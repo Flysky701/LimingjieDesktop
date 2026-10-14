@@ -29,8 +29,8 @@ private data class PermissionItem(
     val enabled: Boolean,
     val statusText: String = if (enabled) "已授权" else "未授权",
     val description: String,
-    val actionLabel: String,
-    val onAction: () -> Unit,
+    val actionLabel: String? = null,
+    val onAction: (() -> Unit)? = null,
 )
 
 @Composable
@@ -39,7 +39,6 @@ fun PermissionCenterScreen(
     onBack: (() -> Unit)? = null,
     onOpenAccessibilitySettings: () -> Unit,
     onRequestNotifications: () -> Unit,
-    onStartCapture: () -> Unit,
     onStopCapture: () -> Unit,
 ) {
     val configuration = LocalConfiguration.current
@@ -59,7 +58,7 @@ fun PermissionCenterScreen(
             verticalArrangement = Arrangement.spacedBy(if (wideLandscape) 8.dp else 12.dp),
         ) {
             Text(
-                "完成无障碍、任务通知和截图授权后即可运行；任务控制入口位于通知栏。",
+                "完成无障碍和任务通知设置后即可启动任务；启动时会请求截图授权，任务控制入口位于通知栏。",
                 style = MaterialTheme.typography.bodySmall,
             )
             val permissionItems = listOf(
@@ -93,9 +92,10 @@ fun PermissionCenterScreen(
                 PermissionItem(
                     title = "屏幕捕获",
                     enabled = state.captureSessionActive,
-                    description = "由 Android 系统授权并限流读取屏幕帧；停止后立即释放资源。",
-                    actionLabel = if (state.captureSessionActive) "停止屏幕捕获" else "请求截图授权",
-                    onAction = if (state.captureSessionActive) onStopCapture else onStartCapture,
+                    statusText = if (state.captureSessionActive) "运行中" else "未运行",
+                    description = "启动视觉任务时由 Android 系统请求截图授权；停止后立即释放资源。",
+                    actionLabel = if (state.captureSessionActive) "停止屏幕捕获" else null,
+                    onAction = onStopCapture.takeIf { state.captureSessionActive },
                 ),
             )
             if (wideLandscape) {
@@ -128,7 +128,9 @@ fun PermissionCenterScreen(
                     state.canStartVisualAutomation -> "已就绪，可以启动视觉自动化。"
                     state.accessibilityEnabled && !state.accessibilityConnected ->
                         "暂不可用：无障碍开关已开启，但服务尚未连接。"
-                    else -> "暂不可用：请先完成上面的权限和截图授权。"
+                    state.accessibilityEnabled && state.accessibilityConnected && state.notificationsEnabled ->
+                        "权限已就绪，启动视觉任务时将请求截图授权。"
+                    else -> "暂不可用：请先完成上面的无障碍和通知设置。"
                 },
                 style = MaterialTheme.typography.titleSmall,
                 color = if (state.canStartVisualAutomation) {
@@ -165,12 +167,16 @@ private fun PermissionCard(
                 )
             }
             Text(item.description, style = MaterialTheme.typography.bodySmall)
-            Button(
-                onClick = item.onAction,
-                modifier = Modifier.defaultMinSize(minHeight = 36.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-            ) {
-                Text(item.actionLabel, style = MaterialTheme.typography.labelLarge)
+            val onAction = item.onAction
+            val actionLabel = item.actionLabel
+            if (onAction != null && actionLabel != null) {
+                Button(
+                    onClick = onAction,
+                    modifier = Modifier.defaultMinSize(minHeight = 36.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Text(actionLabel, style = MaterialTheme.typography.labelLarge)
+                }
             }
         }
     }

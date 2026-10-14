@@ -923,6 +923,10 @@ class LabyrinthBattleTeamRecognizer(
                 1.0
             },
         )
+        // Opening/event/shop pickers offer roles that have not joined this run yet. A battle
+        // roster can survive reset() in this shared recognizer, but must never restrict these
+        // acquisition pages or promote an already-owned look-alike over an unknown portrait.
+        val candidateRoster = if (openingCard) null else roster
         var character = iconMatcher.match(
             frame = frame,
             iconRect = iconRect,
@@ -931,7 +935,7 @@ class LabyrinthBattleTeamRecognizer(
             // by itself; it only removes known candidates of a different attribute. If the badge
             // is unclear this returns null and the matcher falls back to the full icon pack.
             requiredAttribute = requiredAttribute,
-            rosterCharacterIds = roster,
+            rosterCharacterIds = candidateRoster,
         )
         if (!character.trusted && screenRect != recognitionRect) {
             val detectedIconRect = EntryPixelRect(
@@ -959,7 +963,7 @@ class LabyrinthBattleTeamRecognizer(
                 requiredAttribute = if (!selected && visibleScreenRect == screenRect) {
                     recognizeCardAttribute(frame, screenRect)
                 } else null,
-                rosterCharacterIds = roster,
+                rosterCharacterIds = candidateRoster,
             )
             // A second attempt still has to pass the same confidence and different-role margin.
             // Never promote a merely "less bad" candidate into an actionable identity.
@@ -982,7 +986,7 @@ class LabyrinthBattleTeamRecognizer(
                 initial = character,
                 mask = characterMask,
                 requiredAttribute = requiredAttribute,
-                rosterCharacterIds = roster,
+                rosterCharacterIds = candidateRoster,
             )
         }
         return LabyrinthBattleCharacterMatch(

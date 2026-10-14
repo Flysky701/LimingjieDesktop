@@ -434,6 +434,38 @@ class LabyrinthBattleTeamRecognitionTest {
         }
     }
 
+    @Test
+    fun `a free picker never inherits the joined roster from the previous battle`() {
+        val truth = PixelImage(128, 128, IntArray(128 * 128) { index ->
+            val x = index % 128 / 12
+            val y = index / 128 / 10
+            val red = 50 + (x * 37 + y * 19) % 150
+            val green = 50 + (x * 13 + y * 47) % 150
+            val blue = 50 + (x * 53 + y * 7) % 150
+            (0xff shl 24) or (red shl 16) or (green shl 8) or blue
+        })
+        val twin = truth.copy(pixels = truth.pixels.map { it xor 0x00010101 }.toIntArray())
+        val templates = listOf(
+            LabyrinthBattleCharacterTemplate("new", "未获得的角色", "31", truth),
+            LabyrinthBattleCharacterTemplate("owned", "已获得的相似角色", "31", twin),
+        )
+        val frame = openingFrameWithThumb(367, 826, intArrayOf(365), rowColumnCounts = intArrayOf(1))
+        val size = CARD_SIZE - 14
+        repeat(size) { y -> repeat(size) { x ->
+            frame.pixels[(365 + 6 + y) * frame.width + 122 + 6 + x] = truth[
+                (x * 127.0 / (size - 1)).roundToInt(), (y * 127.0 / (size - 1)).roundToInt()]
+        } }
+        val expected = LabyrinthBattleTeamRecognizer(templates, requiredStableFrames = 1)
+            .recognizeOpening(frame).visibleCharacters.single()
+        val reused = LabyrinthBattleTeamRecognizer(templates, requiredStableFrames = 1)
+        reused.recognize(frame, rosterCharacterIds = setOf("owned"))
+        assertEquals("a direct battle-to-picker transition must use the full icon pack", expected,
+            reused.recognizeOpening(frame).visibleCharacters.single())
+        reused.reset()
+        val actual = reused.recognizeOpening(frame).visibleCharacters.single()
+        assertEquals("the unknown role must not become a trusted already-owned look-alike", expected, actual)
+    }
+
     private fun assertRowGeometry(
         matches: List<LabyrinthBattleCharacterMatch>,
         row: Int,

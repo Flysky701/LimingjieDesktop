@@ -4417,7 +4417,13 @@ class LabyrinthEntryRecognitionSession(
             inviteRect != null &&
             inviteState != LabyrinthInviteButtonState.DISABLED
         ) {
-            if (timestampMillis - lastPostEntryActionAt < POST_ENTRY_ACTION_INTERVAL_MILLIS) return
+            if (labyrinthPostEntryCooldownRemaining(
+                    frameTimestampMillis = timestampMillis,
+                    dispatchedAtMillis = lastPostEntryActionAt,
+                    landedAtMillis = lastPostEntryActionLandedAt,
+                    intervalMillis = POST_ENTRY_ACTION_INTERVAL_MILLIS,
+                ) > 0L
+            ) return
             if (eventFreeRoleBlockedSince == Long.MIN_VALUE) eventFreeRoleBlockedSince = timestampMillis
             if (
                 labyrinthEventFreeRoleBlockedAction(timestampMillis - eventFreeRoleBlockedSince) ==
@@ -4499,7 +4505,15 @@ class LabyrinthEntryRecognitionSession(
                     )
                     return
                 }
-                if (timestampMillis - lastPostEntryActionAt < POST_ENTRY_ACTION_INTERVAL_MILLIS) return
+                // Session recovery clears the action timestamp to Long.MIN_VALUE. Subtracting
+                // that sentinel overflows and would hold every stable picker frame indefinitely.
+                if (labyrinthPostEntryCooldownRemaining(
+                        frameTimestampMillis = timestampMillis,
+                        dispatchedAtMillis = lastPostEntryActionAt,
+                        landedAtMillis = lastPostEntryActionLandedAt,
+                        intervalMillis = POST_ENTRY_ACTION_INTERVAL_MILLIS,
+                    ) > 0L
+                ) return
                 _state.value = _state.value.copy(
                     message = "事件自由选角建议（第${selectedIds.size + 1}名）：${decision.displayName}；${decision.explanation.take(2).joinToString("；")}",
                 )

@@ -134,7 +134,6 @@ fun LandosolToolboxApp() {
             else context.startActivity(AndroidAutomationNotificationHost.settingsIntent(context))
         }
     }
-    val requestCapture: () -> Unit = { beginCaptureRequest {} }
     DisposableEffect(lifecycleOwner, pendingNotificationAction) {
         val observer = LifecycleEventObserver { _, event ->
             if (event != Lifecycle.Event.ON_RESUME || pendingNotificationAction == null) return@LifecycleEventObserver
@@ -202,7 +201,7 @@ fun LandosolToolboxApp() {
                         batchHaltReason = batchHaltReason,
                         onRequestCapture = requestCaptureThen,
                     )
-                    AppScreen.Permissions -> PermissionRoute(onStartCapture = requestCapture)
+                    AppScreen.Permissions -> PermissionRoute()
                 }
             }
         }
@@ -277,9 +276,7 @@ private fun KeepScreenAwake(enabled: Boolean) {
 private const val CAPTURE_START_TIMEOUT_MILLIS = 5_000L
 
 @Composable
-private fun PermissionRoute(
-    onStartCapture: () -> Unit,
-) {
+private fun PermissionRoute() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var refreshToken by remember { mutableIntStateOf(0) }
@@ -314,7 +311,6 @@ private fun PermissionRoute(
                 context.startActivity(AndroidAutomationNotificationHost.settingsIntent(context))
             }
         },
-        onStartCapture = onStartCapture,
         onStopCapture = {
             MediaProjectionCaptureService.stop(context)
             refreshToken++
