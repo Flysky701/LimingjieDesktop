@@ -1095,6 +1095,7 @@ batch=20260916-001 goal=gourmet run=008 stage=RETURNING_TO_TITLE
 
 ---
 - [x] **卡牌匹配：粗筛样本缓存 + 掩码索引 + 两趟评分并行**（2026-10-17）。`coarseTemplateSamples` 按模板缓存粗筛颜色网格（原先每个候选重算 108 格坐标与像素），`maskOf()` 每帧只算一次掩码索引并由 `GridMask` 决定读哪些格（原先每个候选每格过一次掩码判断），`scoreAll()` 在候选数 ≥128 时把两趟评分切给 4 个线程（单片 ≥64，`invokeAll` 按提交顺序合并；线程数刻意不取核数）。`correlation()` 改为按 `GridMask.indices` 读取，访问顺序与旧实现的压紧顺序一致，因此判定逐位不变：`character-icon-golden.txt` 未改动，摘要仍为 `ec51ec76d5803513`；
+- [x] **编队/选角页布局测量的跨帧复用**（2026-10-17）。`findSecondaryRowTop()` 每帧扫 350..820 共 471 行，现由 `findSecondaryRowTopCached()` 按「同一 `RosterLayoutProfile` + 滚动条位置同一分档（32 档）+ ≤12 帧」复用；`gridDetector.detect()` 每帧全页重检，现由 `reusableGridSlots()` 按「同一 profile + 行提示 hash + 卡内像素指纹 + ≤8 帧」复用，指纹连续 2 次不符即回退真实检测（选中卡片会变暗但不移动卡框，故允许两次）。两处未命中都返回原路径；V5 的结果只喂兜底行，检测有结果时以检测为准。该测量开局选人页共用，缓存按 profile 实例区分；
 
 ## 20. 最终架构图
 
