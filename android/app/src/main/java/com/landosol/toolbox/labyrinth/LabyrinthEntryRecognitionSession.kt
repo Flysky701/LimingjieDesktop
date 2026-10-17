@@ -8694,13 +8694,20 @@ class LabyrinthEntryRecognitionSession(
         const val POST_ENTRY_ACTION_INTERVAL_MILLIS = 1_500L
 
         const val MAX_EVENT_CHOICE_COMMIT_ATTEMPTS = 3
+        /** Lost-tap retries allowed on a single-pick choice page before the run stops. */
+        const val MAX_SELECTION_COMMIT_ATTEMPTS = 3
         const val SHOP_PURCHASE_TRANSITION_TIMEOUT_MILLIS = 8_000L
         const val SHOP_REFRESH_TRANSITION_TIMEOUT_MILLIS = 8_000L
         const val SHOP_REFRESH_SETTLE_MILLIS = 500L
         const val CHARACTER_ACQUISITION_ACTION_INTERVAL_MILLIS = 650L
         const val NODE_MAP_SETTLE_AFTER_POST_ACTION_MILLIS = 2_000L
         const val MAX_POST_ENTRY_ATTEMPTS = 6
-        const val BATTLE_TEAM_ACTION_INTERVAL_MILLIS = 1_200L
+        // Click-spam guard between two battle-team actions. Halved from 1200 ms: at the 600 ms frame
+        // cadence 1200 ms forced a two-frame wait and, with the confirmation frame on top, made every
+        // team-editor action cost three frames (1.85 s). 600 ms is one frame at the 300 ms cadence.
+        // The guard's structure is untouched -- only the threshold moved -- and an on-device A/B
+        // decides whether the game still keeps up (the gesture cancel/reject counters must stay 0).
+        const val BATTLE_TEAM_ACTION_INTERVAL_MILLIS = 600L
         const val BATTLE_TEAM_CHARACTER_FEEDBACK_TIMEOUT_MILLIS = 4_000L
         const val MAX_BATTLE_TEAM_STEP_ATTEMPTS = 3
         const val MAX_BATTLE_TEAM_SCROLL_ACTIONS = 48

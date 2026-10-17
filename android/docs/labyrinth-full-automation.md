@@ -1094,6 +1094,7 @@ batch=20260916-001 goal=gourmet run=008 stage=RETURNING_TO_TITLE
 - [x] **「破晓之星」星辉吐息复活后的两键战斗失败页无法识别**（2026-10-04，用户实机日志包 `limingjie-debug-20261004-172026`）。星辉吐息把败北改判为胜利后，普通/EX 战斗失败页只画「伤害报告 + 下一步」两颗按钮、左下没有「结束」，而 `LabyrinthBattleFailureDetector` 把「结束」当必需闸门 —— 闸门为 0 时 `detect()` 返回 null，且 `BATTLE_FAILED` 只有这一个生产者（分类器 `stateScores` 里没有该键），整帧因此失去页面归属判 UNKNOWN、动作被禁用，随后被战斗等待或停滞看门狗停机。修法两处：`vision` 侧把「结束」从必需闸门改为布局选择器（`THREE_BUTTON` / `TWO_BUTTON`，`endButtonRect` 变可空），并加「两键变体要求右上『伤害报告』同时在线」的守卫来挡掉遮罩与淡入中间态 —— 阈值与 ROI 一字未改，三键帧的置信度与两个点击矩形逐位不变；`session` 侧新增 `BATTLE_FAILURE_NEXT`，两键失败页只推进（重置战斗等待与帧计数）、不消耗重试预算、不清失败队伍签名与已提交队伍，三条停机条件（3 次失败重刷 / 批次重试上限 / 重试上限）仍只作用于三键页。验证：`gradle :app:testDebugUnitTest` 145 套件 / 1080 用例 / 0 失败 / 0 错误 / 39 跳过；真机证据两部分 —— 已入库的 1920x1080 真机两键图（`test/resources/labyrinth/battle-failure-two-button-20261004.jpg`，`end=0.000` / `retryBlue=0.934` / `reportLegacy=0.770` / `titleBlue=0.349`，判 `BATTLE_FAILED / TWO_BUTTON`）与未入库的实机日志包归档帧（两键失败页 → 下一步 → 遗物效果结果 → 关闭 → 回地图全程走通）。边界：Boss/EX 路径、失败后重刷开局未做真机验证，两键变体的触发条件目前只有领域描述（星辉吐息整局一次、Boss 战不触发）；为复现该页临时加过的「强制最低配合」测试通道已随本次改动一并移除，其本身未做真机验证；详见 android/docs/relic-revive-battle-failure-audit.md；
 
 ---
+- [x] **编队动作冷却 1200 → 600 ms**（2026-10-12）。在 300 ms 帧节拍下，1200 ms 强制等两帧，叠加确认帧后每个编队动作固定花 3 帧；600 ms 正好一拍。`BATTLE_TEAM_ACTION_INTERVAL_MILLIS` 只改阈值，守卫结构与判据不变；实机需保持手势取消/拒绝计数为 0/0；
 
 ## 20. 最终架构图
 
