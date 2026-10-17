@@ -1095,6 +1095,7 @@ batch=20260916-001 goal=gourmet run=008 stage=RETURNING_TO_TITLE
 
 ---
 - [x] **遗物选择页的「已提交」闩锁在点击丢失后不再永久锁定**（2026-10-12，实机）。`relicChoiceCommitted` 只在页面变化时复位，而点击被游戏吞掉后页面恰好不变，于是整局停在遗物页直到页面停摆看门狗结束它。现按事件页同一判据新增 `labyrinthSelectionCommitExpired()`（`SELECTION_COMMIT_RETRY_MILLIS = 6_000`）：到期即复位「已提交」并重新出计划，`MAX_SELECTION_COMMIT_ATTEMPTS = 3` 次仍不推进则 `finishFromPlanner` 明确停止，不再反复空点；正常路径零延迟（页面 1～2 秒内就走了）。回归用例 `LabyrinthSelectionCommitRetryTest`；`testDebugUnitTest` 152 套件 / 1106 用例 / 0 失败；
+- [x] **编队/选角页布局测量的跨帧复用**（2026-10-17）。`findSecondaryRowTop()` 每帧扫 350..820 共 471 行，现由 `findSecondaryRowTopCached()` 按「同一 `RosterLayoutProfile` + 滚动条位置同一分档（32 档）+ ≤12 帧」复用；`gridDetector.detect()` 每帧全页重检，现由 `reusableGridSlots()` 按「同一 profile + 行提示 hash + 卡内像素指纹 + ≤8 帧」复用，指纹连续 2 次不符即回退真实检测（选中卡片会变暗但不移动卡框，故允许两次）。两处未命中都返回原路径；V5 的结果只喂兜底行，检测有结果时以检测为准。该测量开局选人页共用，缓存按 profile 实例区分；
 
 ## 20. 最终架构图
 
