@@ -1095,6 +1095,10 @@ batch=20260916-001 goal=gourmet run=008 stage=RETURNING_TO_TITLE
 
 ---
 - [x] **识别闸门与采集节拍对齐**（2026-10-11，`FRAME_INTERVAL_MILLIS` 500 → 300）。采集本来就以 300 ms 产帧，帧落在 0/300/600…，旧闸门只接受 0 与 600，等于把识别节拍钉在 600 ms，并把 300 ms 那一帧（转换成本已付出）直接丢掉。同机前后：帧间隔中位 616 → 303 ms，节点页同类动作间隔 2.46 → 0.93 s；
+- [x] **编队动作冷却 1200 → 600 ms**（2026-10-12）。在 300 ms 帧节拍下，1200 ms 强制等两帧，叠加确认帧后每个编队动作固定花 3 帧；600 ms 正好一拍。`BATTLE_TEAM_ACTION_INTERVAL_MILLIS` 只改阈值，守卫结构与判据不变；实机需保持手势取消/拒绝计数为 0/0；
+- [x] **卡牌匹配：粗筛样本缓存 + 掩码索引 + 两趟评分并行**（2026-10-17）。`coarseTemplateSamples` 按模板缓存粗筛颜色网格（原先每个候选重算 108 格坐标与像素），`maskOf()` 每帧只算一次掩码索引并由 `GridMask` 决定读哪些格（原先每个候选每格过一次掩码判断），`scoreAll()` 在候选数 ≥128 时把两趟评分切给 4 个线程（单片 ≥64，`invokeAll` 按提交顺序合并；线程数刻意不取核数）。`correlation()` 改为按 `GridMask.indices` 读取，访问顺序与旧实现的压紧顺序一致，因此判定逐位不变：`character-icon-golden.txt` 未改动，摘要仍为 `ec51ec76d5803513`；
+- [x] **遗物选择页的「已提交」闩锁在点击丢失后不再永久锁定**（2026-10-12，实机）。`relicChoiceCommitted` 只在页面变化时复位，而点击被游戏吞掉后页面恰好不变，于是整局停在遗物页直到页面停摆看门狗结束它。现按事件页同一判据新增 `labyrinthSelectionCommitExpired()`（`SELECTION_COMMIT_RETRY_MILLIS = 6_000`）：到期即复位「已提交」并重新出计划，`MAX_SELECTION_COMMIT_ATTEMPTS = 3` 次仍不推进则 `finishFromPlanner` 明确停止，不再反复空点；正常路径零延迟（页面 1～2 秒内就走了）。回归用例 `LabyrinthSelectionCommitRetryTest`；`testDebugUnitTest` 152 套件 / 1106 用例 / 0 失败；
+- [x] **编队/选角页布局测量的跨帧复用**（2026-10-17）。`findSecondaryRowTop()` 每帧扫 350..820 共 471 行，现由 `findSecondaryRowTopCached()` 按「同一 `RosterLayoutProfile` + 滚动条位置同一分档（32 档）+ ≤12 帧」复用；`gridDetector.detect()` 每帧全页重检，现由 `reusableGridSlots()` 按「同一 profile + 行提示 hash + 卡内像素指纹 + ≤8 帧」复用，指纹连续 2 次不符即回退真实检测（选中卡片会变暗但不移动卡框，故允许两次）。两处未命中都返回原路径；V5 的结果只喂兜底行，检测有结果时以检测为准。该测量开局选人页共用，缓存按 profile 实例区分；
 
 ## 20. 最终架构图
 
