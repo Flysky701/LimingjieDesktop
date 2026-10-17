@@ -8665,7 +8665,12 @@ class LabyrinthEntryRecognitionSession(
         const val TEAM_RECOMMENDATION_LOG_TAG = "LabyrinthTeamPlan"
         const val TEAM_SELECTION_PLAN_LOG_TAG = "LabyrinthTeamSelection"
         const val OWNER = "labyrinth-entry-recognition"
-        const val FRAME_INTERVAL_MILLIS = 500L
+
+        // Matches the capture cadence (MediaProjectionCaptureService.FRAME_INTERVAL_MILLIS = 300).
+        // Frames land on 0/300/600/900..., so the old 500 ms gate accepted 0, dropped 300, accepted
+        // 600 - pinning the recognition cadence at 600 ms while capture kept producing a 300 ms
+        // frame that was thrown away. 300 keeps every frame capture already paid to convert.
+        const val FRAME_INTERVAL_MILLIS = 300L
         const val FIRST_FRAME_TIMEOUT_MILLIS = 5_000L
         const val NODE_CLICK_STABLE_FRAMES = 3
         /** How long a strong FULL_COLUMN target rect outranks weaker re-bindings without a gesture. */
