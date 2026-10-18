@@ -1118,6 +1118,8 @@ class LabyrinthEntryRecognitionSession(
      * Fired at most once per run id, after the run has fully stopped. Absent runId = no batch.
      */
     private val runTerminalListener: (suspend (LabyrinthRunTerminalEvent) -> Unit)? = null,
+    /** Channel SDK login dialogs (九游) on the way from the title, read via accessibility. */
+    private val channelPrompts: com.landosol.toolbox.automation.session.ChannelLoginPromptAssistant? = null,
 ) {
     private data class QueuedFrame(
         val sessionId: AutomationSessionId,
@@ -1130,6 +1132,18 @@ class LabyrinthEntryRecognitionSession(
     private val actionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val actionInFlight = AtomicBoolean(false)
     private val stopRequested = AtomicBoolean(false)
+
+    /**
+     * Frames observed before this time belong to a channel SDK login dialog that the accessibility
+     * poll owns. Without the hold the entry planner reads such a dialog as an UNKNOWN
+     * pre-announcement frame and keeps tapping (950,930) outside it (2026-10-05 九游 debug bundle,
+     * 2026-10-12 diag), and the session-block path's 返回标题 point (961,739) can land on it.
+     */
+    @Volatile
+    private var channelPromptVisibleUntil = Long.MIN_VALUE
+
+    @Volatile
+    private var channelPromptMessage: String? = null
     private val queuedFrame = AtomicReference<QueuedFrame?>(null)
     private val frameWorkerRunning = AtomicBoolean(false)
     private val actionPlannerLock = Any()
@@ -1674,6 +1688,9 @@ class LabyrinthEntryRecognitionSession(
         validatedRoute = executionRoute
         lastProcessedAt = Long.MIN_VALUE
         endGuardedAction()
+        channelPromptVisibleUntil = Long.MIN_VALUE
+        channelPromptMessage = null
+        channelPrompts?.reset()
         stopRequested.set(false)
         openingStateReset.set(false)
         lastPersistedObservationSignature = null
@@ -1751,6 +1768,7 @@ class LabyrinthEntryRecognitionSession(
             return LabyrinthEntryRecognitionStartResult.Blocked(reason)
         }
         armFirstFrameWatchdog(session.id)
+        if (!dryRun) startChannelPromptPoll(session.id)
         if (!dryRun && !gameLauncher()) {
             firstFrameWatchdog?.cancel()
             firstFrameWatchdog = null
@@ -2045,6 +2063,11 @@ class LabyrinthEntryRecognitionSession(
             ),
         )
         val pageState = result.observation.state
+        if (clock() < channelPromptVisibleUntil) {
+            // The channel prompt poll owns the screen; nothing behind the dialog may be tapped.
+            channelPromptMessage?.let { message -> _state.value = _state.value.copy(message = message) }
+            return
+        }
         if (
             handleSessionBlockFrame(
                 sessionId = sessionId,
@@ -3697,6 +3720,72 @@ class LabyrinthEntryRecognitionSession(
         }
     }
 
+    /**
+     * Polls for channel SDK login dialogs while the entry flow has not yet handed the run to route
+     * execution. Independent of frames, so a portrait SDK page that never yields a landscape frame
+     * is still seen. The loop ends by itself within one interval once this session is no longer
+     * the active one.
+     */
+    private fun startChannelPromptPoll(sessionId: AutomationSessionId) {
+        val prompts = channelPrompts ?: return
+        actionScope.launch {
+            while (activeSessionId == sessionId) {
+                if (!entryPhaseComplete && !_state.value.paused) pollChannelPrompt(sessionId, prompts)
+                delay(CHANNEL_PROMPT_POLL_MILLIS)
+            }
+        }
+    }
+
+    private suspend fun pollChannelPrompt(
+        sessionId: AutomationSessionId,
+        prompts: com.landosol.toolbox.automation.session.ChannelLoginPromptAssistant,
+    ) {
+        // Cheap look first, so an empty screen never takes the action latch from frame actions.
+        if (prompts.peek() == null) {
+            prompts.markAbsent()
+            channelPromptVisibleUntil = Long.MIN_VALUE
+            channelPromptMessage = null
+            return
+        }
+        if (!beginGuardedAction()) return
+        try {
+            val now = clock()
+            // Node clicks and the gesture fallback both go through this session's executor, so
+            // they keep the session and pause checks every other entry action has.
+            val actions = com.landosol.toolbox.automation.session.SessionBoundChannelPromptActions(actionExecutor, sessionId)
+            when (val step = prompts.step(now, actions)) {
+                com.landosol.toolbox.automation.session.ChannelPromptStep.None -> {
+                    channelPromptVisibleUntil = Long.MIN_VALUE
+                    channelPromptMessage = null
+                }
+                is com.landosol.toolbox.automation.session.ChannelPromptStep.Seen -> {
+                    channelPromptVisibleUntil = now + CHANNEL_PROMPT_HOLD_MILLIS
+                    channelPromptMessage = "渠道登录界面：${step.label}，确认中"
+                }
+                is com.landosol.toolbox.automation.session.ChannelPromptStep.Activated -> {
+                    channelPromptVisibleUntil = now + CHANNEL_PROMPT_HOLD_MILLIS
+                    channelPromptMessage = "渠道登录界面：${step.label}，已点击"
+                    if (activeSessionId == sessionId) {
+                        val current = _state.value
+                        _state.value = current.copy(
+                            actionCount = current.actionCount + 1,
+                            lastActionLabel = step.label,
+                            message = channelPromptMessage,
+                        )
+                        overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
+                    }
+                }
+                is com.landosol.toolbox.automation.session.ChannelPromptStep.Exhausted -> {
+                    channelPromptVisibleUntil = Long.MIN_VALUE
+                    channelPromptMessage = null
+                    if (activeSessionId == sessionId) stopFromRunLogic(step.reason)
+                }
+            }
+        } finally {
+            endGuardedAction()
+        }
+    }
+
     private fun handleActionDecision(
         sessionId: AutomationSessionId,
         result: LabyrinthEntryFrameResult,
@@ -3885,10 +3974,9 @@ class LabyrinthEntryRecognitionSession(
     private fun currentShopDecision(result: LabyrinthEntryFrameResult): LabyrinthShopDecision? {
         val shop = result.shopObservation ?: return null
         if (shop.dialogState != LabyrinthShopDialogState.NONE) return null
-        val refreshAvailable = result.anchorMatches[EntryAnchorId.SHOP_REFRESH_BUTTON]
+        val refreshAnchorReady = result.anchorMatches[EntryAnchorId.SHOP_REFRESH_BUTTON]
             ?.score
             ?.let { it >= POST_ENTRY_ANCHOR_MIN_SCORE }
-            ?.let { anchorReady -> anchorReady && shop.refreshButtonEnabled }
             ?: false
         return shopPolicy.decide(
             // Prefer the area of the node we actually tapped. routeProgress.currentArea can lag
@@ -3898,9 +3986,10 @@ class LabyrinthEntryRecognitionSession(
             items = shop.items,
             acquired = _state.value.observedRelics,
             calibratedStacks = relicMarkStackCalibration,
-            refreshAvailable = refreshAvailable,
+            refreshAvailable = refreshAnchorReady && shop.refreshButtonEnabled,
             lockedFocus = relicFocusMark,
             relicPurchasesInCycle = shopRelicPurchasesThisCycle,
+            refreshAvailabilityKnown = refreshAnchorReady,
         )
     }
 
@@ -5276,7 +5365,7 @@ class LabyrinthEntryRecognitionSession(
                     clearPlannedShopPurchase()
                     val rect = anchorRect(result, EntryAnchorId.SHOP_REFRESH_BUTTON)
                     if (rect != null) {
-                        LabyrinthPostEntryTapPlan(LabyrinthPostEntryActionKind.SHOP_REFRESH, "最终区域刷新商店", rect)
+                        LabyrinthPostEntryTapPlan(LabyrinthPostEntryActionKind.SHOP_REFRESH, "刷新商店：${decision.reason}", rect)
                     } else {
                         shopWaitReason = "策略允许刷新，但刷新按钮没有达到安全识别线"
                         null
@@ -8696,6 +8785,9 @@ class LabyrinthEntryRecognitionSession(
     }
 
     private companion object {
+        const val CHANNEL_PROMPT_POLL_MILLIS = 500L
+        /** How long one sighting keeps frame actions away from the dialog; > one poll interval. */
+        const val CHANNEL_PROMPT_HOLD_MILLIS = 1_500L
         const val NODE_LOG_TAG = "LabyrinthNode"
         const val TEAM_RECOMMENDATION_LOG_TAG = "LabyrinthTeamPlan"
         const val TEAM_SELECTION_PLAN_LOG_TAG = "LabyrinthTeamSelection"

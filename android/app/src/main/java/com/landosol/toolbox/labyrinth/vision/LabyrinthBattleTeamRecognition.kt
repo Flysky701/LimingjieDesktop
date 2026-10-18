@@ -169,31 +169,23 @@ class LabyrinthBattleTeamRecognizer(
     /**
      * Card-grid detection is the most expensive step of this page and it repeats within a single
      * interaction even though the cards have not moved. These fields hold the last result together
-     * with the evidence needed to reuse it: the layout profile it was measured for, the
-     * scrollbar-derived row hints it was given, and a hash of the sampled card pixels.
+     * with the layout profile and scrollbar-derived row hints it was measured for. Both geometry
+     * caches below are also gated by an exact, owned snapshot of the frame pixels: portrait
+     * samples and scrollbar buckets alone cannot establish that the card borders did not move.
      */
+    private var cachedLayoutFrame: PixelImage? = null
     private var cachedGridProfile: RosterLayoutProfile? = null
     private var cachedGridHintsKey: Int = 0
     private var cachedGridSlots: List<LabyrinthDetectedGridSlot> = emptyList()
-    private var cachedGridFingerprint: Long = 0L
     private var cachedGridReuseFrames: Int = 0
-
-    /**
-     * Selecting a card dims the whole card, which shifts the sampled portrait pixels, so a naive
-     * fingerprint would drop the grid cache on every add/remove inside one team edit. The card
-     * frame does not move, and identity reuse is still gated by [viewportSignature], so a short run
-     * of fingerprint mismatches is tolerated before paying for a full grid detection.
-     */
-    private var cachedGridFingerprintMisses: Int = 0
 
     /**
      * Second visible row anchor, reused across frames.
      *
      * [findSecondaryRowTop] walks hundreds of candidate rows and samples the frame around each of
      * them to answer one question that only changes when the roster scrolls. The call site already
-     * knows the scrollbar thumb position, so the measurement is reused while that position stays in
-     * the same quantisation bucket (the same bucket the viewport fingerprint uses) and for a
-     * bounded number of frames, after which it is measured again.
+     * knows the scrollbar thumb position. Reuse requires both the same position bucket and an
+     * identical frame snapshot, for a bounded number of frames before measuring again.
      *
      * The result only feeds `fallbackVisibleSlots`; a measured card grid always wins, so a stale
      * anchor cannot override a projection that actually found cards.
@@ -216,11 +208,10 @@ class LabyrinthBattleTeamRecognizer(
         openingPendingStableFrames = 0
         openingStableObservation = null
         openingViewportRevision = 0L
+        cachedLayoutFrame = null
         cachedGridProfile = null
         cachedGridSlots = emptyList()
-        cachedGridFingerprint = 0L
         cachedGridReuseFrames = 0
-        cachedGridFingerprintMisses = 0
         cachedSecondaryRowTopProfile = null
         cachedSecondaryRowTopBucket = 0
         cachedSecondaryRowTopValue = null
@@ -510,6 +501,7 @@ class LabyrinthBattleTeamRecognizer(
         frame: PixelImage,
         profile: RosterLayoutProfile,
     ): BattleTeamLayout {
+        invalidateGeometryForChangedFrame(frame)
         val filters = profile.filters.mapNotNull { definition ->
             val rect = ReferenceFitMapper.map(
                 frameWidth = frame.width,
@@ -606,7 +598,7 @@ class LabyrinthBattleTeamRecognizer(
                 referenceRect = reference,
             )?.top
         }.distinct()
-        val measuredGridSlots = reusableGridSlots(frame, profile, gridRowTopHints)
+        val measuredGridSlots = reusableGridSlots(profile, gridRowTopHints)
             ?: gridDetector.detect(
                 frame = frame,
                 viewportReference = profile.viewport,
@@ -619,8 +611,6 @@ class LabyrinthBattleTeamRecognizer(
                 cachedGridProfile = profile
                 cachedGridHintsKey = gridRowTopHints.hashCode()
                 cachedGridSlots = detected
-                cachedGridFingerprint =
-                    labyrinthBattleRosterVisualFingerprint(frame, detected.map { it.fullRect })
                 cachedGridReuseFrames = 0
             }
         // A clipped leading band can end on an artwork edge instead of the card border.
@@ -793,21 +783,26 @@ class LabyrinthBattleTeamRecognizer(
     }
 
     /**
-     * Reuse the previous card-grid detection while the page still looks the same.
+     * Only identical pixels prove that every input to grid/row measurement is unchanged. A few
+     * portrait samples can stay identical while borders move, cards disappear or a second row
+     * shifts within one scrollbar bucket. Invalidate both caches before either can yield geometry.
+     * Own the pixels rather than retaining the caller's mutable IntArray.
      *
-     * The fingerprint samples fixed positions inside the previously detected cards, so any scroll,
-     * filter change or re-layout moves the sampled pixels and the cache is dropped. The row hints
-     * derived from the scrollbar are compared as well, and [MAX_GRID_REUSE_FRAMES] forces a real
-     * detection periodically so a long unchanged sequence cannot drift for ever.
-     *
-     * The fingerprint is sensitive to brightness, and a battle selection dims the whole card, so a
-     * single toggle used to invalidate this cache even though the card frame had not moved. A short
-     * run of mismatches ([MAX_GRID_FINGERPRINT_MISSES]) is therefore tolerated: this cache only
-     * yields card geometry, and role identities are still re-checked against the freshly sampled
-     * fingerprint through [viewportSignature], which drops the cached observation instead.
+     * This deliberately remeasures after selection or unrelated animation too. A more permissive
+     * cache needs independent geometry evidence; the identity fingerprint is not such evidence.
      */
+    private fun invalidateGeometryForChangedFrame(frame: PixelImage) {
+        val previous = cachedLayoutFrame
+        if (previous != null && previous.width == frame.width && previous.height == frame.height &&
+            previous.pixels.contentEquals(frame.pixels)
+        ) return
+        cachedGridSlots = emptyList()
+        cachedSecondaryRowTopProfile = null
+        cachedLayoutFrame = PixelImage(frame.width, frame.height, frame.pixels.copyOf())
+    }
+
+    /** Reuse is already gated by identical frame pixels; also retain profile, hint and age checks. */
     private fun reusableGridSlots(
-        frame: PixelImage,
         profile: RosterLayoutProfile,
         rowTopHints: List<Int>,
     ): List<LabyrinthDetectedGridSlot>? {
@@ -816,12 +811,6 @@ class LabyrinthBattleTeamRecognizer(
         if (cachedGridProfile !== profile) return null
         if (cachedGridReuseFrames >= MAX_GRID_REUSE_FRAMES) return null
         if (cachedGridHintsKey != rowTopHints.hashCode()) return null
-        val fingerprint = labyrinthBattleRosterVisualFingerprint(frame, cached.map { it.fullRect })
-        if (fingerprint != cachedGridFingerprint) {
-            if (++cachedGridFingerprintMisses >= MAX_GRID_FINGERPRINT_MISSES) return null
-        } else {
-            cachedGridFingerprintMisses = 0
-        }
         cachedGridReuseFrames++
         return cached
     }
@@ -829,10 +818,9 @@ class LabyrinthBattleTeamRecognizer(
     /**
      * [findSecondaryRowTop] behind a scroll-position keyed cache.
      *
-     * The anchor only moves when the roster list scrolls, and scrolling is already observable as the
-     * scrollbar thumb position, so a measurement is reused while that position stays in the same
-     * quantisation bucket and for at most [MAX_SECONDARY_ROW_TOP_REUSE_FRAMES] frames. The frame
-     * budget bounds how long a scroll that stays inside one bucket can go unnoticed.
+     * [invalidateGeometryForChangedFrame] also invalidates this cache on any pixel/size change,
+     * including scrolling inside one thumb bucket and fallback-only layouts with no detected grid.
+     * The profile, scrollbar bucket and bounded frame budget remain additional reuse conditions.
      */
     private fun findSecondaryRowTopCached(
         frame: PixelImage,
@@ -1770,23 +1758,12 @@ class LabyrinthBattleTeamRecognizer(
         const val SIGNATURE_POSITION_QUANTIZATION = 4
         const val SIGNATURE_POSITION_BUCKETS = 32
 
-        /**
-         * How many frames a measured second-row anchor may be reused inside one scroll-position
-         * bucket. Scrolling out of the bucket invalidates the cache immediately; this only bounds
-         * how long a scroll that stays inside one bucket can go unnoticed.
-         */
+        /** Maximum reuse age even when the frame, profile and scrollbar bucket are unchanged. */
         const val MAX_SECONDARY_ROW_TOP_REUSE_FRAMES = 12
 
         /** Frames a detected card grid may be reused before it is measured again. */
         const val MAX_GRID_REUSE_FRAMES = 8
 
-        /**
-         * Consecutive fingerprint mismatches tolerated before the grid cache is dropped.
-         *
-         * Selecting a card dims it, which shifts the sampled portrait pixels without moving the
-         * card frame; one such toggle must not force a full grid detection.
-         */
-        const val MAX_GRID_FINGERPRINT_MISSES = 2
     }
 }
 
