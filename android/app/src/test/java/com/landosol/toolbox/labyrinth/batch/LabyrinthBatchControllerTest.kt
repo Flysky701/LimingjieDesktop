@@ -27,7 +27,7 @@ class LabyrinthBatchControllerTest {
             return LabyrinthBatchRerollResult.Success(nextEnterId++)
         }
 
-        override suspend fun invalidateClientSessionAndReturn(): LabyrinthBatchInvalidationResult {
+        override suspend fun invalidateClientSessionAndReturn(accountId: Long): LabyrinthBatchInvalidationResult {
             log += "invalidate"
             return if (invalidationFails) {
                 LabyrinthBatchInvalidationResult.Failure("capture stopped")
