@@ -3966,10 +3966,9 @@ class LabyrinthEntryRecognitionSession(
     private fun currentShopDecision(result: LabyrinthEntryFrameResult): LabyrinthShopDecision? {
         val shop = result.shopObservation ?: return null
         if (shop.dialogState != LabyrinthShopDialogState.NONE) return null
-        val refreshAvailable = result.anchorMatches[EntryAnchorId.SHOP_REFRESH_BUTTON]
+        val refreshAnchorReady = result.anchorMatches[EntryAnchorId.SHOP_REFRESH_BUTTON]
             ?.score
             ?.let { it >= POST_ENTRY_ANCHOR_MIN_SCORE }
-            ?.let { anchorReady -> anchorReady && shop.refreshButtonEnabled }
             ?: false
         return shopPolicy.decide(
             // Prefer the area of the node we actually tapped. routeProgress.currentArea can lag
@@ -3979,9 +3978,10 @@ class LabyrinthEntryRecognitionSession(
             items = shop.items,
             acquired = _state.value.observedRelics,
             calibratedStacks = relicMarkStackCalibration,
-            refreshAvailable = refreshAvailable,
+            refreshAvailable = refreshAnchorReady && shop.refreshButtonEnabled,
             lockedFocus = relicFocusMark,
             relicPurchasesInCycle = shopRelicPurchasesThisCycle,
+            refreshAvailabilityKnown = refreshAnchorReady,
         )
     }
 
@@ -5333,7 +5333,7 @@ class LabyrinthEntryRecognitionSession(
                     clearPlannedShopPurchase()
                     val rect = anchorRect(result, EntryAnchorId.SHOP_REFRESH_BUTTON)
                     if (rect != null) {
-                        LabyrinthPostEntryTapPlan(LabyrinthPostEntryActionKind.SHOP_REFRESH, "最终区域刷新商店", rect)
+                        LabyrinthPostEntryTapPlan(LabyrinthPostEntryActionKind.SHOP_REFRESH, "刷新商店：${decision.reason}", rect)
                     } else {
                         shopWaitReason = "策略允许刷新，但刷新按钮没有达到安全识别线"
                         null

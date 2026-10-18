@@ -1,9 +1,18 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.ksp)
     alias(libs.plugins.kotlin.serialization)
 }
+
+// Keep local signing paths out of source control. Unconfigured checkouts use the normal SDK
+// debug key; distributing an update requires the same debug key as the previously shipped APK.
+val localBuildProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.isFile }?.inputStream()?.use { load(it) }
+}
+val debugKeystorePath = localBuildProperties.getProperty("debug.keystore")
 
 android {
     namespace = "com.landosol.toolbox"
@@ -14,10 +23,18 @@ android {
         minSdk = 26
         targetSdk = 35
         // major*10000 + minor*100 + patch, so the code stays monotonic as the name moves.
-        versionCode = 10017
-        versionName = "1.0.17"
+        versionCode = 10018
+        versionName = "1.0.18"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            if (!debugKeystorePath.isNullOrBlank()) {
+                storeFile = rootProject.file(debugKeystorePath)
+            }
+        }
     }
 
     buildTypes {
