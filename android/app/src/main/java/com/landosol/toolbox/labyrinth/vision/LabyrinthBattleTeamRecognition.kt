@@ -166,6 +166,35 @@ class LabyrinthBattleTeamRecognizer(
     private val gridDetector = LabyrinthCharacterGridDetector()
     private val currentMemberStripDetector = LabyrinthCurrentMemberStripDetector()
 
+    /**
+     * Card-grid detection is the most expensive step of this page and it repeats within a single
+     * interaction even though the cards have not moved. These fields hold the last result together
+     * with the layout profile and scrollbar-derived row hints it was measured for. Both geometry
+     * caches below are also gated by an exact, owned snapshot of the frame pixels: portrait
+     * samples and scrollbar buckets alone cannot establish that the card borders did not move.
+     */
+    private var cachedLayoutFrame: PixelImage? = null
+    private var cachedGridProfile: RosterLayoutProfile? = null
+    private var cachedGridHintsKey: Int = 0
+    private var cachedGridSlots: List<LabyrinthDetectedGridSlot> = emptyList()
+    private var cachedGridReuseFrames: Int = 0
+
+    /**
+     * Second visible row anchor, reused across frames.
+     *
+     * [findSecondaryRowTop] walks hundreds of candidate rows and samples the frame around each of
+     * them to answer one question that only changes when the roster scrolls. The call site already
+     * knows the scrollbar thumb position. Reuse requires both the same position bucket and an
+     * identical frame snapshot, for a bounded number of frames before measuring again.
+     *
+     * The result only feeds `fallbackVisibleSlots`; a measured card grid always wins, so a stale
+     * anchor cannot override a projection that actually found cards.
+     */
+    private var cachedSecondaryRowTopProfile: RosterLayoutProfile? = null
+    private var cachedSecondaryRowTopBucket = 0
+    private var cachedSecondaryRowTopValue: Int? = null
+    private var cachedSecondaryRowTopFrames = 0
+
     /** Clears the viewport cache when the entry page leaves the battle team selector. */
     @Synchronized
     fun reset() {
@@ -179,6 +208,14 @@ class LabyrinthBattleTeamRecognizer(
         openingPendingStableFrames = 0
         openingStableObservation = null
         openingViewportRevision = 0L
+        cachedLayoutFrame = null
+        cachedGridProfile = null
+        cachedGridSlots = emptyList()
+        cachedGridReuseFrames = 0
+        cachedSecondaryRowTopProfile = null
+        cachedSecondaryRowTopBucket = 0
+        cachedSecondaryRowTopValue = null
+        cachedSecondaryRowTopFrames = 0
     }
 
     /**
@@ -464,6 +501,7 @@ class LabyrinthBattleTeamRecognizer(
         frame: PixelImage,
         profile: RosterLayoutProfile,
     ): BattleTeamLayout {
+        invalidateGeometryForChangedFrame(frame)
         val filters = profile.filters.mapNotNull { definition ->
             val rect = ReferenceFitMapper.map(
                 frameWidth = frame.width,
@@ -517,7 +555,8 @@ class LabyrinthBattleTeamRecognizer(
         // a safe hint layout. The detector below still snaps every output box to the frame; these
         // hints become the full fallback only when the card grid cannot be measured.
         val primaryTop = primarySlots.firstOrNull()?.referenceRect?.y ?: DEFAULT_PRIMARY_ROW_TOP
-        val secondaryTop = findSecondaryRowTop(frame)?.plus(profile.secondaryRowTopAdjustment)
+        val secondaryTop = findSecondaryRowTopCached(frame, profile, scrollbar)
+            ?.plus(profile.secondaryRowTopAdjustment)
         val fixedLayout = profile.fixedLayouts.firstOrNull { layout ->
             scrollbar.canScroll && scrollbar.position >= layout.minimumScrollbarPosition
         }
@@ -550,23 +589,30 @@ class LabyrinthBattleTeamRecognizer(
                 }
             }
         }
-        val measuredGridSlots = gridDetector.detect(
-            frame = frame,
-            viewportReference = profile.viewport,
-            referenceCardSize = profile.slotHeight,
-            referenceColumnPitch = profile.columnPitch,
-            referenceRowPitch = profile.rowPitch,
-            maxColumns = profile.maxColumns,
-            rowTopHints = fallbackVisibleSlots.mapNotNull { slot ->
-                val reference = slot.referenceRect ?: return@mapNotNull null
-                ReferenceFitMapper.map(
-                    frameWidth = frame.width,
-                    frameHeight = frame.height,
-                    referenceSize = STANDARD_REFERENCE,
-                    referenceRect = reference,
-                )?.top
-            }.distinct(),
-        )
+        val gridRowTopHints = fallbackVisibleSlots.mapNotNull { slot ->
+            val reference = slot.referenceRect ?: return@mapNotNull null
+            ReferenceFitMapper.map(
+                frameWidth = frame.width,
+                frameHeight = frame.height,
+                referenceSize = STANDARD_REFERENCE,
+                referenceRect = reference,
+            )?.top
+        }.distinct()
+        val measuredGridSlots = reusableGridSlots(profile, gridRowTopHints)
+            ?: gridDetector.detect(
+                frame = frame,
+                viewportReference = profile.viewport,
+                referenceCardSize = profile.slotHeight,
+                referenceColumnPitch = profile.columnPitch,
+                referenceRowPitch = profile.rowPitch,
+                maxColumns = profile.maxColumns,
+                rowTopHints = gridRowTopHints,
+            ).also { detected ->
+                cachedGridProfile = profile
+                cachedGridHintsKey = gridRowTopHints.hashCode()
+                cachedGridSlots = detected
+                cachedGridReuseFrames = 0
+            }
         // A clipped leading band can end on an artwork edge instead of the card border.
         // Recover its virtual top from the next measured row, not the header or a click constant.
         val detectedGridSlots = measuredGridSlots.map { detected ->
@@ -734,6 +780,67 @@ class LabyrinthBattleTeamRecognizer(
             ),
         )
         return signature
+    }
+
+    /**
+     * Only identical pixels prove that every input to grid/row measurement is unchanged. A few
+     * portrait samples can stay identical while borders move, cards disappear or a second row
+     * shifts within one scrollbar bucket. Invalidate both caches before either can yield geometry.
+     * Own the pixels rather than retaining the caller's mutable IntArray.
+     *
+     * This deliberately remeasures after selection or unrelated animation too. A more permissive
+     * cache needs independent geometry evidence; the identity fingerprint is not such evidence.
+     */
+    private fun invalidateGeometryForChangedFrame(frame: PixelImage) {
+        val previous = cachedLayoutFrame
+        if (previous != null && previous.width == frame.width && previous.height == frame.height &&
+            previous.pixels.contentEquals(frame.pixels)
+        ) return
+        cachedGridSlots = emptyList()
+        cachedSecondaryRowTopProfile = null
+        cachedLayoutFrame = PixelImage(frame.width, frame.height, frame.pixels.copyOf())
+    }
+
+    /** Reuse is already gated by identical frame pixels; also retain profile, hint and age checks. */
+    private fun reusableGridSlots(
+        profile: RosterLayoutProfile,
+        rowTopHints: List<Int>,
+    ): List<LabyrinthDetectedGridSlot>? {
+        val cached = cachedGridSlots
+        if (cached.isEmpty()) return null
+        if (cachedGridProfile !== profile) return null
+        if (cachedGridReuseFrames >= MAX_GRID_REUSE_FRAMES) return null
+        if (cachedGridHintsKey != rowTopHints.hashCode()) return null
+        cachedGridReuseFrames++
+        return cached
+    }
+
+    /**
+     * [findSecondaryRowTop] behind a scroll-position keyed cache.
+     *
+     * [invalidateGeometryForChangedFrame] also invalidates this cache on any pixel/size change,
+     * including scrolling inside one thumb bucket and fallback-only layouts with no detected grid.
+     * The profile, scrollbar bucket and bounded frame budget remain additional reuse conditions.
+     */
+    private fun findSecondaryRowTopCached(
+        frame: PixelImage,
+        profile: RosterLayoutProfile,
+        scrollbar: LabyrinthBattleScrollbarObservation,
+    ): Int? {
+        val bucket = (scrollbar.position * SIGNATURE_POSITION_BUCKETS).roundToInt()
+        if (cachedSecondaryRowTopProfile === profile &&
+            cachedSecondaryRowTopBucket == bucket &&
+            cachedSecondaryRowTopFrames < MAX_SECONDARY_ROW_TOP_REUSE_FRAMES
+        ) {
+            cachedSecondaryRowTopFrames++
+            return cachedSecondaryRowTopValue
+        }
+        val measured = findSecondaryRowTop(frame)
+        cachedSecondaryRowTopProfile = profile
+        cachedSecondaryRowTopBucket = bucket
+        cachedSecondaryRowTopValue = measured
+        cachedSecondaryRowTopFrames = 0
+        return measured
     }
 
     /** Finds a second visible card row from its shared horizontal card-frame edge. */
@@ -1650,6 +1757,13 @@ class LabyrinthBattleTeamRecognizer(
         const val SIGNATURE_PRIME = 1099511628211L
         const val SIGNATURE_POSITION_QUANTIZATION = 4
         const val SIGNATURE_POSITION_BUCKETS = 32
+
+        /** Maximum reuse age even when the frame, profile and scrollbar bucket are unchanged. */
+        const val MAX_SECONDARY_ROW_TOP_REUSE_FRAMES = 12
+
+        /** Frames a detected card grid may be reused before it is measured again. */
+        const val MAX_GRID_REUSE_FRAMES = 8
+
     }
 }
 
