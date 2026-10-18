@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemKind
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryState
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemStatus
 
 sealed interface LabyrinthShopDecision {
     data class BuyRelic(
@@ -29,8 +30,8 @@ sealed interface LabyrinthShopDecision {
  *
  * Rules requested by the live Dry Run:
  * - relics always outrank role-imprint goods;
- * - areas 1..4 never spend 300 coins on refresh;
- * - area 5 refreshes only after all three relics of the current stock cycle were purchased;
+ * - refresh follows the configured starting area and enable switch;
+ * - completed relic cycles, or a fully observed row with no actionable relic, can refresh;
  * - when no relic can still be bought and another relic cycle cannot be refreshed, a safely
  *   identified purchasable role imprint may consume the remaining coins and enter role selection;
  * - every live good passes bounded title classification before purchase; unresolved goods are
@@ -56,9 +57,13 @@ class LabyrinthShopPolicy(
         refreshAvailable: Boolean,
         lockedFocus: LabyrinthRelicMark? = null,
         relicPurchasesInCycle: Int = 0,
+        refreshAvailabilityKnown: Boolean = true,
     ): LabyrinthShopDecision {
         if (!buyRelics) return LabyrinthShopDecision.Close("策略已关闭商店购买，退出商店")
-        if (currentArea != null && currentArea in noPurchaseAreas) {
+        val refreshAllowed = refreshEnabled && currentArea != null && currentArea >= finalArea
+        // Preserve the default area-4 saving rule, unless the player explicitly permits refresh
+        // there. An earlier configured starting area must not be defeated by this legacy rule.
+        if (currentArea != null && currentArea in noPurchaseAreas && !refreshAllowed) {
             return LabyrinthShopDecision.Close("区域${currentArea}按策略不购买商店商品，直接退出")
         }
 
@@ -91,16 +96,17 @@ class LabyrinthShopPolicy(
             relicPurchasesInCycle
         }
 
-        // Completing all three relic purchases is the only point at which refresh outranks an
-        // imprint. Keep converting coins into fresh relic stock for as long as refresh remains
-        // actionable; only after that path is exhausted may an imprint consume the remainder.
+        // A committed cycle is sufficient even when the refill titles are still being read.
         if (effectiveRelicPurchasesInCycle >= relicsPerStockCycle) {
-            if (refreshEnabled && (currentArea ?: 0) >= finalArea && refreshAvailable) {
+            if (refreshAllowed && !refreshAvailabilityKnown) {
+                return LabyrinthShopDecision.Wait("遗物已买完，等待刷新按钮稳定识别")
+            }
+            if (refreshAllowed && refreshAvailable) {
                 return LabyrinthShopDecision.Refresh(
                     if (visibleStockExhausted && relicPurchasesInCycle < relicsPerStockCycle) {
-                        "当前三个可购买位均为职能印记，恢复为本轮三个遗物已售罄；最终区域花300刷新下一轮遗物"
+                        "当前三个商品位均为职能印记，恢复为本轮三个遗物已售罄；按策略花300刷新下一轮遗物"
                     } else {
-                        "本轮前三个遗物已买完，最终区域允许花300刷新下一轮遗物"
+                        "本轮前三个遗物已买完，按策略花300刷新下一轮遗物"
                     },
                 )
             }
@@ -142,6 +148,10 @@ class LabyrinthShopPolicy(
             return LabyrinthShopDecision.Wait("已识别到遗物，但属性/层数元数据不足，拒绝盲买")
         }
 
+        if (refreshAllowed && items.any { it.status == LabyrinthShopItemStatus.UNKNOWN }) {
+            return LabyrinthShopDecision.Wait("商店商品按钮尚未完整识别，等待稳定后再决定刷新或退出")
+        }
+
         val reading = items.firstOrNull { it.purchasable && it.categoryState == LabyrinthShopCategoryState.READING }
         if (reading != null) {
             return LabyrinthShopDecision.Wait("${reading.slotId}正在确认商品类别（${reading.categoryAttempt}/3轮）")
@@ -158,8 +168,23 @@ class LabyrinthShopPolicy(
             )
         }
 
-        // No safely purchasable relic remains. Do not refresh a partially consumed stock just to
-        // skip an affordable imprint: refresh is reserved for a completed three-relic cycle.
+        // Purchase counts can be lost on restart, and sold-out/disabled titles may never pass
+        // OCR. Button state independently proves that those goods cannot be bought. Require the
+        // complete row: missing controls and unresolved affordable goods do not prove depletion.
+        val noActionableRelicInRow = items.size == relicsPerStockCycle && items.all {
+            it.status == LabyrinthShopItemStatus.DISABLED ||
+                (it.purchasable && it.categoryState == LabyrinthShopCategoryState.READY &&
+                    it.kind == LabyrinthShopItemKind.ROLE_IMPRINT)
+        }
+        if (refreshAllowed && noActionableRelicInRow) {
+            if (!refreshAvailabilityKnown) {
+                return LabyrinthShopDecision.Wait("当前商品行没有可购买遗物，等待刷新按钮稳定识别")
+            }
+            if (refreshAvailable) {
+                return LabyrinthShopDecision.Refresh("当前商品行没有可购买遗物，按策略花300刷新下一轮遗物")
+            }
+        }
+
         if (purchasableRoleImprint != null) {
             return LabyrinthShopDecision.BuyRoleImprint(
                 item = purchasableRoleImprint,
@@ -174,7 +199,7 @@ class LabyrinthShopPolicy(
                     "未确认商品已完成三轮识别并跳过；没有可确认购买项，退出商店"
                 !refreshEnabled -> "策略禁止刷新，当前无可确认遗物或可购买印记，结束商店"
                 (currentArea ?: 0) >= finalArea && refreshAvailable ->
-                    "当前轮尚未确认买满三个遗物，不提前刷新；且没有可购买印记，结束商店"
+                    "当前商品行尚未确认已无可购买遗物，不提前刷新；且没有可购买印记，结束商店"
                 (currentArea ?: 0) >= finalArea ->
                     "当前无可确认遗物、可购买印记或可用刷新，结束商店"
                 else -> "区域${currentArea ?: "?"}当前无可确认遗物或可购买印记，结束商店"

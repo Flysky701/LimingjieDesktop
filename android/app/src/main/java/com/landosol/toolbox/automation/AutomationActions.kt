@@ -60,4 +60,17 @@ class SessionBoundActionExecutor(
         SessionExecutionResult.StaleSession -> AutomationActionResult.StaleSession
         SessionExecutionResult.Paused -> AutomationActionResult.Paused
     }
+
+    /**
+     * Runs an action that is not a gesture (an accessibility ACTION_CLICK on a node) under the same
+     * session gate as [execute]: never for a stale or paused session, and not at all for a dry-run
+     * session (the value is then null). The session lock is held until [block] returns, so a pause
+     * or stop requested meanwhile takes effect right after it, exactly as for a gesture.
+     */
+    suspend fun <T : Any> executeDirect(
+        sessionId: AutomationSessionId,
+        block: suspend () -> T,
+    ): SessionExecutionResult<T?> = sessionManager.executeIfActive(sessionId) { session ->
+        if (session.dryRun) null else block()
+    }
 }
