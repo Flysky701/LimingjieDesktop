@@ -46,9 +46,10 @@ interface LabyrinthBatchPorts {
 
     /**
      * Makes the client drop its stale local labyrinth state and navigate back to the labyrinth
-     * home ready for a fresh entry.
+     * home ready for a fresh entry. [accountId] is the batch's account, so state the reroll left
+     * behind for another account is never acted on.
      */
-    suspend fun invalidateClientSessionAndReturn(): LabyrinthBatchInvalidationResult
+    suspend fun invalidateClientSessionAndReturn(accountId: Long): LabyrinthBatchInvalidationResult
 
     /** Starts one labyrinth run. Returns a stable run id, or null if the run could not start. */
     suspend fun startRun(accountId: Long, guildId: Int, runId: String): Boolean
@@ -275,7 +276,7 @@ class LabyrinthBatchController(
             updatedAt = clock(),
         )
         persist(checkpoint)
-        val invalidationAction = when (val invalidation = ports.invalidateClientSessionAndReturn()) {
+        val invalidationAction = when (val invalidation = ports.invalidateClientSessionAndReturn(checkpoint.accountId)) {
             is LabyrinthBatchInvalidationResult.Failure -> {
                 halt(
                     checkpoint,
@@ -330,7 +331,7 @@ class LabyrinthBatchController(
             updatedAt = clock(),
         )
         persist(checkpoint)
-        val synchronizationAction = when (val sync = ports.invalidateClientSessionAndReturn()) {
+        val synchronizationAction = when (val sync = ports.invalidateClientSessionAndReturn(checkpoint.accountId)) {
             is LabyrinthBatchInvalidationResult.Failure -> {
                 halt(
                     checkpoint,
