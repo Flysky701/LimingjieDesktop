@@ -8,6 +8,123 @@ import org.junit.Test
 
 class LabyrinthBattleTeamRecognitionTest {
     @Test
+    fun `battle geometry follows moved borders even when portrait samples are unchanged`() {
+        assertChangedGeometryIsRemeasured(
+            opening = false,
+            before = openingFrameWithThumb(0, 0, intArrayOf(365), rowColumnCounts = intArrayOf(5)),
+            after = openingFrameWithThumb(0, 0, intArrayOf(425), rowColumnCounts = intArrayOf(5)),
+        )
+    }
+
+    @Test
+    fun `opening geometry follows moved borders even when portrait samples are unchanged`() {
+        assertChangedGeometryIsRemeasured(
+            opening = true,
+            before = openingFrameWithThumb(0, 0, intArrayOf(365), rowColumnCounts = intArrayOf(5)),
+            after = openingFrameWithThumb(0, 0, intArrayOf(425), rowColumnCounts = intArrayOf(5)),
+        )
+    }
+
+    @Test
+    fun `horizontal card movement invalidates geometry in both editors`() {
+        for (opening in listOf(false, true)) {
+            assertChangedGeometryIsRemeasured(
+                opening,
+                before = openingFrameWithThumb(0, 0, intArrayOf(365), rowColumnCounts = intArrayOf(5)),
+                after = openingFrameWithThumb(0, 0, intArrayOf(365),
+                    columnLefts = AVAILABLE_SLOT_X.map { it + 12 }.toIntArray(),
+                    rowColumnCounts = intArrayOf(5)),
+            )
+        }
+    }
+
+    @Test
+    fun `second row movement with the same scrollbar invalidates both editor layouts`() {
+        for (opening in listOf(false, true)) {
+            assertChangedGeometryIsRemeasured(
+                opening,
+                before = openingFrameWithThumb(367, 826, intArrayOf(283, 495),
+                    rowColumnCounts = intArrayOf(8, 5)),
+                after = openingFrameWithThumb(367, 826, intArrayOf(283, 555),
+                    rowColumnCounts = intArrayOf(8, 5)),
+            )
+        }
+    }
+
+    @Test
+    fun `filtered card count invalidates geometry even without a scrollbar change`() {
+        for (opening in listOf(false, true)) {
+            assertChangedGeometryIsRemeasured(
+                opening,
+                before = openingFrameWithThumb(0, 0, intArrayOf(365), rowColumnCounts = intArrayOf(5)),
+                after = openingFrameWithThumb(0, 0, intArrayOf(365), rowColumnCounts = intArrayOf(2)),
+            )
+        }
+    }
+
+    @Test
+    fun `frame size changes invalidate cached coordinates in both editors`() {
+        val before = openingFrameWithThumb(0, 0, intArrayOf(365), rowColumnCounts = intArrayOf(5))
+        val after = PixelImage(960, 540, IntArray(960 * 540) { index ->
+            before[(index % 960) * 2, (index / 960) * 2]
+        })
+        for (opening in listOf(false, true)) {
+            assertChangedGeometryIsRemeasured(opening, before, after)
+        }
+    }
+
+    @Test
+    fun `mutating the caller frame cannot mutate cached geometry evidence`() {
+        for (opening in listOf(false, true)) {
+            val before = openingFrameWithThumb(0, 0, intArrayOf(365), rowColumnCounts = intArrayOf(5))
+            val after = openingFrameWithThumb(0, 0, intArrayOf(425), rowColumnCounts = intArrayOf(5))
+            val recognizer = LabyrinthBattleTeamRecognizer()
+            observeEditor(recognizer, before, opening)
+            after.pixels.copyInto(before.pixels)
+            val waiting = observeEditor(recognizer, before, opening)
+            assertEquals(LabyrinthBattleTeamRecognitionState.WAITING_FOR_STABILITY, waiting.recognitionState)
+            assertTrue(waiting.visibleCharacters.isEmpty())
+            val stable = observeEditor(recognizer, before, opening)
+            assertEquals(425, stable.visibleCharacters.first().screenRect.top)
+            assertEquals(LabyrinthBattleTeamRecognitionState.STABLE, stable.recognitionState)
+        }
+    }
+
+    @Test
+    fun `identical copied frames retain stable geometry across periodic remeasurement`() {
+        for (opening in listOf(false, true)) {
+            val frame = openingFrameWithThumb(0, 0, intArrayOf(365), rowColumnCounts = intArrayOf(5))
+            val recognizer = LabyrinthBattleTeamRecognizer()
+            val initial = observeEditor(recognizer, frame, opening)
+            repeat(14) {
+                val actual = observeEditor(recognizer, frame.copy(pixels = frame.pixels.copyOf()), opening)
+                assertEquals(LabyrinthBattleTeamRecognitionState.STABLE, actual.recognitionState)
+                assertEquals(initial.viewportRevision, actual.viewportRevision)
+                assertEquals(initial.visibleCharacters.map { it.screenRect }, actual.visibleCharacters.map { it.screenRect })
+            }
+        }
+    }
+
+    private fun assertChangedGeometryIsRemeasured(opening: Boolean, before: PixelImage, after: PixelImage) {
+        val recognizer = LabyrinthBattleTeamRecognizer()
+        val initial = observeEditor(recognizer, before, opening)
+        val expected = observeEditor(LabyrinthBattleTeamRecognizer(), after, opening)
+        assertTrue(initial.visibleCharacters.isNotEmpty())
+        assertTrue(expected.visibleCharacters.isNotEmpty())
+        assertTrue(initial.visibleCharacters.map { it.screenRect } != expected.visibleCharacters.map { it.screenRect })
+        val waiting = observeEditor(recognizer, after, opening)
+        assertEquals(LabyrinthBattleTeamRecognitionState.WAITING_FOR_STABILITY, waiting.recognitionState)
+        assertTrue("changed geometry must not expose old click coordinates", waiting.visibleCharacters.isEmpty())
+        val stable = observeEditor(recognizer, after, opening)
+        assertEquals(LabyrinthBattleTeamRecognitionState.STABLE, stable.recognitionState)
+        assertTrue(stable.viewportRevision > initial.viewportRevision)
+        assertEquals(expected.visibleCharacters.map { it.screenRect }, stable.visibleCharacters.map { it.screenRect })
+    }
+
+    private fun observeEditor(recognizer: LabyrinthBattleTeamRecognizer, frame: PixelImage, opening: Boolean) =
+        if (opening) recognizer.recognizeOpening(frame) else recognizer.recognize(frame)
+
+    @Test
     fun `opening ordinal marker distinguishes selected badge from favourite star and pale artwork`() {
         val recognizer = LabyrinthBattleTeamRecognizer(requiredStableFrames = 1)
         val card = EntryPixelRect(0, 0, CARD_SIZE, CARD_SIZE)
