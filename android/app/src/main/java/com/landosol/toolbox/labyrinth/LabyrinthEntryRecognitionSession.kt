@@ -1419,6 +1419,14 @@ class LabyrinthEntryRecognitionSession(
      * 运行中保存新配置不改变本轮，只影响下一次启动。
      */
     private var specialEquipmentSettings: LabyrinthStrategySettings? = null
+    /**
+     * 本次启动的识别节拍，来自设置快照的 `responseIntervalMillis`；运行中保存只影响下一次启动。
+     *
+     * 与 [FRAME_INTERVAL_MILLIS] 的关系：后者是上游默认值，这里在 [start] 里用它做初值，
+     * 快照存在时被覆盖。采集每 300 ms 一帧，所以只有 300（每帧）与 500/600（每 2 帧）
+     * 两档真实生效。
+     */
+    private var responseIntervalMillis: Long = FRAME_INTERVAL_MILLIS
     private var singleBossFallbackToMultiAfterThreeFailures: Boolean = false
     private var singleBossRetryCountBeforeMulti: Int = 2
     private var pendingSingleBossFallbackToMulti: Boolean = false
@@ -1776,6 +1784,7 @@ class LabyrinthEntryRecognitionSession(
             bossTeamMode = configuredBossTeamMode
             preferPureBossDamageSystem = snapshot.settings.preferPureBossDamageSystem
             specialEquipmentSettings = snapshot.settings
+            responseIntervalMillis = snapshot.settings.responseIntervalMillis.toLong()
             singleBossFallbackToMultiAfterThreeFailures =
                 snapshot.settings.singleBossFallbackToMultiAfterThreeFailures
             singleBossRetryCountBeforeMulti = snapshot.settings.singleBossRetryCountBeforeMulti
@@ -2079,7 +2088,7 @@ class LabyrinthEntryRecognitionSession(
             recycle(frame)
             return
         }
-        if (lastProcessedAt != Long.MIN_VALUE && frame.timestampMillis - lastProcessedAt < FRAME_INTERVAL_MILLIS) {
+        if (lastProcessedAt != Long.MIN_VALUE && frame.timestampMillis - lastProcessedAt < responseIntervalMillis) {
             recycle(frame)
             return
         }
