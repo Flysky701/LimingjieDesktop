@@ -25,6 +25,22 @@ enum class LabyrinthSpecialEquipmentMode {
 }
 
 /** User preferences only: game facts and recognition safety thresholds are not editable. */
+
+/**
+ * 采集侧固定每 300 ms 产出一帧（`MediaProjectionCaptureService.FRAME_INTERVAL_MILLIS`）。
+ *
+ * 识别节拍必须是它的整数倍，否则门槛会落空：例如设 400 或 500，第 300 ms 那一帧被丢弃、
+ * 只接受第 600 ms 那一帧，实际节拍都是 600 ms。这里把它写死成两档，让界面显示的毫秒数
+ * 等于真实节拍，而不是看起来可调、实际只有两个值。
+ */
+const val RESPONSE_INTERVAL_FAST = 300
+
+/** 标准档：每 2 帧处理 1 帧。这就是上游 1.0.18 之前 `FRAME_INTERVAL_MILLIS = 500` 的实际行为。 */
+const val RESPONSE_INTERVAL_STANDARD = 500
+
+/** 旧配置没有该字段时的取值：与当前项目行为（300 ms）一致。 */
+const val DEFAULT_RESPONSE_INTERVAL_MILLIS = RESPONSE_INTERVAL_FAST
+
 @Serializable
 data class LabyrinthStrategySettings(
     val playerWeight: Int = 70,
@@ -86,10 +102,24 @@ data class LabyrinthStrategySettings(
      */
     val specialEquipmentKinds: Set<LabyrinthCombatKind> =
         setOf(LabyrinthCombatKind.NORMAL, LabyrinthCombatKind.EX, LabyrinthCombatKind.BOSS),
+    /**
+     * 识别节拍：多久从采集流里取一帧做识别。
+     *
+     * 采集固定每 [CAPTURE_FRAME_INTERVAL_MILLIS] 毫秒产出一帧，所以任何 (300, 600] 之间的值都会
+     * 退化成 600 ms —— 帧只落在 0/300/600…，门槛 400 和 500 都会丢掉 300 那一帧、接受 600。
+     * 为了让每个档位都真实生效，这里只提供两档：[RESPONSE_INTERVAL_FAST]（每帧都处理）与
+     * [RESPONSE_INTERVAL_STANDARD]（每 2 帧处理 1 帧，即上游 1.0.18 之前 500 ms 的实际行为）。
+     *
+     * 旧配置缺这个字段时取 [DEFAULT_RESPONSE_INTERVAL_MILLIS]，与本项目当前行为一致。
+     */
+    val responseIntervalMillis: Int = DEFAULT_RESPONSE_INTERVAL_MILLIS,
 ) {
     fun validationError(): String? = when {
         specialEquipmentMode == LabyrinthSpecialEquipmentMode.AUTO_EQUIP && specialEquipmentKinds.isEmpty() ->
             SPECIAL_EQUIPMENT_EMPTY_KINDS_ERROR
+        responseIntervalMillis != RESPONSE_INTERVAL_FAST &&
+            responseIntervalMillis != RESPONSE_INTERVAL_STANDARD ->
+            "响应速度只有 $RESPONSE_INTERVAL_FAST ms 和 $RESPONSE_INTERVAL_STANDARD ms 两档"
         listOf(playerWeight, damageWeight, survivalWeight, functionWeight, formationWeight,
             cohesionWeight, secondTeamWeight, thirdTeamWeight, normalWinRate, extremeWinRate)
             .any { it !in 0..100 } -> "权重和胜率必须在 0–100 之间"

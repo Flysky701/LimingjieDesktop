@@ -21,6 +21,8 @@ import com.landosol.toolbox.labyrinth.LabyrinthBossTeamMode
 import com.landosol.toolbox.labyrinth.LabyrinthCombatKind
 import com.landosol.toolbox.labyrinth.LabyrinthRelicMark
 import com.landosol.toolbox.labyrinth.LabyrinthSpecialEquipmentMode
+import com.landosol.toolbox.labyrinth.RESPONSE_INTERVAL_FAST
+import com.landosol.toolbox.labyrinth.RESPONSE_INTERVAL_STANDARD
 import com.landosol.toolbox.labyrinth.LabyrinthStrategySettings
 import com.landosol.toolbox.labyrinth.LabyrinthStrategySettingsCodec
 import com.landosol.toolbox.labyrinth.LabyrinthRoleRatingItem
@@ -219,6 +221,15 @@ fun LabyrinthStrategySettingsScreen(
                     Text("仅用于比较事件战斗奖励的期望值，不代表实测胜率或胜利保证。")
                     StrategyNumber("普通战估计胜率", draft.normalWinRate, 0..100, "%", !saving) { draft = draft.copy(normalWinRate = it) }
                     StrategyNumber("极难战估计胜率", draft.extremeWinRate, 0..100, "%", !saving) { draft = draft.copy(extremeWinRate = it) }
+                }
+                StrategySection("响应速度", responseIntervalSummary(draft), section, { section = it }) {
+                    Text("延迟越低响应越快，但CPU需求会更高")
+                    StrategyChoice(
+                        label = "识别节拍",
+                        value = draft.responseIntervalMillis,
+                        choices = listOf(RESPONSE_INTERVAL_FAST, RESPONSE_INTERVAL_STANDARD),
+                        enabled = !saving,
+                    ) { draft = draft.copy(responseIntervalMillis = it) }
                 }
                 StrategySection("特别装备", specialEquipmentSummary(draft), section, { section = it }) {
                     Text(
@@ -438,3 +449,43 @@ private fun StrategySwitch(label: String, detail: String, checked: Boolean, enab
         Switch(checked = checked, onCheckedChange = change, enabled = enabled, modifier = Modifier.semantics { contentDescription = label })
     }
 }
+
+/**
+ * 档位开关：Slider 的取值是 [choices] 的下标，所以拖动只会停在这几个档位上，不会滑出中间值。
+ * [choices] 至少两项；两档时 `steps = 0`，滑块只有两个端点。
+ */
+@Composable
+private fun StrategyChoice(
+    label: String,
+    value: Int,
+    choices: List<Int>,
+    enabled: Boolean,
+    change: (Int) -> Unit,
+) {
+    val index = choices.indexOf(value).coerceIn(0, choices.lastIndex)
+    Column {
+        Text("$label：${choices[index]} ms", style = MaterialTheme.typography.bodyMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { change(choices[(index - 1).coerceAtLeast(0)]) }, enabled = enabled && index > 0,
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "$label 变快" }) { Text("−") }
+            Slider(
+                value = index.toFloat(),
+                onValueChange = { change(choices[it.roundToInt().coerceIn(0, choices.lastIndex)]) },
+                valueRange = 0f..choices.lastIndex.toFloat(),
+                steps = (choices.size - 2).coerceAtLeast(0),
+                enabled = enabled,
+                modifier = Modifier.weight(1f).semantics { contentDescription = label },
+            )
+            TextButton(onClick = { change(choices[(index + 1).coerceAtMost(choices.lastIndex)]) }, enabled = enabled && index < choices.lastIndex,
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "$label 变慢" }) { Text("+") }
+        }
+    }
+}
+
+/** 折叠状态下的摘要：只显示当前档位的毫秒数与快慢标注。 */
+private fun responseIntervalSummary(draft: LabyrinthStrategySettings): String =
+    if (draft.responseIntervalMillis == RESPONSE_INTERVAL_FAST) {
+        "${RESPONSE_INTERVAL_FAST} ms（最快）"
+    } else {
+        "${RESPONSE_INTERVAL_STANDARD} ms（最慢）"
+    }

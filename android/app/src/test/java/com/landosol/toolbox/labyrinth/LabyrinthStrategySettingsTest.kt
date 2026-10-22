@@ -93,6 +93,31 @@ class LabyrinthStrategySettingsTest {
             .forEach { assertNotNull(it.validationError()) }
     }
 
+    @Test fun `response interval defaults to the fast tier and survives persistence`() {
+        assertEquals(RESPONSE_INTERVAL_FAST, LabyrinthStrategySettings().responseIntervalMillis)
+        // 旧配置没有该字段时必须落到当前行为，而不是上游 1.0.18 之前的 500。
+        assertEquals(RESPONSE_INTERVAL_FAST,
+            LabyrinthStrategySettingsCodec.decode("{\"playerWeight\":50}").responseIntervalMillis)
+        listOf(RESPONSE_INTERVAL_FAST, RESPONSE_INTERVAL_STANDARD).forEach { interval ->
+            val settings = LabyrinthStrategySettings(responseIntervalMillis = interval)
+            assertNull(settings.validationError())
+            assertEquals(settings,
+                LabyrinthStrategySettingsCodec.decode(LabyrinthStrategySettingsCodec.encode(settings)))
+        }
+    }
+
+    @Test fun `response intervals the capture cadence would swallow are rejected`() {
+        // 采集固定 300 ms 一帧：任何 (300, 600] 之间的门槛都会丢掉 300 那一帧、只接受 600 那一帧，
+        // 实际节拍仍是 600 ms。界面若显示 400/450 就会与真实节拍不符，所以在设置层直接拒绝。
+        listOf(0, 299, 400, 450, 600, 900).forEach { interval ->
+            assertNotNull(
+                "responseIntervalMillis=$interval should be rejected",
+                LabyrinthStrategySettings(responseIntervalMillis = interval).validationError(),
+            )
+        }
+        assertEquals(RESPONSE_INTERVAL_FAST, DEFAULT_RESPONSE_INTERVAL_MILLIS)
+    }
+
     private fun productionDocument(): LabyrinthRoleDecisionDocument {
         val file = listOf(File("app/src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json"),
             File("src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json")).first { it.isFile }
