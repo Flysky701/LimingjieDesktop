@@ -1,6 +1,8 @@
 package com.landosol.toolbox.desktop.app.control
 
 import androidx.compose.runtime.*
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -11,7 +13,11 @@ import com.landosol.toolbox.desktop.app.ui.*
 import com.landosol.toolbox.desktop.platform.DesktopSettings
 import com.landosol.toolbox.labyrinth.LabyrinthStrategySettings
 import com.landosol.toolbox.labyrinth.LabyrinthUiState
+import java.awt.image.BufferedImage
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
+import javax.imageio.ImageIO
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -54,6 +60,12 @@ class SharedRunTabsUiTest {
         compose.onRoot().performKeyInput{pressKey(Key.F7)}
         compose.waitUntil(5_000){ControlOps.STOP in b.commands}
         compose.runOnIdle{assertFalse(a.previewSelected);assertTrue(b.previewSelected)}
+        val pixels=compose.onRoot().captureToImage().toPixelMap()
+        val image=BufferedImage(pixels.width,pixels.height,BufferedImage.TYPE_INT_ARGB)
+        for(y in 0 until pixels.height)for(x in 0 until pixels.width)image.setRGB(x,y,pixels[x,y].toArgb())
+        val screenshot=Path.of("build/reports/shared-run-tabs.png")
+        Files.createDirectories(screenshot.parent)
+        ImageIO.write(image,"png",screenshot.toFile())
         compose.onNodeWithText("账号").performClick()
         compose.onAllNodesWithText("共享甲").onFirst().assertIsDisplayed()
         compose.onAllNodesWithText("共享乙").onFirst().assertIsDisplayed()
