@@ -135,8 +135,8 @@ class AdbDeviceServiceTest {
             when (opens.incrementAndGet()) { 1 -> first; 2 -> throw DeviceOperationException("synthetic restart failure"); else -> RecordingTouch() }
         }).use { device ->
             device.connect("fixture"); first.alive = false
-            assertEquals(TouchResult.Rejected("触控服务已断开"), device.back(FakeAdb.GAME))
-            withTimeout(3000) { while (device.state.value !is DeviceConnectionState.Lost) delay(10) }
+            withTimeout(3000) { while (device.state.value !is DeviceConnectionState.Lost || lost.isEmpty()) delay(10) }
+            assertEquals(TouchResult.Rejected("触控服务未连接"), device.back(FakeAdb.GAME))
             assertEquals(1, lost.size)
             withTimeout(8000) { while (device.state.value !is DeviceConnectionState.Ready) delay(20) }
             assertTrue(first.gestures.isEmpty()); assertEquals(1, lost.size); assertEquals(3, opens.get())

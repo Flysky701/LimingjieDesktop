@@ -34,11 +34,12 @@ class MaaTouchTest {
             val touch = MaaTouchConnection.open(runner, "synthetic", folder.root.toPath())
             try {
                 coroutineScope { (1..8).map { n -> async { touch.send(MaaTouchProtocol.tap(n.toFloat(), 2f), 5) } }.awaitAll() }
+                // Flushing the parent pipe does not acknowledge the fixture's file writes.
+                touch.send("EXIT\n", 0)
+                withTimeout(3000) { while (touch.alive) delay(10) }
                 val data = Files.readString(output)
                 assertEquals(8, Regex("d 0").findAll(data).count())
                 assertEquals((1..8).map { MaaTouchProtocol.tap(it.toFloat(), 2f) }.toSet(), data.split(Regex("(?=d 0)")).filter(String::isNotEmpty).toSet())
-                touch.send("EXIT\n", 0)
-                withTimeout(3000) { while (touch.alive) delay(10) }
                 try { touch.send("k 4 o\nc\n", 0); fail("closed touch accepted an action") } catch (_: IOException) { }
             } finally { touch.close() }
         }
