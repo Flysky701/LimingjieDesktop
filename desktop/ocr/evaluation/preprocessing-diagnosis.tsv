@@ -1,0 +1,494 @@
+sample	variant	stage	box	text	confidence
+map-link-0	nearest	direct	80x84	G	0.13586323
+map-link-0	nearest	final	0	5	
+map-link-0	gray	direct	80x84	百	0.13675438
+map-link-0	gray	final	0		
+map-link-0	invert	direct	80x84	G	0.12511384
+map-link-0	invert	final	0		
+map-link-0	contrast0.5	direct	80x84	G	0.10335132
+map-link-0	contrast0.5	final	0		
+map-link-0	contrast1.5	direct	80x84		0.0
+map-link-0	contrast1.5	final	0		
+map-link-0	margin-white	direct	120x124	2	0.2369544
+map-link-0	margin-white	detected-0	TextBox(left=16, top=16, right=106, bottom=101)	2	0.36740857
+map-link-0	margin-white	final	1		
+map-link-0	margin-black	direct	120x124	M	0.150772
+map-link-0	margin-black	detected-0	TextBox(left=59, top=35, right=90, bottom=79)	5	0.83495325
+map-link-0	margin-black	final	1	5	
+map-link-0	right-two-thirds	direct	54x84	G	0.072165936
+map-link-0	right-two-thirds	final	0	5	
+map-link-0	bilinear	direct	80x84	5	0.32743812
+map-link-0	bilinear	final	0	5	
+map-link-0	bicubic	direct	80x84	5	0.20851213
+map-link-0	bicubic	final	0		
+map-link-1	nearest	direct	80x84	2	0.87271416
+map-link-1	nearest	final	0	2	
+map-link-1	gray	direct	80x84	2	0.48577577
+map-link-1	gray	final	0		
+map-link-1	invert	direct	80x84	2	0.7281547
+map-link-1	invert	final	0	2	
+map-link-1	contrast0.5	direct	80x84	2	0.70122004
+map-link-1	contrast0.5	final	0	2	
+map-link-1	contrast1.5	direct	80x84	2	0.29124948
+map-link-1	contrast1.5	final	0		
+map-link-1	margin-white	direct	120x124	2	0.9282447
+map-link-1	margin-white	detected-0	TextBox(left=11, top=15, right=105, bottom=101)		0.0
+map-link-1	margin-white	final	1	2	
+map-link-1	margin-black	direct	120x124	2	0.69006145
+map-link-1	margin-black	detected-0	TextBox(left=40, top=24, right=93, bottom=84)	2	0.96796405
+map-link-1	margin-black	final	1	2	
+map-link-1	right-two-thirds	direct	54x84	2	0.90944386
+map-link-1	right-two-thirds	final	0	2	
+map-link-1	bilinear	direct	80x84	2	0.9477519
+map-link-1	bilinear	final	0	2	
+map-link-1	bicubic	direct	80x84	2	0.9708339
+map-link-1	bicubic	final	0	2	
+series-visible	nearest	direct	240x1426		0.0
+series-visible	nearest	detected-0	TextBox(left=63, top=33, right=209, bottom=112)	守备	0.99990946
+series-visible	nearest	detected-1	TextBox(left=49, top=190, right=144, bottom=248)	HP	0.9844292
+series-visible	nearest	detected-2	TextBox(left=34, top=287, right=152, bottom=346)	2M	0.33508527
+series-visible	nearest	detected-3	TextBox(left=63, top=435, right=210, bottom=514)	削弱	0.99848485
+series-visible	nearest	detected-4	TextBox(left=62, top=598, right=112, bottom=638)	通	0.23678862
+series-visible	nearest	detected-5	TextBox(left=61, top=838, right=209, bottom=917)	加速	0.99988747
+series-visible	nearest	detected-6	TextBox(left=216, top=974, right=240, bottom=1011)	1	0.8336791
+series-visible	nearest	detected-7	TextBox(left=219, top=1034, right=240, bottom=1075)	月	0.3294273
+series-visible	nearest	detected-8	TextBox(left=36, top=1093, right=149, bottom=1148)	>	0.337756
+series-visible	nearest	detected-9	TextBox(left=63, top=1239, right=209, bottom=1318)	暴击	0.99956715
+series-visible	nearest	final	10	守备|HP|削弱|加速|1|暴击	
+series-visible	nearest	det-map-digit2	TextBox(left=130, top=220, right=195, bottom=295)	max=0.007820934;mean=2.8877109289169313E-5;above0.3=0;above0.6=0	
+series-visible	nearest	det-map-digit1a	TextBox(left=135, top=620, right=195, bottom=695)	max=3.1888485E-6;mean=1.0688602924346924E-7;above0.3=0;above0.6=0	
+series-visible	nearest	det-map-digit1b	TextBox(left=135, top=1020, right=195, bottom=1095)	max=6.7055225E-6;mean=7.289881799735276E-8;above0.3=0;above0.6=0	
+series-visible	gray	direct	240x1426		0.0
+series-visible	gray	detected-0	TextBox(left=62, top=30, right=211, bottom=112)	守备	0.9999347
+series-visible	gray	detected-1	TextBox(left=209, top=146, right=240, bottom=218)	i	0.35768953
+series-visible	gray	detected-2	TextBox(left=38, top=176, right=152, bottom=265)	HP	0.97749627
+series-visible	gray	detected-3	TextBox(left=134, top=226, right=187, bottom=297)	2	0.9271448
+series-visible	gray	detected-4	TextBox(left=31, top=285, right=164, bottom=352)		0.0
+series-visible	gray	detected-5	TextBox(left=62, top=434, right=211, bottom=516)	削弱	0.9991057
+series-visible	gray	detected-6	TextBox(left=211, top=555, right=240, bottom=676)		0.0
+series-visible	gray	detected-7	TextBox(left=40, top=579, right=149, bottom=669)	海	0.36756513
+series-visible	gray	detected-8	TextBox(left=33, top=690, right=161, bottom=752)	M	0.25255612
+series-visible	gray	detected-9	TextBox(left=61, top=835, right=211, bottom=917)	加速	0.9998909
+series-visible	gray	detected-10	TextBox(left=28, top=867, right=47, bottom=891)		0.0
+series-visible	gray	detected-11	TextBox(left=205, top=946, right=240, bottom=1086)		0.0
+series-visible	gray	detected-12	TextBox(left=42, top=962, right=161, bottom=1097)	+	0.674846
+series-visible	gray	detected-13	TextBox(left=32, top=1091, right=160, bottom=1155)		0.0
+series-visible	gray	detected-14	TextBox(left=62, top=1238, right=210, bottom=1322)	暴击	0.99974734
+series-visible	gray	detected-15	TextBox(left=210, top=1350, right=240, bottom=1420)	i	0.34556153
+series-visible	gray	detected-16	TextBox(left=38, top=1359, right=171, bottom=1426)	A	0.2261992
+series-visible	gray	detected-17	TextBox(left=152, top=1395, right=157, bottom=1399)		0.0
+series-visible	gray	final	18	守备|HP 2|削弱|加速|+|暴击	
+series-visible	gray	det-map-digit2	TextBox(left=130, top=220, right=195, bottom=295)	max=1.0;mean=0.2098056804456494;above0.3=473;above0.6=455	
+series-visible	gray	det-map-digit1a	TextBox(left=135, top=620, right=195, bottom=695)	max=0.08266151;mean=2.400035411119461E-4;above0.3=0;above0.6=0	
+series-visible	gray	det-map-digit1b	TextBox(left=135, top=1020, right=195, bottom=1095)	max=0.89056826;mean=0.012583578699359707;above0.3=26;above0.6=5	
+series-visible	invert	direct	240x1426		0.0
+series-visible	invert	detected-0	TextBox(left=63, top=31, right=210, bottom=116)	守备	0.9998539
+series-visible	invert	detected-1	TextBox(left=41, top=187, right=148, bottom=257)	HP	0.987928
+series-visible	invert	detected-2	TextBox(left=135, top=235, right=186, bottom=294)	2	0.9440657
+series-visible	invert	detected-3	TextBox(left=31, top=289, right=159, bottom=351)	2	0.48844165
+series-visible	invert	detected-4	TextBox(left=61, top=436, right=211, bottom=518)	削弱	0.9994384
+series-visible	invert	detected-5	TextBox(left=34, top=693, right=155, bottom=749)		0.0
+series-visible	invert	detected-6	TextBox(left=61, top=839, right=212, bottom=918)	加速	0.9998503
+series-visible	invert	detected-7	TextBox(left=54, top=987, right=138, bottom=1065)	++	0.71081173
+series-visible	invert	detected-8	TextBox(left=33, top=1095, right=157, bottom=1154)		0.0
+series-visible	invert	detected-9	TextBox(left=58, top=1237, right=212, bottom=1322)	暴击	0.99946785
+series-visible	invert	final	10	守备|HP|2|削弱|加速|++|暴击	
+series-visible	contrast0.5	direct	240x1426		0.0
+series-visible	contrast0.5	detected-0	TextBox(left=65, top=31, right=211, bottom=116)	守备	0.99993557
+series-visible	contrast0.5	detected-1	TextBox(left=214, top=150, right=240, bottom=216)		0.0
+series-visible	contrast0.5	detected-2	TextBox(left=37, top=179, right=153, bottom=266)	HP	0.9816892
+series-visible	contrast0.5	detected-3	TextBox(left=134, top=231, right=187, bottom=296)	2	0.9812748
+series-visible	contrast0.5	detected-4	TextBox(left=29, top=286, right=164, bottom=356)	》	0.6110613
+series-visible	contrast0.5	detected-5	TextBox(left=62, top=434, right=211, bottom=518)	削弱	0.9991019
+series-visible	contrast0.5	detected-6	TextBox(left=22, top=458, right=49, bottom=496)	•	0.2622662
+series-visible	contrast0.5	detected-7	TextBox(left=214, top=557, right=240, bottom=626)		0.0
+series-visible	contrast0.5	detected-8	TextBox(left=37, top=578, right=161, bottom=679)	黄	0.15647033
+series-visible	contrast0.5	detected-9	TextBox(left=221, top=619, right=239, bottom=671)	豆	0.2614321
+series-visible	contrast0.5	detected-10	TextBox(left=33, top=692, right=161, bottom=754)	2	0.3173103
+series-visible	contrast0.5	detected-11	TextBox(left=60, top=835, right=212, bottom=919)	加速	0.99983466
+series-visible	contrast0.5	detected-12	TextBox(left=20, top=855, right=53, bottom=901)	•	0.38037363
+series-visible	contrast0.5	detected-13	TextBox(left=212, top=951, right=240, bottom=1031)		0.0
+series-visible	contrast0.5	detected-14	TextBox(left=34, top=955, right=168, bottom=1101)	+	0.62406033
+series-visible	contrast0.5	detected-15	TextBox(left=214, top=1016, right=240, bottom=1083)	育	0.27796546
+series-visible	contrast0.5	detected-16	TextBox(left=148, top=1035, right=183, bottom=1090)	1	0.99095017
+series-visible	contrast0.5	detected-17	TextBox(left=30, top=1091, right=164, bottom=1159)	2	0.3837694
+series-visible	contrast0.5	detected-18	TextBox(left=61, top=1237, right=212, bottom=1324)	暴击	0.9994198
+series-visible	contrast0.5	detected-19	TextBox(left=214, top=1354, right=240, bottom=1417)		0.0
+series-visible	contrast0.5	detected-20	TextBox(left=25, top=1352, right=184, bottom=1426)	A	0.12282492
+series-visible	contrast0.5	final	21	守备|HP 2|》|削弱|加速|+ 1|暴击	
+series-visible	contrast1.5	direct	240x1426		0.0
+series-visible	contrast1.5	detected-0	TextBox(left=65, top=30, right=211, bottom=114)	守备	0.9999695
+series-visible	contrast1.5	detected-1	TextBox(left=214, top=148, right=240, bottom=213)	i	0.41413587
+series-visible	contrast1.5	detected-2	TextBox(left=43, top=183, right=149, bottom=258)	HP	0.9871624
+series-visible	contrast1.5	detected-3	TextBox(left=136, top=230, right=186, bottom=294)	2	0.89693767
+series-visible	contrast1.5	detected-4	TextBox(left=35, top=287, right=159, bottom=346)		0.0
+series-visible	contrast1.5	detected-5	TextBox(left=62, top=434, right=211, bottom=516)	削弱	0.99955094
+series-visible	contrast1.5	detected-6	TextBox(left=214, top=563, right=240, bottom=629)		0.0
+series-visible	contrast1.5	detected-7	TextBox(left=65, top=593, right=121, bottom=645)	路	0.09592527
+series-visible	contrast1.5	detected-8	TextBox(left=125, top=624, right=129, bottom=634)		0.0
+series-visible	contrast1.5	detected-9	TextBox(left=33, top=689, right=162, bottom=748)		0.0
+series-visible	contrast1.5	detected-10	TextBox(left=61, top=835, right=209, bottom=917)	加速	0.9999562
+series-visible	contrast1.5	detected-11	TextBox(left=19, top=854, right=57, bottom=900)	↓	0.21504344
+series-visible	contrast1.5	detected-12	TextBox(left=211, top=950, right=240, bottom=1082)		0.0
+series-visible	contrast1.5	detected-13	TextBox(left=85, top=1056, right=92, bottom=1062)	-	0.18981645
+series-visible	contrast1.5	detected-14	TextBox(left=36, top=1093, right=155, bottom=1149)	》	0.3982462
+series-visible	contrast1.5	detected-15	TextBox(left=62, top=1238, right=209, bottom=1320)	暴击	0.99988437
+series-visible	contrast1.5	detected-16	TextBox(left=214, top=1353, right=240, bottom=1416)	j	0.35781193
+series-visible	contrast1.5	detected-17	TextBox(left=44, top=1364, right=162, bottom=1426)	A	0.3903065
+series-visible	contrast1.5	final	18	守备|HP|2|削弱|加速|暴击	
+series-visible	margin-white	direct	360x1546		0.0
+series-visible	margin-white	detected-0	TextBox(left=123, top=91, right=272, bottom=173)	守备	0.9998902
+series-visible	margin-white	detected-1	TextBox(left=282, top=210, right=300, bottom=228)	4	0.12920363
+series-visible	margin-white	detected-2	TextBox(left=275, top=224, right=305, bottom=269)	1	0.61543506
+series-visible	margin-white	detected-3	TextBox(left=106, top=243, right=209, bottom=314)	HP	0.9796822
+series-visible	margin-white	detected-4	TextBox(left=95, top=348, right=219, bottom=408)		0.0
+series-visible	margin-white	detected-5	TextBox(left=123, top=495, right=272, bottom=577)	削弱	0.9991795
+series-visible	margin-white	detected-6	TextBox(left=276, top=661, right=306, bottom=738)		0.0
+series-visible	margin-white	detected-7	TextBox(left=122, top=897, right=272, bottom=976)	加速	0.9998481
+series-visible	margin-white	detected-8	TextBox(left=272, top=1028, right=310, bottom=1143)		0.0
+series-visible	margin-white	detected-9	TextBox(left=122, top=1298, right=270, bottom=1377)	暴击	0.99925244
+series-visible	margin-white	final	10	守备|1|HP|削弱|加速|暴击	
+series-visible	margin-black	direct	360x1546		0.0
+series-visible	margin-black	detected-0	TextBox(left=126, top=94, right=269, bottom=170)	守备	0.99988943
+series-visible	margin-black	detected-1	TextBox(left=287, top=216, right=290, bottom=220)	-	0.07217793
+series-visible	margin-black	detected-2	TextBox(left=286, top=233, right=307, bottom=256)	1	0.40861222
+series-visible	margin-black	detected-3	TextBox(left=112, top=244, right=206, bottom=312)	HP	0.98320067
+series-visible	margin-black	detected-4	TextBox(left=93, top=348, right=221, bottom=408)	2	0.4656415
+series-visible	margin-black	detected-5	TextBox(left=123, top=495, right=272, bottom=577)	削弱	0.9991795
+series-visible	margin-black	detected-6	TextBox(left=124, top=897, right=272, bottom=976)	加速	0.9999301
+series-visible	margin-black	detected-7	TextBox(left=124, top=1300, right=269, bottom=1376)	暴击	0.999341
+series-visible	margin-black	final	8	守备|HP|削弱|加速|暴击	
+series-visible	sides-white	direct	360x1426		0.0
+series-visible	sides-white	detected-0	TextBox(left=122, top=34, right=269, bottom=114)	守备	0.9998745
+series-visible	sides-white	detected-1	TextBox(left=275, top=166, right=304, bottom=208)	1	0.84082305
+series-visible	sides-white	detected-2	TextBox(left=108, top=185, right=207, bottom=250)	HP	0.97764623
+series-visible	sides-white	detected-3	TextBox(left=99, top=290, right=198, bottom=342)	2>	0.31993103
+series-visible	sides-white	detected-4	TextBox(left=122, top=437, right=270, bottom=514)	削弱	0.9989
+series-visible	sides-white	detected-5	TextBox(left=273, top=554, right=306, bottom=679)		0.0
+series-visible	sides-white	detected-6	TextBox(left=142, top=617, right=146, bottom=620)	-	0.48692763
+series-visible	sides-white	detected-7	TextBox(left=122, top=837, right=269, bottom=917)	加速	0.9998584
+series-visible	sides-white	detected-8	TextBox(left=270, top=949, right=310, bottom=1083)		0.0
+series-visible	sides-white	detected-9	TextBox(left=100, top=1096, right=203, bottom=1146)		0.0
+series-visible	sides-white	detected-10	TextBox(left=122, top=1240, right=269, bottom=1318)	暴击	0.9991471
+series-visible	sides-white	final	11	守备|1|HP|削弱|加速|暴击	
+series-visible	sides-black	direct	360x1426		0.0
+series-visible	sides-black	detected-0	TextBox(left=124, top=34, right=269, bottom=111)	守备	0.9998737
+series-visible	sides-black	detected-1	TextBox(left=110, top=189, right=206, bottom=249)	HP	0.9780424
+series-visible	sides-black	detected-2	TextBox(left=215, top=258, right=235, bottom=278)	2	0.85187924
+series-visible	sides-black	detected-3	TextBox(left=101, top=293, right=191, bottom=341)		0.0
+series-visible	sides-black	detected-4	TextBox(left=123, top=435, right=271, bottom=515)	削弱	0.99917054
+series-visible	sides-black	detected-5	TextBox(left=123, top=837, right=269, bottom=917)	加速	0.9999482
+series-visible	sides-black	detected-6	TextBox(left=105, top=1101, right=196, bottom=1142)		0.0
+series-visible	sides-black	detected-7	TextBox(left=123, top=1238, right=269, bottom=1318)	暴击	0.99941593
+series-visible	sides-black	final	8	守备|HP|2|削弱|加速|暴击	
+series-visible	red	direct	240x1426		0.0
+series-visible	red	detected-0	TextBox(left=58, top=32, right=210, bottom=112)	守备	0.9996439
+series-visible	red	detected-1	TextBox(left=26, top=59, right=55, bottom=91)	0	0.4005155
+series-visible	red	detected-2	TextBox(left=209, top=146, right=240, bottom=218)	i	0.3501963
+series-visible	red	detected-3	TextBox(left=40, top=182, right=152, bottom=264)	HP	0.9869401
+series-visible	red	detected-4	TextBox(left=134, top=226, right=187, bottom=295)	2	0.9794946
+series-visible	red	detected-5	TextBox(left=32, top=286, right=163, bottom=350)		0.0
+series-visible	red	detected-6	TextBox(left=59, top=434, right=211, bottom=516)	削弱	0.9989605
+series-visible	red	detected-7	TextBox(left=211, top=555, right=240, bottom=678)		0.0
+series-visible	red	detected-8	TextBox(left=42, top=579, right=149, bottom=669)	资	0.1770188
+series-visible	red	detected-9	TextBox(left=32, top=690, right=162, bottom=754)	2	0.41975465
+series-visible	red	detected-10	TextBox(left=59, top=835, right=209, bottom=917)	加速	0.9998443
+series-visible	red	detected-11	TextBox(left=38, top=884, right=43, bottom=888)		0.0
+series-visible	red	detected-12	TextBox(left=205, top=949, right=240, bottom=1086)		0.0
+series-visible	red	detected-13	TextBox(left=35, top=1094, right=157, bottom=1152)	2	0.4153778
+series-visible	red	detected-14	TextBox(left=60, top=1237, right=210, bottom=1322)	暴击	0.9995618
+series-visible	red	detected-15	TextBox(left=212, top=1352, right=240, bottom=1418)		0.0
+series-visible	red	detected-16	TextBox(left=39, top=1359, right=179, bottom=1426)	A	0.17072132
+series-visible	red	final	17	守备|HP 2|削弱|加速|暴击	
+series-visible	green	direct	240x1426		0.0
+series-visible	green	detected-0	TextBox(left=64, top=30, right=211, bottom=112)	守备	0.9999446
+series-visible	green	detected-1	TextBox(left=209, top=146, right=240, bottom=218)	i	0.339803
+series-visible	green	detected-2	TextBox(left=41, top=182, right=151, bottom=263)	HP	0.9754952
+series-visible	green	detected-3	TextBox(left=133, top=226, right=189, bottom=297)	2	0.92140484
+series-visible	green	detected-4	TextBox(left=33, top=286, right=158, bottom=348)	2	0.5205849
+series-visible	green	detected-5	TextBox(left=62, top=434, right=211, bottom=516)	削弱	0.99909663
+series-visible	green	detected-6	TextBox(left=211, top=555, right=240, bottom=675)		0.0
+series-visible	green	detected-7	TextBox(left=36, top=694, right=153, bottom=747)	M	0.29819357
+series-visible	green	detected-8	TextBox(left=61, top=835, right=211, bottom=917)	加速	0.9998752
+series-visible	green	detected-9	TextBox(left=205, top=948, right=240, bottom=1086)		0.0
+series-visible	green	detected-10	TextBox(left=47, top=972, right=151, bottom=1069)	+	0.4946218
+series-visible	green	detected-11	TextBox(left=34, top=1094, right=153, bottom=1150)	》2	0.4839427
+series-visible	green	detected-12	TextBox(left=62, top=1238, right=209, bottom=1320)	暴击	0.9997027
+series-visible	green	detected-13	TextBox(left=210, top=1350, right=240, bottom=1420)	i	0.3498298
+series-visible	green	detected-14	TextBox(left=60, top=1365, right=154, bottom=1426)	A	0.34251258
+series-visible	green	final	15	守备|HP 2|2|削弱|加速|暴击	
+series-visible	blue	direct	240x1426		0.0
+series-visible	blue	detected-0	TextBox(left=65, top=30, right=211, bottom=114)	守备	0.9998566
+series-visible	blue	detected-1	TextBox(left=17, top=50, right=58, bottom=97)	?	0.09194621
+series-visible	blue	detected-2	TextBox(left=212, top=148, right=240, bottom=212)		0.0
+series-visible	blue	detected-3	TextBox(left=62, top=434, right=211, bottom=518)	削弱	0.9993707
+series-visible	blue	detected-4	TextBox(left=17, top=456, right=54, bottom=497)	?	0.11453941
+series-visible	blue	detected-5	TextBox(left=61, top=837, right=209, bottom=919)	加速	0.9998784
+series-visible	blue	detected-6	TextBox(left=211, top=952, right=240, bottom=1079)		0.0
+series-visible	blue	detected-7	TextBox(left=40, top=1101, right=138, bottom=1144)		0.0
+series-visible	blue	detected-8	TextBox(left=62, top=1238, right=209, bottom=1320)	暴击	0.9996456
+series-visible	blue	detected-9	TextBox(left=215, top=1353, right=240, bottom=1410)	i	0.49519703
+series-visible	blue	final	10	守备|削弱|加速|暴击	
+series-visible	binary150	direct	240x1426		0.0
+series-visible	binary150	detected-0	TextBox(left=67, top=32, right=209, bottom=113)	守备	0.99994326
+series-visible	binary150	detected-1	TextBox(left=215, top=150, right=240, bottom=203)	i	0.22926404
+series-visible	binary150	detected-2	TextBox(left=20, top=142, right=188, bottom=313)	回	0.12906675
+series-visible	binary150	detected-3	TextBox(left=149, top=204, right=153, bottom=209)		0.0
+series-visible	binary150	detected-4	TextBox(left=62, top=436, right=209, bottom=518)	削弱	0.99990255
+series-visible	binary150	detected-5	TextBox(left=219, top=624, right=240, bottom=673)		0.0
+series-visible	binary150	detected-6	TextBox(left=62, top=837, right=209, bottom=919)	加速	0.9999832
+series-visible	binary150	detected-7	TextBox(left=213, top=953, right=240, bottom=1080)		0.0
+series-visible	binary150	detected-8	TextBox(left=17, top=941, right=194, bottom=1118)	圖	0.16326627
+series-visible	binary150	detected-9	TextBox(left=63, top=1240, right=209, bottom=1319)	暴击	0.9998826
+series-visible	binary150	detected-10	TextBox(left=214, top=1353, right=240, bottom=1416)	;	0.3504548
+series-visible	binary150	detected-11	TextBox(left=84, top=1370, right=112, bottom=1393)		0.0
+series-visible	binary150	final	12	守备|削弱|加速|暴击	
+series-visible	binary200	direct	240x1426		0.0
+series-visible	binary200	detected-0	TextBox(left=61, top=32, right=209, bottom=114)	守备	0.9999561
+series-visible	binary200	detected-1	TextBox(left=214, top=148, right=240, bottom=210)	i	0.7185847
+series-visible	binary200	detected-2	TextBox(left=44, top=180, right=151, bottom=257)	HP	0.90638363
+series-visible	binary200	detected-3	TextBox(left=61, top=434, right=211, bottom=516)	削弱	0.9999083
+series-visible	binary200	detected-4	TextBox(left=226, top=640, right=235, bottom=648)		0.0
+series-visible	binary200	detected-5	TextBox(left=58, top=837, right=209, bottom=917)	加速	0.99996734
+series-visible	binary200	detected-6	TextBox(left=75, top=865, right=79, bottom=869)		0.0
+series-visible	binary200	detected-7	TextBox(left=214, top=954, right=240, bottom=1012)	i	0.6161318
+series-visible	binary200	detected-8	TextBox(left=60, top=1240, right=209, bottom=1319)	暴击	0.9995673
+series-visible	binary200	detected-9	TextBox(left=215, top=1365, right=240, bottom=1415)	i	0.97034574
+series-visible	binary200	detected-10	TextBox(left=34, top=1355, right=172, bottom=1426)	A	0.5509747
+series-visible	binary200	final	11	守备|i|HP|削弱|加速|i|暴击|A i	
+series-visible	tile640-y0	direct	240x640		0.0
+series-visible	tile640-y0	detected-0	TextBox(left=65, top=34, right=207, bottom=113)	守备	0.99985254
+series-visible	tile640-y0	detected-1	TextBox(left=51, top=192, right=140, bottom=245)	HP	0.98245853
+series-visible	tile640-y0	detected-2	TextBox(left=34, top=289, right=156, bottom=343)	M	0.23382115
+series-visible	tile640-y0	detected-3	TextBox(left=62, top=436, right=209, bottom=515)	削弱	0.9985889
+series-visible	tile640-y0	final	4	守备|HP|削弱	
+series-visible	tile640-y576	direct	240x640		0.0
+series-visible	tile640-y576	detected-0	TextBox(left=61, top=261, right=210, bottom=340)	加速	0.999866
+series-visible	tile640-y576	detected-1	TextBox(left=104, top=538, right=108, bottom=541)		0.0
+series-visible	tile640-y576	detected-2	TextBox(left=83, top=547, right=87, bottom=550)		0.0
+series-visible	tile640-y576	detected-3	TextBox(left=87, top=547, right=91, bottom=550)	1	0.1612281
+series-visible	tile640-y576	detected-4	TextBox(left=91, top=547, right=95, bottom=550)		0.0
+series-visible	tile640-y576	detected-5	TextBox(left=95, top=547, right=98, bottom=550)		0.0
+series-visible	tile640-y576	detected-6	TextBox(left=98, top=547, right=102, bottom=550)		0.0
+series-visible	tile640-y576	final	7	加速	
+series-visible	tile640-y1152	direct	240x274	显	0.09370297
+series-visible	tile640-y1152	detected-0	TextBox(left=62, top=85, right=210, bottom=166)	暴击	0.9994614
+series-visible	tile640-y1152	final	1	暴击	
+series-visible	tile320-y0	direct	240x320		0.0
+series-visible	tile320-y0	detected-0	TextBox(left=65, top=34, right=207, bottom=113)	守备	0.99985254
+series-visible	tile320-y0	detected-1	TextBox(left=50, top=192, right=141, bottom=245)	HP	0.98637384
+series-visible	tile320-y0	final	2	守备|HP	
+series-visible	tile320-y256	direct	240x320		0.0
+series-visible	tile320-y256	detected-0	TextBox(left=36, top=37, right=148, bottom=84)	>≥	0.35831732
+series-visible	tile320-y256	detected-1	TextBox(left=62, top=180, right=209, bottom=259)	削弱	0.9985889
+series-visible	tile320-y256	final	2	削弱	
+series-visible	tile320-y512	direct	240x320	D	0.17415126
+series-visible	tile320-y512	final	0		
+series-visible	tile320-y768	direct	240x320		0.0
+series-visible	tile320-y768	detected-0	TextBox(left=61, top=69, right=210, bottom=148)	加速	0.999866
+series-visible	tile320-y768	final	1	加速	
+series-visible	tile320-y1024	direct	240x320		0.0
+series-visible	tile320-y1024	detected-0	TextBox(left=63, top=215, right=208, bottom=293)	暴击	0.99943554
+series-visible	tile320-y1024	final	1	暴击	
+series-visible	tile320-y1280	direct	240x146		0.0
+series-visible	tile320-y1280	detected-0	TextBox(left=69, top=0, right=200, bottom=31)	恭山	0.6055865
+series-visible	tile320-y1280	final	1	恭山	
+series-visible	digit2	direct	65x75	2	0.96634376
+series-visible	digit2	final	0	2	
+series-visible	digit1a	direct	60x75	1	0.9859519
+series-visible	digit1a	final	0	1	
+series-visible	digit1b	direct	60x75	1	0.9937198
+series-visible	digit1b	final	0	1	
+series-visible	bilinear	direct	240x1426		0.0
+series-visible	bilinear	detected-0	TextBox(left=63, top=33, right=209, bottom=112)	守备	0.9999141
+series-visible	bilinear	detected-1	TextBox(left=219, top=174, right=239, bottom=195)	1	0.93192476
+series-visible	bilinear	detected-2	TextBox(left=48, top=190, right=144, bottom=248)	HP	0.9814389
+series-visible	bilinear	detected-3	TextBox(left=33, top=287, right=154, bottom=346)	2	0.40064755
+series-visible	bilinear	detected-4	TextBox(left=63, top=435, right=210, bottom=514)	削弱	0.99902034
+series-visible	bilinear	detected-5	TextBox(left=62, top=838, right=208, bottom=915)	加速	0.99991333
+series-visible	bilinear	detected-6	TextBox(left=216, top=974, right=240, bottom=1011)	1	0.46353844
+series-visible	bilinear	detected-7	TextBox(left=39, top=1096, right=139, bottom=1145)	∑	0.50332236
+series-visible	bilinear	detected-8	TextBox(left=63, top=1239, right=209, bottom=1318)	暴击	0.99946344
+series-visible	bilinear	final	9	守备|1|HP|削弱|加速|∑|暴击	
+series-visible	bicubic	direct	240x1426		0.0
+series-visible	bicubic	detected-0	TextBox(left=63, top=33, right=209, bottom=112)	守备	0.99991083
+series-visible	bicubic	detected-1	TextBox(left=217, top=172, right=239, bottom=195)	1	0.95997584
+series-visible	bicubic	detected-2	TextBox(left=49, top=190, right=144, bottom=248)	HP	0.9859905
+series-visible	bicubic	detected-3	TextBox(left=33, top=287, right=156, bottom=346)	2M	0.33933008
+series-visible	bicubic	detected-4	TextBox(left=63, top=435, right=210, bottom=514)	削弱	0.99882615
+series-visible	bicubic	detected-5	TextBox(left=61, top=838, right=209, bottom=917)	加速	0.9998797
+series-visible	bicubic	detected-6	TextBox(left=216, top=974, right=240, bottom=1011)	1	0.49635777
+series-visible	bicubic	detected-7	TextBox(left=39, top=1096, right=144, bottom=1145)	∑	0.66938806
+series-visible	bicubic	detected-8	TextBox(left=63, top=1239, right=207, bottom=1318)	暴击	0.9994357
+series-visible	bicubic	final	9	守备|1|HP|削弱|加速|∑|暴击	
+map-boss-0	nearest	direct	192x192	5	0.749361
+map-boss-0	nearest	detected-0	TextBox(left=93, top=27, right=180, bottom=141)	5	0.99002737
+map-boss-0	nearest	final	1	5	
+map-boss-0	gray	direct	192x192	5	0.59211874
+map-boss-0	gray	final	0	5	
+map-boss-0	invert	direct	192x192	5	0.68469095
+map-boss-0	invert	final	0	5	
+map-boss-0	contrast0.5	direct	192x192	5	0.66174436
+map-boss-0	contrast0.5	final	0	5	
+map-boss-0	contrast1.5	direct	192x192	5	0.7344704
+map-boss-0	contrast1.5	final	0	5	
+map-boss-0	margin-white	direct	288x288	2	0.4030519
+map-boss-0	margin-white	detected-0	TextBox(left=30, top=27, right=262, bottom=267)	2	0.4861002
+map-boss-0	margin-white	final	1		
+map-boss-0	margin-black	direct	288x288		0.0
+map-boss-0	margin-black	detected-0	TextBox(left=130, top=68, right=232, bottom=193)	5	0.9963856
+map-boss-0	margin-black	detected-1	TextBox(left=150, top=115, right=153, bottom=119)		0.0
+map-boss-0	margin-black	final	2	5	
+map-boss-0	right-two-thirds	direct	128x192	5	0.8765914
+map-boss-0	right-two-thirds	detected-0	TextBox(left=24, top=22, right=119, bottom=145)	5	0.9826431
+map-boss-0	right-two-thirds	final	1	5	
+map-boss-1	nearest	direct	192x192	4	0.99222225
+map-boss-1	nearest	detected-0	TextBox(left=106, top=63, right=142, bottom=113)	4	0.8285907
+map-boss-1	nearest	final	1	4	
+map-boss-1	gray	direct	192x192	4	0.9614155
+map-boss-1	gray	final	0	4	
+map-boss-1	invert	direct	192x192	4	0.9086546
+map-boss-1	invert	final	0	4	
+map-boss-1	contrast0.5	direct	192x192	4	0.9898323
+map-boss-1	contrast0.5	final	0	4	
+map-boss-1	contrast1.5	direct	192x192	4	0.9330236
+map-boss-1	contrast1.5	final	0	4	
+map-boss-1	margin-white	direct	288x288	4	0.6552031
+map-boss-1	margin-white	detected-0	TextBox(left=35, top=31, right=258, bottom=265)	4	0.52773374
+map-boss-1	margin-white	detected-1	TextBox(left=207, top=161, right=210, bottom=165)		0.0
+map-boss-1	margin-white	final	2	4	
+map-boss-1	margin-black	direct	288x288	4	0.85677403
+map-boss-1	margin-black	detected-0	TextBox(left=53, top=52, right=227, bottom=203)	4	0.9951127
+map-boss-1	margin-black	final	1	4	
+map-boss-1	right-two-thirds	direct	128x192	4	0.99617696
+map-boss-1	right-two-thirds	detected-0	TextBox(left=13, top=25, right=110, bottom=146)	4	0.9982222
+map-boss-1	right-two-thirds	final	1	4	
+map-boss-2	nearest	direct	192x192	2	0.9927371
+map-boss-2	nearest	final	0	2	
+map-boss-2	gray	direct	192x192	2	0.9747312
+map-boss-2	gray	final	0	2	
+map-boss-2	invert	direct	192x192	2	0.9700598
+map-boss-2	invert	detected-0	TextBox(left=68, top=42, right=137, bottom=124)	2	0.9982609
+map-boss-2	invert	final	1	2	
+map-boss-2	contrast0.5	direct	192x192	2	0.95980036
+map-boss-2	contrast0.5	final	0	2	
+map-boss-2	contrast1.5	direct	192x192	2	0.97059727
+map-boss-2	contrast1.5	final	0	2	
+map-boss-2	margin-white	direct	288x288	2	0.72250813
+map-boss-2	margin-white	detected-0	TextBox(left=35, top=32, right=258, bottom=264)	2	0.84768444
+map-boss-2	margin-white	final	1	2	
+map-boss-2	margin-black	direct	288x288	2	0.8227026
+map-boss-2	margin-black	detected-0	TextBox(left=145, top=139, right=149, bottom=143)	-	0.24003962
+map-boss-2	margin-black	final	1		
+map-boss-2	right-two-thirds	direct	128x192	2	0.9941975
+map-boss-2	right-two-thirds	detected-0	TextBox(left=7, top=40, right=76, bottom=130)	2	0.9977913
+map-boss-2	right-two-thirds	final	1	2	
+map-boss-3	nearest	direct	192x192	1	0.9864493
+map-boss-3	nearest	final	0	1	
+map-boss-3	gray	direct	192x192	1	0.8827219
+map-boss-3	gray	final	0	1	
+map-boss-3	invert	direct	192x192	1	0.8704606
+map-boss-3	invert	final	0	1	
+map-boss-3	contrast0.5	direct	192x192	1	0.97993237
+map-boss-3	contrast0.5	final	0	1	
+map-boss-3	contrast1.5	direct	192x192	1	0.52906334
+map-boss-3	contrast1.5	final	0	1	
+map-boss-3	margin-white	direct	288x288	1	0.57077503
+map-boss-3	margin-white	detected-0	TextBox(left=31, top=31, right=258, bottom=260)	1	0.8075996
+map-boss-3	margin-white	final	1	1	
+map-boss-3	margin-black	direct	288x288	」	0.5555702
+map-boss-3	margin-black	detected-0	TextBox(left=46, top=52, right=191, bottom=204)	1	0.9803634
+map-boss-3	margin-black	final	1	1	
+map-boss-3	right-two-thirds	direct	128x192	1	0.9904034
+map-boss-3	right-two-thirds	final	0	1	
+control-plus	nearest	direct	168x160	+	0.42996827
+control-plus	nearest	final	0		
+control-plus	gray	direct	168x160	+	0.88016796
+control-plus	gray	final	0	+	
+control-plus	invert	direct	168x160	+	0.8324435
+control-plus	invert	final	0	+	
+control-plus	contrast0.5	direct	168x160	+	0.8772672
+control-plus	contrast0.5	final	0	+	
+control-plus	contrast1.5	direct	168x160	+	0.84971
+control-plus	contrast1.5	final	0	+	
+control-plus	margin-white	direct	252x244	T	0.12957264
+control-plus	margin-white	detected-0	TextBox(left=26, top=27, right=228, bottom=218)	A	0.24196823
+control-plus	margin-white	final	1		
+control-plus	margin-black	direct	252x244	f	0.16732562
+control-plus	margin-black	detected-0	TextBox(left=44, top=31, right=232, bottom=232)	H	0.15705208
+control-plus	margin-black	final	1		
+control-plus	right-two-thirds	direct	112x160	+	0.5439117
+control-plus	right-two-thirds	final	0	+	
+control-cross	nearest	direct	168x160	中	0.4455583
+control-cross	nearest	final	0		
+control-cross	gray	direct	168x160	+	0.37604564
+control-cross	gray	final	0		
+control-cross	invert	direct	168x160	+	0.30816442
+control-cross	invert	final	0		
+control-cross	contrast0.5	direct	168x160	+	0.5150175
+control-cross	contrast0.5	final	0	+	
+control-cross	contrast1.5	direct	168x160	中	0.27419364
+control-cross	contrast1.5	final	0		
+control-cross	margin-white	direct	252x244	金	0.12684305
+control-cross	margin-white	detected-0	TextBox(left=22, top=25, right=230, bottom=220)	⊕	0.33799714
+control-cross	margin-white	final	1	⊕	
+control-cross	margin-black	direct	252x244	④	0.15770005
+control-cross	margin-black	detected-0	TextBox(left=27, top=31, right=227, bottom=233)	+	0.12238411
+control-cross	margin-black	final	1		
+control-cross	right-two-thirds	direct	112x160	+	0.45575193
+control-cross	right-two-thirds	final	0		
+control-swords	nearest	direct	168x160	a	0.10214704
+control-swords	nearest	final	0		
+control-swords	gray	direct	168x160		0.0
+control-swords	gray	final	0		
+control-swords	invert	direct	168x160		0.0
+control-swords	invert	final	0		
+control-swords	contrast0.5	direct	168x160		0.0
+control-swords	contrast0.5	final	0		
+control-swords	contrast1.5	direct	168x160	q	0.094468035
+control-swords	contrast1.5	final	0		
+control-swords	margin-white	direct	252x244	公	0.08442879
+control-swords	margin-white	detected-0	TextBox(left=23, top=28, right=229, bottom=218)	Q1	0.32550377
+control-swords	margin-white	final	1		
+control-swords	margin-black	direct	252x244	公	0.13376527
+control-swords	margin-black	detected-0	TextBox(left=28, top=31, right=220, bottom=230)	公	0.25305295
+control-swords	margin-black	final	1		
+control-swords	right-two-thirds	direct	112x160	式	0.21005884
+control-swords	right-two-thirds	final	0		
+control-chevron	nearest	direct	192x96		0.0
+control-chevron	nearest	final	0		
+control-chevron	gray	direct	192x96		0.0
+control-chevron	gray	detected-0	TextBox(left=21, top=33, right=31, bottom=51)		0.0
+control-chevron	gray	final	1		
+control-chevron	invert	direct	192x96		0.0
+control-chevron	invert	detected-0	TextBox(left=21, top=33, right=31, bottom=51)		0.0
+control-chevron	invert	final	1		
+control-chevron	contrast0.5	direct	192x96	>	0.37090015
+control-chevron	contrast0.5	final	0		
+control-chevron	contrast1.5	direct	192x96		0.0
+control-chevron	contrast1.5	final	0		
+control-chevron	margin-white	direct	288x192	2	0.19997166
+control-chevron	margin-white	detected-0	TextBox(left=38, top=38, right=250, bottom=152)		0.0
+control-chevron	margin-white	final	1		
+control-chevron	margin-black	direct	288x192	2	0.23054859
+control-chevron	margin-black	detected-0	TextBox(left=45, top=40, right=241, bottom=151)		0.0
+control-chevron	margin-black	final	1		
+control-chevron	right-two-thirds	direct	128x96	>	0.17158471
+control-chevron	right-two-thirds	final	0		
+control-wall	nearest	direct	192x192		0.0
+control-wall	nearest	final	0		
+control-wall	gray	direct	192x192		0.0
+control-wall	gray	final	0		
+control-wall	invert	direct	192x192		0.0
+control-wall	invert	final	0		
+control-wall	contrast0.5	direct	192x192		0.0
+control-wall	contrast0.5	final	0		
+control-wall	contrast1.5	direct	192x192		0.0
+control-wall	contrast1.5	final	0		
+control-wall	margin-white	direct	288x288	-	0.5583794
+control-wall	margin-white	detected-0	TextBox(left=61, top=125, right=237, bottom=238)		0.0
+control-wall	margin-white	final	1		
+control-wall	margin-black	direct	288x288	■	0.29529247
+control-wall	margin-black	final	0		
+control-wall	right-two-thirds	direct	128x192	福	0.16572566
+control-wall	right-two-thirds	final	0		

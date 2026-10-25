@@ -101,7 +101,7 @@
 | E-08 | 回调线程 | 在 Main 上回调 | T | `DesktopAdaptersTest#ocrBridgeCopiesPixelsAndReturnsOnSwingMain`，主分支共享模块验证通过；引擎本身按契约不指定UI线程 |
 | E-09 | 繁体、异体字、全角符号 | 不做归一化（除非有评估集证据） | T（评估集） | `OcrPipelineTest#join sorts rows and columns without character normalization`；完整实采覆盖未完成，见 L2-04 |
 | E-10 | 多行文字 | 用 `\n` 拼接，顺序正确 | T | `OcrPipelineTest#join sorts rows and columns without character normalization`；真实事件样本见 `ocr/evaluation/final-v5.json` |
-| E-11 | 检测器遗漏孤立数字 | 仅对有界紧凑ROI追加整图识别；不补字、不降阈值 | T | FB-14；真实1920像素地图计数回归通过；低分辨率数字5仍失败，见 D-46 |
+| E-11 | 检测器遗漏孤立数字 | 有界紧凑ROI先整图识别，仍失败才追加一次黑边det+rec；不补字、不降阈值 | T | FB-14；真实1920和低清地图计数、5个无文字ROI回归通过；系列长列检测仍有缺口，见D-46与诊断报告 |
 
 ## F. 持久化、文件与 Windows 环境
 

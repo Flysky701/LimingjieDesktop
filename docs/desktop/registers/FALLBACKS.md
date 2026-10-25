@@ -34,7 +34,7 @@
 | ID | 触发 | 行为 | 上限 | 用户可见 | EDGE | 位置 / 测试 |
 |---|---|---|---|---|---|---|
 | FB-13 | OCR 工作队列已满（容量 64） | 新请求立即回调 `null`（与引擎不可用时相同的上游语义） | — | `W` 日志（每分钟最多一条汇总） | E-04 | `OnnxOcrEngineTest#loading queues up to 64 requests and rejects only excess request` |
-| FB-14 | OCR 检测/识别结果为空，宽高均为 32..256，长宽比 0.5..2，且输入非纯色 | 用同一识别模型读整张 ROI，保留 0.5 置信阈值；不修改上游匹配 | 每个输入最多 1 次；不改变模型初始化失败行为 | FINE 日志记录紧凑区域整图识别与尺寸；无有效识别仍返回空串 | E-11 | `OnnxBackend.recognize`；`OnnxOcrEngineTest#real 1920 pixel map counters survive compact ROI detection misses`；D-46 与真实评估报告 |
+| FB-14 | OCR 检测/识别结果为空，宽高均为 32..256，长宽比 0.5..2，且输入非纯色 | 同一模型整图识别；仍失败才四周补短边1/4黑边，追加一次det+rec。已有有效结果立即返回，不改变原像素或0.3/0.6/0.5阈值 | 整图识别最多1次、补边检测最多1次，不递归；不改变模型初始化失败行为 | FINE记录紧凑区域尺寸和补边边距；仍无有效结果返回空串 | E-11 | `OnnxBackend.recognize`；真实1920/低清数字与5个无文字ROI定向回归；D-46、`evaluation/preprocessing-diagnosis.md`与13/14报告 |
 
 ## WS-D
 

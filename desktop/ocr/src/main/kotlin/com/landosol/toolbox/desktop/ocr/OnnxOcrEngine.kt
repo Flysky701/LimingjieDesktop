@@ -188,10 +188,7 @@ internal class OnnxBackend : OcrBackend {
     }
 
     override fun recognize(image: OcrImage): String {
-        val recognized = detect(image).mapNotNull { box ->
-            val (text, score) = recognizeLine(image.crop(box))
-            if (text.isBlank()) null else RecognizedText(box, text, score)
-        }
+        val recognized = recognizeBoxes(image)
         // FB-14: isolated, outlined counters can produce an all-zero detector map.
         // A compact OCR crop gets one recognizer attempt with the unchanged 0.5 threshold.
         // Larger/name/multiline crops stay on the detection path; solid images remain empty.
@@ -199,9 +196,27 @@ internal class OnnxBackend : OcrBackend {
             image.width * 2 >= image.height && image.height * 2 >= image.width &&
             image.pixels.any { (it and 0xffffff) != (image.pixels[0] and 0xffffff) }) {
             Logger.getLogger(OnnxOcrEngine::class.java.name).fine("OCR 紧凑区域整图识别：${image.width}×${image.height}")
-            return recognizeLine(image).first
+            val direct = recognizeLine(image).first
+            if (direct.isNotBlank()) return direct
+            // FB-14: contextual pixels at an ROI edge can suppress the detector. Only after
+            // both original attempts fail, give it one black border, without changing pixels
+            // inside the crop or relaxing either confidence threshold. Do not recurse.
+            val margin = min(image.width, image.height) / 4
+            val width = image.width + 2 * margin
+            val height = image.height + 2 * margin
+            val pixels = IntArray(width * height) { -0x1000000 }
+            repeat(image.height) { y ->
+                image.pixels.copyInto(pixels, (y + margin) * width + margin, y * image.width, (y + 1) * image.width)
+            }
+            Logger.getLogger(OnnxOcrEngine::class.java.name).fine("OCR 紧凑区域补边检测：${image.width}×${image.height}，边距 $margin")
+            return OcrPostprocessing.join(recognizeBoxes(OcrImage(width, height, pixels)))
         }
         return OcrPostprocessing.join(recognized)
+    }
+
+    private fun recognizeBoxes(image: OcrImage): List<RecognizedText> = detect(image).mapNotNull { box ->
+        val (text, score) = recognizeLine(image.crop(box))
+        if (text.isBlank()) null else RecognizedText(box, text, score)
     }
 
     private fun detect(image: OcrImage): List<TextBox> {

@@ -24,3 +24,15 @@ tasks.named("processResources") { dependsOn(verifyModels) }
 tasks.named("check") { dependsOn(verifyModels) }
 apply(from = "evaluation.gradle.kts")
 tasks.named("check") { dependsOn("evaluate") }
+
+// Explicit diagnostics preserve transformed observations without counting them as test cases
+// or adding repeated variants to the accuracy manifest.
+tasks.test { exclude("**/OcrFailureDiagnosisTest*") }
+tasks.register<Test>("diagnosePreprocessing") {
+    description = "Inspect fixed-model responses to real failed ROI preprocessing variants"
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    include("**/OcrFailureDiagnosisTest*")
+    outputs.upToDateWhen { false }
+}

@@ -141,6 +141,35 @@ class OnnxOcrEngineTest {
         }
     }
 
+    @Test fun `low resolution counter gains a final border attempt without reading real nontext controls`() {
+        val resources = File("../../android/app/src/test/resources/labyrinth")
+        val lowResolution = ImageIO.read(File(resources, "node-link-20260914.png"))
+        val fullResolution = ImageIO.read(File(resources, "final-boss-active-20260909.jpg"))
+        val samples = listOf(
+            Triple(lowResolution, intArrayOf(153, 411, 20, 21), "5"),
+            Triple(lowResolution, intArrayOf(190, 411, 20, 21), "2"),
+            Triple(fullResolution, intArrayOf(420, 944, 42, 40), ""), // plus icon
+            Triple(fullResolution, intArrayOf(505, 944, 42, 40), ""), // crosshair icon
+            Triple(fullResolution, intArrayOf(590, 944, 42, 40), ""), // crossed swords
+            Triple(fullResolution, intArrayOf(420, 1008, 48, 24), ""), // chevrons
+            Triple(fullResolution, intArrayOf(1110, 765, 48, 48), ""), // map background
+        )
+        OnnxOcrEngine().use { engine ->
+            for ((source, roi, expected) in samples) {
+                val crop = source.getSubimage(roi[0], roi[1], roi[2], roi[3])
+                val scaled = BufferedImage(crop.width * 4, crop.height * 4, BufferedImage.TYPE_INT_RGB)
+                scaled.createGraphics().apply {
+                    setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR)
+                    drawImage(crop, 0, 0, scaled.width, scaled.height, null)
+                    dispose()
+                }
+                val result = CompletableFuture<String?>()
+                engine.submit(scaled.width, scaled.height, scaled.getRGB(0, 0, scaled.width, scaled.height, null, 0, scaled.width)) { result.complete(it) }
+                assertEquals("ROI ${roi.contentToString()}", expected, result.get(45, TimeUnit.SECONDS))
+            }
+        }
+    }
+
     private fun result(engine: OcrEngine): String? {
         val future = CompletableFuture<String?>()
         engine.submit(1, 1, intArrayOf(-1)) { future.complete(it) }

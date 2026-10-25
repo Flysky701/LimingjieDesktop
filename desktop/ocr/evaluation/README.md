@@ -34,6 +34,12 @@
 
 最后按已观察到的 v4 单字识别优势，补做同两组模型之间的 v5 det + v4 rec 组合验证：仍为 12/14，系列列表计数更少，p95 197.44 ms。没有改善，保留纯 v5，不再尝试其他模型。原始记录为 `final-v5det-v4rec.json`。
 
+## 固定 v5 的前处理诊断与末级回退
+
+继续核查真实失败 ROI 后，补入仅在现有紧凑 ROI 原检测和整图识别都无有效结果时触发的黑边 det+rec。原14例为13/14（92.86%），p50 23.32 ms、p95 157.57 ms；`map-link-0` 修复，`series-visible` 仍失败，G2-C 与覆盖结论不变。当前结果保留在 `final-v5-border.json` / `.tsv`，此前所有模型比较和失败报告保留。
+
+诊断说明见 `preprocessing-diagnosis.md`，原始数据为 `preprocessing-diagnosis.tsv`。显式执行 `:ocr:diagnosePreprocessing` 可复现变换、检测框、未经过置信阈值过滤的原始解码及其得分；图像输出在 `build/reports/preprocessing-diagnosis/`。该任务不接入 `check` 或常规 `test`，变体和人工定位的诊断裁剪不增加评估样本数，也不替代失败样本。
+
 ## 发行包自检样例
 
 `src/main/resources/ocr/self-test.png` 是 `shop/imprints-20260914.jpg` 的 `(125,230,390,55)` 原像素裁剪，期望 `攻击型职能的随机印记` 来自同名 JSON 的第一条 `titleText`，同时已目视核对。没有重绘、生成或改色。来源及转换说明在 `self-test-source.json`。该样例在 v4 实际识别中逐字通过，用于确认随包原生库/模型/资源可用，不代表全面识别准确率。
