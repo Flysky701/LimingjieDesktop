@@ -49,11 +49,22 @@ fun main(args: Array<String>) {
     val instanceLock = lock!!
     application {
         val saved = graph.settings.state.value
+        val screen = GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration
+        val screenBounds = screen.bounds
+        val insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(screen)
+        val centered = WindowPosition.Absolute(
+            (screenBounds.x + insets.left + (screenBounds.width - insets.left - insets.right - saved.windowWidth.coerceAtLeast(1100)).coerceAtLeast(0) / 2).dp,
+            (screenBounds.y + insets.top + (screenBounds.height - insets.top - insets.bottom - saved.windowHeight.coerceAtLeast(700)).coerceAtLeast(0) / 2).dp,
+        )
         val restorePosition = saved.windowX?.let { x -> saved.windowY?.let { y ->
             GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.any { device -> device.defaultConfiguration.bounds.intersects(java.awt.Rectangle(x, y, saved.windowWidth, saved.windowHeight)) }
                 .takeIf { it }?.let { WindowPosition.Absolute(x.dp, y.dp) }
-        } } ?: WindowPosition(Alignment.Center)
+        } } ?: centered
         val windowState = rememberWindowState(position = restorePosition, width = saved.windowWidth.coerceAtLeast(1100).dp, height = saved.windowHeight.coerceAtLeast(700).dp)
+        LaunchedEffect(windowState.size) {
+            val size = windowState.size
+            if (size.width < 1100.dp || size.height < 700.dp) windowState.size = androidx.compose.ui.unit.DpSize(maxOf(size.width, 1100.dp), maxOf(size.height, 700.dp))
+        }
         var visible by remember { mutableStateOf(true) }
         var confirmExit by remember { mutableStateOf(false) }
         var exiting by remember { mutableStateOf(false) }

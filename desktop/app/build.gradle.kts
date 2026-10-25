@@ -46,7 +46,6 @@ tasks.register<Zip>("packagePortableZip") {
     from(rootProject.file("device/licenses")) { into("LimingjieAssistant/licenses/MaaTouch") }
     from(rootProject.file("ocr/licenses")) { into("LimingjieAssistant/licenses/OCR") }
     from(rootProject.file("ocr/MODELS.md")) { into("LimingjieAssistant/licenses/OCR") }
-    from(rootProject.file("../docs/desktop/USER_CHECKLIST.md")) { into("LimingjieAssistant") }
     from(project.file("src/main/resources/desktop/portable.flag")) { into("LimingjieAssistant") }
     outputs.file(portableChecksum)
     doFirst {

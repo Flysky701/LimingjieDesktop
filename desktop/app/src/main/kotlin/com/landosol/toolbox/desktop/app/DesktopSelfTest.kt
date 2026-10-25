@@ -32,6 +32,7 @@ object DesktopSelfTest {
             val result = JSONObject().put("name", name)
             try { result.put("status", "passed").put("detail", action()) }
             catch (skip: Skipped) { result.put("status", "skipped").put("detail", skip.message) }
+            catch (failure: LinkageError) { failures++; result.put("status", "failed").put("detail", "Native runtime could not load: ${failure.message}") }
             catch (failure: Exception) { failures++; result.put("status", "failed").put("detail", failure.message ?: failure.javaClass.name) }
             result.put("durationMillis", (System.nanoTime() - start) / 1_000_000)
             results.put(result)

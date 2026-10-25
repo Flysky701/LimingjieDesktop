@@ -761,7 +761,7 @@ class DesktopAppGraph(
     }
 
     fun actionsAvailable() = (device.state.value as? DeviceConnectionState.Ready)?.device?.let { it.touchReady && it.awake } == true
-    val busy: Boolean get() = startingState.value || stoppingState.value || autoRunJob?.isActive == true || labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES || labyrinthController.uiState.value.isWorking || labyrinthController.uiState.value.captcha != null || labyrinthEntryRecognitionSession.state.value.running || gameSessionResetWorkflow.state.value.running
+    val busy: Boolean get() = startingState.value || stoppingState.value || autoRunJob?.isActive == true || accounts.uiState.value.isWorking || labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES || labyrinthController.uiState.value.isWorking || labyrinthController.uiState.value.captcha != null || labyrinthEntryRecognitionSession.state.value.running || gameSessionResetWorkflow.state.value.running
 
     suspend fun connectDevice(serial: String) {
         check(!busy) { "请先停止当前任务，再切换设备" }
