@@ -75,6 +75,7 @@ class ManagedDeviceService(
     override suspend fun back(expectedPackage: String) = connected().back(expectedPackage)
     override suspend fun home() = connected().home()
     override suspend fun launch(packageName: String) = connected().launch(packageName)
+    override suspend fun isPackageRunning(packageName: String) = connected().isPackageRunning(packageName)
     override suspend fun forceStop(packageName: String) = connected().forceStop(packageName)
     override suspend fun uiTree() = connected().uiTree()
     override fun close() = synchronized(closing) { closed = true; scope.cancel(); delegate?.close(); delegate = null }

@@ -278,6 +278,22 @@ class AdbDeviceService(
         return output is AdbResult.Success && DeviceParsers.launchSucceeded(output.text() + "\n" + output.stderr)
     }
 
+    override suspend fun isPackageRunning(packageName: String): Boolean {
+        require(packageName in gamePackages) { "不是当前支持的游戏包" }
+        val value = session ?: throw DeviceOperationException("设备未连接，无法检查游戏进程")
+        // Toybox NAME is argv[0]; -w prevents truncating long package/subprocess names.
+        val result = adb.shell(value.serial, listOf("ps", "-A", "-w", "-o", "NAME"), 3000)
+        if (session !== value) throw DeviceOperationException("设备连接已更改，无法确认游戏进程")
+        return when (result) {
+            is AdbResult.Success -> {
+                val names = result.text().lineSequence().map(String::trim).filter(String::isNotEmpty).toList()
+                check(names.firstOrNull() == "NAME" && names.size > 1 && result.stderr.isBlank()) { "游戏进程检查返回无效结果" }
+                names.drop(1).any { it == packageName || it.startsWith("$packageName:") }
+            }
+            is AdbResult.Failure -> throw DeviceOperationException("无法检查游戏进程：${result.detail}", result.kind)
+        }
+    }
+
     override suspend fun forceStop(packageName: String): Boolean {
         val serial = session?.serial ?: return false
         if (adb.shell(serial, listOf("am", "force-stop", packageName)) !is AdbResult.Success) return false

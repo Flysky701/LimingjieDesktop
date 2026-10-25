@@ -135,6 +135,27 @@ class AdbDeviceServiceTest {
             assertFalse(device.launch(FakeAdb.GAME)); assertTrue(device.forceStop(FakeAdb.GAME)); assertEquals(2, polls.get())
         }
     }
+    @Test fun packageProcessCheckUsesOnlyConnectedSerialAndExactGamePackage() = runBlocking {
+        val adb = FakeAdb()
+        var processResult: AdbResult = FakeAdb.success("NAME\n${FakeAdb.GAME}\n")
+        adb.handler = { call -> if (call.arguments.firstOrNull() == "ps") processResult else adb.default(call) }
+        AdbDeviceService(adb,directory.root.toPath(),setOf(FakeAdb.GAME),touchFactory=TouchConnectionFactory { _,_,_ -> RecordingTouch() }).use { device ->
+            device.connect("fixture")
+            assertTrue(device.isPackageRunning(FakeAdb.GAME))
+            processResult=FakeAdb.success("NAME\n${FakeAdb.GAME}:push\n")
+            assertTrue(device.isPackageRunning(FakeAdb.GAME))
+            processResult=FakeAdb.success("NAME\n${FakeAdb.GAME}.other\nother.game\n")
+            assertFalse(device.isPackageRunning(FakeAdb.GAME))
+            processResult=AdbResult.Failure(AdbFailureKind.DeviceOffline,"offline")
+            assertTrue(runCatching { device.isPackageRunning(FakeAdb.GAME) }.isFailure)
+            processResult=FakeAdb.success("unknown")
+            assertTrue(runCatching { device.isPackageRunning(FakeAdb.GAME) }.isFailure)
+            assertTrue(runCatching { device.isPackageRunning("other.package") }.isFailure)
+            val checks=adb.calls.filter { it.arguments.firstOrNull()=="ps" }
+            assertEquals(5,checks.size)
+            assertTrue(checks.all { it.serial=="fixture" && it.arguments==listOf("ps","-A","-w","-o","NAME") })
+        }
+    }
     @Test fun uiAutomatorRetriesThreeTimesThenWarnsAndCanRecover() = runBlocking {
         val adb = FakeAdb(); val attempts = AtomicInteger(); val events = CopyOnWriteArrayList<String>()
         adb.handler = { call -> if (call.arguments.firstOrNull() == "uiautomator") {

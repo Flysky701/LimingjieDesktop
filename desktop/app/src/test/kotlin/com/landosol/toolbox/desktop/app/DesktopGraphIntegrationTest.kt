@@ -240,6 +240,64 @@ class DesktopGraphIntegrationTest {
         } finally { withTimeout(15_000) { graph.shutdown() } }
     }
 
+    @Test fun batchProcessPreflightPrecedesRealBusinessAndDoesNotRepeatOnReusableFallback() = runBlocking {
+        for (mode in listOf("query-failure","stop-failure","user-stop","running","absent","reuse-stale")) {
+            val fake=FixtureDevice(1920,1080,IntArray(1920*1080)).apply {
+                packageRunning=mode!="absent"
+                processQueryFails=mode=="query-failure"
+                processQueryWaits=mode=="user-stop"
+                forceStopSucceeds=mode!="stop-failure"
+                rotateOnStop=true
+            }
+            val graph=DesktopAppGraph(directory.root.toPath().resolve(mode),suppliedDevice=fake,startupUpdates=false)
+            try {
+                val accountId=graph.database.accountDao().insert(AccountEntity(alias="offline-preflight",serverId=GameServer.CN_BILIBILI.storageId,
+                    gameUid=null,credentialKey="synthetic-preflight",isSelected=true,createdAt=1,updatedAt=1))
+                com.landosol.toolbox.security.AndroidKeystoreCredentialStore(graph.context).save("synthetic-preflight",
+                    com.landosol.toolbox.security.AccountCredentials("synthetic","synthetic"))
+                graph.connectDevice("fixture-only")
+                withTimeout(60_000) { graph.ocr.status.first { it is OcrEngineStatus.Ready } }
+                val ui=withTimeout(5000) { graph.labyrinthController.uiState.first { it.selectedAccount?.id==accountId && it.settingsReady } }
+                var businessCalls=0
+                graph.gameSessionRegistry.save(accountId,object:com.landosol.toolbox.protocol.bilibili.BilibiliGameSession {
+                    override val profile=com.landosol.toolbox.protocol.bilibili.GameAccountProfile(1,"synthetic",1,"synthetic")
+                    override suspend fun request(path:String,fields:LinkedHashMap<String,Any?>):com.landosol.toolbox.protocol.bilibili.GameSessionResult {
+                        fake.processEvents+="business:$path"
+                        businessCalls++
+                        // A stale reusable opening falls back to reroll and invokes the login hook again.
+                        return if(mode=="reuse-stale" && businessCalls==1)
+                            com.landosol.toolbox.protocol.bilibili.GameSessionResult.Success(mapOf("enter_id" to 0L))
+                        else com.landosol.toolbox.protocol.bilibili.GameSessionResult.NetworkFailure("offline test stops here")
+                    }
+                })
+                val candidateField=graph.labyrinthController.javaClass.getDeclaredField("explicitlyReadInitialOpening").apply { isAccessible=true }
+                val candidate=com.landosol.toolbox.labyrinth.batch.LabyrinthBatchReusableOpening(1,1,ui.selectedDifficulty)
+                if(mode.endsWith("failure") || mode=="user-stop" || mode=="reuse-stale") candidateField.set(graph.labyrinthController,candidate)
+                assertTrue(mode,graph.startLabyrinthAutoRun(accountId,listOf(com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoal(
+                    1,1,com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoalMode.ATTEMPTS))))
+                if(mode=="user-stop") {
+                    withTimeout(5000) { while(fake.processEvents.isEmpty()) delay(10) }
+                    withTimeout(5000) { graph.stopAll().join() }
+                }
+                withTimeout(10_000) { graph.taskStarting.first { !it } }
+                val pkg=GameServer.CN_BILIBILI.packageName
+                assertEquals(mode, "query:$pkg",fake.processEvents.first())
+                if(mode.endsWith("failure") || mode=="user-stop") {
+                    if(mode!="user-stop") assertNull(mode,graph.labyrinthBatchController.state.value)
+                    assertEquals(mode,0,businessCalls)
+                    if(mode.endsWith("failure")) assertEquals(candidate,candidateField.get(graph.labyrinthController))
+                } else {
+                    assertTrue(mode,businessCalls >= if(mode=="reuse-stale") 2 else 1)
+                    assertEquals(mode,if(mode=="absent") 0 else 1,fake.processEvents.count { it=="stop:$pkg" })
+                    val businessIndex=fake.processEvents.indexOfFirst { it.startsWith("business:") }
+                    assertEquals(mode,if(mode=="absent") listOf("query:$pkg") else listOf("query:$pkg","stop:$pkg","query:$pkg"),fake.processEvents.take(businessIndex))
+                }
+                assertNotNull("failed startup must revoke actions",graph.resolutionGuard.actionRejection())
+                assertEquals(0,fake.acceptedActions.get())
+            } finally { withTimeout(15_000) { graph.shutdown() } }
+        }
+    }
+
     /** Map and expected route copied from the upstream workflow test; only network I/O is fake. */
     private class RerollApi : LabyrinthApi {
         val retired = mutableListOf<Long>()
@@ -272,6 +330,12 @@ class DesktopGraphIntegrationTest {
         @Volatile var nextSize: Pair<Int,Int>? = null
         val acceptedActions = AtomicInteger()
         val lifecycleActions = AtomicInteger()
+        var packageRunning=false
+        var processQueryFails=false
+        var processQueryWaits=false
+        var forceStopSucceeds=true
+        var rotateOnStop=false
+        val processEvents=CopyOnWriteArrayList<String>()
         val actions = CopyOnWriteArrayList<AutomationAction>()
         var closed = false
         private val ready = DeviceReady("fixture-only", "upstream shop fixture", width, height, emptyList(), CaptureMode.Raw, true, true,
@@ -295,7 +359,19 @@ class DesktopGraphIntegrationTest {
         override suspend fun back(expectedPackage: String) = action(expectedPackage).also { if (it is TouchResult.Completed) actions += AutomationAction.Back }
         override suspend fun home() = true.also { lifecycleActions.incrementAndGet() }
         override suspend fun launch(packageName: String) = true.also { lifecycleActions.incrementAndGet() }
-        override suspend fun forceStop(packageName: String) = true.also { lifecycleActions.incrementAndGet() }
+        override suspend fun isPackageRunning(packageName:String):Boolean {
+            processEvents+="query:$packageName"
+            check(!processQueryFails) { "synthetic query failure" }
+            if(processQueryWaits) kotlinx.coroutines.awaitCancellation()
+            return packageRunning
+        }
+        override suspend fun forceStop(packageName: String):Boolean {
+            lifecycleActions.incrementAndGet();processEvents+="stop:$packageName"
+            if(!forceStopSucceeds)return false
+            packageRunning=false
+            if(rotateOnStop)nextSize=1080 to 1920
+            return true
+        }
         override suspend fun uiTree() = emptyList<UiNode>()
         override fun close() { closed = true; state.value = DeviceConnectionState.Disconnected }
     }

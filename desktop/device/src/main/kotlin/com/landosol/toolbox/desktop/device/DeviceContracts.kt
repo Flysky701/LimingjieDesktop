@@ -54,6 +54,8 @@ interface DeviceService : AutoCloseable {
     suspend fun back(expectedPackage: String): TouchResult
     suspend fun home(): Boolean
     suspend fun launch(packageName: String): Boolean
+    /** Android package and package:child processes; query failure must not mean absent. */
+    suspend fun isPackageRunning(packageName: String): Boolean = error("当前设备服务不支持进程检查")
     suspend fun forceStop(packageName: String): Boolean
     suspend fun uiTree(): List<UiNode>
 }

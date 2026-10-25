@@ -466,6 +466,9 @@ class DesktopAppGraph(
     }
 
     private val gameClientHardCloseLedger = com.landosol.toolbox.automation.session.GameClientHardCloseLedger()
+    // Retained through reusable-opening validation and its stale-opening reroll fallback;
+    // consumed only when the first client synchronization begins, never on later batch cycles.
+    @Volatile private var batchPreparedClient: Pair<Long, String>? = null
 
     private val gameClientHardCloser by lazy {
         com.landosol.toolbox.automation.session.GameClientHardCloser(
@@ -480,6 +483,9 @@ class DesktopAppGraph(
     private suspend fun hardCloseChannelClientBeforeReroll(accountId: Long): String? {
         val isBatch = labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES
         val closesClient = selectedGameServer?.let(com.landosol.toolbox.automation.session.ChannelSdkTraits::closesClientBeforeReroll) == true
+        if (isBatch && batchPreparedClient == (accountId to gamePackageName)) {
+            return resolutionGuard.beforeClientReset()
+        }
         if (isBatch) {
             val rejection = if (closesClient) resolutionGuard.beforeClientReset() else resolutionGuard.actionRejection()
             rejection?.let { return it }
@@ -518,6 +524,7 @@ class DesktopAppGraph(
     }
 
     private fun consumeGameClientHardClosed(accountId: Long?, packageName: String?): Boolean {
+        batchPreparedClient = null
         val matched = gameClientHardCloseLedger.consume(accountId, packageName)
         Log.i(CLIENT_LOG_TAG, "大退凭证 账号=$accountId 包=$packageName 有效=$matched")
         return matched
@@ -751,9 +758,10 @@ class DesktopAppGraph(
         // stage remains the authoritative lock for the rest of that run.
         if (labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES) return false
         val ui = labyrinthController.uiState.value
-        if (ui.isWorking || ui.captcha != null || labyrinthEntryRecognitionSession.state.value.running) {
+        if (ui.selectedAccount?.id != id || ui.isWorking || ui.captcha != null || labyrinthEntryRecognitionSession.state.value.running) {
             return false
         }
+        val targetPackage = (gameClientResolution as GameClientResolution.Available).server.packageName
         startingState.value = true
         autoRunJob = autoRunScope.launch {
           try {
@@ -761,12 +769,25 @@ class DesktopAppGraph(
             captureService.start()
             // Only a checked startup can consume the one-shot opening or clear task state.
             resolutionGuard.actionRejection()?.let { error(it) }
+            check(labyrinthController.uiState.value.selectedAccount?.id == id && gamePackageName == targetPackage) { "账号或游戏客户端已变化，请重新启动批量任务" }
+            check(ui.settingsReady) { "账号配置尚未加载完成" }
+            check(goals.all { goal -> com.landosol.toolbox.labyrinth.LabyrinthRerollOptions.guilds.any { it.guildId == goal.guildId } }) { "请选择有效公会" }
+            check(ui.selectedDifficulty in ui.availableDifficulties) { "请选择已解锁的有效难度" }
+            check((ui.maxAttempts.toIntOrNull() ?: 0) in 1..com.landosol.toolbox.labyrinth.LabyrinthRerollOptions.MAX_ATTEMPTS) { "最大尝试次数无效" }
+            accountRepository.loadLoginMaterial(id) // Local credential validation only; no login yet.
+            resolutionGuard.beforeClientReset()?.let { error(it) }
+            val wasRunning = prepareBatchClient(actionDevice, targetPackage)
+            currentCoroutineContext().ensureActive()
+            resolutionGuard.beforeClientReset()?.let { error(it) }
+            log.add(if (wasRunning) "批量启动前已关闭 PCR：$targetPackage" else "PCR 未运行，继续准备批量任务：$targetPackage", kind = UserLogKind.KEY)
             val reusableOpening = labyrinthController.consumeReusableOpeningForBatch(
                 expectedGuildId = goals.first().guildId,
                 expectedDifficulty = ui.selectedDifficulty,
             )
             val batchId = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.ROOT).format(java.util.Date())
             gameClientHardCloseLedger.clear()
+            gameClientHardCloseLedger.issue(id, targetPackage)
+            batchPreparedClient = id to targetPackage
             labyrinthBatchController.start(
                 batchId = batchId,
                 accountId = id,
@@ -774,8 +795,20 @@ class DesktopAppGraph(
                 difficulty = ui.selectedDifficulty,
                 reusableOpening = reusableOpening,
             )
-          } catch (cancelled: CancellationException) { throw cancelled }
+            if (labyrinthBatchController.state.value?.stage !in ACTIVE_BATCH_STAGES) {
+                resolutionGuard.disarm()
+                batchPreparedClient = null
+                gameClientHardCloseLedger.clear()
+                captureService.stop("批量任务未进入执行状态")
+            }
+          } catch (cancelled: CancellationException) {
+              if (batchPreparedClient != null) gameClientHardCloseLedger.clear()
+              resolutionGuard.disarm(); batchPreparedClient = null
+              throw cancelled
+          }
           catch (failure: Exception) {
+              if (batchPreparedClient != null) gameClientHardCloseLedger.clear()
+              batchPreparedClient = null
               resolutionGuard.disarm()
               val reason = failure.message ?: "自动执行启动失败"
               log.add(reason, true); labyrinthController.reportMessage(reason); captureService.stop()
@@ -851,6 +884,7 @@ class DesktopAppGraph(
     }
     fun pauseTask() { automationOverlayCoordinator.state.value?.let { current -> autoRunScope.launch { automationOverlayCoordinator.setPaused(current.sessionId, !current.paused) } } }
     fun stopAll(reason: String = "用户停止任务"): Job = synchronized(startLock) {
+        batchPreparedClient = null
         resolutionGuard.disarm()
         stopJob?.takeIf { it.isActive }?.let { return it }
         stoppingState.value = true
