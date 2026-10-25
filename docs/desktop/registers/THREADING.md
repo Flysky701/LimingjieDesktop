@@ -2,7 +2,7 @@
 
 更新：2026-10-25。依据实际实现；Main由kotlinx-coroutines-swing提供，为Swing EDT。
 
-UX-0 / UX-1：本轮仅新增 HTML 设计预览、截图工具和文档，没有新增正式程序 scope、收集器、轮询或线程。运行台限频、独立计时、记录采集与通知的资源所有权在 UX-2 之后随真实实现登记；当前不把规划项写成已存在资源。
+UX 实现补充：`DesktopUxController` 持有 SupervisorJob / Default scope，运行台组合状态以 250ms sample 发布；独立 1Hz 计时仅在存在运行记录时刷新。IO 子任务观察终态并追加记录、读取数据库/目录缓存及凭据可用性布尔值；没有新增 ADB 轮询或提高截图频率。预览像素转换在 Default，头像读取在 IO，页面离开时由 Compose 取消；日志以 250ms sample 展示。Graph 退出会等待 `ux.closeAndJoin()`，再释放原服务。真实 Graph + 假 I/O 的停止与资源释放定向检查通过，实机长时性能未验收。
 
 | 工作 | 实际线程/所有权 | 证据范围 |
 |---|---|---|

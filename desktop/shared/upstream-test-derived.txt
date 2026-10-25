@@ -1,2 +1,2 @@
 # D-47: retain the literal upstream release assertion while checking the desktop display suffix.
-com/landosol/toolbox/AppVersionTest.kt|assertEquals("1.0.18", AppVersion.name)|assertEquals("1.0.18+desktop.1", AppVersion.name)|1
+com/landosol/toolbox/AppVersionTest.kt|assertEquals("1.0.18", AppVersion.name)|assertEquals("1.0.18+desktop.2", AppVersion.name)|1
