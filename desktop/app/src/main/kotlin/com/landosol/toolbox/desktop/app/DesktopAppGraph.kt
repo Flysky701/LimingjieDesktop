@@ -436,12 +436,16 @@ class DesktopAppGraph(
 
     private val gameGateways = ConcurrentHashMap<Pair<GameServer, DeviceIdentitySnapshot>, BilibiliGameGateway>()
 
+    /** Worker control installs its account lease guard before accepting commands. */
+    @Volatile
+    var authenticatedAccountGuard: ((GameServer, Long) -> Unit)? = null
+
     private fun gameGatewayFor(server: GameServer): BilibiliGameGateway =
         gameGateways.computeIfAbsent(server to DesktopBindings.identity()) {
             check(server.packageName in installedGamePackages) {
                 "未安装${server.displayName}客户端（${server.packageName}），无法登录该账号"
             }
-            BilibiliGameGatewayFactory.create(
+            val delegate = BilibiliGameGatewayFactory.create(
                 context,
                 server.packageName,
                 if (server.isChannelServer) {
@@ -450,6 +454,28 @@ class DesktopAppGraph(
                     BilibiliGameGatewayFactory.ChannelEndpoint.BILIBILI
                 },
             )
+            object : BilibiliGameGateway {
+                override suspend fun loginAndLoadProfile(
+                    sdkSession: com.landosol.toolbox.protocol.bilibili.SdkSession,
+                    deviceSeed: String,
+                    captcha: com.landosol.toolbox.protocol.bilibili.CaptchaSolution?,
+                ): com.landosol.toolbox.protocol.bilibili.GameLoginResult {
+                    val result = delegate.loginAndLoadProfile(sdkSession, deviceSeed, captcha)
+                    if (result !is com.landosol.toolbox.protocol.bilibili.GameLoginResult.Success) return result
+                    val guard = authenticatedAccountGuard ?: return result
+                    val uid = result.profile.viewerId
+                    guard(server, uid)
+                    val session = object : com.landosol.toolbox.protocol.bilibili.BilibiliGameSession {
+                        override val profile = result.session.profile
+                        override suspend fun request(path: String, fields: LinkedHashMap<String, Any?>):
+                            com.landosol.toolbox.protocol.bilibili.GameSessionResult {
+                            authenticatedAccountGuard?.invoke(server, uid)
+                            return result.session.request(path, fields)
+                        }
+                    }
+                    return result.copy(session = session)
+                }
+            }
         }
     val accountRepository: AccountRepository by lazy {
         AccountRepository(database, credentialStore, sessionStore, gameSessionRegistry)

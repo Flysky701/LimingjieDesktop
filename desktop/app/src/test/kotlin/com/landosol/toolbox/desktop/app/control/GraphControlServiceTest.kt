@@ -1,0 +1,189 @@
+package com.landosol.toolbox.desktop.app.control
+
+import com.landosol.toolbox.account.AccountEditorState
+import com.landosol.toolbox.account.AccountUiState
+import com.landosol.toolbox.automation.AutomationSessionId
+import com.landosol.toolbox.clanbattle.recognition.PixelImage
+import com.landosol.toolbox.desktop.app.DesktopAppGraph
+import com.landosol.toolbox.desktop.app.adapters.storage.DesktopGoal
+import com.landosol.toolbox.desktop.app.ui.RunConsoleState
+import com.landosol.toolbox.desktop.device.*
+import com.landosol.toolbox.desktop.platform.UserResourceLeases
+import com.landosol.toolbox.labyrinth.*
+import com.landosol.toolbox.labyrinth.node.NodeClassification
+import com.landosol.toolbox.labyrinth.node.NodeViewportPixels
+import com.landosol.toolbox.labyrinth.vision.*
+import com.landosol.toolbox.protocol.bilibili.GameServer
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.*
+import org.junit.Assert.*
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.util.concurrent.atomic.AtomicInteger
+
+/** Synthetic local data only. Device calls fail unless a test explicitly supplies a fake result. */
+class GraphControlServiceTest {
+    @get:Rule val directory = TemporaryFolder()
+
+    @Test fun formsUseOriginalValidationAndSnapshotsNeverPublishEditorPasswords() = runBlocking {
+        val fake = NoIoDevice()
+        val graph = DesktopAppGraph(directory.root.toPath().resolve("data"), suppliedDevice = fake, startupUpdates = false)
+        val runtime = directory.root.toPath().resolve("runtime")
+        val leases = UserResourceLeases(runtime)
+        val service = GraphControlService(graph, "synthetic-profile", "离线测试", leases, runtime)
+        try {
+            service.execute(ControlOps.ACCOUNT_NEW, emptyArgs())
+            val editor = AccountEditorState(alias = "synthetic-account", loginId = "unused-login", password = "synthetic-password-unused",
+                server = GameServer.CN_BILIBILI, gameUid = "99999")
+            service.execute(ControlOps.ACCOUNT_SAVE, controlArgs("editor" to ControlModelCodec.encode(editor)))
+            val row = withTimeout(10_000) { graph.accounts.uiState.first { it.accounts.size == 1 } }.accounts.single()
+            service.execute(ControlOps.ACCOUNT_SELECT, controlArgs("id" to JsonPrimitive(row.id)))
+            service.execute(ControlOps.ACCOUNT_EDIT, controlArgs("id" to JsonPrimitive(row.id)))
+            withContext(Dispatchers.Main) { graph.accounts.updateEditor { it.copy(password = "never-publish-this-draft") } }
+            val opened = service.snapshot(false)
+            assertFalse(opened.toString().contains("never-publish-this-draft"))
+            val accountState = ControlModelCodec.decode<AccountUiState>(opened.getValue("accounts"))
+            assertEquals("", accountState.editor?.password)
+            assertEquals("unused-login", accountState.editor?.loginId)
+            service.execute(ControlOps.ACCOUNT_DISMISS, emptyArgs())
+
+            val strategy = LabyrinthStrategySettings(bossTeamMode = LabyrinthBossTeamMode.SINGLE_TEAM,
+                personalRoleScores = mapOf("100101" to 83), specialEquipmentMode = LabyrinthSpecialEquipmentMode.AUTO_EQUIP,
+                specialEquipmentKinds = setOf(LabyrinthCombatKind.EX))
+            service.execute(ControlOps.STRATEGY_SAVE, controlArgs("value" to ControlModelCodec.encode(strategy)))
+            assertEquals(strategy, graph.labyrinthStrategySettings.state.value)
+            val invalid = strategy.copy(playerWeight = 101)
+            val rejected = runCatching { service.execute(ControlOps.STRATEGY_SAVE, controlArgs("value" to ControlModelCodec.encode(invalid))) }.exceptionOrNull()
+            assertNotNull(rejected)
+            assertEquals(strategy, graph.labyrinthStrategySettings.state.value)
+
+            val reroll = graph.labyrinthController.uiState.value.rerollSettings().copy(difficulty = 2, maxAttempts = "19", rerollUntilFound = false)
+            val goals = listOf(DesktopGoal(1, 2, false))
+            service.execute(ControlOps.SAVE_SETUP, controlArgs("settings" to ControlModelCodec.encode(reroll), "goals" to ControlModelCodec.encode(goals)))
+            assertEquals(goals, graph.ux.preferences.state.value.goals)
+            withTimeout(5_000) { graph.labyrinthController.uiState.first { it.maxAttempts == "19" } }
+            val snapshot = service.snapshot(false)
+            assertEquals(reroll, ControlModelCodec.decode<RunConsoleState>(snapshot.getValue("console")).task.rerollSettings())
+            assertEquals(JsonNull, snapshot["preview"])
+            assertFalse(snapshot.getValue("accountVerified").jsonPrimitive.boolean)
+            verifyNonEmptyRecognitionSnapshot(service, graph)
+
+            // A manually entered UID never counts as authenticated identity.
+            val noBootstrap = runCatching { service.execute(ControlOps.START, controlArgs("task" to JsonPrimitive("REROLL"), "retreatConfirmed" to JsonPrimitive(true))) }.exceptionOrNull()
+            assertTrue(noBootstrap?.message.orEmpty(), noBootstrap?.message.orEmpty().contains("读取当前开局"))
+            assertEquals(0, fake.ioCalls.get())
+
+            // Simulate the gateway's successful authentication callback, without any request.
+            graph.authenticatedAccountGuard!!.invoke(GameServer.CN_BILIBILI, 1234567)
+            assertThrows(IllegalStateException::class.java) { leases.acquireAccount("cn-bilibili", "1234567") }
+            service.execute(ControlOps.STOP, emptyArgs())
+            leases.acquireAccount("cn-bilibili", "1234567").close()
+            service.revokeActions("synthetic disconnect")
+            assertNotNull(runCatching { service.execute(ControlOps.ACCOUNT_NEW, emptyArgs()) }.exceptionOrNull())
+        } finally { withTimeout(15_000) { service.shutdown() } }
+        assertEquals(0, fake.ioCalls.get())
+    }
+
+    @Test fun stopPreemptsAnInFlightDiscoveryInsteadOfWaitingForTheCommandMutex() = runBlocking {
+        val fake = NoIoDevice().apply { discoveryMayWait = true }
+        val graph = DesktopAppGraph(directory.root.toPath().resolve("data"), suppliedDevice = fake, startupUpdates = false)
+        val runtime = directory.root.toPath().resolve("runtime")
+        val service = GraphControlService(graph, "stop-profile", "停止测试", UserResourceLeases(runtime), runtime)
+        try {
+            val pending = async { runCatching { service.execute(ControlOps.DEVICE_DISCOVER, emptyArgs()) } }
+            withTimeout(5_000) { fake.discoveryStarted.await() }
+            withTimeout(5_000) { service.execute(ControlOps.STOP, emptyArgs()) }
+            assertTrue(withTimeout(5_000) { pending.await() }.isFailure)
+            assertFalse(graph.busy)
+            assertNull(graph.deviceConnection.activity.value)
+            assertEquals(1, fake.ioCalls.get())
+        } finally { withTimeout(15_000) { service.shutdown() } }
+    }
+
+    @Test fun firstAccountReadRequiresExclusiveAdmissionAndReleasesItOnClose() {
+        val runtime = directory.root.toPath().resolve("runtime")
+        AccountTaskAdmission.acquire(runtime, bootstrap = false).use {
+            assertThrows(IllegalStateException::class.java) { AccountTaskAdmission.acquire(runtime, bootstrap = true) }
+        }
+        AccountTaskAdmission.acquire(runtime, bootstrap = true).use {
+            assertThrows(IllegalStateException::class.java) { AccountTaskAdmission.acquire(runtime, bootstrap = false) }
+        }
+        AccountTaskAdmission.acquire(runtime, bootstrap = false).close()
+    }
+
+    private fun emptyArgs() = JsonObject(emptyMap())
+
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun verifyNonEmptyRecognitionSnapshot(service: GraphControlService, graph: DesktopAppGraph) {
+        val pixels = NodeViewportPixels.sample(PixelImage(1920, 1080, IntArray(1920 * 1080)))
+        val rect = EntryPixelRect(100, 200, 120, 80)
+        val result = LabyrinthEntryFrameResult(
+            observation = LabyrinthEntryPageObservation(LabyrinthEntryPageState.NODE_MAP_VIEW, .98,
+                mapOf(LabyrinthEntryPageState.NODE_MAP_VIEW to .98, LabyrinthEntryPageState.SHOP to .12),
+                LabyrinthAnchorScores(mapOf(EntryAnchorId.NODE_HEADER to .97))),
+            matchedFeatures = listOf("synthetic-map"), elapsedMillis = 8,
+            anchorMatches = mapOf("synthetic" to EntryAnchorMatch(.97, rect)),
+            nodeClassifications = listOf(NodeClassification(2, 1, 1, .97, true, rect)),
+            characterMatches = listOf(LabyrinthCharacterMatch("joined-1", "100101", "示例角色", .99, rect)),
+            relicChoiceSelection = LabyrinthRelicChoiceObservation(listOf(
+                LabyrinthRelicMatch("choice-1", "1", "示例遗物", "火", "+1", "示例效果", .95, rect, iconRect = rect))),
+            frameWidth = 1920, frameHeight = 1080, stageMillis = mapOf("nodes" to 7L),
+            nodeSearchMode = "typed", nodeSearchWindowCount = 12, nodeViewportSignature = "synthetic", nodeViewportPixels = pixels,
+        )
+        val member = LabyrinthRecommendedTeamMember("100101", "示例角色")
+        val state = LabyrinthEntryRecognitionSessionState(status = LabyrinthEntryRecognitionStatus.RUNNING,
+            sessionId = AutomationSessionId(17L), dryRun = true, paused = true, receivedFrameCount = 7, frameCount = 5,
+            lastResult = result, joinedCharacters = listOf(LabyrinthJoinedCharacter("100101", "示例角色", 0, .99, 1, 2)),
+            observedRelics = listOf(LabyrinthObservedRelic("1", "示例遗物", "火", "+1", "效果", .95, 1, 2, 2)),
+            routeProgress = LabyrinthRouteProgress(2, 4, 21, "下个节点", rect),
+            combatContext = LabyrinthCombatContext(LabyrinthCombatKind.EX, 1, 3),
+            battleTeamRecommendation = LabyrinthBattleTeamRecommendation(listOf(member), LabyrinthTeamDamageType.PHYSICAL,
+                83.5, member, null, listOf("示例推荐原因"), 4, 3),
+            frameTrace = LabyrinthFrameTrace(listOf("NODE_MAP_VIEW"), actionRejectReason = "已暂停", nodeTargetBlockId = 123L,
+                nodeSearchWindowCount = 12, nodeTrackerReliable = true, nodeTrackerWorldLeft = 16.5))
+        // A complete synthetic session state exercises the real snapshot path without starting capture.
+        val field = graph.labyrinthEntryRecognitionSession.javaClass.getDeclaredField("_state").apply { isAccessible = true }
+        val mutable = field.get(graph.labyrinthEntryRecognitionSession) as MutableStateFlow<LabyrinthEntryRecognitionSessionState>
+        val original = mutable.value
+        try {
+            mutable.value = state
+            val document = service.snapshot(false)
+            val restored = ControlModelCodec.decode<RunConsoleState>(document.getValue("console"))
+            assertEquals(state.copy(lastResult = result.copy(nodeViewportPixels = null)), restored.entry)
+            assertTrue(restored.busy)
+            assertNull(restored.entry.lastResult?.nodeViewportPixels)
+            assertSame(pixels, mutable.value.lastResult?.nodeViewportPixels)
+            assertTrue("snapshot must not contain raw viewport buffers", document.toString().length < 500_000)
+        } finally { mutable.value = original }
+    }
+
+    private class NoIoDevice : DeviceService {
+        override val state = MutableStateFlow<DeviceConnectionState>(DeviceConnectionState.Disconnected)
+        override val foregroundPackage: String? = null
+        val ioCalls = AtomicInteger()
+        val discoveryStarted = CompletableDeferred<Unit>()
+        var discoveryMayWait = false
+        override suspend fun discover(): List<DeviceDescriptor> {
+            ioCalls.incrementAndGet()
+            check(discoveryMayWait) { "Unexpected device discovery" }
+            discoveryStarted.complete(Unit)
+            awaitCancellation()
+        }
+        private fun unexpected(): Nothing { ioCalls.incrementAndGet(); error("No device I/O allowed") }
+        override suspend fun connect(serial: String, touchMode: TouchMode) = unexpected()
+        override suspend fun disconnect() { state.value = DeviceConnectionState.Disconnected }
+        override suspend fun capture(): DeviceFrame = unexpected()
+        override suspend fun queryForeground(): String? = unexpected()
+        override suspend fun tap(x: Float, y: Float, expectedPackage: String): TouchResult = unexpected()
+        override suspend fun swipe(fromX: Float, fromY: Float, toX: Float, toY: Float, durationMillis: Long, holdMillis: Long, expectedPackage: String): TouchResult = unexpected()
+        override suspend fun back(expectedPackage: String): TouchResult = unexpected()
+        override suspend fun home(): Boolean = unexpected()
+        override suspend fun launch(packageName: String): Boolean = unexpected()
+        override suspend fun forceStop(packageName: String): Boolean = unexpected()
+        override suspend fun uiTree(): List<UiNode> = unexpected()
+        override fun close() = Unit
+    }
+}
