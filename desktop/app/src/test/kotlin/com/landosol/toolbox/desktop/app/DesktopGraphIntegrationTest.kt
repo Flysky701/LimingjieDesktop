@@ -7,6 +7,7 @@ import com.landosol.toolbox.data.local.AccountEntity
 import com.landosol.toolbox.data.local.AppDatabase
 import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
+import com.landosol.toolbox.desktop.platform.PowerMode
 import com.landosol.toolbox.desktop.shared.DesktopBindings
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import com.landosol.toolbox.labyrinth.*
@@ -34,6 +35,7 @@ class DesktopGraphIntegrationTest {
     @get:Rule val directory = TemporaryFolder()
 
     @Test fun realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources() = runBlocking {
+        val existingThreads = ownedThreads().map { it.threadId() }.toSet()
         val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }
             .first { Files.exists(it.resolve("android/app/src/test/resources/shop/shop.png")) }
         val fixture = ImageIO.read(root.resolve("android/app/src/test/resources/shop/shop.png").toFile())
@@ -63,6 +65,7 @@ class DesktopGraphIntegrationTest {
             assertTrue(recognized.running); assertTrue(recognized.dryRun)
             assertEquals(LabyrinthEntryPageState.SHOP, recognized.lastResult?.observation?.state)
             assertNotNull(graph.preview.value); assertNotNull(CaptureFrameBus.currentOwner())
+            withTimeout(3000) { while (powerMode(graph) != PowerMode.VISUAL) delay(10) }
             assertEquals(0, fake.acceptedActions.get())
             val sessionId = checkNotNull(recognized.sessionId)
             assertTrue(graph.automationActionExecutor.execute(sessionId, AutomationAction.Tap(ScreenPoint(10f, 20f))) is AutomationActionResult.DryRun)
@@ -77,6 +80,12 @@ class DesktopGraphIntegrationTest {
             assertFalse(graph.labyrinthEntryRecognitionSession.state.value.running)
             assertNull(CaptureFrameBus.currentOwner()); assertFalse(CaptureStateRegistry.isActive())
             assertEquals(AutomationActionResult.StaleSession, graph.automationActionExecutor.execute(sessionId, AutomationAction.Back))
+            withTimeout(3000) {
+                while (powerMode(graph) != PowerMode.IDLE || taskJobs(graph).any { !it.isCompleted }) delay(10)
+            }
+            val capturesAfterStop = fake.captures.get()
+            delay(650)
+            assertEquals("stopped capture must not keep polling", capturesAfterStop, fake.captures.get())
 
             val foregroundSession = graph.automationSessionManager.start(AutomationMode.LABYRINTH, dryRun = false) as AutomationSessionStartResult.Started
             fake.foreground = null
@@ -101,8 +110,19 @@ class DesktopGraphIntegrationTest {
             val starting = graph.startRecognition(dryRun = true)
             withTimeout(5000) { graph.stopAll("startup cancellation").join(); starting.join() }
             assertFalse(graph.busy); assertNull(CaptureFrameBus.currentOwner()); assertFalse(CaptureStateRegistry.isActive())
-        } finally { withTimeout(15_000) { graph.shutdown() } }
+        } finally {
+            val began = System.nanoTime()
+            withTimeout(5000) {
+                graph.shutdown()
+                while (ownedScopes(graph).any { it.coroutineContext[Job]?.isCompleted == false } ||
+                    ownedThreads().any { it.threadId() !in existingThreads }) delay(10)
+            }
+            val elapsedMillis = (System.nanoTime() - began) / 1_000_000
+            assertTrue("shutdown and owned workers took ${elapsedMillis}ms", elapsedMillis <= 5000)
+            println("GRAPH_LIFECYCLE shutdownMillis=$elapsedMillis graphJobs=0 ownedThreads=0 power=${powerMode(graph)}")
+        }
         assertTrue(fake.closed)
+        assertEquals(PowerMode.IDLE, powerMode(graph))
         assertNull(graph.preview.value); assertNull(CaptureFrameBus.currentOwner())
         assertThrows(IllegalStateException::class.java) { DesktopBindings.services }
         for (port in listOfNotNull(debugPort, captchaPort.takeIf { it > 0 })) ServerSocket().use { socket ->
@@ -115,6 +135,28 @@ class DesktopGraphIntegrationTest {
         val reopened = DesktopAppGraph(data, suppliedDevice = FixtureDevice(fixture.width, fixture.height, intArrayOf()), startupUpdates = false)
         try { assertEquals(1, reopened.database.accountDao().count()) }
         finally { withTimeout(15_000) { reopened.shutdown() } }
+    }
+
+    /** Observe real owners instead of substituting lifecycle collaborators in the graph. */
+    private fun ownedScopes(owner: Any): List<CoroutineScope> = owner.javaClass.declaredFields
+        .filter { CoroutineScope::class.java.isAssignableFrom(it.type) }
+        .map { it.isAccessible = true; it.get(owner) as CoroutineScope }
+
+    private fun taskJobs(graph: DesktopAppGraph): List<Job> = listOf("recognitionScope", "resetScope")
+        .flatMap { name ->
+            val field = graph.javaClass.getDeclaredField(name).apply { isAccessible = true }
+            (field.get(graph) as CoroutineScope).coroutineContext[Job]!!.children.toList()
+        } + ownedScopes(graph.captureService).flatMap { it.coroutineContext[Job]!!.children.toList() }
+
+    private fun powerMode(graph: DesktopAppGraph): PowerMode {
+        val power = graph.javaClass.getDeclaredField("power").apply { isAccessible = true }.get(graph)
+        return power.javaClass.getDeclaredField("mode").apply { isAccessible = true }.get(power) as PowerMode
+    }
+
+    private fun ownedThreads(): Set<Thread> = Thread.getAllStackTraces().keys.filterTo(mutableSetOf()) {
+        it.isAlive && (it.name in setOf("desktop-capture", "landosol-ocr", "desktop-power-state",
+            "desktop-runtime-diagnostics", "labyrinth-debug-dashboard", "labyrinth-debug-http") ||
+            it.name.startsWith("desktop-captcha-"))
     }
 
     @Test fun upstreamRerollPersistsAndActionReplayUsesRealGraph() = runBlocking {

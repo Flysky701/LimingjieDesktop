@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.landosol.toolbox.desktop.app.DesktopGraphIntegrationTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-10-25T11:49:35" hostname="FLY-LAPTOP" time="5.351">
+  <properties/>
+  <testcase name="realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources" classname="com.landosol.toolbox.desktop.app.DesktopGraphIntegrationTest" time="5.351"/>
+  <system-out><![CDATA[GRAPH_LIFECYCLE shutdownMillis=35 graphJobs=0 ownedThreads=0 power=IDLE
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

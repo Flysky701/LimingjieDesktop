@@ -13,3 +13,11 @@
 范围限制：两项是最短必要集成，不宣称完整 G3/G6 通过；完整 12 次重连、长时 soak、真实 MaaTouch/模拟器行为另按 L1/L2 记录。设备层 FakeAdb 和进程测试证据见 WS-B-1。
 
 只读环境盘点：MuMu 安装可用，ADB 36.0.0 查询 exit 0、在线设备为空；MuMuManager info -v all 显示 Android 12 的实例 0/1 和 Android 15 的实例 3 均关闭。未读取账号数据；ADB 查询自行启动本地守护进程。随后是否启动及 L1 结果单独记录。
+
+## 停止与退出资源补充（2026-10-25）
+
+针对 G3-4/G3-8 追加到原首项用例的断言已通过：运行后 Windows 原生防睡眠控制器处于 VISUAL，停止后回到 IDLE；识别/重置及截图 scope 的子 Job 数归零；停止后跨两个截图周期没有继续抓帧。退出时 graph 所有自有 scope 均完成，截图、OCR、防睡眠、验证码和诊断的新增专用线程全部消失，原有端口、数据库移动、设备 close 和绑定释放断言仍通过。
+
+此次完整首项用例 5.351 秒，**shutdown 连同等待自有 worker 退出为 35ms**，满足本例 ≤5 秒；结果为 `graphJobs=0 ownedThreads=0 power=IDLE`。证据见 `../evidence/final-tests/graph-lifecycle.xml`。这是实际测试耗时，不声称异常路径的全局强制退出上限。生产 `shutdown` 的 10 秒只限等待任务停止，随后才逐项关闭资源。
+
+任务停止时保持设备连接，截图 executor 的闲置线程随 graph 保留供重启使用，实际截图 Job 已结束；设备触控连接由 DeviceService 持有，退出时关闭。此处不将“闲置连接线程”称为已销毁，也不将假 DeviceService 的 close 替代 MaaTouch kill 的设备层证据。G3-11 逐行线程断言仍不是本用例的覆盖范围。
