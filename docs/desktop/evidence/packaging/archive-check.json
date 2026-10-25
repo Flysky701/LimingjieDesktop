@@ -1,0 +1,16 @@
+{
+  "archive": "desktop/app/build/dist/LimingjieAssistant-desktop-1.0.18+desktop.1-win-x64.zip",
+  "bytes": 294084561,
+  "roots": [
+    "LimingjieAssistant"
+  ],
+  "entries": 561,
+  "missingRequired": [],
+  "forbiddenEntries": [],
+  "testRuntimeJars": [],
+  "checksum": "853c41536082737dab32be52fd6158477330c83240076e75efb5861a7789c016",
+  "hasBundledRuntime": true,
+  "binarySelfTest": "self-test.json: 10 passed, exit 0; native temp and extracted path both contain Chinese/spaces",
+  "documentationRefresh": "README updated after both 1280x720 and 1920x1080 title probes; createReleaseDistributable remained UP-TO-DATE, only ZIP documentation refreshed",
+  "portableWindow": "portable-window.png: actual packaged EXE launched into a fresh data directory, version and first-run wizard checked, exited normally"
+}

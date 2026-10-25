@@ -34,7 +34,8 @@
     "suiteNames": [
       "com.landosol.toolbox.desktop.device.AdbDeviceServiceTest",
       "com.landosol.toolbox.desktop.device.MaaTouchTest"
-    ]
+    ],
+    "scope": "Only two fixture synchronization failures rerun; preceding full run was 31 tests. One additional real-MuMu parser case passed in the device worktree afterward, giving 32 cases in total."
   },
   "shared": {
     "totals": {
@@ -45,6 +46,20 @@
     },
     "suiteNames": [
       "com.landosol.toolbox.AppVersionTest"
-    ]
+    ],
+    "scope": "Only the corrected AppVersionTest class rerun; full 1256-test evidence retained separately."
+  },
+  "ocr": {
+    "totals": {
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "suiteNames": [
+      "com.landosol.toolbox.desktop.ocr.OcrPipelineTest",
+      "com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest"
+    ],
+    "scope": "Final PP-OCRv5 engine tests in managed OCR worktree; accuracy evaluation is separate and failed 12/14."
   }
 }

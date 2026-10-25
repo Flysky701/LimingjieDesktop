@@ -14,7 +14,7 @@
 | 捕获帧 | 新Bitmap交原CaptureFrameBus所有权协议，UI不持有此Bitmap | capture测试及源码 |
 | 预览 | 500ms至多发布一次IntArray副本，UI另复制为BufferedImage/ImageBitmap | 源码；视觉/框位置待窗口检查 |
 | OCR桥 | 同步复制ARGB后交OcrPort，Main回调；调用方可立即recycle | ocrBridgeCopiesPixelsAndReturnsOnSwingMain通过 |
-| OCR推理 | :ocr的专用运行资源由OnnxOcrEngine持有和关闭 | 正在集成，性能/取消以WS-C报告为准 |
+| OCR推理 | OnnxOcrEngine单守护线程、容量64、初始化复用，close使请求完成并释放模型 | WS-C-1的16项测试；实际模型自检和质量评估分别记录 |
 | Room | BundledSQLite+WAL，查询context IO；writer connection事务 | RoomCompatibilityTest事务/外键/旧版迁移；未重复M1检查 |
 | 损坏恢复 | DatabaseRecovery整段IO；明确use范围只读检查，关闭后移动db/wal/shm | DesktopStorageTest通过，避免Windows坏库首次打开留句柄 |
 | 加密 | suspend接口、IO+每实例Mutex；DPAPI在IO执行 | 本机合成DPAPI往返/entropy/篡改拒绝通过 |
@@ -24,6 +24,6 @@
 | 防睡眠 | 专用常驻单线程executor统一设/清 | 假kernel32同线程与异常清理通过 |
 | 国服库 | databaseUpdateScope IO；仓库更新synchronized；同目录候选与原子替换 | 合成SQLite/拦截HTTP/占用暂存测试通过 |
 | 诊断 | 上游面板守护线程；采样每5秒最多720条，desktop-runtime-diagnostics | socket关闭测试通过；采样线程无独立断言 |
-| 退出 | 停止job归graph，stopAndJoin后清busy；shutdown上界10秒后资源关闭 | 接线实现；进程退出以集成/打包自检为准 |
+| 退出 | 停止job归graph，stopAndJoin后清busy；shutdown上界10秒后资源关闭 | DesktopGraphIntegrationTest验证端口/数据库/绑定释放与同JVM重开；实际窗口正常退出 |
 
 上游角色搜索/图标评分守护线程池保持原样。阻塞平台操作在IO/Default，Windows文件选择在EDT模态运行。未做全部动作、托盘回调或每个scope的逐线程断言，源码确认不冒充这些测试。

@@ -1,0 +1,67 @@
+{
+  "checks": [
+    {
+      "name": "data-dir",
+      "detail": "Writable data directory: D:\\Project\\LimingjieDesktop\\.tools\\交付验证\\测试 目录 20261025\\自检 数据",
+      "millis": 6,
+      "status": "passed"
+    },
+    {
+      "name": "fonts",
+      "detail": "CJK characters available in Dialog",
+      "millis": 210,
+      "status": "passed"
+    },
+    {
+      "name": "resources",
+      "detail": "1074 assets; assets/resource-packs/cn-bilibili/icons/characters/icon_unit_100111.png 128x128",
+      "millis": 246,
+      "status": "passed"
+    },
+    {
+      "name": "ocr",
+      "detail": "Models loaded; sample recognized as 攻击型职能的随机印记",
+      "millis": 450,
+      "status": "passed"
+    },
+    {
+      "name": "sqlite-bundled",
+      "detail": "3.46.0",
+      "millis": 26,
+      "status": "passed"
+    },
+    {
+      "name": "room",
+      "detail": "Schema 1 → 4; migration preserved data; insert/read passed",
+      "millis": 115,
+      "status": "passed"
+    },
+    {
+      "name": "dpapi",
+      "detail": "Current Windows user encrypt/decrypt round trip passed",
+      "millis": 67,
+      "status": "passed"
+    },
+    {
+      "name": "jna-kernel32",
+      "detail": "SetThreadExecutionState resolved without invoking it",
+      "millis": 0,
+      "status": "passed"
+    },
+    {
+      "name": "maatouch",
+      "detail": "MaaTouch v1.1.0 verified",
+      "millis": 4,
+      "status": "passed"
+    },
+    {
+      "name": "tls",
+      "detail": "TLSv1.3; handshake only, no HTTP request",
+      "millis": 525,
+      "status": "passed"
+    }
+  ],
+  "passed": true,
+  "version": "1.0.18+desktop.1",
+  "timestamp": "2026-10-25T11:06:07.116969300Z"
+}
