@@ -24,6 +24,9 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlin.system.exitProcess
 
+@Volatile private var crashGraph: DesktopAppGraph? = null
+private val crashDialogOpen = java.util.concurrent.atomic.AtomicBoolean(false)
+
 fun main(args: Array<String>) {
     System.setProperty("java.net.useSystemProxies", "true")
     if ("--self-test" in args) { exitProcess(DesktopSelfTest.run(args)) }
@@ -37,7 +40,7 @@ fun main(args: Array<String>) {
         DesktopLog.initialize(directory.resolve("logs"))
         installCrashHandler(directory)
         val database = runBlocking { DatabaseRecovery.open(DesktopContext(directory.toFile())) { messages.add(it) } }
-        DesktopAppGraph(directory, database).also { app -> messages.forEach { app.log.add(it, true) } }
+        DesktopAppGraph(directory, database).also { app -> crashGraph = app; messages.forEach { app.log.add(it, true) } }
     } catch (failure: Exception) {
         lock?.close()
         JOptionPane.showMessageDialog(null, failure.message ?: "启动失败", "黎明界助手", JOptionPane.ERROR_MESSAGE)
@@ -141,8 +144,21 @@ private fun installCrashHandler(directory: Path) {
     Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
         runCatching {
             val crashes = directory.resolve("logs/crashes"); Files.createDirectories(crashes)
-            Files.writeString(crashes.resolve("crash-${System.currentTimeMillis()}.log"), DesktopLog.redact("${AppVersion.display}\nThread: ${thread.name}\n${failure.stackTraceToString()}"))
+            val path = crashes.resolve("crash-${System.currentTimeMillis()}.log")
+            Files.writeString(path, DesktopLog.redact("${AppVersion.display}\nJVM: ${System.getProperty("java.version")}\nOS: ${System.getProperty("os.name")} ${System.getProperty("os.arch")}\nThread: ${thread.name}\n${failure.stackTraceToString()}"))
             DesktopLog.write('E', "Crash", "线程 ${thread.name} 未处理异常", failure)
+            if (crashDialogOpen.compareAndSet(false, true)) javax.swing.SwingUtilities.invokeLater {
+                try {
+                    val choice = JOptionPane.showOptionDialog(null, "程序发生异常。诊断记录已保存：\n$path", "黎明界助手", JOptionPane.DEFAULT_OPTION,
+                        JOptionPane.ERROR_MESSAGE, null, arrayOf("导出诊断包", "打开日志目录", "关闭"), "关闭")
+                    runCatching {
+                        when (choice) {
+                            0 -> crashGraph?.debugUrl?.let { BrowserLauncher.open("${it}logs.zip") }
+                            1 -> java.awt.Desktop.getDesktop().open(directory.resolve("logs").toFile())
+                        }
+                    }
+                } finally { crashDialogOpen.set(false) }
+            }
         }
     }
 }
