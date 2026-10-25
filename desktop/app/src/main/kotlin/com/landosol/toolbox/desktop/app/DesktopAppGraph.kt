@@ -82,6 +82,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class DesktopAppGraph(
     val dataDirectory: Path,
@@ -145,13 +147,11 @@ class DesktopAppGraph(
                 .put("screenshotP95Millis", ready?.timing?.firstOrNull { it.mode == ready.selectedMode }?.p95Millis ?: 0)
         }
     } }
-    private var debugSocket: java.net.ServerSocket? = null
-    val debugPort: Int? = (8765..8775).firstOrNull { port ->
-        runCatching { java.net.ServerSocket().use { it.reuseAddress = false; it.bind(java.net.InetSocketAddress("127.0.0.1", port)) } }.isSuccess
-    }
+    val debugPort: Int? get() = labyrinthDebugDashboard?.boundPort
     val debugUrl get() = debugPort?.let { "http://127.0.0.1:$it/" }
     private var rerollHostJob: Job? = null
     @Volatile private var closed = false
+    private val shutdownLock = Mutex()
     private val installedServices = DesktopServices(OcrPort(ocr::submit), WindowsSecretProtector(), identityStore, captchaHost, DesktopLog::snapshot)
     init {
         DesktopLog.initialize(dataDirectory.resolve("logs"))
@@ -290,14 +290,12 @@ class DesktopAppGraph(
         DesktopLabyrinthCnDatabaseRepository(context, onNotice = { log.add(it) })
     }
     private val labyrinthDebugDashboard by lazy {
-        debugPort?.let { port -> LabyrinthDebugDashboardServer(
-            port = port, processLogSource = DesktopLog::snapshot,
-            serverSocketFactory = { java.net.ServerSocket().also { debugSocket = it } }, allowAddressReuse = false,
+        LabyrinthDebugDashboardServer(
+            port = 0, processLogSource = DesktopLog::snapshot,
+            allowAddressReuse = false,
             frameArchiveDirectory = java.io.File(cacheDir, "labyrinth-frame-archive"),
             runtimeDiagnostics = diagnostics,
-        ).also { server ->
-            server.start()
-        } }
+        ).also { it.start() }.takeIf { it.boundPort != null }
     }
     val labyrinthEntryRecognitionSession: LabyrinthEntryRecognitionSession by lazy {
         // Start the debug endpoint with its initial waiting snapshot instead of waiting for the
@@ -954,8 +952,8 @@ class DesktopAppGraph(
         }
     }
 
-    suspend fun shutdown() {
-        if (closed) return
+    suspend fun shutdown() = shutdownLock.withLock {
+        if (closed) return@withLock
         closed = true
         try {
             val stopped = withTimeoutOrNull(10_000) {
@@ -970,7 +968,7 @@ class DesktopAppGraph(
                 withContext(Dispatchers.Main) { viewModels.clear() }
                 databaseUpdateScope.cancel(); accountServerScope.cancel(); autoRunScope.cancel(); mainScope.cancel(); recognitionScope.cancel(); resetScope.cancel()
                 listOf<() -> Unit>({ captureService.close() }, { device.close() }, { ocr.close() }, { captchaHost.close() },
-                    { debugSocket?.close(); Unit }, { diagnostics.close() }, { database.close() }, { power.close() }, { network.close() })
+                    { labyrinthDebugDashboard?.close(); Unit }, { diagnostics.close() }, { database.close() }, { power.close() }, { network.close() })
                     .forEach { release -> runCatching(release).onFailure { Log.e(APP_LOG_TAG, "释放桌面资源失败", it) } }
                 DesktopBindings.release(installedServices)
                 previewState.value = null

@@ -48,6 +48,7 @@ class GraphControlService(
 ) : WorkerDomain {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val commands = Mutex()
+    private val shutdownLock = Mutex()
     private val epoch = AtomicLong()
     private val revoked = AtomicBoolean()
     private val closing = AtomicBoolean()
@@ -64,6 +65,7 @@ class GraphControlService(
     private var captchaKey: AccountCaptchaState? = null
     private var captchaSession: CaptchaSession? = null
     private var captchaTicket: String? = null
+    private var captchaGeneration: Long? = null
     private var previewTimestamp: Long? = null
     private var previewPng: String? = null
 
@@ -163,7 +165,9 @@ class GraphControlService(
                 val goals: List<DesktopGoal> = decode(args.required("goals"))
                 validateGoals(goals)
                 settings.validationError()?.let { error(it) }
-                saveReroll(settings)
+                // The original quick form can save goals before an account is selected.
+                // Unchanged account settings must also keep an explicitly read opening reusable.
+                if (settings != graph.labyrinthController.uiState.value.rerollSettings()) saveReroll(settings)
                 withContext(Dispatchers.IO) { graph.ux.preferences.update { it.copy(goals = goals) } }
             }
             ControlOps.PREFS_PATCH -> withContext(Dispatchers.IO) {
@@ -247,7 +251,7 @@ class GraphControlService(
             }
             ControlOps.FOREGROUND -> return buildJsonObject { put("value", graph.device.queryForeground()) }
             ControlOps.PREVIEW -> { check(!revoked.get()); graph.startPreview() }
-            ControlOps.CAPTURE_STOP -> { requireIdle(); graph.captureService.stopAndJoin("用户停止截图") }
+            ControlOps.CAPTURE_STOP -> graph.captureService.stopAndJoin("用户停止截图")
             ControlOps.DATABASE_UPDATE -> {
                 val message = withContext(Dispatchers.IO) {
                     when (val result = graph.labyrinthCnDatabaseRepository.updateIfNeeded()) {
@@ -290,6 +294,7 @@ class GraphControlService(
             }
             ControlOps.CAPTCHA_CANCEL -> {
                 check(args.requiredString("ticketId") == captchaTicket) { "验证码已失效，请使用当前实例的验证" }
+                check(!graph.labyrinthController.uiState.value.isWorking) { "验证正在提交，请稍候；需要中止时请停止任务" }
                 graph.labyrinthController.cancelCaptcha(); closeCaptcha()
             }
             else -> error("不支持的控制操作：$op")
@@ -301,6 +306,9 @@ class GraphControlService(
         requireIdle()
         val task = enumValueOf<DesktopTask>(args.requiredString("task"))
         val account = graph.labyrinthController.uiState.value.selectedAccount
+        if (task in setOf(DesktopTask.READ, DesktopTask.REROLL, DesktopTask.BATCH)) {
+            check(graph.labyrinthController.uiState.value.settingsReady) { "账号配置尚未加载，请稍后重试" }
+        }
         if (task != DesktopTask.RECOGNIZE) {
             val id = account?.id ?: error("请先选择此实例的账号")
             binding["accountId"]?.jsonPrimitive?.longOrNull?.let { check(it == id) { "账号与实例绑定不同，请重新选择账号" } }
@@ -371,6 +379,8 @@ class GraphControlService(
         val ready = (graph.device.state.value as? DeviceConnectionState.Ready)?.device ?: error("请先连接设备")
         val foreground = graph.device.queryForeground() ?: error("无法确定前台应用，未执行点击")
         check(GameServer.entries.none { it.packageName == foreground }) { "测试点击只能在非游戏前台页面进行" }
+        currentCoroutineContext().ensureActive()
+        check(!revoked.get() && !stopping.get()) { "测试点击已停止" }
         when (val result = graph.device.tap(ready.width / 2f, ready.height / 2f, foreground)) {
             TouchResult.Completed -> graph.log.add("已在非游戏前台页面中央执行一次测试点击")
             is TouchResult.Rejected -> error(result.reason)
@@ -399,8 +409,8 @@ class GraphControlService(
         graph.stopAll(reason)
     }
 
-    override suspend fun shutdown() {
-        if (!closing.compareAndSet(false, true)) return
+    override suspend fun shutdown() = shutdownLock.withLock {
+        if (!closing.compareAndSet(false, true)) return@withLock
         revokeActions("控制实例退出，任务已停止")
         try {
             withContext(NonCancellable) {
@@ -464,28 +474,43 @@ class GraphControlService(
     }
 
     private fun refreshCaptcha() {
-        val current = graph.labyrinthController.uiState.value.captcha
-        if (captchaKey?.accountId == current?.accountId && captchaKey?.challenge == current?.challenge &&
-            (current == null || captchaSession != null)) return
+        val state = graph.labyrinthController.uiState.value
+        val current = state.captcha
+        if (current == null || revoked.get() || stopping.get()) { closeCaptcha(); return }
+        // A solved page is consumed while native login is still using this challenge.
+        // Do not mint a second page until that submission completes or changes the challenge.
+        if (state.isWorking) return
+        if (captchaKey?.accountId == current.accountId && captchaKey?.challenge == current.challenge && captchaGeneration == epoch.get() &&
+            captchaSession != null) return
         closeCaptcha()
-        if (current == null || revoked.get()) return
         val ticket = UUID.randomUUID().toString()
-        captchaKey = current; captchaTicket = ticket
+        val generation = epoch.get()
+        captchaKey = current; captchaTicket = ticket; captchaGeneration = generation
         captchaSession = graph.captchaHost.open(current.challenge,
             onSolved = { result ->
-                if (!revoked.get() && captchaTicket == ticket) {
-                    graph.labyrinthController.submitCaptcha(result); closeCaptcha()
+                synchronized(admission) {
+                    if (captchaCallbackAllowed(ticket, generation, current)) {
+                        graph.labyrinthController.submitCaptcha(result); closeCaptcha()
+                    }
                 }
             },
             onError = { message ->
-                if (!revoked.get() && captchaTicket == ticket) {
-                    graph.labyrinthController.reportCaptchaError(message); closeCaptcha()
+                synchronized(admission) {
+                    if (captchaCallbackAllowed(ticket, generation, current)) {
+                        graph.labyrinthController.reportCaptchaError(message); closeCaptcha()
+                    }
                 }
             })
     }
 
+    private fun captchaCallbackAllowed(ticket: String, generation: Long, expected: AccountCaptchaState): Boolean {
+        val state = graph.labyrinthController.uiState.value
+        return !revoked.get() && !closing.get() && !stopping.get() && epoch.get() == generation && captchaTicket == ticket &&
+            !state.isWorking && state.captcha?.accountId == expected.accountId && state.captcha?.challenge == expected.challenge
+    }
+
     private fun closeCaptcha() {
-        captchaSession?.close(); captchaSession = null; captchaKey = null; captchaTicket = null
+        captchaSession?.close(); captchaSession = null; captchaKey = null; captchaTicket = null; captchaGeneration = null
     }
 
     private fun captchaDocument(): JsonElement {
@@ -494,6 +519,7 @@ class GraphControlService(
         return buildJsonObject {
             put("ticketId", captchaTicket); put("url", session.url)
             put("accountAlias", current.accountAlias); put("error", current.error)
+            put("working", graph.labyrinthController.uiState.value.isWorking)
         }
     }
 

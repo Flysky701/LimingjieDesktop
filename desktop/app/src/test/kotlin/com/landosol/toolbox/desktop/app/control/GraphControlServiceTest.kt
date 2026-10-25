@@ -14,6 +14,9 @@ import com.landosol.toolbox.labyrinth.node.NodeClassification
 import com.landosol.toolbox.labyrinth.node.NodeViewportPixels
 import com.landosol.toolbox.labyrinth.vision.*
 import com.landosol.toolbox.protocol.bilibili.GameServer
+import com.landosol.toolbox.protocol.bilibili.BilibiliGameSession
+import com.landosol.toolbox.protocol.bilibili.GameAccountProfile
+import com.landosol.toolbox.protocol.bilibili.GameSessionResult
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -23,6 +26,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.util.concurrent.atomic.AtomicInteger
+import java.net.InetSocketAddress
+import java.net.ServerSocket
 
 /** Synthetic local data only. Device calls fail unless a test explicitly supplies a fake result. */
 class GraphControlServiceTest {
@@ -35,6 +40,15 @@ class GraphControlServiceTest {
         val leases = UserResourceLeases(runtime)
         val service = GraphControlService(graph, "synthetic-profile", "离线测试", leases, runtime)
         try {
+            val dashboardPort = requireNotNull(graph.debugPort)
+            assertEquals("http://127.0.0.1:$dashboardPort/", graph.debugUrl)
+            assertThrows(java.net.BindException::class.java) {
+                ServerSocket().use { it.reuseAddress = false; it.bind(InetSocketAddress("127.0.0.1", dashboardPort)) }
+            }
+            val earlyGoals = listOf(DesktopGoal(1, 1))
+            service.execute(ControlOps.SAVE_SETUP, controlArgs(
+                "settings" to ControlModelCodec.encode(LabyrinthRerollSettings()), "goals" to ControlModelCodec.encode(earlyGoals)))
+            assertEquals(earlyGoals, graph.ux.preferences.state.value.goals)
             service.execute(ControlOps.ACCOUNT_NEW, emptyArgs())
             val editor = AccountEditorState(alias = "synthetic-account", loginId = "unused-login", password = "synthetic-password-unused",
                 server = GameServer.CN_BILIBILI, gameUid = "99999")
@@ -81,10 +95,29 @@ class GraphControlServiceTest {
             assertThrows(IllegalStateException::class.java) { leases.acquireAccount("cn-bilibili", "1234567") }
             service.execute(ControlOps.STOP, emptyArgs())
             leases.acquireAccount("cn-bilibili", "1234567").close()
+
+            // An authenticated new account can then reach the original protocol workflow.
+            // The synthetic session returns one offline failure before any write request.
+            val requested = CompletableDeferred<String>()
+            graph.gameSessionRegistry.save(row.id, object : BilibiliGameSession {
+                override val profile = GameAccountProfile(1234567, "synthetic", 100, "synthetic")
+                override suspend fun request(path: String, fields: LinkedHashMap<String, Any?>): GameSessionResult {
+                    requested.complete(path)
+                    return GameSessionResult.ProtocolFailure("synthetic-protocol-stop")
+                }
+            })
+            service.execute(ControlOps.START, controlArgs("task" to JsonPrimitive("REROLL"), "retreatConfirmed" to JsonPrimitive(true)))
+            assertTrue(withTimeout(5_000) { requested.await() }.contains("labyrinth"))
+            withTimeout(5_000) { graph.labyrinthController.uiState.first { !it.isWorking && it.message.orEmpty().contains("synthetic-protocol-stop") } }
             service.revokeActions("synthetic disconnect")
             assertNotNull(runCatching { service.execute(ControlOps.ACCOUNT_NEW, emptyArgs()) }.exceptionOrNull())
-        } finally { withTimeout(15_000) { service.shutdown() } }
+        } finally { withTimeout(15_000) {
+            coroutineScope { listOf(async { service.shutdown() }, async { service.shutdown() }, async { graph.shutdown() }).awaitAll() }
+        } }
         assertEquals(0, fake.ioCalls.get())
+        assertEquals(1, fake.closeCalls.get())
+        assertNull(graph.debugPort)
+        assertNull(graph.debugUrl)
     }
 
     @Test fun stopPreemptsAnInFlightDiscoveryInsteadOfWaitingForTheCommandMutex() = runBlocking {
@@ -164,6 +197,7 @@ class GraphControlServiceTest {
         override val state = MutableStateFlow<DeviceConnectionState>(DeviceConnectionState.Disconnected)
         override val foregroundPackage: String? = null
         val ioCalls = AtomicInteger()
+        val closeCalls = AtomicInteger()
         val discoveryStarted = CompletableDeferred<Unit>()
         var discoveryMayWait = false
         override suspend fun discover(): List<DeviceDescriptor> {
@@ -184,6 +218,6 @@ class GraphControlServiceTest {
         override suspend fun launch(packageName: String): Boolean = unexpected()
         override suspend fun forceStop(packageName: String): Boolean = unexpected()
         override suspend fun uiTree(): List<UiNode> = unexpected()
-        override fun close() = Unit
+        override fun close() { closeCalls.incrementAndGet() }
     }
 }
