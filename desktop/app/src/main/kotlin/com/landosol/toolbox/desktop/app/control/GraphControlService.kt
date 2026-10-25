@@ -26,12 +26,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption.CREATE_NEW
-import java.nio.file.StandardOpenOption.CREATE
 import java.nio.file.StandardOpenOption.WRITE
-import java.nio.file.StandardOpenOption.READ
-import java.nio.channels.FileChannel
-import java.nio.channels.FileLock
-import java.nio.channels.OverlappingFileLockException
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -57,7 +52,7 @@ class GraphControlService(
     private var commandActive = false
     private var activeCommand: Deferred<JsonObject>? = null
     private var accountLease: ResourceLease? = null
-    private var accountAdmission: AccountTaskAdmission? = null
+    private var accountStartLease: AccountStartLease? = null
     private var leasedIdentity: Pair<String, Long>? = null
     private val authenticatedAccounts = mutableMapOf<Long, Pair<String, Long>>()
     private val bindingFile = graph.dataDirectory.resolve("settings/instance-binding.json")
@@ -70,6 +65,7 @@ class GraphControlService(
     private var previewPng: String? = null
 
     init {
+        graph.bindSharedRuntime(profileId, profileName)
         graph.authenticatedAccountGuard = ::guardAuthenticatedAccount
         // Upstream view models stop observing their repositories without a subscriber.
         scope.launch { graph.accounts.uiState.collect {} }
@@ -118,6 +114,9 @@ class GraphControlService(
             put("preview", preview)
             put("notices", model(graph.notices.value))
             put("binding", binding)
+            put("dataOnly", graph.dataOnly)
+            put("strategyRevision", graph.strategyRevision.value)
+            put("requiresAccountRead", false)
             put("accountVerified", synchronized(admission) { console.task.selectedAccount?.id in authenticatedAccounts })
             put("accountReminder", "助手绑定只选择任务凭据，不会切换 PCR 登录账号；请人工确认此模拟器登录的是同一账号。")
             put("captcha", captchaDocument())
@@ -125,6 +124,7 @@ class GraphControlService(
     }
 
     override suspend fun execute(op: String, args: JsonObject): JsonObject {
+        if (graph.dataOnly && op in DATA_ROLE_FORBIDDEN) error("全局数据服务不执行设备任务，请使用对应设备的运行页")
         if (op == ControlOps.STOP) return stop(args.string("reason") ?: "用户停止任务")
         if (op == ControlOps.DEVICE_CANCEL) {
             epoch.incrementAndGet()
@@ -154,6 +154,7 @@ class GraphControlService(
     }
 
     private suspend fun dispatch(op: String, args: JsonObject): JsonObject {
+        if (graph.sharedData != null && op in GLOBAL_EDITS) error("请在全局账号、策略或设置页修改共享数据")
         when (op) {
             ControlOps.START -> startTask(args)
             ControlOps.PAUSE -> graph.pauseTask()
@@ -168,11 +169,13 @@ class GraphControlService(
                 // The original quick form can save goals before an account is selected.
                 // Unchanged account settings must also keep an explicitly read opening reusable.
                 if (settings != graph.labyrinthController.uiState.value.rerollSettings()) saveReroll(settings)
+                graph.markRuntimePreferencesEdited()
                 withContext(Dispatchers.IO) { graph.ux.preferences.update { it.copy(goals = goals) } }
             }
             ControlOps.PREFS_PATCH -> withContext(Dispatchers.IO) {
                 val value: DesktopPreferences = decode(patch(model(graph.ux.preferences.state.value), args))
                 validateGoals(value.goals)
+                if (args.keys.any { it == "goals" || it == "selectedTask" }) graph.markRuntimePreferencesEdited()
                 graph.ux.preferences.update { value }
             }
             ControlOps.SETTINGS_PATCH -> {
@@ -191,6 +194,18 @@ class GraphControlService(
             ControlOps.ACCOUNT_SAVE -> saveAccount(decode(args.required("editor")))
             ControlOps.ACCOUNT_SELECT -> {
                 requireIdle()
+                if (graph.sharedData != null) {
+                    val id = args["id"]?.jsonPrimitive?.longOrNull
+                    releaseAccount()
+                    if (id == null) {
+                        graph.clearSharedBinding(); saveBinding(binding - "accountId")
+                    } else {
+                        graph.prepareSharedAccount(id)
+                        synchronized(admission) { authenticatedAccounts.remove(id) }
+                        saveBinding(binding + ("accountId" to JsonPrimitive(id)))
+                    }
+                    return accepted()
+                }
                 val id = args.long("id")
                 accountOperation({ graph.accounts.selectAccount(id) }) { it.accounts.any { row -> row.id == id && row.isSelected } }
                 withTimeout(10_000) { graph.labyrinthController.uiState.first { it.selectedAccount?.id == id && it.settingsReady } }
@@ -213,9 +228,17 @@ class GraphControlService(
             }
             ControlOps.STRATEGY_SAVE -> graph.labyrinthStrategySettings.save(decode(args.required("value")))
             ControlOps.CATALOG -> return buildJsonObject { put("items", model(graph.loadLabyrinthRoleRatings())) }
-            ControlOps.DEVICE_DISCOVER -> { requireIdle(); graph.deviceConnection.discover(args.boolean("force", true)) }
+            ControlOps.DEVICE_DISCOVER -> {
+                requireIdle(); graph.deviceConnection.discover(args.boolean("force", true))
+                return buildJsonObject { put("devices", model(graph.deviceConnection.devices.value)) }
+            }
+            SharedSupervisorOps.DEVICE_RESOLVE -> {
+                requireIdle()
+                return buildJsonObject { put("device", model(graph.device.resolveDevice(args.requiredString("serial")))) }
+            }
             ControlOps.DEVICE_CONNECT -> {
                 requireIdle()
+                graph.refreshSharedSettings()
                 graph.connectDevice(args.requiredString("serial"), args.boolean("reconnect"))
                 val ready = (graph.device.state.value as? DeviceConnectionState.Ready)?.device
                     ?: error(graph.deviceConnection.message.value ?: "设备尚未连接")
@@ -305,6 +328,24 @@ class GraphControlService(
     private suspend fun startTask(args: JsonObject) {
         requireIdle()
         val task = enumValueOf<DesktopTask>(args.requiredString("task"))
+        if (graph.sharedData != null) {
+            val id = binding["accountId"]?.jsonPrimitive?.longOrNull
+                ?: graph.labyrinthController.uiState.value.selectedAccount?.id
+            if (task != DesktopTask.RECOGNIZE) {
+                checkNotNull(id) { "请先在设备管理中绑定一个共享账号" }
+                synchronized(admission) {
+                    if (accountStartLease == null) accountStartLease = AccountStartLease.acquire(accountAdmissionDirectory, graph.sharedData.authorityId, id)
+                }
+                val data = graph.prepareSharedAccount(id)
+                synchronized(admission) {
+                    authenticatedAccounts.remove(id)
+                    data.authenticatedUid?.let { uid ->
+                        val server = requireNotNull(GameServer.fromStorageId(data.account.serverId))
+                        authenticatedAccounts[id] = accountServerKey(server) to uid
+                    }
+                }
+            } else if (id != null) graph.prepareSharedAccount(id)
+        }
         val account = graph.labyrinthController.uiState.value.selectedAccount
         if (task in setOf(DesktopTask.READ, DesktopTask.REROLL, DesktopTask.BATCH)) {
             check(graph.labyrinthController.uiState.value.settingsReady) { "账号配置尚未加载，请稍后重试" }
@@ -313,14 +354,14 @@ class GraphControlService(
             val id = account?.id ?: error("请先选择此实例的账号")
             binding["accountId"]?.jsonPrimitive?.longOrNull?.let { check(it == id) { "账号与实例绑定不同，请重新选择账号" } }
             saveBinding(binding + ("accountId" to JsonPrimitive(id)))
+            synchronized(admission) {
+                if (accountStartLease == null) accountStartLease = AccountStartLease.acquire(accountAdmissionDirectory,
+                    graph.sharedData?.authorityId ?: AccountStartLease.authority(graph.dataDirectory), id)
+            }
             val material = graph.accountRepository.loadLoginMaterial(id)
             val session = graph.gameSessionRegistry.read(id)
             val known = synchronized(admission) { authenticatedAccounts[id] }
                 ?: session?.profile?.viewerId?.let { accountServerKey(material.server) to it }
-            check(known != null || task == DesktopTask.READ) { "首次使用此账号，请先选择“读取当前开局”校验服务端 UID，再启动任务" }
-            synchronized(admission) {
-                if (accountAdmission == null) accountAdmission = AccountTaskAdmission.acquire(accountAdmissionDirectory, bootstrap = known == null)
-            }
             if (known != null) guardAuthenticatedAccount(material.server, known.second)
         }
         if (task in setOf(DesktopTask.BATCH, DesktopTask.ENTRY, DesktopTask.RECOGNIZE)) {
@@ -348,11 +389,15 @@ class GraphControlService(
         yield()
     }
 
-    private fun saveReroll(value: LabyrinthRerollSettings) {
+    private suspend fun saveReroll(value: LabyrinthRerollSettings) {
         requireIdle()
         check(graph.labyrinthController.uiState.value.settingsReady) { "请先选择账号，等待配置加载" }
         value.validationError()?.let { error(it) }
         check(value.difficulty in graph.labyrinthController.uiState.value.availableDifficulties) { "所选难度尚未解锁" }
+        graph.sharedData?.let { shared ->
+            val id = checkNotNull(graph.labyrinthController.uiState.value.selectedAccount?.id) { "请先绑定共享账号" }
+            shared.saveReroll(id, value)
+        }
         graph.labyrinthController.saveSettings(value)
     }
 
@@ -439,7 +484,6 @@ class GraphControlService(
         graph.labyrinthController.uiState.value.selectedAccount?.id?.let { id ->
             authenticatedAccounts[id]?.let { check(it == key) { "服务端账号身份已变化，请停止后重新读取账号" } }
         }
-        if (accountAdmission == null) accountAdmission = AccountTaskAdmission.acquire(accountAdmissionDirectory, bootstrap = false)
         if (leasedIdentity != key || accountLease?.isValid != true) {
             check(accountLease == null) { "服务端账号身份已变化，任务已禁止继续" }
             accountLease = leases.acquireAccount(key.first, uid.toString())
@@ -456,7 +500,7 @@ class GraphControlService(
         try { accountLease?.close() }
         finally {
             accountLease = null; leasedIdentity = null
-            accountAdmission?.close(); accountAdmission = null
+            accountStartLease?.close(); accountStartLease = null
         }
     }
 
@@ -561,21 +605,11 @@ class GraphControlService(
     private fun JsonObject.string(name: String): String? = (this[name] as? JsonPrimitive)?.contentOrNull
     private fun JsonObject.long(name: String): Long = (this[name] as? JsonPrimitive)?.longOrNull ?: error("参数无效：$name")
     private fun JsonObject.boolean(name: String, default: Boolean = false): Boolean = (this[name] as? JsonPrimitive)?.booleanOrNull ?: default
-}
 
-/** Unknown accounts can bootstrap through one explicit read while all other account tasks are idle.
- * Known account tasks share this admission lock, then take their independent server+UID lease. */
-internal class AccountTaskAdmission private constructor(private val channel: FileChannel, private val lock: FileLock) : AutoCloseable {
-    override fun close() { try { if (lock.isValid) lock.release() } finally { channel.close() } }
-    companion object {
-        fun acquire(directory: Path, bootstrap: Boolean): AccountTaskAdmission {
-            Files.createDirectories(directory.resolve("leases"))
-            val channel = FileChannel.open(directory.resolve("leases/account-bootstrap.lock"), READ, WRITE, CREATE)
-            try {
-                val lock = try { channel.tryLock(0, Long.MAX_VALUE, !bootstrap) } catch (_: OverlappingFileLockException) { null }
-                return AccountTaskAdmission(channel, lock ?: error(if (bootstrap)
-                    "其他实例正在使用账号；请在账号任务空闲时执行首次“读取当前开局”校验" else "另一实例正在首次校验账号，请稍后重试"))
-            } catch (failure: Throwable) { channel.close(); throw failure }
-        }
+    private companion object {
+        val GLOBAL_EDITS = setOf(ControlOps.ACCOUNT_NEW, ControlOps.ACCOUNT_EDIT, ControlOps.ACCOUNT_SAVE,
+            ControlOps.ACCOUNT_DELETE, ControlOps.STRATEGY_SAVE, ControlOps.SETTINGS_PATCH, ControlOps.ADB_CONFIGURE, ControlOps.ADB_DOWNLOAD)
+        val DATA_ROLE_FORBIDDEN = setOf(ControlOps.START, ControlOps.STOP, ControlOps.PAUSE, ControlOps.PREVIEW,
+            ControlOps.DEVICE_CONNECT, ControlOps.DEVICE_DISCONNECT, ControlOps.DEVICE_TEST, ControlOps.CAPTURE_STOP)
     }
 }

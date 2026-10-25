@@ -229,6 +229,8 @@ class LabyrinthController(
     private var startRequested = false
     private var cancellationMessage: String? = null
     val hasActiveReroll: Boolean get() = chrome.value.isWorking && frozenStart != null
+    /** Synchronous task admission state; observable UI projections may lag one dispatcher turn. */
+    val isBusy: Boolean get() = chrome.value.isWorking || chrome.value.captcha != null
 
     private val chrome = MutableStateFlow(LabyrinthChromeState())
     private var runningJob: Job? = null

@@ -49,6 +49,8 @@ class AccountRepository(
     private val sessionStore: SdkSessionStore,
     private val gameSessionRegistry: GameSessionRegistry,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Desktop runtime projections send authenticated UID changes to their sole data owner. */
+    private val onGameUidUpdated: (suspend (Long, String) -> Unit)? = null,
 ) {
     fun observeAccounts(): Flow<List<AccountListItem>> = database.accountDao().observeAll().map { accounts ->
         accounts.map { entity ->
@@ -165,6 +167,7 @@ class AccountRepository(
     suspend fun updateGameUid(id: Long, gameUid: String) {
         require(gameUid.isNotBlank()) { "游戏 UID 不能为空" }
         val account = requireNotNull(database.accountDao().getById(id)) { "账号不存在" }
+        onGameUidUpdated?.invoke(id, gameUid)
         database.accountDao().update(account.copy(gameUid = gameUid, updatedAt = clock()))
     }
 

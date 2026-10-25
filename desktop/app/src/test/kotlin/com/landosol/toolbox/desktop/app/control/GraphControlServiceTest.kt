@@ -17,6 +17,11 @@ import com.landosol.toolbox.protocol.bilibili.GameServer
 import com.landosol.toolbox.protocol.bilibili.BilibiliGameSession
 import com.landosol.toolbox.protocol.bilibili.GameAccountProfile
 import com.landosol.toolbox.protocol.bilibili.GameSessionResult
+import com.landosol.toolbox.protocol.bilibili.GameLoginResult
+import com.landosol.toolbox.protocol.bilibili.BilibiliGameGateway
+import com.landosol.toolbox.protocol.bilibili.SdkSession
+import com.landosol.toolbox.protocol.bilibili.CaptchaSolution
+import com.landosol.toolbox.account.NormalizedAccountInput
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -85,9 +90,7 @@ class GraphControlServiceTest {
             assertFalse(snapshot.getValue("accountVerified").jsonPrimitive.boolean)
             verifyNonEmptyRecognitionSnapshot(service, graph)
 
-            // A manually entered UID never counts as authenticated identity.
-            val noBootstrap = runCatching { service.execute(ControlOps.START, controlArgs("task" to JsonPrimitive("REROLL"), "retreatConfirmed" to JsonPrimitive(true))) }.exceptionOrNull()
-            assertTrue(noBootstrap?.message.orEmpty(), noBootstrap?.message.orEmpty().contains("读取当前开局"))
+            // A manually entered UID is informational; normal task startup no longer requires a manual read.
             assertEquals(0, fake.ioCalls.get())
 
             // Simulate the gateway's successful authentication callback, without any request.
@@ -136,15 +139,53 @@ class GraphControlServiceTest {
         } finally { withTimeout(15_000) { service.shutdown() } }
     }
 
-    @Test fun firstAccountReadRequiresExclusiveAdmissionAndReleasesItOnClose() {
+    @Test fun accountRowStartupLockAllowsOtherAccountsAndReleasesOnClose() {
         val runtime = directory.root.toPath().resolve("runtime")
-        AccountTaskAdmission.acquire(runtime, bootstrap = false).use {
-            assertThrows(IllegalStateException::class.java) { AccountTaskAdmission.acquire(runtime, bootstrap = true) }
+        AccountStartLease.acquire(runtime, "synthetic-authority", 1).use {
+            assertThrows(IllegalStateException::class.java) { AccountStartLease.acquire(runtime, "synthetic-authority", 1) }
+            AccountStartLease.acquire(runtime, "synthetic-authority", 2).close()
+            AccountStartLease.acquire(runtime, "another-authority", 1).close()
         }
-        AccountTaskAdmission.acquire(runtime, bootstrap = true).use {
-            assertThrows(IllegalStateException::class.java) { AccountTaskAdmission.acquire(runtime, bootstrap = false) }
+        AccountStartLease.acquire(runtime, "synthetic-authority", 1).close()
+    }
+
+    @Test fun unknownUidStartsNormallyAndAcquiresUidLeaseAfterAuthenticatedLogin() = runBlocking {
+        val runtime = directory.root.toPath().resolve("runtime")
+        val data = directory.root.toPath().resolve("normal-start")
+        val leases = UserResourceLeases(runtime)
+        val requestSeen = CompletableDeferred<Unit>()
+        var accountId = 0L
+        val authenticatedProfile = GameAccountProfile(7654321, "synthetic-channel", 100, "synthetic")
+        val session = object : BilibiliGameSession {
+            override val profile = authenticatedProfile
+            override suspend fun request(path: String, fields: LinkedHashMap<String, Any?>): GameSessionResult {
+                assertThrows(IllegalStateException::class.java) { leases.acquireAccount("cn-channel", "7654321") }
+                requestSeen.complete(Unit)
+                return GameSessionResult.ProtocolFailure("synthetic-normal-start-stop")
+            }
         }
-        AccountTaskAdmission.acquire(runtime, bootstrap = false).close()
+        val gateway = object : BilibiliGameGateway {
+            override suspend fun loginAndLoadProfile(sdkSession: SdkSession, deviceSeed: String, captcha: CaptchaSolution?): GameLoginResult {
+                assertThrows(IllegalStateException::class.java) { AccountStartLease.acquire(runtime, AccountStartLease.authority(data), accountId) }
+                // The UID lease is not guessed from loginId or a manually filled UID.
+                leases.acquireAccount("cn-channel", "7654321").close()
+                return GameLoginResult.Success(authenticatedProfile, session)
+            }
+        }
+        val fake = NoIoDevice()
+        val graph = DesktopAppGraph(data, suppliedDevice = fake, startupUpdates = false, suppliedGameGateway = { gateway })
+        val service = GraphControlService(graph, "normal-start", "离线正常启动", leases, runtime)
+        try {
+            accountId = graph.accountRepository.create(NormalizedAccountInput("synthetic-channel", "unused-uid", "unused-access-key", null, GameServer.CN_XIAOMI))
+            withTimeout(10_000) { graph.labyrinthController.uiState.first { it.selectedAccount?.id == accountId && it.settingsReady } }
+            service.execute(ControlOps.START, controlArgs("task" to JsonPrimitive("REROLL"), "retreatConfirmed" to JsonPrimitive(true)))
+            withTimeout(5_000) { requestSeen.await() }
+            withTimeout(5_000) { graph.labyrinthController.uiState.first { !it.isWorking && it.message.orEmpty().contains("synthetic-normal-start-stop") } }
+            service.execute(ControlOps.STOP, emptyArgs())
+            AccountStartLease.acquire(runtime, AccountStartLease.authority(data), accountId).close()
+            leases.acquireAccount("cn-channel", "7654321").close()
+            assertEquals(0, fake.ioCalls.get())
+        } finally { service.shutdown() }
     }
 
     private fun emptyArgs() = JsonObject(emptyMap())

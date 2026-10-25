@@ -11,6 +11,18 @@ import com.landosol.toolbox.desktop.app.adapters.storage.*
 import com.landosol.toolbox.desktop.app.adapters.captcha.*
 import com.landosol.toolbox.desktop.app.adapters.cndb.*
 import com.landosol.toolbox.desktop.app.adapters.device.*
+import com.landosol.toolbox.desktop.app.control.*
+import com.landosol.toolbox.desktop.app.adapters.storage.RunHistoryStore
+import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
+import com.landosol.toolbox.security.CredentialStore
+import com.landosol.toolbox.security.InMemoryCredentialStore
+import com.landosol.toolbox.security.AccountCredentials
+import com.landosol.toolbox.security.InMemorySdkSessionStore
+import com.landosol.toolbox.protocol.bilibili.SdkSessionStore
+import com.landosol.toolbox.data.local.AccountEntity
+import com.landosol.toolbox.labyrinth.LabyrinthRerollSettingsStore
+import com.landosol.toolbox.labyrinth.rerollSettings
+import kotlinx.coroutines.channels.Channel
 import com.landosol.toolbox.protocol.bilibili.BilibiliSdkGateway
 import com.landosol.toolbox.automation.session.ChannelPromptNode
 import com.landosol.toolbox.automation.session.ChannelPromptWindow
@@ -90,6 +102,9 @@ class DesktopAppGraph(
     private val openedDatabase: AppDatabase? = null,
     suppliedDevice: DeviceService? = null,
     private val startupUpdates: Boolean = true,
+    val sharedData: SharedDataAccess? = null,
+    val dataOnly: Boolean = false,
+    private val suppliedGameGateway: ((GameServer) -> BilibiliGameGateway)? = null,
 ) : AutoCloseable {
     val log = UserLog()
     val ux by lazy { com.landosol.toolbox.desktop.app.ui.DesktopUxController(this) }
@@ -107,15 +122,115 @@ class DesktopAppGraph(
     private val cacheDir get() = context.cacheDir
     private val assets get() = context.assets
     val settings = DesktopSettingsStore(dataDirectory) { addNotice("桌面设置已从默认值恢复，原文件已备份：$it") }
+    private var inheritTaskDefaults = sharedData != null && !java.nio.file.Files.exists(dataDirectory.resolve("settings/ui.json"))
+    fun markRuntimePreferencesEdited() { inheritTaskDefaults = false }
     private val network = NetworkProxyController().also { it.setMode(settings.state.value.networkMode) }
     private val power = PowerSaveController()
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main + failures)
     private val recognitionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + failures)
     private val resetScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + failures)
     val identityStore = FileDeviceIdentityStore(dataDirectory) { log.add(it, true) }
-    val ocr = OnnxOcrEngine()
+    val ocr: OcrEngine = if (dataOnly) DataOnlyOcr() else OnnxOcrEngine()
     val captchaHost = LoopbackCaptchaHost()
-    val device: DeviceService = suppliedDevice ?: ManagedDeviceService(dataDirectory, { settings.state.value.adbPath }, { log.add(it) }, { reason -> stopAll(reason) })
+    val device: DeviceService = (suppliedDevice ?: ManagedDeviceService(dataDirectory, { settings.state.value.adbPath }, { log.add(it) }, { reason -> stopAll(reason) }))
+        .let { if (dataOnly) DiscoveryOnlyDevice(it) else it }
+    private val sharedIdentity = MutableStateFlow<Pair<String, String>?>(null)
+    private data class SharedHistoryEvent(val record: DesktopRunRecord? = null, val flush: CompletableDeferred<Unit>? = null)
+    private val sharedHistoryEvents = Channel<SharedHistoryEvent>(Channel.UNLIMITED)
+    private val sharedHistoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val sharedHistoryForwarder by lazy {
+        sharedHistoryScope.launch {
+            val origin = sharedIdentity.filterNotNull().first()
+            for (event in sharedHistoryEvents) {
+                try {
+                    event.record?.let { sharedData?.putRecord(origin.first, origin.second, it.accountId, it) }
+                    event.flush?.complete(Unit)
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) {
+                    log.add("运行记录尚未同步，已保留本地任务日志：${failure.message}", true)
+                    event.flush?.completeExceptionally(failure)
+                    stopAll("共享数据连接失败，已停止当前设备任务")
+                }
+            }
+        }
+    }
+    val runHistory by lazy {
+        RunHistoryStore(dataDirectory, ::addNotice, decorate = { record ->
+            if (sharedData == null) record else record.copy(deviceId = record.deviceId ?: sharedIdentity.value?.first,
+                deviceName = record.deviceName ?: sharedIdentity.value?.second,
+                accountId = record.accountId ?: labyrinthController.uiState.value.selectedAccount?.id)
+        }, onRecord = { record -> if (sharedData != null) sharedHistoryEvents.trySend(SharedHistoryEvent(record = record)) })
+    }
+    private val strategyRevisionState = MutableStateFlow<Long?>(null)
+    val strategyRevision = strategyRevisionState.asStateFlow()
+    private val sharedRerollCache = SharedRerollCache()
+    private var cachedMaterial: com.landosol.toolbox.protocol.bilibili.AccountLoginMaterial? = null
+
+    fun bindSharedRuntime(sessionId: String, name: String) {
+        if (sharedData == null) return
+        sharedIdentity.value = sessionId to name
+        sharedHistoryForwarder
+    }
+
+    suspend fun refreshSharedSettings() {
+        sharedData?.settings()?.let { global -> settings.save(global.copy(lastDevice = settings.state.value.lastDevice)) }
+    }
+
+    suspend fun flushSharedRecords() {
+        if (sharedData == null || sharedIdentity.value == null) return
+        val done = CompletableDeferred<Unit>()
+        sharedHistoryEvents.send(SharedHistoryEvent(flush = done))
+        done.await()
+    }
+
+    /** Install a single shared account projection; credentials and SDK sessions are RAM-only. */
+    suspend fun prepareSharedAccount(accountId: Long): SharedTaskData {
+        check(!busy) { "请先停止任务，再更新设备的账号快照" }
+        val shared = checkNotNull(sharedData) { "当前不是共享数据运行会话" }
+        val snapshot = shared.taskData(accountId)
+        if (inheritTaskDefaults) {
+            ux.preferences.update { it.copy(goals = snapshot.taskDefaults.goals, selectedTask = snapshot.taskDefaults.selectedTask) }
+            inheritTaskDefaults = false
+        }
+        val account = snapshot.account
+        check(account.id == accountId) { "共享账号身份不匹配" }
+        val key = "shared-account-$accountId"
+        val material = com.landosol.toolbox.protocol.bilibili.AccountLoginMaterial(accountId, key, snapshot.loginId, snapshot.password,
+            requireNotNull(GameServer.fromStorageId(account.serverId)) { "共享账号服务器无法识别" })
+        val previous = cachedMaterial
+        if (previous != null && (previous.accountId != accountId || previous.server != material.server ||
+                previous.loginId != material.loginId || previous.password != material.password)) {
+            sessionStore.delete(previous.credentialKey); gameSessionRegistry.delete(previous.accountId)
+            credentialStore.delete(previous.credentialKey)
+        }
+        credentialStore.save(key, AccountCredentials(material.loginId, material.password))
+        cachedMaterial = material
+        sharedRerollCache.save(accountId, snapshot.reroll)
+        withContext(Dispatchers.IO) {
+            val existing = database.accountDao().getById(accountId)
+            val row = AccountEntity(id = accountId, alias = account.alias, serverId = account.serverId, gameUid = account.gameUid,
+                credentialKey = key, isSelected = true, createdAt = existing?.createdAt ?: account.updatedAt, updatedAt = account.updatedAt)
+            if (existing == null) database.accountDao().insert(row) else database.accountDao().update(row)
+            database.accountDao().selectAccount(accountId)
+            settings.save(snapshot.settings.copy(lastDevice = settings.state.value.lastDevice))
+        }
+        withTimeout(10_000) { labyrinthController.uiState.first { it.selectedAccount?.id == accountId && it.settingsReady } }
+        withContext(Dispatchers.Main) {
+            if (labyrinthController.uiState.value.rerollSettings() != snapshot.reroll) labyrinthController.saveSettings(snapshot.reroll)
+        }
+        labyrinthStrategySettings.save(snapshot.strategy)
+        strategyRevisionState.value = snapshot.strategyRevision
+        return snapshot
+    }
+
+    suspend fun clearSharedBinding() {
+        check(sharedData != null && !busy) { "请先停止设备任务" }
+        cachedMaterial?.let { credentialStore.delete(it.credentialKey); sessionStore.delete(it.credentialKey); gameSessionRegistry.delete(it.accountId) }
+        cachedMaterial = null
+        database.accountDao().clearSelection()
+        withTimeout(10_000) { labyrinthController.uiState.first { it.selectedAccount == null } }
+        strategyRevisionState.value = null
+    }
     val resolutionGuard = VisualResolutionGuard(device) { reason ->
         autoRunScope.launch {
             labyrinthController.reportMessage(reason)
@@ -193,7 +308,7 @@ class DesktopAppGraph(
         }
         autoRunScope.launch { labyrinthController.uiState.collect { state -> (state.progress ?: state.message)?.let { log.add(it) } } }
         autoRunScope.launch { automationOverlayCoordinator.state.collect { it?.let { log.add("${it.status} ${it.detail.orEmpty()}") } } }
-        autoRunScope.launch { ocr.warmUp() }
+        if (!dataOnly) autoRunScope.launch { ocr.warmUp() }
         if (startupUpdates) databaseUpdateScope.launch {
             when (val result = labyrinthCnDatabaseRepository.updateIfNeeded()) {
                 is LabyrinthCnDatabaseUpdateResult.UpToDate ->
@@ -271,7 +386,7 @@ class DesktopAppGraph(
         AndroidLabyrinthRoleDecisionDataLoader(context).load()
     }
     val labyrinthStrategySettings by lazy {
-        com.landosol.toolbox.labyrinth.AndroidLabyrinthStrategySettingsStore(context)
+        com.landosol.toolbox.labyrinth.AndroidLabyrinthStrategySettingsStore(context, transient = sharedData != null)
     }
     suspend fun loadLabyrinthRoleRatings(): List<com.landosol.toolbox.labyrinth.LabyrinthRoleRatingItem> =
         kotlinx.coroutines.withContext(Dispatchers.IO) {
@@ -409,8 +524,8 @@ class DesktopAppGraph(
     val database: AppDatabase by lazy { openedDatabase ?: AppDatabase.create(context) }
     val labyrinthRunStateStore by lazy { RoomLabyrinthRunStateStore(database) }
     val labyrinthRouteStore by lazy { RoomLabyrinthRouteStore(database) }
-    private val credentialStore by lazy { AndroidKeystoreCredentialStore(context) }
-    private val sessionStore by lazy { AndroidKeystoreSdkSessionStore(context) }
+    private val credentialStore: CredentialStore by lazy { if (sharedData == null) AndroidKeystoreCredentialStore(context) else InMemoryCredentialStore() }
+    private val sessionStore: SdkSessionStore by lazy { if (sharedData == null) AndroidKeystoreSdkSessionStore(context) else InMemorySdkSessionStore() }
     val gameSessionRegistry by lazy { InMemoryGameSessionRegistry() }
     private var sdkCache: Triple<DeviceIdentitySnapshot, BilibiliSdkGateway, BilibiliLoginCoordinator>? = null
     @Synchronized private fun sdkPair(): Pair<BilibiliSdkGateway, BilibiliLoginCoordinator> {
@@ -433,13 +548,15 @@ class DesktopAppGraph(
     }
 
     private val gameGateways = ConcurrentHashMap<Pair<GameServer, DeviceIdentitySnapshot>, BilibiliGameGateway>()
+    private val suppliedGameGateways = ConcurrentHashMap<GameServer, BilibiliGameGateway>()
 
     /** Worker control installs its account lease guard before accepting commands. */
     @Volatile
     var authenticatedAccountGuard: ((GameServer, Long) -> Unit)? = null
 
-    private fun gameGatewayFor(server: GameServer): BilibiliGameGateway =
-        gameGateways.computeIfAbsent(server to DesktopBindings.identity()) {
+    private fun gameGatewayFor(server: GameServer): BilibiliGameGateway {
+        suppliedGameGateway?.let { supplied -> return suppliedGameGateways.computeIfAbsent(server) { guardedGameGateway(server, supplied(server)) } }
+        return gameGateways.computeIfAbsent(server to DesktopBindings.identity()) {
             check(server.packageName in installedGamePackages) {
                 "未安装${server.displayName}客户端（${server.packageName}），无法登录该账号"
             }
@@ -452,6 +569,11 @@ class DesktopAppGraph(
                     BilibiliGameGatewayFactory.ChannelEndpoint.BILIBILI
                 },
             )
+            guardedGameGateway(server, delegate)
+        }
+    }
+
+    private fun guardedGameGateway(server: GameServer, delegate: BilibiliGameGateway): BilibiliGameGateway =
             object : BilibiliGameGateway {
                 override suspend fun loginAndLoadProfile(
                     sdkSession: com.landosol.toolbox.protocol.bilibili.SdkSession,
@@ -474,14 +596,14 @@ class DesktopAppGraph(
                     return result.copy(session = session)
                 }
             }
-        }
     val accountRepository: AccountRepository by lazy {
-        AccountRepository(database, credentialStore, sessionStore, gameSessionRegistry)
+        AccountRepository(database, credentialStore, sessionStore, gameSessionRegistry,
+            onGameUidUpdated = { id, uid -> sharedData?.updateGameUid(id, uid) })
     }
     val labyrinthController by lazy {
         com.landosol.toolbox.labyrinth.LabyrinthController(
             accountRepository, gameSessionRegistry, database, { bilibiliNativeLoginCoordinator },
-            com.landosol.toolbox.labyrinth.AndroidLabyrinthRerollSettingsStore(context),
+            if (sharedData == null) com.landosol.toolbox.labyrinth.AndroidLabyrinthRerollSettingsStore(context) else sharedRerollCache,
             launchForeground = ::startRerollHost,
             scope = mainScope,
             beforeRerollLogin = { accountId -> withContext(Dispatchers.IO) { hardCloseChannelClientBeforeReroll(accountId) } },
@@ -851,9 +973,10 @@ class DesktopAppGraph(
     }
 
     fun actionsAvailable() = (device.state.value as? DeviceConnectionState.Ready)?.device?.let { it.touchReady && it.awake } == true
-    val busy: Boolean get() = startingState.value || stoppingState.value || autoRunJob?.isActive == true || accounts.uiState.value.isWorking || labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES || labyrinthController.uiState.value.isWorking || labyrinthController.uiState.value.captcha != null || labyrinthEntryRecognitionSession.state.value.running || gameSessionResetWorkflow.state.value.running
+    val busy: Boolean get() = startingState.value || stoppingState.value || autoRunJob?.isActive == true || accounts.uiState.value.isWorking || labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES || labyrinthController.isBusy || labyrinthEntryRecognitionSession.state.value.running || gameSessionResetWorkflow.state.value.running
 
     suspend fun connectDevice(serial: String, reconnect: Boolean = false) {
+        check(!dataOnly) { "请通过设备运行会话连接模拟器" }
         check(!busy) { "请先停止当前任务，再切换设备" }
         deviceConnection.connect(serial.trim(), if (settings.state.value.touchMode == PreferredTouchMode.COMPATIBILITY) TouchMode.Compatibility else TouchMode.MaaTouch,
             reconnect = reconnect, beforeConnect = { resolutionGuard.disarm(clearStatus = true); captureService.stopAndJoin("切换设备") }, onReady = { ready ->
@@ -965,6 +1088,8 @@ class DesktopAppGraph(
             withContext(NonCancellable) {
                 deviceConnection.closeAndJoin()
                 ux.closeAndJoin()
+                withTimeoutOrNull(5_000) { flushSharedRecords() }
+                sharedHistoryScope.cancel()
                 withContext(Dispatchers.Main) { viewModels.clear() }
                 databaseUpdateScope.cancel(); accountServerScope.cancel(); autoRunScope.cancel(); mainScope.cancel(); recognitionScope.cancel(); resetScope.cancel()
                 listOf<() -> Unit>({ captureService.close() }, { device.close() }, { ocr.close() }, { captchaHost.close() },

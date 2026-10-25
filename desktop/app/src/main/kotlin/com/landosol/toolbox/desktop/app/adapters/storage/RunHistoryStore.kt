@@ -12,24 +12,31 @@ import java.nio.file.Path
 import java.nio.file.StandardOpenOption.*
 
 data class DesktopRunRecord(val id: String, val startedAt: Long, val alias: String, val type: String, val goal: String,
-    val endedAt: Long? = null, val result: String = "运行中", val reason: String = "", val cleared: Int = 0, val singleRun: Boolean = false) {
+    val endedAt: Long? = null, val result: String = "运行中", val reason: String = "", val cleared: Int = 0, val singleRun: Boolean = false,
+    val deviceId: String? = null, val deviceName: String? = null, val accountId: Long? = null) {
     val durationMillis get() = endedAt?.let { (it-startedAt).coerceAtLeast(0) }
 }
 
 /** Event journal. Each UTF-8 line is written under one exclusive writer lock and forced to disk.
  * Compaction only applies the documented retention policy; replacement is atomic. No credentials. */
 class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, private val now: () -> Long = System::currentTimeMillis,
-    private val limit: Int = 5000) {
+    private val limit: Int = 5000,
+    private val decorate: (DesktopRunRecord) -> DesktopRunRecord = { it },
+    private val onRecord: (DesktopRunRecord) -> Unit = {}) {
     private val file = directory.resolve("runs.jsonl")
     private var needsCompaction = false
     private val mutable = MutableStateFlow(load())
     val records = mutable.asStateFlow()
     private fun encode(r: DesktopRunRecord) = JSONObject().put("id",r.id).put("startedAt",r.startedAt).put("alias",r.alias)
         .put("type",r.type).put("goal",r.goal).put("endedAt",r.endedAt ?: JSONObject.NULL).put("result",r.result)
-        .put("reason",DesktopLog.redact(r.reason)).put("cleared",r.cleared).put("singleRun",r.singleRun).toString()
+        .put("reason",DesktopLog.redact(r.reason)).put("cleared",r.cleared).put("singleRun",r.singleRun)
+        .put("deviceId",r.deviceId ?: JSONObject.NULL).put("deviceName",r.deviceName ?: JSONObject.NULL)
+        .put("accountId",r.accountId ?: JSONObject.NULL).toString()
     private fun decode(line: String): DesktopRunRecord = JSONObject(line).let { j ->
         DesktopRunRecord(j.getString("id"),j.getLong("startedAt"),j.getString("alias"),j.getString("type"),j.getString("goal"),
-            if(j.isNull("endedAt")) null else j.getLong("endedAt"),j.getString("result"),j.optString("reason"),j.optInt("cleared"),j.optBoolean("singleRun"))
+            if(j.isNull("endedAt")) null else j.getLong("endedAt"),j.getString("result"),j.optString("reason"),j.optInt("cleared"),j.optBoolean("singleRun"),
+            if(j.isNull("deviceId")) null else j.getString("deviceId"), if(j.isNull("deviceName")) null else j.getString("deviceName"),
+            if(j.isNull("accountId")) null else j.getLong("accountId"))
     }
     private fun retained(rows: Collection<DesktopRunRecord>): List<DesktopRunRecord> = rows.filter { it.startedAt >= now()-180L*86_400_000 }
         .sortedBy { it.startedAt }.takeLast(limit)
@@ -45,7 +52,8 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
         return kept
     }
     @Synchronized fun put(record: DesktopRunRecord) {
-        val safe = record.copy(alias=DesktopLog.redact(record.alias),goal=DesktopLog.redact(record.goal),reason=DesktopLog.redact(record.reason))
+        val value = decorate(record)
+        val safe = value.copy(alias=DesktopLog.redact(value.alias),goal=DesktopLog.redact(value.goal),reason=DesktopLog.redact(value.reason))
         Files.createDirectories(file.parent)
         // Repair a crash-truncated final line before appending, leaving it as an independently skipped line.
         FileChannel.open(file, CREATE, READ, WRITE).use { channel ->
@@ -59,6 +67,7 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
         val all=mutable.value.filterNot { it.id==safe.id }+safe
         val kept=retained(all)
         mutable.value=kept
+        onRecord(safe)
         if(kept.size<all.size || Files.size(file)>8L*1024*1024) compact()
     }
     @Synchronized fun recoverInterrupted() { if(needsCompaction){compact();needsCompaction=false};mutable.value.filter { it.endedAt==null }.forEach { put(it.copy(endedAt=now(),result="未正常结束",reason="上次进程退出前未记录终态，请检查游戏当前状态。")) } }
