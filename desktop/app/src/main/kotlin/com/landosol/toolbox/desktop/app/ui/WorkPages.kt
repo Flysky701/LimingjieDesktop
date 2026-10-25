@@ -188,7 +188,7 @@ import java.time.format.DateTimeFormatter
         if (state.editor == null) Message(state.message, vm::dismissMessage)
         Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
             Column(Modifier.width(230.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                Button(onClick = vm::openNewAccount, enabled = !state.isWorking && state.editor == null, modifier = Modifier.fillMaxWidth()) { Text("+ 新增账号") }
+                Button(onClick = vm::openNewAccount, enabled = !state.isWorking && !busy && state.editor == null, modifier = Modifier.fillMaxWidth()) { Text("+ 新增账号") }
                 if (state.accounts.isEmpty()) Text("还没有账号", Modifier.padding(12.dp), color = Muted)
                 state.accounts.forEach { account ->
                     Surface(onClick = { focusId = account.id }, enabled = state.editor == null && !state.isWorking,
@@ -221,31 +221,32 @@ import java.time.format.DateTimeFormatter
     }
     state.deleteCandidate?.let { account -> AlertDialog(onDismissRequest = vm::dismissDelete,
         title = { Text("删除账号") }, text = { Column { Text("确定删除“${account.alias}”吗？账号元数据和本地加密凭据都会删除，此操作不可撤销。"); state.message?.let { Text(it, color = MaterialTheme.colorScheme.error) } } },
-        confirmButton = { TextButton(onClick = vm::confirmDelete, enabled = !state.isWorking) { Text("删除") } },
+        confirmButton = { TextButton(onClick = vm::confirmDelete, enabled = !state.isWorking && !busy) { Text("删除") } },
         dismissButton = { TextButton(onClick = vm::dismissDelete, enabled = !state.isWorking) { Text("取消") } }) }
 }
 
 @Composable private fun AccountEditor(editor: AccountEditorState, state: AccountUiState, vm: AccountViewModel) {
+    val editable = !state.isWorking && !LocalTaskBusy.current
     var servers by remember { mutableStateOf(false) }
     Panel(if (editor.isEditing) "编辑账号" else "新增账号") {
         Box {
-            OutlinedButton(onClick = { servers = true }, enabled = !state.isWorking) { Text("服务器：${editor.server?.displayName ?: "请选择"}") }
+            OutlinedButton(onClick = { servers = true }, enabled = editable) { Text("服务器：${editor.server?.displayName ?: "请选择"}") }
             DropdownMenu(expanded = servers, onDismissRequest = { servers = false }) {
-                GameServer.entries.forEach { server -> DropdownMenuItem(text = { Text(server.displayName) }, onClick = { servers = false; vm.updateEditor { it.copy(server = server) } }) }
+                GameServer.entries.forEach { server -> DropdownMenuItem(text = { Text(server.displayName) }, enabled = editable, onClick = { servers = false; vm.updateEditor { it.copy(server = server) } }) }
             }
         }
         if (editor.serverChanged) Text("更换服务器后需重新填写密码，该账号已有的登录会话会失效", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         else if (editor.server?.isChannelServer == true) Text("渠道服登录账号填 uid，密码填 access_key。", color = Muted, fontSize = 12.sp)
-        OutlinedTextField(editor.alias, { value -> vm.updateEditor { it.copy(alias = value) } }, label = { Text("账号名称") }, singleLine = true, enabled = !state.isWorking, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(editor.loginId, { value -> vm.updateEditor { it.copy(loginId = value) } }, label = { Text(if (editor.server?.isChannelServer == true) "登录账号（uid）" else "登录账号") }, singleLine = true, enabled = !state.isWorking, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(editor.alias, { value -> vm.updateEditor { it.copy(alias = value) } }, label = { Text("账号名称") }, singleLine = true, enabled = editable, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(editor.loginId, { value -> vm.updateEditor { it.copy(loginId = value) } }, label = { Text(if (editor.server?.isChannelServer == true) "登录账号（uid）" else "登录账号") }, singleLine = true, enabled = editable, modifier = Modifier.fillMaxWidth())
         val passwordName = if (editor.server?.isChannelServer == true) "密码（access_key）" else "密码"
         OutlinedTextField(editor.password, { value -> vm.updateEditor { it.copy(password = value) } }, label = { Text(if (editor.serverChanged) "新$passwordName（更换服务器必填）" else if (editor.isEditing) "新$passwordName（留空不修改）" else passwordName) },
-            visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = !state.isWorking, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(editor.gameUid, { value -> vm.updateEditor { it.copy(gameUid = value) } }, label = { Text("游戏 UID（可选）") }, singleLine = true, enabled = !state.isWorking, modifier = Modifier.fillMaxWidth())
+            visualTransformation = PasswordVisualTransformation(), singleLine = true, enabled = editable, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(editor.gameUid, { value -> vm.updateEditor { it.copy(gameUid = value) } }, label = { Text("游戏 UID（可选）") }, singleLine = true, enabled = editable, modifier = Modifier.fillMaxWidth())
         state.message?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (state.isWorking) LinearProgressIndicator(Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = vm::saveEditor, enabled = !state.isWorking) { Text("保存账号") }
+            Button(onClick = vm::saveEditor, enabled = editable) { Text("保存账号") }
             OutlinedButton(onClick = vm::dismissEditor, enabled = !state.isWorking) { Text("取消") }
         }
     }
