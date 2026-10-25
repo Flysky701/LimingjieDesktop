@@ -35,64 +35,33 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-@Composable internal fun RunConsole(graph:DesktopAppGraph,s:RunConsoleState,selected:DesktopTask,select:(DesktopTask)->Unit,configure:()->Unit,navigate:(Page)->Unit,searchFocus:FocusRequester) {
-    val database by graph.ux.database.collectAsState()
-    val foreground by graph.ux.foreground.collectAsState()
-    val ocr by graph.ocr.status.collectAsState()
+@Composable internal fun RunConsole(
+    graph:DesktopAppGraph,s:RunConsoleState,selected:DesktopTask,select:(DesktopTask)->Unit,
+    configure:()->Unit,navigate:(Page)->Unit,searchFocus:FocusRequester,
+    setup:RunSetupDraft,configuration:LabyrinthUiState,standaloneGuild:Int,selectGuild:(Int)->Unit,
+    setupMessage:String?,
+) {
     val preferences by graph.ux.preferences.state.collectAsState()
     val history by graph.ux.history.records.collectAsState()
-    val settings by graph.settings.state.collectAsState()
-    val strategy by graph.labyrinthStrategySettings.state.collectAsState()
-    val credentials by graph.ux.credentials.collectAsState()
     val actions=rememberActions(graph)
     val ready=(s.device as? DeviceConnectionState.Ready)?.device
+    val enabled=!s.busy&&!LocalTaskBusy.current
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val compact=maxWidth<1180.dp
-        Row(Modifier.fillMaxSize().padding(if(compact)12.dp else 14.dp),horizontalArrangement=Arrangement.spacedBy(14.dp)) {
-            Column(Modifier.width(if(compact)268.dp else 288.dp).fillMaxHeight().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-                ConsoleCard("就绪检查",action={TextButton(onClick={actions.run { graph.ux.refreshForeground();graph.ux.refreshDatabase() }},enabled=ready!=null&&!actions.working){Text("重新检查",style=MaterialTheme.typography.bodySmall)}}) {
-                    val items=listOf(
-                        ReadinessItem("模拟器已连接",ready?.label ?: "去连接",ready!=null,"Devices"),
-                        ReadinessItem("分辨率与触控",ready?.let { "${it.width}×${it.height} · ${if(it.touchReady) "触控就绪" else "只读"}" } ?: "等待连接",ready!=null,"Devices",ready!=null&&(ready.width!=1920||ready.height!=1080)),
-                        ReadinessItem("游戏在前台",foreground?.let { if(com.landosol.toolbox.protocol.bilibili.GameServer.entries.any { s->s.packageName==it }) "上次检查通过" else "请打开游戏" } ?: "开始前检查",foreground!=null,"Devices",true),
-                        ReadinessItem("账号凭据",if(credentials[s.task.selectedAccount?.id]==false) "缺凭据" else s.task.selectedAccount?.alias ?: "去添加",s.task.selectedAccount!=null&&credentials[s.task.selectedAccount?.id]!=false,"Accounts"),
-                        ReadinessItem("国服数据库",database,database.startsWith("已就绪"),"Settings"),
-                        ReadinessItem("识别模型",when(ocr){OcrEngineStatus.Ready->"已加载";OcrEngineStatus.Loading->"加载中";OcrEngineStatus.NotLoaded->"尚未加载";is OcrEngineStatus.Failed->"加载失败"},ocr is OcrEngineStatus.Ready,"Settings"))
-                    Column { items.forEach { item -> Row(Modifier.fillMaxWidth().heightIn(min=27.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(7.dp)) {
-                        Symbol(if(item.passed&&!item.warning) "check_circle" else "warning",tint=if(item.passed&&!item.warning)LocalDesktopColors.current.ok else LocalDesktopColors.current.warn,modifier=Modifier.size(16.dp))
-                        Text(item.title,style=MaterialTheme.typography.bodySmall)
-                        Spacer(Modifier.weight(1f))
-                        Text(item.detail,Modifier.widthIn(max=114.dp).clickable {navigate(Page.valueOf(item.page))},color=if(item.passed) Muted else Accent,style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis)
-                    } } }
-                    Row(verticalAlignment=Alignment.CenterVertically) {
-                        Checkbox(settings.gameSettingsConfirmed && preferences.animationConfirmedVersion==AppVersion.name,{checked->actions.run { withContext(Dispatchers.IO){graph.settings.update{it.copy(gameSettingsConfirmed=checked)};graph.ux.preferences.update{it.copy(animationConfirmedVersion=if(checked)AppVersion.name else "")}} }},modifier=Modifier.size(28.dp))
-                        Text("关闭“播放角色加入动画”\n请在游戏内确认",color=LocalDesktopColors.current.warn,style=MaterialTheme.typography.bodySmall)
-                    }
-                    Message(actions.message)
-                }
-                ConsoleCard("任务") {
-                    DesktopTask.entries.chunked(2).forEach { pair -> Row(horizontalArrangement=Arrangement.spacedBy(7.dp)) {
-                        pair.forEach { task -> Surface(onClick={select(task)},enabled=!s.busy,shape=DesktopCorners.sm,
-                            color=if(selected==task)MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
-                            border=BorderStroke(1.dp,if(selected==task)Accent else Line),modifier=Modifier.weight(1f)) {
-                            Column(Modifier.padding(9.dp),verticalArrangement=Arrangement.spacedBy(3.dp)) { Text(task.title,style=MaterialTheme.typography.titleSmall,color=if(selected==task)MaterialTheme.colorScheme.onPrimaryContainer else LocalContentColor.current);Text(task.mode,style=MaterialTheme.typography.bodySmall,color=Muted) }
-                        } }
-                        if(pair.size==1) Spacer(Modifier.weight(1f))
-                    } }
-                    Text("难度 ${s.task.selectedDifficulty} · ${if(preferences.goals.isEmpty()) "尚未配置目标" else "${preferences.goals.size} 个公会 · 共 ${preferences.goals.sumOf{it.count}} 次"}",style=MaterialTheme.typography.bodySmall)
-                    Text("策略共用 · 个人评分 ${strategy.personalRoleScores.size} 人",style=MaterialTheme.typography.bodySmall,color=Muted)
-                    OutlinedButton(shape=MaterialTheme.shapes.small,onClick=configure,modifier=Modifier.fillMaxWidth()){Text("编辑完整配置")}
-                }
-            }
+        val compact=maxWidth<1120.dp
+        Row(Modifier.fillMaxSize().padding(if(compact)12.dp else 16.dp),horizontalArrangement=Arrangement.spacedBy(16.dp)) {
             Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-                if(!s.busy && s.batch==null && s.entry.message==null && s.task.message==null) {
-                    ConsoleCard("开始今天的任务") { Symbol("play_arrow",modifier=Modifier.size(34.dp),tint=Accent);Text("选择左侧任务，完成就绪检查后，从底部开始。",color=Muted);TextButton(onClick={navigate(if(s.task.selectedAccount==null)Page.Accounts else Page.Devices)}){Text(if(s.task.selectedAccount==null)"添加账号 →" else "连接模拟器 →")} }
-                    ConsoleCard("上次运行") {
-                        val last=history.lastOrNull { !it.singleRun && it.endedAt!=null }
-                        if(last==null) {Text("还没有运行记录",style=MaterialTheme.typography.titleSmall);Text("第一次任务结束后，这里会显示结果和停止原因。",color=Muted,style=MaterialTheme.typography.bodySmall)} else {Text("${last.type} · ${last.result}");Text(last.reason.ifBlank {"正常结束"},color=Muted,style=MaterialTheme.typography.bodySmall);Text("耗时 ${formatDuration(last.durationMillis ?: 0)}",fontFamily=FontFamily.Monospace)}
-                        TextButton(onClick={navigate(Page.Records)}){Text("查看全部记录 →")}
-                    }
+                if(!s.busy) {
+                    RunTaskSetup(configuration,selected,select,setup,standaloneGuild,selectGuild,enabled,configure,{navigate(Page.Strategies)},setupMessage)
                 } else {
+                    Row(Modifier.fillMaxWidth().padding(horizontal=4.dp),verticalAlignment=Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(selected.title,style=MaterialTheme.typography.titleLarge)
+                            Text("运行中使用开始时的固定配置",color=Muted,style=MaterialTheme.typography.bodySmall)
+                        }
+                        StatusBadge(if(s.stopping)"停止中" else if(s.overlay?.paused==true)"已暂停" else "运行中")
+                    }
+                }
+                if(s.busy||s.batch!=null||s.entry.status!=LabyrinthEntryRecognitionStatus.IDLE||s.task.startedAtMillis!=null||s.task.currentOpeningReadStatus!=LabyrinthCurrentOpeningReadStatus.NOT_READ) {
                     ConsoleCard(if(s.batch!=null) "批量执行" else if(s.entry.running) if(s.entry.dryRun) "只读识别" else "执行入口流程" else "当前任务") {
                         val cp=s.batch
                         if(cp!=null) { Text("目标 ${(cp.activeGoalIndex+1).coerceAtMost(cp.goals.size)} / ${cp.goals.size} · ${s.task.guildOptions.firstOrNull{it.guildId==cp.currentGuildId}?.name ?: "目标公会"}",style=MaterialTheme.typography.titleMedium)
@@ -127,13 +96,81 @@ import java.time.format.DateTimeFormatter
                     val decision=when(choice){is LabyrinthRoleRewardChoiceDecision.Select->"选择 ${choice.displayName}：${choice.explanation.joinToString("；")}";is LabyrinthRoleRewardChoiceDecision.Wait->choice.reason;null->s.entry.battleTeamRecommendation?.reasons?.joinToString("；") ?: s.entry.battleTeamRecommendationUnavailableReason ?: eventDecisionText(s.entry.eventChoiceDecision)}
                     if(decision!=null)ConsoleCard("最近决策"){SelectionContainer{Text(decision,style=MaterialTheme.typography.bodySmall,maxLines=6,overflow=TextOverflow.Ellipsis)}}
                 }
+                if(!s.busy) history.lastOrNull{!it.singleRun&&it.endedAt!=null}?.let{last->
+                    Row(Modifier.fillMaxWidth().padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        Text("上次 ${last.type} · ${last.result} · ${formatDuration(last.durationMillis ?: 0)}",Modifier.weight(1f),color=Muted,style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis)
+                        TextButton(onClick={navigate(Page.Records)}){Text("查看记录 →",style=MaterialTheme.typography.bodySmall)}
+                    }
+                }
             }
-            Column(Modifier.width(if(compact)280.dp else 340.dp).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-                if(compact) Row { listOf("preview" to "画面","logs" to "日志").forEach{(key,label)->FilterChip(selected=preferences.rightTab==key,onClick={actions.run{withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(rightTab=key)}}}},label={Text(label)},modifier=Modifier.weight(1f))} }
-                if(!compact||preferences.rightTab=="preview")ConsoleCard("实时画面"){Preview(graph,s.busy);Text("帧 ${s.entry.frameCount} · 动作 ${s.entry.actionCount}",fontFamily=FontFamily.Monospace,style=MaterialTheme.typography.bodySmall);s.entry.lastActionLabel?.let{Text("上一步：$it",style=MaterialTheme.typography.bodySmall,color=Muted)}}
-                if(!compact||preferences.rightTab!="preview") LogPanel(graph,Modifier.weight(1f),searchFocus)
+            Column(Modifier.width(if(compact)280.dp else 310.dp).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                RunReadiness(graph,s,selected,preferences.goals.isNotEmpty(),navigate)
+                Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                    listOf("logs" to "日志","preview" to "画面").forEach{(key,label)->
+                        FilterChip(selected=preferences.rightTab==key,onClick={actions.run{withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(rightTab=key)}}}},label={Text(label)},modifier=Modifier.weight(1f))
+                    }
+                }
+                if(preferences.rightTab=="preview") {
+                    ConsoleCard("实时画面") {
+                        if(ready==null&&!s.busy) {
+                            Text("连接模拟器后可查看画面",style=MaterialTheme.typography.bodySmall,color=Muted)
+                            TextButton(onClick={navigate(Page.Devices)}){Text("连接设备 →")}
+                        } else {
+                            Preview(graph,s.busy)
+                            Text("帧 ${s.entry.frameCount} · 动作 ${s.entry.actionCount}",fontFamily=FontFamily.Monospace,style=MaterialTheme.typography.bodySmall)
+                            s.entry.lastActionLabel?.let{Text("上一步：$it",style=MaterialTheme.typography.bodySmall,color=Muted)}
+                        }
+                    }
+                } else LogPanel(graph,if(s.busy)Modifier.weight(1f) else Modifier.weight(1f,fill=false).heightIn(max=340.dp),searchFocus)
             }
         }
+    }
+}
+
+@Composable private fun RunReadiness(graph:DesktopAppGraph,s:RunConsoleState,selected:DesktopTask,hasGoals:Boolean,navigate:(Page)->Unit) {
+    val database by graph.ux.database.collectAsState()
+    val foreground by graph.ux.foreground.collectAsState()
+    val ocr by graph.ocr.status.collectAsState()
+    val preferences by graph.ux.preferences.state.collectAsState()
+    val settings by graph.settings.state.collectAsState()
+    val credentials by graph.ux.credentials.collectAsState()
+    val ready=(s.device as? DeviceConnectionState.Ready)?.device
+    val actions=rememberActions(graph)
+    var expanded by remember{mutableStateOf(false)}
+    val missing=startMissing(selected,s.copy(busy=false,stopping=false),ocr is OcrEngineStatus.Ready,hasGoals,credentials[s.task.selectedAccount?.id])
+    ConsoleCard("就绪状态",action={TextButton(onClick={expanded=!expanded}){Text(if(expanded)"收起" else "详情",style=MaterialTheme.typography.bodySmall)}}) {
+        val reason=missing
+        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(7.dp)) {
+            Symbol(if(reason==null)"check_circle" else "warning",tint=if(reason==null)LocalDesktopColors.current.ok else LocalDesktopColors.current.warn,modifier=Modifier.size(17.dp))
+            Text(if(s.busy)"任务进行中" else reason ?: "当前任务已就绪",style=MaterialTheme.typography.bodySmall)
+        }
+        if(reason!=null&&!s.busy) TextButton(onClick={navigate(when{reason.contains("账号")->Page.Accounts;reason.contains("目标")||reason.contains("配置")->Page.Run;reason.contains("模型")->Page.Settings;else->Page.Devices})},contentPadding=PaddingValues(horizontal=0.dp,vertical=2.dp)) {
+            Text(when{reason.contains("账号")->"选择或编辑账号 →";reason.contains("目标")||reason.contains("配置")->"填写任务配置";reason.contains("模型")->"查看识别模型 →";else->"检查设备 →"},style=MaterialTheme.typography.bodySmall)
+        }
+        if(expanded) {
+            val inForeground=com.landosol.toolbox.protocol.bilibili.GameServer.entries.any{it.packageName==foreground}
+            val items=listOf(
+                ReadinessItem("模拟器",ready?.label ?: "未连接",ready!=null,"Devices"),
+                ReadinessItem("分辨率与触控",ready?.let{"${it.width}×${it.height} · ${if(it.touchReady)"就绪" else "只读"}"} ?: "等待连接",ready!=null,"Devices",ready!=null&&(ready.width!=1920||ready.height!=1080)),
+                ReadinessItem("游戏前台",if(foreground==null)"开始前检查" else if(inForeground)"上次检查通过" else "请打开游戏",inForeground,"Devices",true),
+                ReadinessItem("账号",if(credentials[s.task.selectedAccount?.id]==false)"缺凭据" else s.task.selectedAccount?.alias ?: "未选择",s.task.selectedAccount!=null&&credentials[s.task.selectedAccount?.id]!=false,"Accounts"),
+                ReadinessItem("国服数据库",database,database.startsWith("已就绪"),"Settings"),
+                ReadinessItem("识别模型",when(ocr){OcrEngineStatus.Ready->"已加载";OcrEngineStatus.Loading->"加载中";OcrEngineStatus.NotLoaded->"尚未加载";is OcrEngineStatus.Failed->"加载失败"},ocr is OcrEngineStatus.Ready,"Settings"))
+            items.forEach{item->Row(Modifier.fillMaxWidth().heightIn(min=25.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                Text(item.title,style=MaterialTheme.typography.bodySmall,color=Muted)
+                Spacer(Modifier.weight(1f))
+                Text(item.detail,Modifier.widthIn(max=145.dp).clickable{navigate(Page.valueOf(item.page))},color=if(item.passed&&!item.warning)Muted else Accent,style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis)
+            }}
+            TextButton(onClick={actions.run{graph.ux.refreshForeground();graph.ux.refreshDatabase()}},enabled=ready!=null&&!actions.working){Text("重新检查",style=MaterialTheme.typography.bodySmall)}
+        }
+        if(selected in listOf(DesktopTask.BATCH,DesktopTask.ENTRY)) {
+            val confirmed=settings.gameSettingsConfirmed&&preferences.animationConfirmedVersion==AppVersion.name
+            Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                Checkbox(confirmed,{checked->actions.run{withContext(Dispatchers.IO){graph.settings.update{it.copy(gameSettingsConfirmed=checked)};graph.ux.preferences.update{it.copy(animationConfirmedVersion=if(checked)AppVersion.name else "")}}}},modifier=Modifier.size(26.dp))
+                Text("已在游戏关闭角色加入动画",style=MaterialTheme.typography.bodySmall,color=if(confirmed)Muted else LocalDesktopColors.current.warn)
+            }
+        }
+        Message(actions.message)
     }
 }
 @Composable internal fun ConsoleCard(title:String,modifier:Modifier=Modifier,action:(@Composable ()->Unit)?=null,content:@Composable ColumnScope.()->Unit){Surface(modifier.fillMaxWidth(),color=MaterialTheme.colorScheme.surface,shape=DesktopCorners.lg,border=BorderStroke(1.dp,Line)){Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){Row(verticalAlignment=Alignment.CenterVertically){Text(title,Modifier.weight(1f),style=MaterialTheme.typography.titleSmall);action?.invoke()};content()}}}

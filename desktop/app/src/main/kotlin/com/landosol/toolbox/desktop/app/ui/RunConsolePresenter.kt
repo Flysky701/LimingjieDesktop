@@ -12,7 +12,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 enum class DesktopTask(val title:String,val summary:String,val mode:String) {
-    BATCH("批量自动执行","按公会目标连续执行","会点击"), REROLL("刷开局","刷到满意开局为止","网络操作"),
+    BATCH("批量自动执行","每轮重新刷取开局，再按公会目标执行","会点击"), REROLL("刷开局","刷到满意开局为止","网络操作"),
     READ("读取当前开局","登录并读取开局信息","只读 · 会登录"), RECOGNIZE("只读识别","仅分析当前游戏画面","只读 · 不点击"), ENTRY("执行入口流程","根据已保存策略操作游戏","会点击")
 }
 data class RunConsoleState(val task:LabyrinthUiState=LabyrinthUiState(),val entry:LabyrinthEntryRecognitionSessionState=LabyrinthEntryRecognitionSessionState(),
@@ -60,9 +60,13 @@ fun explainStop(halt:LabyrinthBatchHaltReason?,raw:String):StopExplanation {
     return StopExplanation(info[0],if(battle) "识别到了战斗失败页，但没有当前战斗信息。" else info[1],
         if(battle) "可能停在了标题画面，请先进入游戏主界面，再用只读识别检查。" else info[2],info[3],info[4],raw)
 }
-fun startMissing(task:DesktopTask,state:RunConsoleState,ocrReady:Boolean,hasGoals:Boolean):String? {
+fun startMissing(task:DesktopTask,state:RunConsoleState,ocrReady:Boolean,hasGoals:Boolean,credentialsReady:Boolean?=true):String? {
     if(state.busy) return if(state.stopping) "正在停止任务" else "当前任务正在运行"
     if(task in listOf(DesktopTask.BATCH,DesktopTask.REROLL,DesktopTask.READ) && state.task.selectedAccount==null) return "尚未选择账号"
+    if(task in listOf(DesktopTask.BATCH,DesktopTask.REROLL,DesktopTask.READ)) {
+        if(credentialsReady==false)return "账号凭据缺失"
+        if(credentialsReady==null)return "正在检查账号凭据"
+    }
     if(task in listOf(DesktopTask.BATCH,DesktopTask.REROLL) && !state.task.settingsReady) return "刷开局配置尚未就绪"
     if(task in listOf(DesktopTask.BATCH,DesktopTask.RECOGNIZE,DesktopTask.ENTRY)) {
         val device=(state.device as? DeviceConnectionState.Ready)?.device ?: return "模拟器未连接"

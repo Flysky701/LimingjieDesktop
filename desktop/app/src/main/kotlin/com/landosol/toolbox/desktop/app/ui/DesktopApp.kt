@@ -26,8 +26,11 @@ import com.landosol.toolbox.desktop.app.ui.theme.*
 import com.landosol.toolbox.desktop.device.DeviceConnectionState
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
 import com.landosol.toolbox.labyrinth.batch.*
+import com.landosol.toolbox.labyrinth.rerollSettings
+import com.landosol.toolbox.labyrinth.LabyrinthRerollOptions
 import com.landosol.toolbox.ui.labyrinth.LabyrinthScreen
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 
@@ -52,6 +55,8 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
         val connectionLabel = if (state.device.inProgress) deviceLabel(state.device) else connectionActivity
             ?: connectionMessage?.takeIf { state.device !is DeviceConnectionState.Ready }?.let { "连接提示 · $it" }
             ?: deviceLabel(state.device)
+        val configuration by graph.labyrinthController.uiState.collectAsState()
+        val credentials by graph.ux.credentials.collectAsState()
         val settings by graph.settings.state.collectAsState()
         val accounts by graph.accounts.uiState.collectAsState()
         val ocr by graph.ocr.status.collectAsState()
@@ -62,32 +67,70 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
         DisposableEffect(graph,navigation){graph.ux.confirmNavigation=navigation::request;onDispose{graph.ux.confirmNavigation=null}}
         var searchRequested by remember{mutableStateOf(false)}
         var page by remember { mutableStateOf(Page.entries.firstOrNull { it.name==preferences.page } ?: Page.Run) }
-        var selected by remember { mutableStateOf(DesktopTask.BATCH) }
+        var selected by remember { mutableStateOf(DesktopTask.entries.firstOrNull{it.name==preferences.selectedTask} ?: DesktopTask.BATCH) }
         var fullConfiguration by remember { mutableStateOf(false) }
         var wizard by remember { mutableStateOf(false) }
         var confirmRetreat by remember { mutableStateOf(false) }
         var deviceMenu by remember { mutableStateOf(false) }
         var accountMenu by remember { mutableStateOf(false) }
+        val setup=remember(configuration.selectedAccount?.id){RunSetupDraft(configuration,preferences.goals)}
+        var standaloneGuild by remember(configuration.selectedAccount?.id){mutableStateOf(LabyrinthRerollOptions.DEFAULT_GUILD_ID)}
+        var setupMessage by remember{mutableStateOf<String?>(null)}
+        var pendingSetupExit by remember{mutableStateOf<(() -> Unit)?>(null)}
+        LaunchedEffect(configuration.rerollSettings(),preferences.goals){setup.sync(configuration,preferences.goals)}
+        fun cancelSetup(){setup.reset(graph.labyrinthController.uiState.value,graph.ux.preferences.state.value.goals);setupMessage=null}
+        fun saveSetup(){
+            if(graph.busy||actions.working)return
+            setupMessage=null
+            val current=graph.labyrinthController.uiState.value
+            setup.validationError(current)?.let{setupMessage=it;return}
+            val settingsToSave=setup.settingsToSave(current)
+            val goalsToSave=setup.savedGoals()
+            val accountId=current.selectedAccount?.id
+            actions.run {
+                if(graph.busy||graph.labyrinthController.uiState.value.selectedAccount?.id!=accountId)return@run
+                if(settingsToSave!=current.rerollSettings()) {
+                    graph.labyrinthController.saveSettings(settingsToSave)
+                    val saved=withTimeout(3000){graph.labyrinthController.uiState.first{it.selectedAccount?.id!=accountId||it.rerollSettings()==settingsToSave}}
+                    check(saved.selectedAccount?.id==accountId){"账号已变化，请重新检查配置"}
+                }
+                withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(goals=goalsToSave)}}
+                setup.reset(graph.labyrinthController.uiState.value,graph.ux.preferences.state.value.goals)
+                setupMessage=null
+            }
+        }
+        if(page==Page.Run&&!fullConfiguration) {
+            SideEffect{navigation.intercept={next->if(setup.dirty)pendingSetupExit=next else next()}}
+            DisposableEffect(navigation){onDispose{navigation.intercept=null}}
+        }
+        fun selectTask(task:DesktopTask){
+            if(task==selected||graph.busy||actions.working)return
+            navigation.request{selected=task;setupMessage=null;actions.run{withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(selectedTask=task.name)}}}}
+        }
+        fun configure(){navigation.request{fullConfiguration=true}}
         val searchFocus=remember { FocusRequester() }
-        fun navigate(target:Page) { navigation.request {page=target;actions.run { withContext(Dispatchers.IO){graph.ux.preferences.update { it.copy(page=target.name) }} }} }
+        fun navigate(target:Page) { if(target!=page)navigation.request {page=target;actions.run { withContext(Dispatchers.IO){graph.ux.preferences.update { it.copy(page=target.name) }} }} }
         LaunchedEffect(page,searchRequested){if(page==Page.Run&&searchRequested){withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(rightTab="logs")}};delay(50);runCatching{searchFocus.requestFocus()};searchRequested=false}}
         val goals=preferences.goals.map { LabyrinthBatchGoal(it.guildId,it.count,if(it.clears) LabyrinthBatchGoalMode.CLEARS else LabyrinthBatchGoalMode.ATTEMPTS) }
-        val missing=startMissing(selected,state,ocr is OcrEngineStatus.Ready,goals.isNotEmpty())
+        val missing=runSetupBlock(setup.dirty,fullConfiguration) ?: startMissing(selected,state,ocr is OcrEngineStatus.Ready,goals.isNotEmpty(),credentials[configuration.selectedAccount?.id])
         fun launchSelected() {
-            if(missing!=null || actions.working || graph.busy) return
+            if(setup.dirty || fullConfiguration || actions.working || graph.busy) return
+            val current=graph.labyrinthController.uiState.value
+            val currentGoals=graph.ux.preferences.state.value.goals.map{LabyrinthBatchGoal(it.guildId,it.count,if(it.clears)LabyrinthBatchGoalMode.CLEARS else LabyrinthBatchGoalMode.ATTEMPTS)}
+            if(startMissing(selected,state.copy(task=current),graph.ocr.status.value is OcrEngineStatus.Ready,currentGoals.isNotEmpty(),graph.ux.credentials.value[current.selectedAccount?.id])!=null)return
             graph.ux.expect(selected)
             actions.run {
                 if(selected in listOf(DesktopTask.BATCH,DesktopTask.RECOGNIZE,DesktopTask.ENTRY)) graph.ux.refreshForeground()
                 when(selected) {
-                    DesktopTask.BATCH -> if(!graph.startLabyrinthAutoRun(state.task.selectedAccount?.id,goals)) graph.log.add("启动检查未通过，请核对账号、设备、模型和当前任务。",true)
-                    DesktopTask.REROLL -> graph.labyrinthController.start(retreatConfirmed=true)
+                    DesktopTask.BATCH -> if(!graph.startLabyrinthAutoRun(current.selectedAccount?.id,currentGoals)) graph.log.add("启动检查未通过，请核对账号、设备、模型和当前任务。",true)
+                    DesktopTask.REROLL -> graph.labyrinthController.start(retreatConfirmed=true,guildIdOverride=standaloneGuild)
                     DesktopTask.READ -> graph.labyrinthController.checkStatus()
                     DesktopTask.RECOGNIZE -> graph.startRecognition(true)
                     DesktopTask.ENTRY -> graph.startRecognition(false)
                 }
             }
         }
-        fun start() { if(selected==DesktopTask.REROLL && state.task.retireExisting && missing==null) confirmRetreat=true else launchSelected() }
+        fun start() { if(setup.dirty||fullConfiguration||actions.working||graph.busy)return;if(selected==DesktopTask.REROLL && graph.labyrinthController.uiState.value.retireExisting && missing==null) confirmRetreat=true else launchSelected() }
         fun stop() { if(graph.busy && !graph.taskStopping.value) actions.run { graph.stopAll().join() } }
         fun pause() { if(state.overlay!=null && !state.stopping) graph.pauseTask() }
         Surface(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
@@ -128,7 +171,7 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                             Box { OutlinedButton(shape=MaterialTheme.shapes.small,onClick={accountMenu=true},enabled=!state.busy,contentPadding=PaddingValues(horizontal=10.dp,vertical=6.dp)) {
                                 Symbol("person");Spacer(Modifier.width(6.dp));Text(state.task.selectedAccount?.alias ?: "选择账号",style=MaterialTheme.typography.bodySmall)
                             };DropdownMenu(accountMenu,{accountMenu=false}) {
-                                accounts.accounts.forEach { account -> DropdownMenuItem(text={Text("${if(account.isSelected) "✓ " else ""}${account.alias} · ${account.serverName}")},onClick={accountMenu=false;if(!graph.busy)graph.accounts.selectAccount(account.id)}) }
+                                accounts.accounts.forEach { account -> DropdownMenuItem(text={Text("${if(account.isSelected) "✓ " else ""}${account.alias} · ${account.serverName}")},onClick={accountMenu=false;if(!graph.busy)navigation.request{cancelSetup();graph.accounts.selectAccount(account.id)}}) }
                                 DropdownMenuItem(text={Text("管理账号")},onClick={accountMenu=false;navigate(Page.Accounts)})
                             } }
                             if(state.busy) Text("运行中不可切换账号",color=Muted,style=MaterialTheme.typography.bodySmall)
@@ -141,7 +184,8 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                         CompositionLocalProvider(LocalContext provides graph.context,LocalTaskBusy provides (state.busy||actions.working),LocalDesktopWindow provides hostWindow,LocalNavigationGuard provides navigation,
                             LocalConfiguration provides Configuration(maxWidth.value.toInt(),maxHeight.value.toInt())) {
                             when(page) {
-                                Page.Run -> RunConsole(graph,state,selected,{if(!state.busy)selected=it},{fullConfiguration=true},{navigate(it)},searchFocus)
+                                Page.Run -> RunConsole(graph,state,selected,::selectTask,::configure,{navigate(it)},searchFocus,
+                                    setup,configuration,standaloneGuild,{if(!graph.busy)standaloneGuild=it},setupMessage ?: actions.message)
                                 Page.Accounts -> AccountsPage(graph)
                                 Page.Strategies -> StrategiesPage(graph)
                                 Page.Devices -> DevicesPage(graph)
@@ -158,13 +202,21 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                             if(!fullConfiguration) state.task.captcha?.let { captcha -> com.landosol.toolbox.ui.account.GeetestCaptchaDialog(captcha,state.task.isWorking,graph.labyrinthController::submitCaptcha,graph.labyrinthController::reportCaptchaError,graph.labyrinthController::cancelCaptcha) }
                             if(confirmRetreat) AlertDialog(onDismissRequest={confirmRetreat=false},title={Text("确认彻底撤退")},text={Text("允许彻底撤退会放弃当前开局。请确认没有需要保留的进度。")},
                                 confirmButton={TextButton(onClick={confirmRetreat=false;launchSelected()}){Text("确认并开始")}},dismissButton={TextButton(onClick={confirmRetreat=false}){Text("取消")}})
+                            if(pendingSetupExit!=null) AlertDialog(onDismissRequest={pendingSetupExit=null},title={Text("放弃未保存的常用配置？")},
+                                text={Text("更改尚未保存。你可以留在运行台保存，或放弃更改后继续。")},
+                                confirmButton={TextButton(onClick={val next=pendingSetupExit;pendingSetupExit=null;cancelSetup();next?.invoke()}){Text("放弃更改并继续")}},
+                                dismissButton={TextButton(onClick={pendingSetupExit=null}){Text("留在此页")}})
                         }
                     }
                     HorizontalDivider(color=Line)
                     Surface(color=MaterialTheme.colorScheme.surface) { Row(Modifier.fillMaxWidth().heightIn(min=68.dp).padding(horizontal=16.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                        Column(Modifier.weight(1f)) { Text(if(state.busy) state.overlay?.status ?: state.task.progress ?: "任务进行中" else "准备开始",style=MaterialTheme.typography.titleSmall,maxLines=1,overflow=TextOverflow.Ellipsis)
-                            Text(actions.message ?: state.entry.message ?: state.task.message ?: "选择任务，完成就绪检查后开始",color=Muted,style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis) }
-                        if(missing!=null && !state.busy) TextButton(onClick={when {missing.contains("账号")->navigate(Page.Accounts);missing.contains("目标")||missing.contains("配置")->fullConfiguration=true;missing.contains("模型")->navigate(Page.Settings);else->navigate(Page.Devices)}}) { Text("还差：$missing",style=MaterialTheme.typography.bodySmall) }
+                        Column(Modifier.weight(1f)) { Text(if(state.busy) state.overlay?.status ?: state.task.progress ?: "任务进行中" else selected.title,style=MaterialTheme.typography.titleSmall,maxLines=1,overflow=TextOverflow.Ellipsis)
+                            Text(actions.message ?: setupMessage ?: if(setup.dirty)"请先保存或取消更改" else if(state.busy) state.entry.message ?: state.task.message ?: "任务正在进行" else selected.mode+" · 使用已保存配置",color=Muted,style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis) }
+                        if(missing!=null && !state.busy && !setup.dirty) TextButton(onClick={when {fullConfiguration||missing.contains("目标")||missing.contains("配置")->{page=Page.Run;fullConfiguration=false};missing.contains("账号")->navigate(Page.Accounts);missing.contains("模型")->navigate(Page.Settings);else->navigate(Page.Devices)}}) { Text(missing,style=MaterialTheme.typography.bodySmall) }
+                        if(setup.dirty&&!fullConfiguration) {
+                            TextButton(onClick=::cancelSetup,enabled=!state.busy&&!actions.working){Text("取消更改")}
+                            Button(onClick=::saveSetup,enabled=!state.busy&&!actions.working,shape=MaterialTheme.shapes.small){Text(if(actions.working)"保存中…" else "保存更改")}
+                        }
                         if(state.overlay!=null) OutlinedButton(shape=MaterialTheme.shapes.small,onClick=::pause,enabled=!state.stopping&&!actions.working) { Text(if(state.overlay?.paused==true) "继续 F6" else "暂停 F6") }
                         OutlinedButton(shape=MaterialTheme.shapes.small,onClick=::stop,enabled=state.busy&&!state.stopping&&!actions.working) { Text(if(state.stopping) "停止中…" else "停止 F7") }
                         StartControl(missing,actions.working,::start)
