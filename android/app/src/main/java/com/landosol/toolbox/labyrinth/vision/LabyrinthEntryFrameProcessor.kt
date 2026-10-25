@@ -462,6 +462,7 @@ class LabyrinthEntryFrameProcessor(
      */
     private val nodeScanConsumable: () -> Boolean = { true },
 ) {
+    private val challengeSuffixTemplates = ChallengeSuffixTemplates()
     private val finalBossPlatformLocator = FinalBossPlatformLocator(
         nodeTemplates.templates["node.boss.platform"],
     )
@@ -535,8 +536,13 @@ class LabyrinthEntryFrameProcessor(
                         )
                     }
                     mapped?.let { rect ->
+                        val scoredTemplate = when (id) {
+                            EntryAnchorId.BATTLE_CHALLENGE_SUFFIX_NORMAL,
+                            EntryAnchorId.BATTLE_CHALLENGE_SUFFIX_EXTREME -> challengeSuffixTemplates.forRect(template, rect)
+                            else -> template
+                        }
                         EntryAnchorMatch(
-                            score = matcher.score(frame, rect, template),
+                            score = matcher.score(frame, rect, scoredTemplate),
                             rect = rect,
                         )
                     }
