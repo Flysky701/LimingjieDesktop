@@ -24,7 +24,7 @@ class ManagedDeviceService(
     override val state = current.asStateFlow()
     override val foregroundPackage get() = delegate?.foregroundPackage
     private suspend fun service(): DeviceService = mutex.withLock {
-        val location = AdbLocator.find(configuredPath()?.takeIf { it.isNotBlank() }, directory.resolve("platform-tools"))
+        val location = AdbLocator.find(configuredPath()?.takeIf { it.isNotBlank() }, directory.resolve("tools/platform-tools"))
             ?: error("未找到 ADB。请在设备页选择模拟器自带的 adb.exe，或安装 Android Platform Tools")
         if (delegate == null || path != location.path) {
             check(current.value !is DeviceConnectionState.Ready) { "请先断开设备，再更换 ADB" }

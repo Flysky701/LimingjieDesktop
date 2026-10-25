@@ -10,7 +10,7 @@ class UserLog {
     val lines = entries.asStateFlow()
     @Synchronized fun add(text: String, error: Boolean = false) {
         if (text.isBlank() || entries.value.lastOrNull()?.text == text) return
-        val line = UserLogLine(LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")), text, error)
+        val line = UserLogLine(LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")), com.landosol.toolbox.desktop.shared.DesktopLog.redact(text), error)
         entries.value = (entries.value + line).takeLast(2000)
     }
     fun clear() { entries.value = emptyList() }

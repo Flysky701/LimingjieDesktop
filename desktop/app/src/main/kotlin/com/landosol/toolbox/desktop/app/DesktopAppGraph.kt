@@ -90,6 +90,11 @@ class DesktopAppGraph(
     private val startupUpdates: Boolean = true,
 ) : AutoCloseable {
     val log = UserLog()
+    private val failures = CoroutineExceptionHandler { _, failure ->
+        Log.e("DesktopTask", "后台任务异常", failure)
+        log.add("任务发生异常：${failure.message ?: failure.javaClass.simpleName}。请查看诊断日志。", true)
+        if (!closed) stopAll("后台任务异常，已停止当前任务")
+    }
     val context = DesktopContext(dataDirectory.toFile()) { log.add("配置损坏，已保留备份：${it.name}", true) }
     private val filesDir get() = context.filesDir
     private val cacheDir get() = context.cacheDir
@@ -97,9 +102,9 @@ class DesktopAppGraph(
     val settings = DesktopSettingsStore(dataDirectory) { log.add("桌面设置已从默认值恢复，原文件已备份", true) }
     private val network = NetworkProxyController().also { it.setMode(settings.state.value.networkMode) }
     private val power = PowerSaveController()
-    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val recognitionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val resetScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main + failures)
+    private val recognitionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + failures)
+    private val resetScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + failures)
     val identityStore = FileDeviceIdentityStore(dataDirectory) { log.add(it, true) }
     val ocr = OnnxOcrEngine()
     val captchaHost = LoopbackCaptchaHost()
@@ -126,8 +131,8 @@ class DesktopAppGraph(
         DesktopBindings.install(installedServices)
     }
 
-    private val databaseUpdateScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val accountServerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val databaseUpdateScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + failures)
+    private val accountServerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + failures)
 
     private fun start() {
         // First line of every process log, so a diagnostic bundle always names the build it came
@@ -681,20 +686,23 @@ class DesktopAppGraph(
         )
     }
 
-    private val autoRunScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val autoRunScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + failures)
 
     @Volatile
     private var autoRunJob: Job? = null
     private val startLock = Any()
     private val startingState = MutableStateFlow(false)
     val taskStarting = startingState.asStateFlow()
+    private val stoppingState = MutableStateFlow(false)
+    val taskStopping = stoppingState.asStateFlow()
+    private var stopJob: Job? = null
 
     fun startLabyrinthAutoRun(
         accountId: Long?,
         goals: List<com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoal>,
     ): Boolean = synchronized(startLock) {
         val id = accountId ?: return false
-        if (goals.isEmpty() || !actionsAvailable() || ocr.status.value !is OcrEngineStatus.Ready) return false
+        if (goals.isEmpty() || stoppingState.value || !actionsAvailable() || ocr.status.value !is OcrEngineStatus.Ready) return false
         if (autoRunJob?.isActive == true) return false
         // The launch job ends after start() hands control to the recognition session. The batch
         // stage remains the authoritative lock for the rest of that run.
@@ -734,20 +742,11 @@ class DesktopAppGraph(
     }
 
     fun stopLabyrinthAutoRun() {
-        autoRunJob?.cancel()
-        autoRunJob = null
-        startingState.value = false
-        gameClientHardCloseLedger.clear()
-        autoRunScope.launch {
-            labyrinthBatchController.stop("用户停止自动执行")
-            gameSessionResetWorkflow.stop("用户停止自动执行")
-            // The batch is over: release the capture session the user authorized for it.
-            labyrinthEntryRecognitionSession.stop("用户停止自动执行")
-        }
+        stopAll("用户停止自动执行")
     }
 
-    fun actionsAvailable() = (device.state.value as? DeviceConnectionState.Ready)?.device?.touchReady == true
-    val busy: Boolean get() = startingState.value || autoRunJob?.isActive == true || labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES || labyrinthController.uiState.value.isWorking || labyrinthController.uiState.value.captcha != null || labyrinthEntryRecognitionSession.state.value.running || gameSessionResetWorkflow.state.value.running
+    fun actionsAvailable() = (device.state.value as? DeviceConnectionState.Ready)?.device?.let { it.touchReady && it.awake } == true
+    val busy: Boolean get() = startingState.value || stoppingState.value || autoRunJob?.isActive == true || labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES || labyrinthController.uiState.value.isWorking || labyrinthController.uiState.value.captcha != null || labyrinthEntryRecognitionSession.state.value.running || gameSessionResetWorkflow.state.value.running
 
     suspend fun connectDevice(serial: String) {
         check(!busy) { "请先停止当前任务，再切换设备" }
@@ -770,6 +769,7 @@ class DesktopAppGraph(
         autoRunScope.launch {
         try {
             check(device.state.value is DeviceConnectionState.Ready) { "请先在设备页连接模拟器" }
+            check((device.state.value as? DeviceConnectionState.Ready)?.device?.awake == true) { "模拟器屏幕正在休眠，请先手动唤醒，再启动任务" }
             check(ocr.status.value is OcrEngineStatus.Ready) { "OCR 尚未就绪，请查看设置与环境" }
             check(dryRun || actionsAvailable()) { "触控服务未就绪，请在设备页重新连接" }
             captureService.start()
@@ -783,17 +783,27 @@ class DesktopAppGraph(
         }.also { autoRunJob = it }
     }
     fun pauseTask() { automationOverlayCoordinator.state.value?.let { current -> autoRunScope.launch { automationOverlayCoordinator.setPaused(current.sessionId, !current.paused) } } }
-    fun stopAll(reason: String = "用户停止任务") {
+    fun stopAll(reason: String = "用户停止任务"): Job = synchronized(startLock) {
+        stopJob?.takeIf { it.isActive }?.let { return it }
+        stoppingState.value = true
         log.add(reason)
         labyrinthController.stopWithReason(reason)
-        autoRunJob?.cancel(); autoRunJob = null
-        startingState.value = false
+        gameClientHardCloseLedger.clear()
+        val starting = autoRunJob
+        starting?.cancel()
         autoRunScope.launch {
-            labyrinthBatchController.stop(reason)
-            gameSessionResetWorkflow.stop(reason)
-            labyrinthEntryRecognitionSession.stop(reason)
-            captureService.stop(reason)
-        }
+            try {
+                starting?.join()
+                labyrinthBatchController.stop(reason)
+                gameSessionResetWorkflow.stop(reason)
+                labyrinthEntryRecognitionSession.stop(reason)
+            } finally {
+                withContext(NonCancellable) { captureService.stopAndJoin(reason) }
+                autoRunJob = null
+                startingState.value = false
+                stoppingState.value = false
+            }
+        }.also { stopJob = it }
     }
     private fun startRerollHost() {
         val accepted = labyrinthController.startFromService()
@@ -816,12 +826,7 @@ class DesktopAppGraph(
         closed = true
         try {
             val stopped = withTimeoutOrNull(10_000) {
-                labyrinthController.stop()
-                autoRunJob?.cancelAndJoin()
-                labyrinthBatchController.stop("应用退出")
-                gameSessionResetWorkflow.stop("应用退出")
-                labyrinthEntryRecognitionSession.stop("应用退出")
-                captureService.stopAndJoin("应用退出")
+                stopAll("应用退出").join()
                 true
             }
             if (stopped != true) Log.w(APP_LOG_TAG, "等待任务停止超过 10 秒，继续释放桌面资源")

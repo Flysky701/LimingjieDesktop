@@ -9,13 +9,16 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 object DesktopLog {
+    private val secrets = Regex("(?i)([\\\"']?(?:password|passwd|access[_-]?key|access[_-]?token|refresh[_-]?token|token|login[_-]?id|authorization|cookie)[\\\"']?\\s*[:=]\\s*)(?:\\\"[^\\\"]*\\\"|'[^']*'|[^\\s,;}&]+)")
+    private val encrypted = Regex("v1:[A-Za-z0-9+/=]{16,}")
+    fun redact(text: String): String = encrypted.replace(secrets.replace(text) { it.groupValues[1] + "<redacted>" }, "<encrypted-redacted>")
     private var directory: Path? = null
     private val recent = ArrayDeque<String>()
     private val formatter = DateTimeFormatter.ofPattern("MM-dd HH:mm:ss.SSS")
     @Synchronized fun initialize(path: Path) { Files.createDirectories(path); directory = path }
     @Synchronized fun write(level: Char, tag: String, message: String, error: Throwable? = null): Int {
-        val line = "${LocalDateTime.now().format(formatter)} ${ProcessHandle.current().pid()} ${Thread.currentThread().threadId()} $level $tag: $message" +
-            (error?.let { "\n${it.stackTraceToString()}" } ?: "") + "\n"
+        val line = "${LocalDateTime.now().format(formatter)} ${ProcessHandle.current().pid()} ${Thread.currentThread().threadId()} $level $tag: " +
+            redact(message + (error?.let { "\n${it.stackTraceToString()}" } ?: "")) + "\n"
         recent.addLast(line)
         while (recent.size > 5000) recent.removeFirst()
         directory?.let { dir ->

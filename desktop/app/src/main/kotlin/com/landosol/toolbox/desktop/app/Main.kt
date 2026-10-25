@@ -61,7 +61,9 @@ fun main(args: Array<String>) {
         val batch by graph.labyrinthBatchController.state.collectAsState()
         val recognition by graph.labyrinthEntryRecognitionSession.state.collectAsState()
         val reset by graph.gameSessionResetWorkflow.state.collectAsState()
-        val taskActive = reroll.isWorking || reroll.captcha != null || presentation != null || recognition.running || reset.running || batch?.stage?.name in setOf("REROLLING", "INVALIDATING_OLD_CLIENT_SESSION", "RUNNING_LABYRINTH", "RECORDING_RESULT")
+        val starting by graph.taskStarting.collectAsState()
+        val stopping by graph.taskStopping.collectAsState()
+        val taskActive = starting || stopping || reroll.isWorking || reroll.captcha != null || presentation != null || recognition.running || reset.running || batch?.stage?.name in setOf("REROLLING", "INVALIDATING_OLD_CLIENT_SESSION", "RUNNING_LABYRINTH", "RECORDING_RESULT")
         val trayState = rememberTrayState()
         val trayAvailable = java.awt.SystemTray.isSupported()
         val icon = remember { AppPainter() }
@@ -139,7 +141,7 @@ private fun installCrashHandler(directory: Path) {
     Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
         runCatching {
             val crashes = directory.resolve("logs/crashes"); Files.createDirectories(crashes)
-            Files.writeString(crashes.resolve("crash-${System.currentTimeMillis()}.log"), "${AppVersion.display}\nThread: ${thread.name}\n${failure.stackTraceToString()}")
+            Files.writeString(crashes.resolve("crash-${System.currentTimeMillis()}.log"), DesktopLog.redact("${AppVersion.display}\nThread: ${thread.name}\n${failure.stackTraceToString()}"))
             DesktopLog.write('E', "Crash", "线程 ${thread.name} 未处理异常", failure)
         }
     }
