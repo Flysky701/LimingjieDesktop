@@ -13,14 +13,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.landosol.toolbox.desktop.app.DesktopAppGraph
+import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
 import com.landosol.toolbox.desktop.app.ui.theme.LocalDesktopColors
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
-@Composable internal fun RecordsPage(graph:DesktopAppGraph) {
+@Composable internal fun RecordsPage(graph:ControlSessionUi) {
     val records by graph.ux.history.records.collectAsState()
     var diagnostics by remember {mutableStateOf(false)}
     Column(Modifier.fillMaxSize()) {

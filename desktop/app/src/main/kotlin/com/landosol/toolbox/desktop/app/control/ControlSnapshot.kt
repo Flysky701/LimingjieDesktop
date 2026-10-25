@@ -53,14 +53,16 @@ object ControlModelCodec {
         is String->JsonPrimitive(value)
         is Char->JsonPrimitive(value.toString())
         is Boolean->JsonPrimitive(value)
+        is Double->if(value.isFinite())JsonPrimitive(value) else JsonPrimitive(value.toString())
+        is Float->if(value.isFinite())JsonPrimitive(value) else JsonPrimitive(value.toString())
         is Number->JsonPrimitive(value)
         is Enum<*>->JsonPrimitive(value.name)
         is Map<*,*>->JsonObject(value.entries.associate{(key,item)->(if(key is Enum<*>)key.name else key.toString()) to encode(item)})
         is Iterable<*>->JsonArray(value.map(::encode))
         is IntArray->JsonArray(value.map(::JsonPrimitive))
         is LongArray->JsonArray(value.map(::JsonPrimitive))
-        is FloatArray->JsonArray(value.map(::JsonPrimitive))
-        is DoubleArray->JsonArray(value.map(::JsonPrimitive))
+        is FloatArray->JsonArray(value.map(::encode))
+        is DoubleArray->JsonArray(value.map(::encode))
         is ByteArray->JsonArray(value.map{JsonPrimitive(it.toInt())})
         is Array<*>->JsonArray(value.map(::encode))
         else->{
@@ -100,9 +102,9 @@ object ControlModelCodec {
             FloatArray::class->return value.jsonArray.map{it.jsonPrimitive.float}.toFloatArray()
             DoubleArray::class->return value.jsonArray.map{it.jsonPrimitive.double}.toDoubleArray()
             ByteArray::class->return value.jsonArray.map{it.jsonPrimitive.int.toByte()}.toByteArray()
-            List::class,Collection::class,Iterable::class,MutableList::class->return value.jsonArray.map{decode(it,checkNotNull(type.arguments[0].type))}
-            Set::class,MutableSet::class->return value.jsonArray.map{decode(it,checkNotNull(type.arguments[0].type))}.toSet()
-            Map::class,MutableMap::class->return value.jsonObject.entries.associate{(key,item)->decode(JsonPrimitive(key),checkNotNull(type.arguments[0].type)) to decode(item,checkNotNull(type.arguments[1].type))}
+            List::class,Collection::class,Iterable::class->return value.jsonArray.map{decode(it,checkNotNull(type.arguments[0].type))}
+            Set::class->return value.jsonArray.map{decode(it,checkNotNull(type.arguments[0].type))}.toSet()
+            Map::class->return value.jsonObject.entries.associate{(key,item)->decode(JsonPrimitive(key),checkNotNull(type.arguments[0].type)) to decode(item,checkNotNull(type.arguments[1].type))}
         }
         if(klass.java.isEnum)return klass.java.enumConstants.firstOrNull{(it as Enum<*>).name==primitive?.content} ?: error("Unknown ${klass.simpleName}")
         val obj=value.jsonObject

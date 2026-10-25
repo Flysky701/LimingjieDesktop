@@ -14,7 +14,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.automation.GameClientResolution
-import com.landosol.toolbox.desktop.app.DesktopAppGraph
+import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.desktop.app.adapters.device.inProgress
 import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
@@ -22,6 +22,7 @@ import com.landosol.toolbox.desktop.platform.*
 import com.landosol.toolbox.labyrinth.LabyrinthCnDatabaseUpdateResult
 import com.landosol.toolbox.protocol.bilibili.GameServer
 import kotlinx.coroutines.*
+import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.awt.Desktop
@@ -30,7 +31,7 @@ import java.nio.file.Files
 import javax.swing.JFileChooser
 import javax.swing.filechooser.FileNameExtensionFilter
 
-@Composable internal fun DevicesPage(graph: DesktopAppGraph) {
+@Composable internal fun DevicesPage(graph: ControlSessionUi) {
     val busy = LocalTaskBusy.current
     val settings by graph.settings.state.collectAsState()
     val state by graph.device.state.collectAsState()
@@ -49,8 +50,8 @@ import javax.swing.filechooser.FileNameExtensionFilter
             OutlinedTextField(adbPath, { adbPath = it }, label = { Text("adb.exe 路径（留空自动查找）") }, singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = !actions.working && !busy)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { chooseFile(false, "选择 adb.exe", "exe")?.let { adbPath = it.absolutePath } }, enabled = !actions.working && !busy) { Text("选择文件") }
-                Button(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.deviceConnection.configure { location = null; withContext(Dispatchers.IO) { graph.settings.update { it.copy(adbPath = adbPath.trim()) }; location = graph.checkAdb() } } } }, enabled = !actions.working && !busy && !connectionBusy && ready == null) { Text("保存并检查") }
-                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.deviceConnection.configure { val found = withContext(Dispatchers.IO) { AdbLocator.downloadPlatformTools(graph.dataDirectory) }; location = found; adbPath = found.path; withContext(Dispatchers.IO) { graph.settings.update { it.copy(adbPath = found.path) }; graph.checkAdb() }; graph.log.add("Platform Tools 已下载并配置") } } }, enabled = !actions.working && !busy && !connectionBusy && ready == null) { Text("下载 Platform Tools") }
+                Button(shape=MaterialTheme.shapes.small,onClick = { actions.run { location = graph.configureAdb(adbPath.trim()) } }, enabled = !actions.working && !busy && !connectionBusy && ready == null) { Text("保存并检查") }
+                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { val found=graph.downloadAdb();location=found;adbPath=found.path } }, enabled = !actions.working && !busy && !connectionBusy && ready == null) { Text("下载 Platform Tools") }
             }
             location?.let { Detail("来源", it.source); Detail("版本", it.version) }
             Text("更换 ADB 前请先断开设备。下载使用 Android 官方 Platform Tools。", color = Muted, fontSize = 12.5.sp)
@@ -91,7 +92,8 @@ import javax.swing.filechooser.FileNameExtensionFilter
             }
         }
         Panel("设备画像与客户端") {
-            val snapshot = graph.identityStore.current()
+            val identityState by graph.identityStore.state.collectAsState()
+            val snapshot = identityState
             if (snapshot == null) Text("连接完成后会读取模拟器信息。", color = Muted)
             else {
                 Detail("设备", "${snapshot.brand} ${snapshot.model}")
@@ -105,7 +107,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
     }
 }
 
-@Composable internal fun DeviceConnectionPanel(graph: DesktopAppGraph,autoDetect:Boolean=false) {
+@Composable internal fun DeviceConnectionPanel(graph: ControlSessionUi,autoDetect:Boolean=false) {
     val resolution by graph.resolutionGuard.status.collectAsState()
     val busy = LocalTaskBusy.current
     val state by graph.device.state.collectAsState()
@@ -152,7 +154,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
     }
 }
 
-@Composable internal fun SettingsPage(graph: DesktopAppGraph, openWizard: () -> Unit, openDevices: () -> Unit) {
+@Composable internal fun SettingsPage(graph: ControlSessionUi, openWizard: () -> Unit, openDevices: () -> Unit) {
     val resolution by graph.resolutionGuard.status.collectAsState()
     val busy = LocalTaskBusy.current
     val saved by graph.settings.state.collectAsState()
@@ -182,19 +184,21 @@ import javax.swing.filechooser.FileNameExtensionFilter
             OutlinedButton(onClick = { actions.run { graph.recheckResolution() } }, enabled = ready != null && !busy && !actions.working) { Text("重新检查画面尺寸") }
             Detail("触控", if (ready?.touchReady == true) if (saved.touchMode == PreferredTouchMode.COMPATIBILITY) "兼容模式（速度较慢）" else "MaaTouch 就绪" else "未就绪")
             Detail("屏幕", if (ready == null) "未读取" else if (ready.awake) "已唤醒" else "未唤醒")
-            Detail("游戏客户端", when (val client = graph.gameClientResolution) {
-                is GameClientResolution.Available -> "${client.server.displayName} 已安装"
-                is GameClientResolution.NotInstalled -> "请在模拟器中安装 ${client.server.displayName} 客户端"
+            val client by graph.gameClient.collectAsState()
+            Detail("游戏客户端", when (val currentClient=client) {
+                is GameClientResolution.Available -> "${currentClient.server.displayName} 已安装"
+                is GameClientResolution.NotInstalled -> "请在模拟器中安装 ${currentClient.server.displayName} 客户端"
                 is GameClientResolution.Ambiguous -> "检测到多个客户端，请先选择账号"
                 is GameClientResolution.UnknownServer -> "账号服务器无法识别，请在账号库重新选择"
                 GameClientResolution.Unavailable -> "未检测到支持的游戏客户端"
             })
-            Detail("前台应用", graph.device.foregroundPackage ?: "尚未读取")
+            val foreground by graph.device.foreground.collectAsState()
+            Detail("前台应用", foreground ?: "尚未读取")
             Detail("OCR", when (ocr) { OcrEngineStatus.Ready -> "就绪"; OcrEngineStatus.Loading -> "正在加载"; OcrEngineStatus.NotLoaded -> "尚未加载"; is OcrEngineStatus.Failed -> (ocr as OcrEngineStatus.Failed).reason })
             Detail("凭据加密", encryption)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(shape=MaterialTheme.shapes.small,onClick = openDevices) { Text("设备设置") }
-                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { encryption = withContext(Dispatchers.IO) { val fixture = "desktop-self-check".toByteArray(); val entropy = "fixture".toByteArray(); check(WindowsDpapi.unprotect(WindowsDpapi.protect(fixture, entropy), entropy).contentEquals(fixture)); "DPAPI 当前用户自检通过" } } }, enabled = !actions.working) { Text("检查加密") }
+                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { encryption = graph.messageRequest(ControlOps.ENCRYPTION_TEST) } }, enabled = !actions.working) { Text("检查加密") }
                 OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.device.queryForeground() ?: error("前台应用暂时无法读取") } }, enabled = ready != null && !actions.working) { Text("刷新前台状态") }
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -208,24 +212,16 @@ import javax.swing.filechooser.FileNameExtensionFilter
                 RadioButton(saved.networkMode == NetworkMode.DIRECT, { actions.run { withContext(Dispatchers.IO) { graph.settings.update { it.copy(networkMode = NetworkMode.DIRECT) } } } }); Text("直连", Modifier.weight(1f))
             }
             Text("支持静态系统代理；Java 不支持 PAC 自动配置脚本。模式切换后对新请求生效。", color = Muted, fontSize = 12.5.sp)
-            OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { networkResult = withContext(Dispatchers.IO) { OkHttpClient.Builder().callTimeout(10, java.util.concurrent.TimeUnit.SECONDS).build().newCall(Request.Builder().url("https://line1-sdk-center-login-sh.biligame.net/").head().build()).execute().use { "SDK 主机可连接（HTTP ${it.code}）" } } } }, enabled = !actions.working) { Text("测试 SDK 连通性") }
+            OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { networkResult = graph.messageRequest(ControlOps.NETWORK_TEST) } }, enabled = !actions.working) { Text("测试 SDK 连通性") }
             Message(networkResult)
-            Text("任务运行时关闭窗口", fontSize = 12.5.sp)
-            CloseBehavior.entries.forEach { choice -> Row(verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(saved.closeBehavior == choice, { actions.run { withContext(Dispatchers.IO) { graph.settings.update { it.copy(closeBehavior = choice) } } } })
-                Text(when (choice) { CloseBehavior.ASK -> "每次询问"; CloseBehavior.MINIMIZE -> "最小化到托盘"; CloseBehavior.STOP_AND_EXIT -> "停止任务并退出" })
-            } }
+            Text("关闭总控窗口时统一确认：停止全部并退出，或最小化到托盘继续。关闭单个标签只影响该标签。", fontSize = 12.5.sp,color=Muted)
         }
         if(group=="数据库与本地数据") Panel("数据库与本地数据") {
             Detail("数据目录", graph.dataDirectory.toString())
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { withContext(Dispatchers.IO) { Desktop.getDesktop().open(graph.dataDirectory.toFile()) } } }) { Text("打开数据目录") }
-                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.captureService.stopAndJoin("用户停止截图") } }, enabled = !actions.working) { Text("停止截图") }
-                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { updateResult = withContext(Dispatchers.IO) { when (val result = graph.labyrinthCnDatabaseRepository.updateIfNeeded()) {
-                    is LabyrinthCnDatabaseUpdateResult.Updated -> "国服数据库已更新：${result.metadata.version}"
-                    is LabyrinthCnDatabaseUpdateResult.UpToDate -> "已经是最新版本：${result.metadata.version}"
-                    is LabyrinthCnDatabaseUpdateResult.Failed -> result.reason
-                } } } }, enabled = !actions.working) { Text("检查国服数据库") }
+                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.request(ControlOps.OPEN_DATA) } }) { Text("打开数据目录") }
+                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.stopCapture() } }, enabled = !actions.working) { Text("停止截图") }
+                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { updateResult = graph.messageRequest(ControlOps.DATABASE_UPDATE) } }, enabled = !actions.working) { Text("检查国服数据库") }
             }
             Message(updateResult)
             LaunchedEffect(updateResult){if(updateResult!=null)graph.ux.refreshDatabase()}
@@ -245,32 +241,23 @@ import javax.swing.filechooser.FileNameExtensionFilter
     }
 }
 
-@Composable internal fun DiagnosticsPage(graph: DesktopAppGraph) {
+@Composable internal fun DiagnosticsPage(graph: ControlSessionUi) {
     val lines by graph.log.lines.collectAsState()
     val actions = rememberActions(graph)
-    var crashes by remember { mutableStateOf<List<File>>(emptyList()) }
-    LaunchedEffect(Unit) { crashes = withContext(Dispatchers.IO) { graph.dataDirectory.resolve("logs").toFile().listFiles()?.filter { it.name.startsWith("crash-") }?.sortedByDescending { it.lastModified() }.orEmpty() } }
+    val wire by graph.port.snapshots.collectAsState()
+    val crashes=wire["crashes"]?.jsonArray?.map{it.jsonPrimitive.content}.orEmpty()
     PageBody("日志与诊断", "查看任务事件，或导出包含当前状态与运行记录的诊断包。") {
         Message(actions.message)
         Panel("诊断面板") {
-            Text(graph.debugUrl ?: "没有可用诊断端口（8765–8775），请关闭占用端口的程序后重启助手。", color = Muted)
+            Text(graph.debugUrl ?: "诊断服务不可用，请查看当前实例日志。", color = Muted)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(shape=MaterialTheme.shapes.small,onClick = { graph.debugUrl?.let(BrowserLauncher::open) }, enabled = graph.debugUrl != null) { Text("在浏览器打开") }
                 OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run {
-                    val url = checkNotNull(graph.debugUrl) { "诊断面板不可用" } + "logs.zip"
-                    val download = withContext(Dispatchers.IO) {
-                        OkHttpClient.Builder().callTimeout(60, java.util.concurrent.TimeUnit.SECONDS).build().newCall(Request.Builder().url(url).build()).execute().use { response ->
-                            check(response.isSuccessful) { "诊断包导出失败：HTTP ${response.code}" }
-                            val name = Regex("filename=\"([^\"]+)\"").find(response.header("Content-Disposition").orEmpty())?.groupValues?.get(1) ?: "limingjie-debug.zip"
-                            name to checkNotNull(response.body).bytes()
-                        }
-                    }
-                    chooseFile(true, "保存诊断包", "zip", download.first)?.let { target ->
-                        withContext(Dispatchers.IO) { Files.write(target.toPath(), download.second) }
-                        graph.log.add("诊断包已导出：${target.name}")
+                    chooseFile(true, "保存诊断包", "zip", "limingjie-debug.zip")?.let { target ->
+                        graph.request(ControlOps.DIAGNOSTICS_EXPORT,buildJsonObject{put("path",target.absolutePath)})
                     }
                 } }, enabled = graph.debugUrl != null && !actions.working) { Text("导出诊断包") }
-                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { withContext(Dispatchers.IO) { Desktop.getDesktop().open(Files.createDirectories(graph.dataDirectory.resolve("logs")).toFile()) } } }) { Text("打开日志目录") }
+                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.request(ControlOps.OPEN_LOGS) } }) { Text("打开日志目录") }
             }
             if (actions.working) LinearProgressIndicator(Modifier.fillMaxWidth())
         }
@@ -286,7 +273,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
         }
         Panel("最近崩溃记录") {
             if (crashes.isEmpty()) Text("没有崩溃记录", color = Muted)
-            crashes.take(10).forEach { file -> TextButton(onClick = { actions.run { withContext(Dispatchers.IO) { Desktop.getDesktop().open(file) } } }) { Text(file.name) } }
+            crashes.take(10).forEach { name -> TextButton(onClick = { actions.run { graph.request(ControlOps.OPEN_CRASH,buildJsonObject{put("name",name)}) } }) { Text(name) } }
         }
     }
 }
@@ -299,12 +286,12 @@ internal fun chooseFile(save: Boolean, title: String, extension: String, suggest
     return file
 }
 
-@Composable internal fun SetupWizard(graph: DesktopAppGraph, onFinished: () -> Unit) {
+@Composable internal fun SetupWizard(graph: ControlSessionUi, onFinished: () -> Unit) {
     var step by remember { mutableStateOf(0) }
     var accepted by remember { mutableStateOf(false) }
     var prepared by remember { mutableStateOf(false) }
     val actions = rememberActions(graph)
-    Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
+    if(LocalControlVisible.current)Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
         Surface(Modifier.width(800.dp).fillMaxHeight(.9f), shape = RoundedCornerShape(16.dp)) {
             Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("欢迎使用黎明界助手", style = MaterialTheme.typography.titleLarge)

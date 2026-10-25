@@ -186,7 +186,7 @@ internal fun runSetupBlock(dirty: Boolean, fullConfiguration: Boolean): String? 
         Box {
             FilterChip(selected !in listOf(DesktopTask.BATCH,DesktopTask.REROLL),{tools=true},enabled=enabled,
                 label={Text(if(selected in listOf(DesktopTask.BATCH,DesktopTask.REROLL))"辅助任务" else selected.title)},trailingIcon={Symbol("expand_more",modifier=Modifier.size(16.dp))})
-            DropdownMenu(tools,{tools=false}) {
+            DropdownMenu(tools&&LocalControlVisible.current,{tools=false}) {
                 listOf(DesktopTask.READ,DesktopTask.RECOGNIZE,DesktopTask.ENTRY).forEach {task->
                     DropdownMenuItem(text={Column{Text(task.title);Text(task.mode,style=MaterialTheme.typography.bodySmall,color=Muted)}},onClick={tools=false;select(task)})
                 }
@@ -213,7 +213,7 @@ internal fun runSetupBlock(dirty: Boolean, fullConfiguration: Boolean): String? 
                     TextButton(onClick={modes=true},enabled=enabled,contentPadding=PaddingValues(horizontal=4.dp,vertical=2.dp)) {
                         Text(if(input.clears)"按通关计" else "按开局计",style=MaterialTheme.typography.bodySmall);Symbol("expand_more",modifier=Modifier.size(14.dp))
                     }
-                    DropdownMenu(modes,{modes=false}) {
+                    DropdownMenu(modes&&LocalControlVisible.current,{modes=false}) {
                         listOf(true,false).forEach{clears->DropdownMenuItem(text={Text(if(clears)"按通关计" else "按开局计")},onClick={modes=false;change(goals.map{if(it.guildId==input.guildId)it.copy(clears=clears)else it})})}
                     }
                 }
@@ -232,7 +232,7 @@ internal fun runSetupBlock(dirty: Boolean, fullConfiguration: Boolean): String? 
                 Text(value,Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)
                 Symbol("expand_more",modifier=Modifier.size(16.dp))
             }
-            DropdownMenu(expanded,{expanded=false}){options.forEach{option->DropdownMenuItem(text={Text(optionLabel(option))},onClick={expanded=false;change(option)})}}
+            DropdownMenu(expanded&&LocalControlVisible.current,{expanded=false}){options.forEach{option->DropdownMenuItem(text={Text(optionLabel(option))},onClick={expanded=false;change(option)})}}
         }
     }
 }

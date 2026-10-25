@@ -5,12 +5,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import com.landosol.toolbox.desktop.app.DesktopAppGraph
+import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopThemeMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-@Composable internal fun AppearanceSettings(graph:DesktopAppGraph) {
+@Composable internal fun AppearanceSettings(graph:ControlSessionUi) {
     val p by graph.ux.preferences.state.collectAsState()
     val actions=rememberActions(graph)
     Panel("外观与通知") {

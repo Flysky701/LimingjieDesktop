@@ -15,7 +15,7 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
-import com.landosol.toolbox.desktop.app.DesktopAppGraph
+import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.labyrinth.LabyrinthRoleRatingItem
 import com.landosol.toolbox.ui.labyrinth.LabyrinthRoleRatingsScreen
 import kotlinx.coroutines.*
@@ -29,11 +29,12 @@ internal object ScoreEdits {
     fun restore(id:String,personal:Int?,change:(String,Int?)->Unit){if(personal!=null)change(id,null)}
 }
 
-@Composable internal fun RoleRatingsPage(graph:DesktopAppGraph,onClose:()->Unit) {
+@Composable internal fun RoleRatingsPage(graph:ControlSessionUi,onClose:()->Unit) {
     val saved by graph.labyrinthStrategySettings.state.collectAsState()
     val preferences by graph.ux.preferences.state.collectAsState()
     val catalog by graph.ux.catalog.collectAsState()
     var draft by remember {mutableStateOf(saved.personalRoleScores)}
+    ReportControlDirty("ratings",draft!=saved.personalRoleScores)
     var query by remember{mutableStateOf("")};var modified by remember{mutableStateOf(false)}
     var attribute by remember{mutableStateOf("")};var position by remember{mutableStateOf("")};var sort by remember{mutableStateOf("已修改优先")}
     var original by remember{mutableStateOf(preferences.originalRatings)}
@@ -77,9 +78,9 @@ internal object ScoreEdits {
         Message(actions.message)
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("${shown.size} 人 · 0–100 整数 · Enter 应用到草稿 · ↑↓ 移动",style=MaterialTheme.typography.bodySmall,color=Muted);Text(if(draft==saved.personalRoleScores)"配置已保存；下次启动生效" else "有未保存的修改",style=MaterialTheme.typography.bodySmall)};OutlinedButton(shape=MaterialTheme.shapes.small,onClick=::close,enabled=!actions.working){Text("取消")};Spacer(Modifier.width(8.dp));Button(shape=MaterialTheme.shapes.small,onClick={actions.run{graph.labyrinthStrategySettings.save(saved.copy(personalRoleScores=draft));graph.log.add("角色评分已保存，下次启动生效",kind=com.landosol.toolbox.desktop.app.UserLogKind.KEY)}},enabled=draft!=saved.personalRoleScores&&!actions.working){Text("保存配置")}}
     }
-    if(original)LabyrinthRoleRatingsScreen(draft,graph::loadLabyrinthRoleRatings,change,{original=false})
-    if(confirmDiscard)AlertDialog(onDismissRequest={confirmDiscard=false;pendingExit=null},title={Text("放弃未保存的修改？")},text={Text("个人评分修改尚未保存。")},confirmButton={TextButton(onClick={confirmDiscard=false;val next=pendingExit;pendingExit=null;next?.invoke() ?: onClose()}){Text("放弃修改")}},dismissButton={TextButton(onClick={confirmDiscard=false;pendingExit=null}){Text("继续编辑")}})
+    if(original)BoundStrategyDialog{LabyrinthRoleRatingsScreen(draft,graph::loadLabyrinthRoleRatings,change,{original=false})}
+    if(confirmDiscard&&LocalControlVisible.current)AlertDialog(onDismissRequest={confirmDiscard=false;pendingExit=null},title={Text("放弃未保存的修改？")},text={Text("个人评分修改尚未保存。")},confirmButton={TextButton(onClick={confirmDiscard=false;val next=pendingExit;pendingExit=null;next?.invoke() ?: onClose()}){Text("放弃修改")}},dismissButton={TextButton(onClick={confirmDiscard=false;pendingExit=null}){Text("继续编辑")}})
 }
-@Composable internal fun ChoiceMenu(label:String,value:String,options:List<String>,clear:Boolean=true,select:(String)->Unit){var open by remember{mutableStateOf(false)};Box{OutlinedButton(shape=MaterialTheme.shapes.small,onClick={open=true}){Text(value.ifBlank{label},style=MaterialTheme.typography.bodySmall)};DropdownMenu(open,{open=false}){if(clear)DropdownMenuItem(text={Text(label)},onClick={select("");open=false});options.forEach{option->DropdownMenuItem(text={Text(option)},onClick={select(option);open=false})}}}
+@Composable internal fun ChoiceMenu(label:String,value:String,options:List<String>,clear:Boolean=true,select:(String)->Unit){var open by remember{mutableStateOf(false)};Box{OutlinedButton(shape=MaterialTheme.shapes.small,onClick={open=true}){Text(value.ifBlank{label},style=MaterialTheme.typography.bodySmall)};DropdownMenu(open&&LocalControlVisible.current,{open=false}){if(clear)DropdownMenuItem(text={Text(label)},onClick={select("");open=false});options.forEach{option->DropdownMenuItem(text={Text(option)},onClick={select(option);open=false})}}}
 
 }

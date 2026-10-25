@@ -1,5 +1,7 @@
 package com.landosol.toolbox.desktop.app.ui
 
+import com.landosol.toolbox.desktop.app.control.*
+
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -36,7 +38,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 @Composable internal fun RunConsole(
-    graph:DesktopAppGraph,s:RunConsoleState,selected:DesktopTask,select:(DesktopTask)->Unit,
+    graph:ControlSessionUi,s:RunConsoleState,selected:DesktopTask,select:(DesktopTask)->Unit,
     configure:()->Unit,navigate:(Page)->Unit,searchFocus:FocusRequester,
     setup:RunSetupDraft,configuration:LabyrinthUiState,standaloneGuild:Int,selectGuild:(Int)->Unit,
     setupMessage:String?,
@@ -127,7 +129,7 @@ import java.time.format.DateTimeFormatter
     }
 }
 
-@Composable private fun RunReadiness(graph:DesktopAppGraph,s:RunConsoleState,selected:DesktopTask,hasGoals:Boolean,navigate:(Page)->Unit) {
+@Composable private fun RunReadiness(graph:ControlSessionUi,s:RunConsoleState,selected:DesktopTask,hasGoals:Boolean,navigate:(Page)->Unit) {
     val resolution by graph.resolutionGuard.status.collectAsState()
     val database by graph.ux.database.collectAsState()
     val foreground by graph.ux.foreground.collectAsState()
@@ -181,11 +183,11 @@ import java.time.format.DateTimeFormatter
 internal fun formatDuration(ms:Long):String {val s=ms.coerceAtLeast(0)/1000;return "%02d:%02d:%02d".format(s/3600,s/60%60,s%60)}
 private fun eventDecisionText(event:LabyrinthEventChoiceDecision?):String?=when(event){is LabyrinthEventChoiceDecision.Select->"${event.label}：${event.explanation}";is LabyrinthEventChoiceDecision.Wait->event.reason;null->null}
 internal fun formatTime(ms:Long):String=DateTimeFormatter.ofPattern("MM-dd HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(ms))
-@Composable internal fun Portrait(graph:DesktopAppGraph,role:LabyrinthRoleRatingItem?,name:String,modifier:Modifier=Modifier.size(36.dp)){
+@Composable internal fun Portrait(graph:ControlSessionUi,role:LabyrinthRoleRatingItem?,name:String,modifier:Modifier=Modifier.size(36.dp)){
     val bitmap by produceState<ImageBitmap?>(null,role?.iconAsset){value=withContext(Dispatchers.IO){runCatching{role?.iconAsset?.let{asset->graph.context.assets.open(asset).use{stream->BitmapFactory.decodeStream(stream)?.let{decoded->try{decoded.toBufferedImage().toComposeImageBitmap()}finally{decoded.recycle()}}}}}.getOrNull()}}
     Surface(modifier,shape=DesktopCorners.sm,color=MaterialTheme.colorScheme.surfaceContainerHigh){if(bitmap!=null)Image(bitmap!!,name,Modifier.fillMaxSize()) else Box(contentAlignment=Alignment.Center){Text(name.take(1),style=MaterialTheme.typography.bodySmall)}}
 }
-@Composable internal fun Preview(graph:DesktopAppGraph,running:Boolean=false){val pref by graph.ux.preferences.state.collectAsState();var expanded by remember{mutableStateOf(running||pref.previewExpanded)};LaunchedEffect(running){if(running)expanded=true};val frame by graph.preview.collectAsState();val overlay by graph.automationOverlayCoordinator.state.collectAsState();val actions=rememberActions(graph)
+@Composable internal fun Preview(graph:ControlSessionUi,running:Boolean=false){val pref by graph.ux.preferences.state.collectAsState();var expanded by remember{mutableStateOf(running||pref.previewExpanded)};LaunchedEffect(running){if(running)expanded=true};val frame by graph.preview.collectAsState();val overlay by graph.automationOverlayCoordinator.state.collectAsState();val actions=rememberActions(graph)
     TextButton(onClick={expanded=!expanded;actions.run{withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(previewExpanded=expanded)}};if(expanded&&!running)graph.startPreview()}},enabled=!actions.working){Text(if(expanded)"收起画面" else "展开画面")}
     if(expanded){val bitmap by produceState<ImageBitmap?>(null,frame){value=withContext(Dispatchers.Default){frame?.let{pixels->BufferedImage(pixels.width,pixels.height,BufferedImage.TYPE_INT_ARGB).apply{setRGB(0,0,pixels.width,pixels.height,pixels.pixels.copyOf(),0,pixels.width)}.toComposeImageBitmap()}}}
         if(bitmap==null)Text(actions.message ?: "尚无画面。连接模拟器后，点击展开预览。",color=Muted,style=MaterialTheme.typography.bodySmall)
@@ -194,7 +196,7 @@ internal fun formatTime(ms:Long):String=DateTimeFormatter.ofPattern("MM-dd HH:mm
 }
 
 @OptIn(FlowPreview::class)
-@Composable internal fun LogPanel(graph:DesktopAppGraph,modifier:Modifier=Modifier,searchFocus:FocusRequester=remember{FocusRequester()}){
+@Composable internal fun LogPanel(graph:ControlSessionUi,modifier:Modifier=Modifier,searchFocus:FocusRequester=remember{FocusRequester()}){
     val lines by remember(graph){graph.log.lines.sample(250)}.collectAsState(graph.log.lines.value)
     var filter by remember{mutableStateOf("关键")};var query by remember{mutableStateOf("")};val listState=rememberLazyListState();val scope=rememberCoroutineScope()
     val shown=remember(lines,filter,query){lines.filter{(filter=="全部"||filter=="关键"&&it.kind!=UserLogKind.NORMAL||filter=="警告与错误"&&it.kind in listOf(UserLogKind.WARNING,UserLogKind.ERROR))&&(query.isBlank()||it.text.contains(query,true))}}

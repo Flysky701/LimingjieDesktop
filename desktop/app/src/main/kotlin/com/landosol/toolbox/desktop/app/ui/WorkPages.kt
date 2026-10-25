@@ -15,7 +15,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.landosol.toolbox.account.*
-import com.landosol.toolbox.desktop.app.DesktopAppGraph
+import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.desktop.device.DeviceConnectionState
 import com.landosol.toolbox.labyrinth.*
 import com.landosol.toolbox.protocol.bilibili.GameServer
@@ -27,12 +27,13 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-@Composable internal fun StrategiesPage(graph: DesktopAppGraph) {
+@Composable internal fun StrategiesPage(graph: ControlSessionUi) {
     val saved by graph.labyrinthStrategySettings.state.collectAsState()
     var edit by remember { mutableStateOf(false) }
     var ratings by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    ReportControlDirty("strategy",edit)
     val scope = rememberCoroutineScope()
     if(ratings) { RoleRatingsPage(graph) { ratings=false };return }
     PageBody("策略", "全局配置 · 保存后从下一次识别或自动执行生效。") {
@@ -64,15 +65,20 @@ import java.time.format.DateTimeFormatter
         } }) }
 }
 
-@Composable internal fun AccountsPage(graph: DesktopAppGraph) {
+@Composable internal fun AccountsPage(graph: ControlSessionUi) {
     val busy = LocalTaskBusy.current
     val vm = graph.accounts
     val state by vm.uiState.collectAsState()
+    ReportControlDirty("account",vm.dirty)
+    val navigation=LocalNavigationGuard.current
+    var pendingExit by remember{mutableStateOf<(() -> Unit)?>(null)}
+    SideEffect{navigation.intercept={next->if(vm.dirty)pendingExit=next else next()}}
+    DisposableEffect(navigation){onDispose{navigation.intercept=null}}
     val credentials by graph.ux.credentials.collectAsState()
     val connection by graph.device.state.collectAsState()
     var focusId by remember { mutableStateOf<Long?>(null) }
     val focus = state.accounts.firstOrNull { it.id == focusId } ?: state.accounts.firstOrNull { it.isSelected } ?: state.accounts.firstOrNull()
-    val snapshot = graph.identityStore.current()
+    val snapshot by graph.identityStore.state.collectAsState()
     PageBody("账号库", "在当前 Windows 用户下加密保存凭据。选择账号后，任务按需登录。") {
         if(busy)Message("任务运行中，停止后可新增、切换或修改账号；编辑草稿仍可取消。")
         Message(snapshot?.let { "设备画像：${it.brand} ${it.model} · ${DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(it.capturedAtMillis))}${if (connection is DeviceConnectionState.Ready) "（当前设备）" else "（上次连接设备）"}" }
@@ -113,19 +119,20 @@ import java.time.format.DateTimeFormatter
             }
         }
     }
-    state.deleteCandidate?.let { account -> AlertDialog(onDismissRequest = vm::dismissDelete,
+    if(pendingExit!=null&&LocalControlVisible.current)AlertDialog(onDismissRequest={pendingExit=null},title={Text("放弃未保存的账号修改？")},text={Text("账号草稿尚未保存。")},confirmButton={TextButton(onClick={vm.dismissEditor();val next=pendingExit;pendingExit=null;next?.invoke()}){Text("放弃修改")}},dismissButton={TextButton(onClick={pendingExit=null}){Text("继续编辑")}})
+    state.deleteCandidate?.takeIf{LocalControlVisible.current}?.let { account -> AlertDialog(onDismissRequest = vm::dismissDelete,
         title = { Text("删除账号") }, text = { Column { Text("确定删除“${account.alias}”吗？账号元数据和本地加密凭据都会删除，此操作不可撤销。"); state.message?.let { Text(it, color = MaterialTheme.colorScheme.error) } } },
         confirmButton = { TextButton(onClick = {if(!graph.busy)vm.confirmDelete()}, enabled = !state.isWorking && !busy) { Text("删除") } },
         dismissButton = { TextButton(onClick = vm::dismissDelete, enabled = !state.isWorking) { Text("取消") } }) }
 }
 
-@Composable private fun AccountEditor(editor: AccountEditorState, state: AccountUiState, vm: AccountViewModel,graph:DesktopAppGraph) {
+@Composable private fun AccountEditor(editor: AccountEditorState, state: AccountUiState, vm: ControlSessionUi.AccountsView,graph:ControlSessionUi) {
     val editable = !state.isWorking && !LocalTaskBusy.current
     var servers by remember { mutableStateOf(false) }
     Panel(if (editor.isEditing) "编辑账号" else "新增账号") {
         Box {
             OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { servers = true }, enabled = editable) { Text("服务器：${editor.server?.displayName ?: "请选择"}") }
-            DropdownMenu(expanded = servers, onDismissRequest = { servers = false }) {
+            DropdownMenu(expanded = servers && LocalControlVisible.current, onDismissRequest = { servers = false }) {
                 GameServer.entries.forEach { server -> DropdownMenuItem(text = { Text(server.displayName) }, enabled = editable, onClick = { servers = false; vm.updateEditor { it.copy(server = server) } }) }
             }
         }
