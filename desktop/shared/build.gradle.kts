@@ -34,7 +34,12 @@ val prepareUpstreamTest by tasks.registering(Sync::class) {
 }
 val prepareUpstreamAssets by tasks.registering(Sync::class) {
     from(upstream.resolve("src/main/assets")) { into("assets") }
+    from(upstream.resolve("schemas/com.landosol.toolbox.data.local.AppDatabase/1.json")) { into("desktop"); rename { "schema-v1.json" } }
     into(layout.buildDirectory.dir("generated/upstream/assets"))
+    doLast {
+        val names = destinationDir.resolve("assets").walkTopDown().filter { it.isFile }.map { it.relativeTo(destinationDir).invariantSeparatorsPath }.sorted().toList()
+        destinationDir.resolve("desktop/assets-manifest.txt").writeText(names.joinToString("\n", postfix = "\n"))
+    }
 }
 val generateBuildConfig by tasks.registering {
     inputs.file(upstream.resolve("build.gradle.kts"))

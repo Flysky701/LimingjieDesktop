@@ -684,11 +684,14 @@ class DesktopAppGraph(
 
     @Volatile
     private var autoRunJob: Job? = null
+    private val startLock = Any()
+    private val startingState = MutableStateFlow(false)
+    val taskStarting = startingState.asStateFlow()
 
     fun startLabyrinthAutoRun(
         accountId: Long?,
         goals: List<com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoal>,
-    ): Boolean {
+    ): Boolean = synchronized(startLock) {
         val id = accountId ?: return false
         if (goals.isEmpty() || !actionsAvailable() || ocr.status.value !is OcrEngineStatus.Ready) return false
         if (autoRunJob?.isActive == true) return false
@@ -711,6 +714,7 @@ class DesktopAppGraph(
             .format(java.util.Date())
         // A new batch never inherits a hard close from an earlier task.
         gameClientHardCloseLedger.clear()
+        startingState.value = true
         autoRunJob = autoRunScope.launch {
           try {
             captureService.start()
@@ -723,6 +727,7 @@ class DesktopAppGraph(
             )
           } catch (cancelled: CancellationException) { throw cancelled }
           catch (failure: Exception) { log.add(failure.message ?: "自动执行启动失败", true); captureService.stop() }
+          finally { startingState.value = false }
         }
         return true
     }
@@ -730,6 +735,7 @@ class DesktopAppGraph(
     fun stopLabyrinthAutoRun() {
         autoRunJob?.cancel()
         autoRunJob = null
+        startingState.value = false
         gameClientHardCloseLedger.clear()
         autoRunScope.launch {
             labyrinthBatchController.stop("用户停止自动执行")
@@ -740,7 +746,7 @@ class DesktopAppGraph(
     }
 
     fun actionsAvailable() = (device.state.value as? DeviceConnectionState.Ready)?.device?.touchReady == true
-    val busy: Boolean get() = autoRunJob?.isActive == true || labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES || labyrinthController.uiState.value.isWorking || labyrinthController.uiState.value.captcha != null || labyrinthEntryRecognitionSession.state.value.running || gameSessionResetWorkflow.state.value.running
+    val busy: Boolean get() = startingState.value || autoRunJob?.isActive == true || labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES || labyrinthController.uiState.value.isWorking || labyrinthController.uiState.value.captcha != null || labyrinthEntryRecognitionSession.state.value.running || gameSessionResetWorkflow.state.value.running
 
     suspend fun connectDevice(serial: String) {
         check(!busy) { "请先停止当前任务，再切换设备" }
@@ -757,9 +763,11 @@ class DesktopAppGraph(
 
     suspend fun disconnectDevice() { check(!busy) { "请先停止任务" }; captureService.stopAndJoin("断开设备"); device.disconnect(); previewState.value = null }
     suspend fun startPreview() { captureService.start() }
-    fun startRecognition(dryRun: Boolean): Job = autoRunScope.launch {
+    fun startRecognition(dryRun: Boolean): Job = synchronized(startLock) {
+        if (busy) { log.add("请先停止当前任务", true); return Job().apply { complete() } }
+        startingState.value = true
+        autoRunScope.launch {
         try {
-            check(!busy) { "请先停止当前任务" }
             check(device.state.value is DeviceConnectionState.Ready) { "请先在设备页连接模拟器" }
             check(ocr.status.value is OcrEngineStatus.Ready) { "OCR 尚未就绪，请查看设置与环境" }
             check(dryRun || actionsAvailable()) { "触控服务未就绪，请在设备页重新连接" }
@@ -770,12 +778,15 @@ class DesktopAppGraph(
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { log.add(failure.message ?: "启动失败", true) }
+        finally { startingState.value = false }
+        }.also { autoRunJob = it }
     }
     fun pauseTask() { automationOverlayCoordinator.state.value?.let { current -> autoRunScope.launch { automationOverlayCoordinator.setPaused(current.sessionId, !current.paused) } } }
     fun stopAll(reason: String = "用户停止任务") {
         log.add(reason)
         labyrinthController.stopWithReason(reason)
         autoRunJob?.cancel(); autoRunJob = null
+        startingState.value = false
         autoRunScope.launch {
             labyrinthBatchController.stop(reason)
             gameSessionResetWorkflow.stop(reason)
