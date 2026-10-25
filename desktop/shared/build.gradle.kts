@@ -27,10 +27,19 @@ val prepareUpstreamMain by tasks.registering(Sync::class) {
 }
 val prepareUpstreamTest by tasks.registering(Sync::class) {
     val excluded = exclusions("upstream-test-excludes.txt")
-    inputs.file("upstream-test-excludes.txt")
+    inputs.files("upstream-test-excludes.txt", "upstream-test-derived.txt")
     from(upstream.resolve("src/test/java")) { exclude(excluded) }
     into(layout.buildDirectory.dir("generated/upstream/test"))
     doFirst { excluded.forEach { check(upstream.resolve("src/test/java/$it").isFile) { "Stale test exclusion: $it" } } }
+    doLast {
+        file("upstream-test-derived.txt").readLines().filter { it.isNotBlank() && !it.startsWith('#') }.forEach {
+            val parts = it.split('|')
+            val target = destinationDir.resolve(parts[0])
+            val source = target.readText()
+            check(source.windowed(parts[1].length).count { text -> text == parts[1] } == parts[3].toInt()) { "Derived test drift: ${parts[0]}" }
+            target.writeText(source.replace(parts[1], parts[2]))
+        }
+    }
 }
 val prepareUpstreamAssets by tasks.registering(Sync::class) {
     from(upstream.resolve("src/main/assets")) { into("assets") }

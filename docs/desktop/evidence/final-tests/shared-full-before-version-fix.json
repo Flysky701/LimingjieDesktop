@@ -1,0 +1,1317 @@
+{
+  "command": ":shared:check :device:check :platform:check",
+  "phase": "full shared verification before desktop version expectation correction",
+  "exitCode": 1,
+  "totals": {
+    "tests": 1256,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 46
+  },
+  "suites": [
+    {
+      "suite": "com.landosol.toolbox.account.AccountInputValidatorTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.006
+    },
+    {
+      "suite": "com.landosol.toolbox.AppVersionTest",
+      "tests": 2,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.013
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.AutomationSessionManagerTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.158
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.capture.CaptureStateRegistryTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.005
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.capture.MediaProjectionCaptureServiceTest",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.014
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.CoordinateMapperTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.003
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.GameClientLaunchGateTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.GameClientResolverTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.013
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.overlay.AutomationNotificationContentTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.004
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.overlay.AutomationOverlayCoordinatorTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.01
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.overlay.AutomationOverlayLabelLayoutTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.AdbSessionResetBackendTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.139
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.AnchorTriggerSessionExpiryTerminatorTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.531
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.ChannelLoginPromptsTest",
+      "tests": 31,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.062
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.GameClientHardCloserTest",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.026
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.GameSessionResetPlannerTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.017
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.GameSessionResetPresenceTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.GameSessionResetReadyDecisionTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.GameSessionResetWorkflowTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.086
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.SessionBlockClassifierTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.SessionExpiryFrameTrackerTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.004
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.SessionExpiryTerminatorTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 5.065
+    },
+    {
+      "suite": "com.landosol.toolbox.automation.session.TerminatorFallbackChainTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.007
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.axis.AxisParserTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.005
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.BossUbDetectorTest",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.003
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.ClanBattleActionDispatcherTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.01
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.ClanBattleRecognitionSessionTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.023
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.ClanBattleStateMachineTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.013
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.ClanBattleViewModelTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.011
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.recognition.BattleMenuRecognitionTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.recognition.BattleScreenRecognitionTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.recognition.ClanBattleObservationTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.016
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.recognition.ControlRecognitionTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.recognition.EmbeddedControlTemplateLoaderTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.015
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.recognition.EnergyRecognitionTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.recognition.RecognitionTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.003
+    },
+    {
+      "suite": "com.landosol.toolbox.clanbattle.SwitchAxisCoordinatorTest",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.007
+    },
+    {
+      "suite": "com.landosol.toolbox.desktop.shared.DesktopAdaptersTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 2.658
+    },
+    {
+      "suite": "com.landosol.toolbox.desktop.shared.RoomCompatibilityTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.589
+    },
+    {
+      "suite": "com.landosol.toolbox.desktop.shared.ShimTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.143
+    },
+    {
+      "suite": "com.landosol.toolbox.gamedata.CharacterCatalogTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.008
+    },
+    {
+      "suite": "com.landosol.toolbox.gamedata.ResourcePackValidatorTest",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.844
+    },
+    {
+      "suite": "com.landosol.toolbox.gamedata.VisionResourceContractsTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.042
+    },
+    {
+      "suite": "com.landosol.toolbox.HomeUiStateTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.02
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.batch.LabyrinthBatchCheckpointStoreTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.009
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.batch.LabyrinthBatchControllerTest",
+      "tests": 20,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.036
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthAutoRunWorkflowTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.018
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthBattleFailureAdvanceTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.068
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthBattleRosterSearchTest",
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.005
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthBattleTeamActionRecoveryTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.207
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthBattleTeamRecommendationTest",
+      "tests": 27,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.031
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthBattleTeamSelectionPlanTest",
+      "tests": 32,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.015
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthBattleWaitPolicyTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthBossEditorProgressTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthBossTeamSwitchProgressTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthCnDatabaseUpdaterTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.018
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthCurrentOpeningCriteriaTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.005
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthDecisionPolicyTest",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.01
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthEntryActionPlannerTest",
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.011
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionPolicyTest",
+      "tests": 43,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.004
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSessionTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.469
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthEventChoiceCommitTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthEventChoicePlannerTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.007
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthExecutionGateTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.003
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthExEncounterCatalogTest",
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.008
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthFallbackTapsTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.004
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthFreeRoleRecoveryTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.04
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthGhostLordFormationTest",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.486
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthHasBattleControlsTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthMasterSchemaResolverTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.012
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthNodeEntryRecoveryTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthOpeningRosterOverrideTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.009
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthOrphanDialogBudgetTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthPageRuntimePolicyTest",
+      "tests": 37,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.003
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthPersonalRoleScoresTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.044
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthPostBossStageTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthPostEntryActionKindTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.056
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRelicAcquisitionGateTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRelicPriorityTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRelicStackLedgerTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRerollSettingsTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.033
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRerollWorkflowTest",
+      "tests": 18,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.111
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthReusableOpeningSnapshotTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionDataTest",
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.217
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionPolicyTest",
+      "tests": 34,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.351
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRoleRewardCommitTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.058
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRoutePolicyTest",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.005
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRouteProgressTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRouteSearcherTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthRunStateTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthSelectionCommitRetryTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthSessionBoundaryResetTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.004
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthShopPolicyTest",
+      "tests": 25,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.005
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthSpecialEquipmentDispatchThrottleTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.007
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthSpecialEquipmentSessionFlowTest",
+      "tests": 42,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 3.446
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthSpecialEquipmentSettingsTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.006
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthStrategySettingsTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.022
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.LabyrinthTeamCompositionPolicyTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 2.406
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.FinalBossPlatformLocatorTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "seconds": 0.616
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.LabyrinthBossConflictTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.LabyrinthNodeClassifierFixtureTest",
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "seconds": 3.671
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.LabyrinthNodeClickPointTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecoveryTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.LabyrinthNodeGlowGateTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.LabyrinthNodePositionTest",
+      "tests": 65,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.04
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.LabyrinthNodeScreenshotBatchDiagnosticTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "seconds": 0.848
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.LabyrinthNodeSessionFinalBossTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.LabyrinthNodeSessionTest",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.LabyrinthNodeViewportScannerTest",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.075
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.NodeScanCoverageTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.933
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.NodeTopRectSelectionTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.013
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.node.NodeViewportPixelsTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.126
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.replay.LabyrinthReplayHarnessTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "seconds": 3.691
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthNodeRelicStackResolverTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.004
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthRelicStackResolverTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.GradientTemplateMatcherCacheTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthBattleEndConfirmationDetectorTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.128
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthBattleFailureDetectorTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.073
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthBattleFailureLayoutAuditTest",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "seconds": 4.603
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthBattleFailureTwoButtonLayoutTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "seconds": 3.842
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthBattleTeamRecognitionTest",
+      "tests": 27,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.045
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthCharacterIconGoldenTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.032
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthCharacterIconMatcherLifetimeTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.025
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthCharacterNameFuzzyMatcherTest",
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.009
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthCharacterRecognitionTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.033
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthCompactCounterRecognizerScreenshotTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthCurrentMemberStripDetectorTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.152
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameProcessorTest",
+      "tests": 39,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 32,
+      "seconds": 5.424
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageClassifierTest",
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthEventFlowRegressionTest",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.766
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthEventOcrCacheDiagnosticsTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthEventRecognitionTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.004
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthExChallengeDetectorTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.02
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthFreeRolePickerRegressionTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "seconds": 0.986
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthMemberGeometryTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthNodeMoveConfirmationDetectorTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1,
+      "seconds": 0.011
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthOcrInkBoundsTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.006
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthOpeningPopupFixtureTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.858
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthRelicDetailTextTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthReportBundleReplayTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 3,
+      "seconds": 0.003
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthRoleRewardTextIdentityTest",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthRosterRestrictedIconMatchTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.01
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthRunClearRecordingTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.701
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryResolutionTest",
+      "tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.178
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemTextTest",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.003
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthSparseRosterTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.98
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.LabyrinthSpecialEquipmentRecognitionTest",
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 1.571
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.ReferenceFitMapperTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.labyrinth.vision.RelicOcrSchedulerTest",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.003
+    },
+    {
+      "suite": "com.landosol.toolbox.permissions.PermissionCenterStateTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.bilibili.BilibiliGameProtocolGatewayTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.176
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.bilibili.BilibiliLoginCoordinatorTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.01
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.bilibili.BilibiliNativeLoginCoordinatorTest",
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.015
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.bilibili.BilibiliSdkHttpGatewayTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.158
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.bilibili.BilibiliSdkSignerTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.bilibili.GameProtocolCryptoTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.bilibili.GameProtocolFixtureTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.002
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.bilibili.GeetestPageBuilderTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.001
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.bilibili.MessagePackCodecTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.0
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.bilibili.RsaPasswordEncryptorTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.056
+    },
+    {
+      "suite": "com.landosol.toolbox.protocol.labyrinth.BilibiliLabyrinthApiTest",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.01
+    },
+    {
+      "suite": "com.landosol.toolbox.security.InMemoryCredentialStoreTest",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.003
+    },
+    {
+      "suite": "com.landosol.toolbox.ui.ResponsiveLayoutTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "seconds": 0.03
+    }
+  ]
+}
