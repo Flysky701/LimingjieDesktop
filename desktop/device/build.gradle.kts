@@ -18,3 +18,16 @@ tasks.processResources {
     dependsOn(verifyMaaTouch)
     from("licenses") { into("META-INF/licenses") }
 }
+
+// Explicit opt-in manual L1 probe; ordinary test/check never contacts a device.
+tasks.register<JavaExec>("probeDevice") {
+    group = "verification"
+    dependsOn(tasks.testClasses)
+    classpath = sourceSets.test.get().runtimeClasspath
+    mainClass.set("com.landosol.toolbox.desktop.device.LiveDeviceProbeKt")
+    systemProperty("file.encoding", "UTF-8")
+    systemProperty("stdout.encoding", "UTF-8")
+    systemProperty("stderr.encoding", "UTF-8")
+    args(providers.gradleProperty("probeAdb").orElse("").get(), providers.gradleProperty("probeSerial").orElse("").get(),
+        providers.gradleProperty("probeOutput").orElse("").get(), providers.gradleProperty("probeMode").orElse("inspect").get())
+}

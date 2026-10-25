@@ -37,3 +37,5 @@ AdbDeviceService(adb, dataDirectory, gamePackages, onEvent = {}, onLost = {})
 ## 实测边界
 
 没有连接用户模拟器或游戏，没有执行真实触控、游戏启动/停止、账号登录或付费请求。`fixtures/android9` 与 `fixtures/android12` 均明确标注为合成；MuMuManager/ldconsole 格式、设备 Raw 头、MaaTouch 握手坐标、前台查询 p95、渠道 UI、force-stop 是否保留渠道登录态仍需 L1/L3 实机验证。它们不因离线测试通过而标成实机完成。官方 platform-tools 下载入口已实现，但本次未实际下载/连接 ADB。
+
+追加（2026-10-25）：已完成 MuMu Android 12/API32 定向实机验证，真实发现并修复 MaaTouch 清理命令自匹配问题；新增实采 parser 用例通过，并补了负坐标、0/5001 ms 与超屏透传的既有用例断言。实机范围、数据、节点树间歇失败、L2 标题动画误报和恢复记录以 L1-MuMu.md 为准，不再将该环境全部列为未实测。Android 9/雷电仍未验证。

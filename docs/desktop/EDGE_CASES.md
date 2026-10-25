@@ -34,11 +34,11 @@
 | B-01 | Raw 头部 12 或 16 字节 | 都能正确解析 | T | ScreenAndParserTest#rawAllHeadersAndFormats |
 | B-02 | 未知 `format` | 测速阶段淘汰 Raw，使用 PNG | T | ScreenAndParserTest#benchmarkRejectsAnyFailedModeAndUsesSeparateChannel |
 | B-03 | 数据被截断、PNG 损坏或为空 | 丢弃本帧，计入连续失败；连续 5 次失败或 10 s 内没有成功帧 → Lost | T | ScreenAndParserTest#rawRejectsTruncationFormatAndInvalidDimensions、pngMatchesArgb；AdbDeviceServiceTest#fiveFailedCapturesNotifyLostBeforeReconnectAndNeverResumeTasks（5 次分支）；10 秒分支待 L1-03 |
-| B-04 | 截图 p95 > 600 ms | 环境检查黄色警告，附调整建议 | T | 未验证：L1-02（p95 警告分支） |
+| B-04 | 截图 p95 > 600 ms | 环境检查黄色警告，附调整建议 | T | L1-MuMu.md：真实 PNG p95=626 ms 时警告出现（settings.log） |
 | B-05 | 持续全黑帧 | 照常投递；超过 10 s 显示警告，不停止任务 | T | 未验证：L1-13 |
 | B-06 | 开始时是竖屏（桌面或游戏未横屏） | 上游稳定门阻止开始，并给出上游的提示 | T（上游测试 + 桥接集成测试） | MediaProjectionCaptureServiceTest#stable portrait metrics never consume the projection token（上游门）；桌面竖屏桥接待 L1-06 |
 | B-07 | 运行中发生旋转 | 由上游旋转门处理 | T（上游测试） | MediaProjectionCaptureServiceTest#a transient portrait rotation suspends frames and resumes after settling |
-| B-08 | 横屏但不是 1920×1080 | 警告，不阻断 | T | DesktopGraphIntegrationTest#realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources（480×270 可识别）；警告文案待 L1-02 |
+| B-08 | 横屏但不是 1920×1080 | 警告，不阻断 | T | L1-MuMu.md：1280×720 正常截图/触控且警告不阻断；DesktopGraphIntegrationTest#realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources |
 | B-09 | 消费者处理很慢 | 截图线程不积压，下一轮在处理完成后立即开始 | T | 未验证：L1-03（慢消费者节奏） |
 | B-10 | 没有注册消费者 | 帧被回收（上游 `dispatch` 语义） | T | DesktopAdaptersTest#captureUsesOwnedThreadAndStopsAfterFiveFailures（桌面帧桥接）；无消费者分支待补 |
 | B-11 | 色彩空间字段不为 0 | 忽略，按像素格式解码 | T | ScreenAndParserTest#rawAllHeadersAndFormats |
@@ -48,9 +48,9 @@
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| C-01 | 坐标为负 | `Rejected("动作坐标无效")` | T | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch（NaN）；负坐标待 L1-05 |
-| C-02 | 坐标超出屏幕 | 不额外校验（与上游一致），在 DECISIONS 记录 | N/A 或 T（透传） | 未验证：L1-05（透传行为） |
-| C-03 | 滑动时长为 0、5001，或 duration + hold > 5000 | `Rejected("滑动时长超出范围")` | T | MaaTouchTest#exactGestureBytesAndHoldWithoutDrift（总时长越界）；AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch（溢出）；0/5001 待补 |
+| C-01 | 坐标为负 | `Rejected("动作坐标无效")` | T | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch（NaN/负坐标） |
+| C-02 | 坐标超出屏幕 | 不额外校验（与上游一致），在 DECISIONS 记录 | N/A 或 T（透传） | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch（超屏坐标透传） |
+| C-03 | 滑动时长为 0、5001，或 duration + hold > 5000 | `Rejected("滑动时长超出范围")` | T | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch（0/5001/溢出）；MaaTouchTest#exactGestureBytesAndHoldWithoutDrift（总时长越界） |
 | C-04 | hold 为负 | 按 0 处理（上游 `coerceAtLeast(0)`） | T | MaaTouchTest#exactGestureBytesAndHoldWithoutDrift |
 | C-05 | 游戏不在前台 | `Rejected(GAME_NOT_FOREGROUND_REASON)` | T | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch；DesktopGraphIntegrationTest#realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources |
 | C-06 | 前台查询结果为 Unknown | 同 C-05 | T | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch |
@@ -58,9 +58,9 @@
 | C-08 | MaaTouch 启动后 5 s 内没有输出头部 | 启动失败，环境检查标红并显示原因 | T | 未验证：L1-05（握手超时分支） |
 | C-09 | 设备上有残留的 MaaTouch 进程 | 启动前清理 | T | MaaTouchTest#persistentActorSerializesGesturesAndDetectsProcessExit 经过清理路径；设备残留进程效果待 L1-05 |
 | C-10 | 并发提交多个动作 | actor 串行执行，逐个完成 | T | MaaTouchTest#persistentActorSerializesGesturesAndDetectsProcessExit |
-| C-11 | 兼容模式下 hold > 0 的滑动 | `Rejected("兼容模式不支持按住拖拽，请在设置中切换到 MaaTouch")` | T | AdbDeviceServiceTest#compatibilityIsExplicitAndRefusesHold |
+| C-11 | 兼容模式下 hold > 0 的滑动 | `Rejected("兼容模式不支持按住拖拽，请在设置中切换到 MaaTouch")` | T | AdbDeviceServiceTest#compatibilityIsExplicitAndRefusesHold；L1-MuMu.md 真实兼容模式拒绝 hold |
 | C-12 | 触控坐标系与帧尺寸既不相等也不互为转置 | `Rejected("触控坐标系与截图尺寸不一致")`，提示重新连接 | T | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch |
-| C-13 | 模拟器设置为竖屏 1080×1920，游戏横屏 | 头部与帧互为转置，允许；坐标不缩放 | T + L | MaaTouchTest#headerAndPackagedAsset（转置判定）；真实坐标待 L1-06 |
+| C-13 | 模拟器设置为竖屏 1080×1920，游戏横屏 | 头部与帧互为转置，允许；坐标不缩放 | T + L | MaaTouchTest#headerAndPackagedAsset；L1-MuMu.md：wm 720×1280、真实帧1280×720，Tap/Swipe/hold 实测正确 |
 | C-14 | dryRun 会话 | 上游 `SessionBoundActionExecutor` 返回 DryRun，动作不会到达后端 | T（上游测试） | DesktopGraphIntegrationTest#realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources |
 | C-15 | 用户同时用鼠标操作模拟器 | 不做防护（与上游一致），README 提醒 | D | 未验证：发行 README 提醒待核对；实机测试不同时手动操作 |
 
@@ -73,12 +73,12 @@
 | D-03 | `resolve-activity` 输出异常或没有启动入口 | 返回失败及原因 | T（fixture） | ScreenAndParserTest#discoveryAndPackageParsers（正常入口）；异常输出分支待 L1-08 |
 | D-04 | `am start` 退出码为 0 但输出包含 `Error:` | 判为失败 | T（fixture） | AdbDeviceServiceTest#applicationLaunchDetectsExitZeroErrorAndForceStopPolls |
 | D-05 | `force-stop` 后 3 s 内进程仍在 | 返回失败及原因 | T | AdbDeviceServiceTest#applicationLaunchDetectsExitZeroErrorAndForceStopPolls（进程退出轮询）；3 秒耗尽待 L1-08 |
-| D-06 | `mCurrentFocus=null` | 改用 `mFocusedApp` | T（fixture） | ScreenAndParserTest#foregroundFixturesAreLiveAndFailClosed（Android 9/12 合成） |
+| D-06 | `mCurrentFocus=null` | 改用 `mFocusedApp` | T（fixture） | ScreenAndParserTest#foregroundFixturesAreLiveAndFailClosed（Android9/12合成）；actualMumu12SettingsDumpPreservesTheInspectedNodes（实采设置前台） |
 | D-07 | 输入法、状态栏、系统对话框在前台 | 判为非游戏 | T（fixture） | ScreenAndParserTest#foregroundFixturesAreLiveAndFailClosed（Android 9/12 合成） |
 | D-08 | 渠道 SDK 应用（如华为帐号）在前台 | 返回该应用的包名；`ChannelPromptScreen` 按规则中的包处理 | T（fixture）+ L3 | ScreenAndParserTest#foregroundFixturesAreLiveAndFailClosed（合成包名解析）；真实渠道页待 L3 |
-| D-09 | uiautomator 无法获取空闲状态 | 重试 3 次（FB-03），仍失败返回空列表，并显示警告 | T | AdbDeviceServiceTest#uiAutomatorRetriesThreeTimesThenWarnsAndCanRecover |
+| D-09 | uiautomator 无法获取空闲状态 | 重试 3 次（FB-03），仍失败返回空列表，并显示警告 | T | AdbDeviceServiceTest#uiAutomatorRetriesThreeTimesThenWarnsAndCanRecover；L1-MuMu.md 真实间歇空树告警，恢复后20次dump成功 |
 | D-10 | uiautomator XML 中含 DTD 或外部实体 | 解析被拒绝 | T | ScreenAndParserTest#nodesPreserveTextBoundsAndRejectExternalEntities |
-| D-11 | 节点文字包含 emoji、换行或特殊字符 | 原样保留 | T | ScreenAndParserTest#nodesPreserveTextBoundsAndRejectExternalEntities（中文）；emoji/换行未验证，L1-10 |
+| D-11 | 节点文字包含 emoji、换行或特殊字符 | 原样保留 | T | ScreenAndParserTest#nodesPreserveTextBoundsAndRejectExternalEntities、actualMumu12SettingsDumpPreservesTheInspectedNodes（中文实采）；emoji/换行未验证 |
 | D-12 | 点击时节点已消失或位置变化 | `GONE` | T | 未验证：L3 渠道弹窗点击 |
 | D-13 | 点击时匹配到多个节点 | `GONE`（上游 `singleOrNull` 语义） | T | 未验证：L3 渠道弹窗多节点 |
 | D-14 | 拉取 APK 失败（空间不足等） | 显示错误；设备画像不可用，阻止登录 | T | 未验证：L2-01（APK 拉取失败分支） |

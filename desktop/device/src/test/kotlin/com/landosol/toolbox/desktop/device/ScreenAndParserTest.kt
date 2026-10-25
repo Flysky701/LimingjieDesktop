@@ -49,6 +49,16 @@ class ScreenAndParserTest {
         assertTrue(root.children.single().clickable)
         assertThrows(SAXException::class.java) { DeviceParsers.uiTree("<!DOCTYPE hierarchy [<!ENTITY xxe SYSTEM 'file:///never-read'>]><hierarchy>&xxe;</hierarchy>") }
     }
+    @Test fun actualMumu12SettingsDumpPreservesTheInspectedNodes() {
+        assertEquals("com.android.settings", DeviceParsers.foreground(fixture("android12-live/window-settings.txt")))
+        val roots = DeviceParsers.uiTree(fixture("android12-live/ui-settings.xml"))
+        fun flatten(nodes: List<UiNode>): List<UiNode> = nodes.flatMap { listOf(it) + flatten(it.children) }
+        val nodes = flatten(roots)
+        assertEquals(47, nodes.size)
+        assertTrue(nodes.any { it.text == "声音" && it.bounds == UiBounds(108, 650, 168, 691) })
+        assertTrue(nodes.any { it.text == "网络和互联网" })
+        assertEquals(720 to 1280, DeviceParsers.screenSize(fixture("android12-live/display-size.txt")))
+    }
     @Test fun nodeLimitsMatchUpstream() {
         val node = "<node package='p' bounds='[0,0][1,1]'/>"
         val root = DeviceParsers.uiTree("<hierarchy><node package='p' bounds='[0,0][1,1]'>${node.repeat(900)}</node></hierarchy>").single()

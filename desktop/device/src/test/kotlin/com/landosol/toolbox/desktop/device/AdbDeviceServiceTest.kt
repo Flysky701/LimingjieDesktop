@@ -34,6 +34,9 @@ class AdbDeviceServiceTest {
             assertEquals(TouchResult.Completed, device.tap(1f, 2f, FakeAdb.GAME))
             assertEquals(listOf(MaaTouchProtocol.tap(1f, 2f)), touch.gestures)
             assertEquals(TouchResult.Rejected("动作坐标无效"), device.tap(Float.NaN, 2f, FakeAdb.GAME))
+            assertEquals(TouchResult.Rejected("动作坐标无效"), device.tap(-1f, 2f, FakeAdb.GAME))
+            for (duration in listOf(0L, 5001L)) assertEquals(TouchResult.Rejected("滑动时长超出范围"), device.swipe(0f, 0f, 1f, 1f, duration, 0, FakeAdb.GAME))
+            assertEquals(TouchResult.Completed, device.tap(2000f, 1100f, FakeAdb.GAME)) // Preserve upstream out-of-screen pass-through.
             assertEquals(TouchResult.Rejected("滑动时长超出范围"), device.swipe(0f, 0f, 1f, 1f, 1, Long.MAX_VALUE, FakeAdb.GAME))
             device.capture()
             assertEquals(TouchResult.Rejected("触控坐标系与截图尺寸不一致"), device.back(FakeAdb.GAME))
