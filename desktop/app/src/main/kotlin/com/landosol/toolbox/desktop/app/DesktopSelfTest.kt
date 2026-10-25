@@ -34,13 +34,23 @@ object DesktopSelfTest {
             catch (skip: Skipped) { result.put("status", "skipped").put("detail", skip.message) }
             catch (failure: LinkageError) { failures++; result.put("status", "failed").put("detail", "Native runtime could not load: ${failure.message}") }
             catch (failure: Exception) { failures++; result.put("status", "failed").put("detail", failure.message ?: failure.javaClass.name) }
-            result.put("durationMillis", (System.nanoTime() - start) / 1_000_000)
+            result.put("millis", (System.nanoTime() - start) / 1_000_000)
             results.put(result)
         }
         val directory = DataDirectories.resolve(args)
         DataDirectories.ensureWritable(directory)
         val temporary = Files.createTempDirectory(directory, "self-test-").toAbsolutePath().normalize()
         try {
+            checkItem("data-dir") {
+                DataDirectories.ensureWritable(directory)
+                "Writable data directory: $directory"
+            }
+            checkItem("fonts") {
+                val font = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().availableFontFamilyNames
+                    .firstOrNull { java.awt.Font(it, java.awt.Font.PLAIN, 14).canDisplayUpTo("中文黎明界") == -1 }
+                checkNotNull(font) { "No usable CJK font was found" }
+                "CJK characters available in $font"
+            }
             checkItem("resources") {
                 val names = resource("desktop/assets-manifest.txt").toString(Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }.toList()
                 require(names.isNotEmpty()) { "Empty asset manifest" }

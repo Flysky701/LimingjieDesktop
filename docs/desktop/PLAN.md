@@ -100,7 +100,7 @@
 | D-23 | 使用 JetBrains `lifecycle-viewmodel`（KMP）。`AccountViewModel` / `ClanBattleViewModel` 的 `Factory.create(Class<T>)` 在 JVM 上不存在，派生改写为 `create(KClass<T>, CreationExtras)`，字面量替换并在 Sync 中校验命中次数 | 无其他可行方案；改写是机械的、可验证的 |
 | D-24 | 上游测试的工作目录 = `android/app`（上游测试依赖 `user.dir` 找 fixture）。测试前后 `android/` 的 git 快照必须一致（CI 上必须为空，SPEC-00 §11）（金标自举风险：`LabyrinthCharacterIconGoldenTest` 在金标缺失时会生成文件） | 与上游 CI 语义一致；防止测试悄悄改仓库 |
 | D-25 | 桌面页面按实际内容区自适应布局。**仅在复用依赖 Android 环境的上游 UI 组件时**，外层提供 `LocalConfiguration` / `LocalContext`，尺寸为该组件内容区而非整个窗口 | 保留兼容垫片；重设计页面使用 Compose Desktop 布局约束，Android 紧凑布局分支不再是桌面视觉验收标准（D-37） |
-| D-26 | `BitmapFactory` 垫片解码 = `ImageIO.read` + `getRGB`（非预乘 ARGB），不做色彩管理 | 与上游 JVM 测试的读图方式一致，golden 和 fixture 直接适用 |
+| D-26 | `BitmapFactory` 使用已有 Skia 解码 PNG/JPEG/WebP，再读取非预乘 ARGB；不新增色彩校正 | D-45 实际 WebP 资源修正；上游 golden 和 fixture 继续直接验证 |
 | D-27 | 前台包名：执行动作前**实时查询**（`dumpsys`，SPEC-10）；非挂起回调（`ChannelPromptScreen.foregroundPackage()`、`GameClientHardCloser` 的 `foregroundPackage`）读取 500 ms 轮询缓存，缓存超过 2 s 视为 `null` | 上游这两个接口不是挂起函数，不能在里面阻塞调用 adb；过期返回 null 让上游走它已有的“不确定”分支 |
 
 ## 5. Android → 桌面 映射

@@ -155,7 +155,7 @@ desktop/
 | `android.os.SystemClock` | `elapsedRealtime()` / `uptimeMillis()` 单调递增，用 `System.nanoTime()` 换算，不用墙钟 |
 | `android.os.Process` | `myPid()` = `ProcessHandle.current().pid().toInt()` |
 | `android.graphics.Bitmap` | 内部是 ARGB_8888、**非预乘**的 `IntArray`。`recycle()` 后访问像素抛 `IllegalStateException`，`isRecycled` 为真。`createBitmap(src, x, y, w, h)` 在全尺寸时返回**同一实例**，`createScaledBitmap` 在同尺寸时返回同一实例（与 Android 一致，上游的 recycle 逻辑依赖这一点）；越界抛 `IllegalArgumentException`。`compress(JPEG/PNG, quality, out)` 用 ImageIO，JPEG 先转 RGB |
-| `android.graphics.BitmapFactory` | 解码路径 = `ImageIO.read` + `getRGB` 全图（D-26，与上游 JVM 测试读图方式一致，因此上游的 golden 和 fixture 直接适用）。无法解码返回 `null`，不抛异常。不做色彩管理或伽马校正。资源里若有 WebP，加入 TwelveMonkeys `imageio-webp`。`Options` 只实现用到的字段 |
+| `android.graphics.BitmapFactory` | 解码路径 = Compose 已携带的 Skia → 非预乘 ARGB（D-45）。PNG/JPEG/WebP 均支持；无效图像返回 `null`。不新增色彩校正或依赖。`Options` 实现尺寸预读及采样缩小；真实 WebP 与上游 golden/fixture 验证兼容 |
 | `android.util.Base64` | `decode/encode` 的 flags（`DEFAULT`、`NO_WRAP`、`URL_SAFE`、`NO_PADDING`）与 Android 一致；`DEFAULT` 解码时忽略换行 |
 | `android.content.Context` | 抽象类，只含 `assets`、`applicationContext`、`filesDir`、`cacheDir`、`getSharedPreferences(name, mode)`、`MODE_PRIVATE`。桌面实现 `DesktopContext(dataDir)`：`filesDir = <data>/files`，`cacheDir = <data>/cache`，`applicationContext = this` |
 | `android.content.SharedPreferences` + `Editor` | 每个 name 一个文件 `<data>/shared_prefs/<name>.json`，类型化值。`commit()` 同步原子写（SPEC-30 §3），失败返回 `false` 并记日志；`apply()` 与 `commit()` 走同一同步写，失败只记日志（与 Android 一样调用方拿不到结果）。同一 name 返回同一实例，读写加锁 |

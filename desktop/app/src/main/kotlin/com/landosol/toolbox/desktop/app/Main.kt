@@ -35,6 +35,7 @@ fun main(args: Array<String>) {
     val graph = try {
         val directory = DataDirectories.resolve(args)
         DataDirectories.ensureWritable(directory)
+        if (directory.toString().length > 150) messages += "数据目录路径较长，可能超出 Windows 路径长度限制。建议使用更短的可写目录：$directory"
         lock = InstanceLock.acquire(directory)
         DataDirectories.cleanTemporaryFiles(directory)
         DesktopLog.initialize(directory.resolve("logs"))
@@ -132,7 +133,7 @@ fun main(args: Array<String>) {
             DesktopApp(graph)
             MaterialTheme {
                 if (notices.isNotEmpty()) AlertDialog(onDismissRequest = graph::dismissNotices,
-                    title = { Text("本地数据恢复提示") }, text = { Text(notices.joinToString("\n\n")) },
+                    title = { Text("启动提示") }, text = { Text(notices.joinToString("\n\n")) },
                     confirmButton = { TextButton(onClick = graph::dismissNotices) { Text("我知道了") } })
                 if (confirmExit) AlertDialog(
                     onDismissRequest = { if (!exiting) confirmExit = false }, title = { Text("任务正在运行") },
@@ -146,7 +147,7 @@ fun main(args: Array<String>) {
                             if (rememberChoice) graph.settings.update { it.copy(closeBehavior = CloseBehavior.MINIMIZE) }
                             confirmExit = false
                             if (trayAvailable) visible = false else windowState.isMinimized = true
-                        }) { Text("最小化到托盘") }
+                        }) { Text(if (trayAvailable) "最小化到托盘" else "最小化窗口") }
                         TextButton(enabled = !exiting, onClick = { confirmExit = false }) { Text("取消") }
                     } },
                 )

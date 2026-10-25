@@ -47,7 +47,7 @@
 | D-23 | JetBrains lifecycle + 两个 ViewModel Factory 的派生改写 | 已定 |
 | D-24 | 上游测试工作目录 = `android/app`；测试前后 `android/` 快照一致 | 已定 |
 | D-25 | 桌面按内容区布局；复用组件时提供其所需环境垫片 | 已修订（D-37） |
-| D-26 | `BitmapFactory` 垫片 = `ImageIO.read` + `getRGB` | 已定 |
+| D-26 | `BitmapFactory` 使用已有 Skia 解码 → 非预乘 ARGB（D-45） | 已按真实资源修正 |
 | D-27 | 动作前实时查询前台；非挂起回调读 500 ms 轮询缓存，超过 2 s 视为 null | 已定 |
 
 ## 2. 方案阶段预登记（SPEC 中要求“登记到 DECISIONS”的取舍）
@@ -156,3 +156,9 @@
 - 状态：已定。
 - 决策：新增 --self-test 使用独立临时目录、固定假账号和内置 OCR 样本；仅 TLS 握手触及 SDK 主机，不发送业务请求。生产数据目录先检查可写并加实例锁；测试不读取旧项目账号。
 - 本机 SDK 与 Temurin 17 仅安装于 .tools，专门验证 Android 上游兼容。桌面使用 Temurin 21，依赖版本不升级上游 Android 项目。
+
+### D-45 WebP 资源使用已有 Skia 解码
+- 状态：已定。
+- 证据：真实 Graph 首次加载 `icon_unit_100661.webp` 时，ImageIO 无 WebP 解码器导致识别会话启动失败。上游角色图标广泛使用 WebP，属于运行必需资源。
+- 决策：BitmapFactory 使用 Compose 已依赖的 Skia 统一解码，读取 BGRA_8888 / UNPREMUL 并转换为 ARGB IntArray；不增加额外图像库或改写识别算法。保留尺寸预读、采样、无效图返回 null 和位图所有权语义。
+- 验证：原 PNG 往返/无效图用例通过；实际 128×128 WebP 的透明度、已知像素颜色、尺寸及 2 倍采样通过。完整共享 fixture 结果见最终报告。
