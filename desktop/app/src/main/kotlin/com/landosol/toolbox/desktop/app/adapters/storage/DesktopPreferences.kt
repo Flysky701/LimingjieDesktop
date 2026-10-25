@@ -20,6 +20,7 @@ data class DesktopPreferences(
     val previewExpanded: Boolean = false,
     val animationConfirmedVersion: String = "",
     val goals: List<DesktopGoal> = emptyList(),
+    val selectedTask: String = "BATCH",
 )
 data class DesktopGoal(val guildId: Int, val count: Int, val clears: Boolean = true)
 
@@ -35,7 +36,7 @@ class DesktopPreferencesStore(directory: Path, private val notice: (String) -> U
                 j.optJSONArray("goals")?.let { a -> (0 until a.length()).mapNotNull { i ->
                     val g = a.getJSONObject(i); val count = g.optInt("count")
                     if (count > 0) DesktopGoal(g.getInt("guildId"), count, g.optBoolean("clears", true)) else null
-                } }.orEmpty())
+                } }.orEmpty(), j.optString("selectedTask", "BATCH"))
         }
     } catch (_: Exception) { notice("界面偏好无法读取，使用默认值；原文件保留。请在设置中重新选择。") ; DesktopPreferences() }
     @Synchronized fun update(change: (DesktopPreferences) -> DesktopPreferences) {
@@ -44,6 +45,7 @@ class DesktopPreferencesStore(directory: Path, private val notice: (String) -> U
             .put("sound", value.sound).put("originalRatings", value.originalRatings).put("page", value.page).put("rightTab", value.rightTab)
             .put("previewExpanded", value.previewExpanded).put("animationConfirmedVersion", value.animationConfirmedVersion)
             .put("goals", JSONArray(value.goals.map { JSONObject().put("guildId", it.guildId).put("count", it.count).put("clears", it.clears) }))
+            .put("selectedTask", value.selectedTask)
         AtomicFiles.write(file, j.toString(2).toByteArray())
         mutable.value = value
     }
