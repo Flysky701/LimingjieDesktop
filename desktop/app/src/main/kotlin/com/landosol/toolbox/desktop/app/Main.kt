@@ -27,6 +27,7 @@ import kotlin.system.exitProcess
 @Volatile private var crashGraph: DesktopAppGraph? = null
 private val crashDialogOpen = java.util.concurrent.atomic.AtomicBoolean(false)
 
+@OptIn(FlowPreview::class)
 fun main(args: Array<String>) {
     System.setProperty("java.net.useSystemProxies", "true")
     if ("--self-test" in args) { exitProcess(DesktopSelfTest.run(args)) }

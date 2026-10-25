@@ -26,6 +26,8 @@
 | FB-02 | 连接 Ready 后选择截图模式 | Raw / PNG 各取 5 帧，选 p50 更低且解码成功的一种 | 只在连接时执行一次，运行中不切换 | 设备页显示所选模式和耗时 | B 组（测速） | device/ScreenCapturer.kt；ScreenAndParserTest#benchmarkRejectsAnyFailedModeAndUsesSeparateChannel |
 | FB-03 | `uiautomator dump` 输出 `ERROR: could not get idle state` | 重新 dump | 最多 3 次，每次间隔 500 ms | 仍失败：返回空列表，记 `W` 日志，UI 显示「无法读取渠道登录界面」 | D-09 | device/AdbDeviceService.kt#uiTree；AdbDeviceServiceTest#uiAutomatorRetriesThreeTimesThenWarnsAndCanRecover（首次 + 最多3次重试） |
 | FB-06 | adb 命令报告 server 未运行 / 连接被拒 | 执行一次 `adb start-server` 后重试原命令一次 | 1 次 | 仍失败：设备页显示原始错误与处理建议 | A-04 | device/ProcessAdbExecutor.kt；ProcessAdbExecutorTest#daemonStartsOnlyOnceAndVersionConflictNeverRestarts |
+| FB-15 | sys.boot_completed 尚非1 | 继续查询开机状态 | 每2秒一次，最多120秒；断开立即取消 | 连接状态显示模拟器正在启动，超时失败 | A-09 | AdbDeviceService.establish；disconnectCancelsBootPollingImmediately |
+| FB-16 | Ready会话中的MaaTouch进程退出 | 清理并重新启动触控；再次失败进入Lost，停止任务 | 每次设备会话最多重启1次 | 触控服务已断开；后续按FB-01重连，不自动续跑 | C-07 | AdbDeviceService.recoverTouch；failedTouchRestartLosesConnectionAndReconnectDoesNotSendActions、disconnectCancelsInFlightTouchRestart |
 
 ## WS-C
 

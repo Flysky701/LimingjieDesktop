@@ -1,0 +1,50 @@
+{
+  "app": {
+    "totals": {
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "suiteNames": [
+      "com.landosol.toolbox.desktop.app.adapters.captcha.LoopbackCaptchaHostTest",
+      "com.landosol.toolbox.desktop.app.adapters.cndb.DesktopCnDatabaseTest",
+      "com.landosol.toolbox.desktop.app.adapters.storage.DesktopStorageTest",
+      "com.landosol.toolbox.desktop.app.DesktopGraphIntegrationTest"
+    ]
+  },
+  "platform": {
+    "totals": {
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "suiteNames": [
+      "com.landosol.toolbox.desktop.platform.PlatformTest"
+    ]
+  },
+  "device": {
+    "totals": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "suiteNames": [
+      "com.landosol.toolbox.desktop.device.AdbDeviceServiceTest",
+      "com.landosol.toolbox.desktop.device.MaaTouchTest"
+    ]
+  },
+  "shared": {
+    "totals": {
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "suiteNames": [
+      "com.landosol.toolbox.AppVersionTest"
+    ]
+  }
+}
