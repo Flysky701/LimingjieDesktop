@@ -1,15 +1,15 @@
 # 黎明界助手 Windows 桌面版交付报告
 
-更新：2026-10-25。**已交付可运行的本地候选版，尚未达到项目全部完成标准。**主要阻断是OCR真实评估低于门槛；标题页实测还发现页面误判。没有将候选包、自检或假设备回放标为真实游戏验收通过。
+更新：2026-10-25。**已交付可运行的本地候选版，尚未达到项目全部完成标准。**主要阻断是OCR真实评估低于门槛；标题页实测还确认了上游原有的页面误判。没有将候选包、自检或假设备回放标为真实游戏验收通过。
 
 ## 交付物
 
 - 版本 `1.0.18+desktop.1`，上游 `b809b196988b019571caf5679ccf8d7ebb7f072d`；保留上游Git历史和共享业务源码。
-- [Windows x64便携包](../../desktop/app/build/dist/LimingjieAssistant-desktop-1.0.18+desktop.1-win-x64.zip)，内置Java21，解压后运行 `LimingjieAssistant.exe`。大小 **294084561** 字节（约280.5MiB）。
-- [SHA-256文件](../../desktop/app/build/dist/LimingjieAssistant-desktop-1.0.18+desktop.1-win-x64.zip.sha256)：`853c41536082737dab32be52fd6158477330c83240076e75efb5861a7789c016`。
+- [Windows x64便携包](../../desktop/app/build/dist/LimingjieAssistant-desktop-1.0.18+desktop.1-win-x64.zip)，内置Java21，解压后运行 `LimingjieAssistant.exe`。大小 **294085736** 字节（约280.5MiB）。
+- [SHA-256文件](../../desktop/app/build/dist/LimingjieAssistant-desktop-1.0.18+desktop.1-win-x64.zip.sha256)：`84b0bbbf788b1ddbabcb0cd6591b4d28667a424f271989b6dbf000216ad4bdb4`。
 - [用户说明](../../README-desktop.md)、[实机验收清单](USER_CHECKLIST.md)、[便携包自检结果](evidence/packaging/self-test.json)、[归档结构检查](evidence/packaging/archive-check.json)。
 
-便携包只有一个根目录，包含exe/app/runtime、portable.flag、用户说明与清单、完整许可目录；未包含真实数据目录、测试依赖、开发临时文件或PDB。最终文案补充真实误判限制后仅重打ZIP，jpackage应用镜像没有变化。没有公开发布、创建收费资源或修改旧项目 `D:\WorkSpace\LimingjiePC`。
+便携包只有一个根目录，包含exe/app/runtime、portable.flag、用户说明与清单、完整许可目录；未包含真实数据目录、测试依赖、开发临时文件或PDB。最终包包含有界OCR补边修复，并重新生成应用镜像和自检；历史包验证记录不冒充新包验证。没有公开发布、创建收费资源或修改旧项目 `D:\WorkSpace\LimingjiePC`。
 
 ## 功能与入口
 
@@ -31,15 +31,15 @@
 | 范围 | 结果 |
 |---|---|
 | 共享单元/集成 | **1256项：1210通过、46跳过、0遗留失败**。完整检查唯一失败是上游固定版本期待；D-47只派生生成测试中的桌面版本后缀后，失败类定向复跑通过。46项是上游缺本地素材，不计为通过 |
-| 设备/平台/app/OCR单测 | 设备32（含新增真实fixture解析）、平台7、app14、OCR16项通过；两项设备fixture时序修正后仅重跑失败项。归并共1325项：1279通过、46跳过。OCR单测通过不代表质量评估通过 |
+| 设备/平台/app/OCR单测 | 设备32（含新增真实fixture解析）、平台7、app14、OCR17项通过；两项设备fixture时序修正后仅重跑失败项。归并共1326项：1280通过、46跳过。OCR单测通过不代表质量评估通过 |
 | 框架/漂移 | 25个框架垫片无JAR同名冲突；同名替身签名、派生命中数、上游耦合与内容漂移、Room v4 identityHash检查通过；测试未修改Android源文件/金标 |
 | Android兼容 | lintDebug、testDebugUnitTest、assembleDebug退出0，耗时14分14秒；1247项=1201通过+46素材缺失跳过；lint无Error/Fatal，已有57Warning/2Info保留 |
 | 真实窗口 | 默认1280×800/最小1100×700、七个入口、假账号增改取消删、评分保存与重启、编组合法性检查通过；实际便携exe首次向导可显示并正常退出 |
 | 本地发行自检 | 中文及空格的解压目录、数据目录、原生库临时目录下退出0，10项全部passed：目录、字体、1074资源、真实OCR样图、SQLite、Room1→4、DPAPI、JNA、MaaTouch、TLS1.3握手 |
-| OCR真实质量 | **失败：12/14=85.71%**；商店3/3、详情1/2、堆叠5/6、事件2/2、EX1/1；角色奖励0样本。总体95%与各类85%门槛未满足。p50 18.08ms/p95 152.78ms |
+| OCR真实质量 | **失败：14/15=93.33%**；商店3/3、详情1/2、堆叠7/7、事件2/2、EX1/1；角色奖励0样本。总体95%与各类85%门槛未满足。p50 23.27ms/p95 151.04ms |
 | CI | 三job脚本已实现，但没有可写项目远端及Actions执行记录。云端未验证；OCR gate保留，会阻断check和依赖它的发行job |
 
-证据：[共享完整检查及复跑](evidence/final-tests/)、[Android摘要](evidence/android/result.json)、[WS-B](reports/WS-B-1.md)、[WS-DE](reports/WS-DE-1.md)、[真实Graph](reports/WS-H-device.md)、[OCR](reports/WS-C-1.md)、[窗口操作](reports/UI-1.md)。本地构建日志在忽略的 `.tools/`；没有为获得一次绿色全量输出重复已通过的检查。
+证据：[共享完整检查及复跑](evidence/final-tests/)、[Android摘要](evidence/android/result.json)、[WS-B](reports/WS-B-1.md)、[WS-DE](reports/WS-DE-1.md)、[真实Graph](reports/WS-H-device.md)、[OCR](reports/WS-C-1.md)、[窗口操作](reports/UI-1.md)。[退出资源补充](evidence/final-tests/graph-lifecycle.xml)中实际防睡眠VISUAL→IDLE、任务子Job及退出自有scope/线程归零；shutdown连同worker退出35ms。[运行中窗口补查](reports/UI-2-lifecycle.md)因外部关闭模拟器未能完成三分支，未反复重启争用；powercfg查询需管理员权限，未提权。本地构建日志在忽略的 `.tools/`；没有为获得一次绿色全量输出重复已通过的检查。
 
 ![实际便携exe首次向导](evidence/packaging/portable-window.png)
 
@@ -51,7 +51,7 @@
 - 600秒连续截图1989帧，起帧间隔p50 **301.21ms**、p95 **302.46ms**，没有断线。该次测速PNG的p50为220ms，低于Raw233ms，因此全程固定PNG。GC后heap约6.70→6.79MB，没有观察到持续大幅增长；不等同于整应用1小时/8小时soak。
 - 前台查询20次p50/p95为100.87/128.43ms，Home缓存约210ms更新。系统设置节点树先有idle/null-root失败，官方adb直接调用也失败；一次滚动后恢复，之后20次dump全部成功。此前失败仍保留。
 - 最终v5的真实Graph只读20秒处理46帧，有预览；关闭289ms，MaaTouch无残留。B服版本11.7.2/352，停在“点击屏幕开始游戏”，未点击或输入凭据。
-- **L2页面识别失败**：1280×720标题动画出现BATTLE_FAILED误判；按推荐1920×1080额外20秒54帧复核仍出现同样误判，因此不是只在低分辨率存在。没有修改上游识别规则掩盖结果；黎明界内多场景尚需验证。游戏截图包含标识，仅留本机忽略目录。
+- **L2页面识别失败**：1280×720标题动画出现BATTLE_FAILED误判；按推荐1920×1080额外20秒54帧复核仍出现同样误判，因此不是只在低分辨率存在。随后63帧精确抓到5次误判，原始帧与PNG两种解码、102模板及Android原源码/资源行为一致，确认上游纯色检测覆盖标题分类。无战斗上下文时现有分支停止且不点结束/重试；未改识别规则。黎明界内多场景尚需验证。游戏截图包含标识，仅留本机忽略目录。
 - 测试实例0最终恢复原关闭状态、720×1280与密度240、无尺寸覆盖。1920复核后的首次恢复因ADB离线失败，随后重启仅用于恢复并核对成功。收尾出现本轮之外的新运行实例3，未干预该实例，保留共享ADB服务以免影响并发使用。实际临时数据留在本机 `.tools/l1-probe`、`.tools/l2-probe`，不进入发行包。
 
 未执行：雷电/Android9、旋转与锁屏组合、12次耗尽重连、真实登录/验证码/渠道SDK、完整游戏循环和游戏长时soak、另一台干净Windows。具体步骤已在随包清单中，不把标题页长时间停留当作游戏soak。
@@ -61,20 +61,20 @@
 | Gate | 正式状态 | 原因 |
 |---|---|---|
 | G1 | 通过 | 共享源码/兼容/Android验证完成 |
-| G2-C | 失败 | OCR质量85.71%，且14/80样本覆盖不足 |
+| G2-C | 失败 | OCR质量93.33%，且15/80样本覆盖不足 |
 | G2-B/D/E/F | 通过（本机定向范围） | 具体单测、窗口和设备证据见对应报告；真实账号与其他模拟器另列G6 |
-| G3 | 未验证（完整严格清单） | 最短必要真Graph回放通过；并未为每个scope/所有退出分支另加断言 |
+| G3 | 未验证（完整严格清单） | 真Graph回放、任务Job结束、原生防睡眠恢复、自有scope/线程退出通过（35ms）；逐行线程及运行中UI关闭完整分支仍缺 |
 | G4 | 通过（代表性流程） | 实际窗口、复杂表单和典型编辑流程通过；真实游戏任务归G6 |
 | G5 | 未验证（云端部分） | 本地ZIP/自检/启动通过；三个云端job未运行 |
 | G6 | 未验证（完整清单） | MuMu L1定向路径通过；标题页有误判，L2/L3游戏闭环未验收 |
 
-因此交付的是候选版，不宣称全部G1–G6通过。下一步需要真实游戏画面与对应实体真值：OCR总量至少80、每类至少8，优先角色奖励、系列计数、小数字；保持原匹配阈值重跑评估。现有两处漏读和标题误判仍需定位。随后在可写项目远端运行CI及剩余L2/L3清单。详见[已知限制](registers/KNOWN_LIMITATIONS.md)。
+因此交付的是候选版，不宣称全部G1–G6通过。下一步需要真实游戏画面与对应实体真值：OCR总量至少80、每类至少8，优先角色奖励、系列计数、小数字；保持原匹配阈值重跑评估。低清数字漏读已修复；系列计数未形成检测框，常规变换未能完整修复且部分引入误读。标题误判已定位为上游原有纯色检测/优先级缺口，按现行边界未改。真实样本还缺65条，具体来源审计见[SAMPLE_AUDIT](../../desktop/ocr/evaluation/SAMPLE_AUDIT.md)。随后在可写项目远端运行CI及剩余L2/L3清单。详见[已知限制](registers/KNOWN_LIMITATIONS.md)。
 
 ## 与上游的差异及维护
 
 P-01至P-11均为纯声明/辅助函数搬移或保留Android默认行为的注入（P-07日志源、P-10作用域、P-11 socket），全部登记于[UPSTREAM_PATCHES](registers/UPSTREAM_PATCHES.md)，Android构建已验证。KClass Factory是D-23机械派生；D-47仅处理生成测试的桌面显示后缀。D-45使用现有Skia修复WebP资源；D-46记录v4/v5实测、320宽补边与有界短ROI回退。没有复制旧Python业务或修改上游匹配器、决策阈值。
 
-[回退登记](registers/FALLBACKS.md)逐项列位置/测试：设备重连、截图测速、节点重试、daemon启动、开机轮询、单次触控重启、OCR队列及短ROI回退、坏数据备份、数据库暂存等均有边界；系统浏览器失败和跨电脑DPAPI等未实测分支仍明确记录。没有启用Room JDBC或KCEF备选。
+[回退登记](registers/FALLBACKS.md)逐项列位置/测试：设备重连、截图测速、节点重试、daemon启动、开机轮询、单次触控重启、OCR队列及短ROI回退、坏数据备份、数据库暂存等均有边界；系统浏览器失败和跨电脑DPAPI等未实测分支仍明确记录。没有启用Room JDBC或KCEF备选。真实国服库下载与占用恢复报告见[L2-CnDatabase](reports/L2-CnDatabase.md)：44,163,072字节公开库通过校验，实际SQLite占用触发暂存，新JVM安装并保留旧库备份，恢复阶段零网络请求。
 
 按[上游同步流程](registers/UPSTREAM_SYNC.md)保留历史合并，更新漂移基线、派生命中、Room schema、协议工厂和受影响UI入口；运行相关检查后再交付。当前未开展P2功能。
 
@@ -87,7 +87,7 @@ P-01至P-11均为纯声明/辅助函数搬移或保留Android默认行为的注�
 | app | 14 | 2637 |
 | shared | 28 | 1014 |
 | device | 8 | 993 |
-| ocr | 3 | 404 |
+| ocr | 3 | 419 |
 | platform | 6 | 205 |
 
 设备与OCR均低于方案2500/1200行估算；app包含桌面页面、完整装配、自检和适配器，UI估算按D-37不强制。云端CI运行时间不可用；本地首轮打包1分29秒、仅文档刷新13秒，自检各项耗时见JSON。

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-10-25T11:49:43" hostname="FLY-LAPTOP" time="1.048">
+  <properties/>
+  <testcase name="warmUp loads real packaged models and recognizes a blank image as empty" classname="com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest" time="0.332"/>
+  <testcase name="real 1920 pixel map counters survive compact ROI detection misses" classname="com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest" time="0.308"/>
+  <testcase name="loading queues up to 64 requests and rejects only excess request" classname="com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest" time="0.002"/>
+  <testcase name="native inference failure completes current and future submissions" classname="com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest" time="0.002"/>
+  <testcase name="low resolution counter gains a final border attempt without reading real nontext controls" classname="com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest" time="0.399"/>
+  <testcase name="close completes active and queued requests exactly once" classname="com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest" time="0.001"/>
+  <testcase name="initialization failure completes queued requests and does not retry" classname="com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest" time="0.001"/>
+  <testcase name="callback exception does not abandon later requests" classname="com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest" time="0.001"/>
+  <testcase name="bad input fails without initializing models" classname="com.landosol.toolbox.desktop.ocr.OnnxOcrEngineTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

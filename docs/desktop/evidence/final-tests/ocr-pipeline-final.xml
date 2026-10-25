@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.landosol.toolbox.desktop.ocr.OcrPipelineTest" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-10-25T11:49:43" hostname="FLY-LAPTOP" time="0.133">
+  <properties/>
+  <testcase name="recognition keeps BGR and pads extreme aspect ratios" classname="com.landosol.toolbox.desktop.ocr.OcrPipelineTest" time="0.067"/>
+  <testcase name="CTC suppresses adjacent duplicates and restores repetition after blank" classname="com.landosol.toolbox.desktop.ocr.OcrPipelineTest" time="0.007"/>
+  <testcase name="detection enlarges small crops and bounds large images" classname="com.landosol.toolbox.desktop.ocr.OcrPipelineTest" time="0.041"/>
+  <testcase name="detection uses planar BGR and documented normalization" classname="com.landosol.toolbox.desktop.ocr.OcrPipelineTest" time="0.0"/>
+  <testcase name="cropping uses half open pixel bounds" classname="com.landosol.toolbox.desktop.ocr.OcrPipelineTest" time="0.002"/>
+  <testcase name="DB rejects low mean regions blank maps and tiny output boxes" classname="com.landosol.toolbox.desktop.ocr.OcrPipelineTest" time="0.001"/>
+  <testcase name="DB boxes expand confident connected regions and map to original coordinates" classname="com.landosol.toolbox.desktop.ocr.OcrPipelineTest" time="0.0"/>
+  <testcase name="join sorts rows and columns without character normalization" classname="com.landosol.toolbox.desktop.ocr.OcrPipelineTest" time="0.014"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
