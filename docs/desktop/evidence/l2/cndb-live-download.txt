@@ -1,0 +1,23 @@
+started=2026-10-25T11:50:14.576159700Z phase=download processId=48812
+oldDatabase=synthetic disposable SQLite marker; bytes=12288 sha256=94f29a99c27559b233aa574fd30b345fd7282b661e38423fd0b0aaae6c2db8a1
+lock=real BundledSQLiteDriver READONLY connection and active read transaction on target; moveFile=production AtomicFiles.move
+HTTP GET https://github.com/wbero/autopcr-db-builder/releases/latest/download/manifest.json
+HTTP RESPONSE status=302 host=github.com path=/wbero/autopcr-db-builder/releases/latest/download/manifest.json
+HTTP BODY bytes=0
+HTTP RESPONSE status=302 host=github.com path=/wbero/autopcr-db-builder/releases/download/db-v202610141448/manifest.json
+HTTP BODY bytes=0
+HTTP RESPONSE status=200 host=release-assets.githubusercontent.com path=/github-production-release-asset/1206944138/3564596c-dc4e-4eb7-afff-98db0e5baf8d
+HTTP BODY bytes=375
+HTTP GET https://github.com/wbero/autopcr-db-builder/releases/download/db-v202610141448/202610141448.db
+HTTP RESPONSE status=302 host=github.com path=/wbero/autopcr-db-builder/releases/download/db-v202610141448/202610141448.db
+HTTP BODY bytes=0
+HTTP RESPONSE status=200 host=release-assets.githubusercontent.com path=/github-production-release-asset/1206944138/e8c6f757-8984-4591-936c-30d9d5451a93
+HTTP BODY bytes=44163072
+NOTICE 数据库更新已下载，将在下次启动时生效
+updateResult=Failed(reason=数据库更新已下载，将在下次启动时生效) elapsedMillis=56036
+pending=true currentMetadata=null publicRequestCount=2
+pendingBytes=44163072 pendingSha256=f4a81d5bd752be8605f8b6f2fe2655232632fd6d6a2d6478534fe8156df3c8b2
+pendingMetadata={"version":"202610141448","upstreamHash":"f4a81d5bd752be8605f8b6f2fe2655232632fd6d6a2d6478534fe8156df3c8b2","fileSha256":"f4a81d5bd752be8605f8b6f2fe2655232632fd6d6a2d6478534fe8156df3c8b2","installedAt":1792929070904}
+oldPreserved=true; currentMetadataAbsent=true; pendingPairPresent=true
+SQLite handle closed; process exits before restart phase
+RESULT PASS phase=download

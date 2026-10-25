@@ -1,0 +1,6 @@
+started=2026-10-25T11:51:16.553493100Z phase=restart processId=51604
+NOTICE 已安装上次下载的国服数据库
+installedMetadata=LabyrinthCnDatabaseMetadata(version=202610141448, upstreamHash=f4a81d5bd752be8605f8b6f2fe2655232632fd6d6a2d6478534fe8156df3c8b2, fileSha256=f4a81d5bd752be8605f8b6f2fe2655232632fd6d6a2d6478534fe8156df3c8b2, installedAt=1792929070904) installedBytes=44163072
+validation=Valid(schema=LabyrinthMasterSchemaResolution(tables={UNIT_DATA=LabyrinthResolvedLogicalTable(logicalTable=UNIT_DATA, physicalName=unit_data, confidenceScore=1230, matchedSignals=[稳定unit_id锚点 12/12, 字段类型结构 19I/5T/1R]), UNIT_SKILL_DATA=LabyrinthResolvedLogicalTable(logicalTable=UNIT_SKILL_DATA, physicalName=unit_skill_data, confidenceScore=1233, matchedSignals=[稳定unit_id锚点 12/12, 字段类型结构 33I/0T/0R]), SKILL_DATA=LabyrinthResolvedLogicalTable(logicalTable=SKILL_DATA, physicalName=skill_data, confidenceScore=86, matchedSignals=[上游ID引用覆盖 86/86]), SKILL_ACTION=LabyrinthResolvedLogicalTable(logicalTable=SKILL_ACTION, physicalName=skill_action, confidenceScore=266, matchedSignals=[上游ID引用覆盖 266/266])}, issues=[]))
+reopenedRepository=true; pendingRemoved=true; originalBackupPreserved=true; installedHashMatchesManifest=true; publicRequestCount=0
+RESULT PASS phase=restart
