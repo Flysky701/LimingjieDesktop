@@ -16,7 +16,7 @@ class ManagedDeviceService(
     private val onLost: (String) -> Unit,
     private val locate: suspend (String?, Path) -> AdbLocation? = { selected, downloaded -> AdbLocator.find(selected, downloaded) },
     private val createService: (AdbLocation) -> DeviceService = { location ->
-        AdbDeviceService(ProcessAdbExecutor(location.path), directory, GameServer.entries.map { it.packageName }.toSet(), onEvent, onLost)
+        AdbDeviceService(ProcessAdbExecutor(location.path, server = AdbServerClient()), directory, GameServer.entries.map { it.packageName }.toSet(), onEvent, onLost)
     },
 ) : DeviceService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

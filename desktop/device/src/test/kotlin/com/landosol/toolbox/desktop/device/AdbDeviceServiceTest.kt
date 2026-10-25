@@ -19,7 +19,7 @@ class AdbDeviceServiceTest {
         override fun close() { alive = false }
     }
     private fun service(fake: FakeAdb, touch: RecordingTouch = RecordingTouch(), events: MutableList<String> = CopyOnWriteArrayList(), lost: MutableList<String> = CopyOnWriteArrayList()) =
-        AdbDeviceService(fake, directory.root.toPath(), emptySet(), events::add, lost::add, TouchConnectionFactory { _, _, _ -> touch }, emulatorCommands = { emptyList() })
+        AdbDeviceService(fake, directory.root.toPath(), emptySet(), events::add, lost::add, TouchConnectionFactory { _, _, _ -> touch })
 
     @Test fun duplicateConnectionKeepsSessionAndDoesNotBenchmarkOrNotifyLostAgain() = runBlocking {
         val adb = FakeAdb(); val lost = CopyOnWriteArrayList<String>(); val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
@@ -41,18 +41,40 @@ class AdbDeviceServiceTest {
         }
     }
 
-    @Test fun discoveryOnlyConnectsListeningUnregisteredPortsAndKeepsReadyState() = runBlocking {
-        val adb = FakeAdb(); val checked = CopyOnWriteArrayList<Int>()
-        adb.handler = { call -> if (call.arguments == listOf("devices", "-l")) FakeAdb.success("List of devices attached\n127.0.0.1:5555 device model:Fixture") else adb.default(call) }
-        AdbDeviceService(adb, directory.root.toPath(), emptySet(),
-            emulatorCommands = { listOf(java.nio.file.Path.of("fixture/ldplayer.exe")) },
-            portOpen = { port -> checked += port; port == 5557 }).use { device ->
-            device.connect("127.0.0.1:5555", TouchMode.Compatibility)
+    @Test fun discoveryMergesBlankSerialAliasesFiltersOfflineAndKeepsConnectedEndpoint() = runBlocking {
+        val adb = FakeAdb()
+        adb.handler = { call -> when (call.arguments) {
+            listOf("devices", "-l") -> FakeAdb.success("List of devices attached\n127.0.0.1:16416 offline model:Old\n127.0.0.1:16480 device model:Fixture\n127.0.0.1:7555 device model:Fixture")
+            listOf("getprop", "ro.serialno") -> FakeAdb.success("")
+            else -> adb.default(call)
+        } }
+        service(adb).use { device ->
+            assertEquals(listOf("127.0.0.1:16480"), device.discover().map { it.serial })
+            device.connect("127.0.0.1:7555", TouchMode.Compatibility)
             val ready = device.state.value
-            device.discover()
+            repeat(2) {
+                val devices = device.discover()
+                assertEquals(listOf("127.0.0.1:7555"), devices.map { it.serial })
+                assertEquals(setOf("127.0.0.1:16480", "127.0.0.1:7555"), devices.single().aliases)
+            }
             assertEquals(ready, device.state.value)
-            assertFalse(5555 in checked)
-            assertEquals(listOf(listOf("connect", "127.0.0.1:5557")), adb.calls.filter { it.arguments.firstOrNull() == "connect" }.map { it.arguments })
+            assertFalse(adb.calls.any { it.arguments.firstOrNull() in setOf("connect", "disconnect", "kill-server") })
+            assertFalse(adb.calls.any { it.serial == "127.0.0.1:16416" })
+        }
+    }
+
+    @Test fun differentBootsWithSameModelAndSerialAreNotMergedAndMissingIdentityIsConservative() = runBlocking {
+        val adb = FakeAdb(); var readable = true
+        adb.handler = { call -> when (call.arguments) {
+            listOf("devices", "-l") -> FakeAdb.success("List of devices attached\nfirst device model:Clone\nsecond device model:Clone")
+            listOf("cat", "/proc/sys/kernel/random/boot_id") -> if (!readable) AdbResult.Failure(AdbFailureKind.NonZeroExit, "denied")
+                else FakeAdb.success(if (call.serial == "first") "10000000-1111-2222-3333-444444444444" else "20000000-1111-2222-3333-444444444444")
+            else -> adb.default(call)
+        } }
+        service(adb).use { device ->
+            assertEquals(listOf("first", "second"), device.discover().map { it.serial })
+            readable = false
+            assertEquals(listOf("first", "second"), device.discover().map { it.serial })
         }
     }
 
@@ -133,7 +155,7 @@ class AdbDeviceServiceTest {
         adb.handler = { call -> if (call.arguments == listOf("devices", "-l")) FakeAdb.success("List of devices attached\nemulator-5554 device model:Synthetic\n127.0.0.1:5555 device model:Synthetic\nother unauthorized") else adb.default(call) }
         service(adb).use { device ->
             val devices = device.discover()
-            assertEquals(listOf("127.0.0.1:5555", "other"), devices.map { it.serial })
+            assertEquals(listOf("127.0.0.1:5555"), devices.map { it.serial })
         }
     }
     @Test fun unsupportedAndroidFailsAndSleepIsVisibleWithoutWakeCommand() = runBlocking {

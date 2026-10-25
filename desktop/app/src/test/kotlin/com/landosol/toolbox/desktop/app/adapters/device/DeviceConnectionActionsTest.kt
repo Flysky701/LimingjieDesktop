@@ -12,7 +12,8 @@ internal class ConnectionFixture : DeviceService {
     var connections = 0; var discoveries = 0; var disconnections = 0; var closes = 0
     var onConnect: suspend () -> Unit = {}
     var onDiscover: suspend () -> Unit = {}
-    override suspend fun discover(): List<DeviceDescriptor> { discoveries++; onDiscover(); return listOf(DeviceDescriptor("fixture", "Fixture", "device")) }
+    var descriptors = listOf(DeviceDescriptor("fixture", "Fixture", "device"))
+    override suspend fun discover(): List<DeviceDescriptor> { discoveries++; onDiscover(); return descriptors }
     override suspend fun connect(serial: String, touchMode: TouchMode) {
         connections++; state.value = DeviceConnectionState.Connecting(serial); onConnect()
         state.value = DeviceConnectionState.Ready(DeviceReady(serial, "Fixture", 1920, 1080, emptyList(), CaptureMode.Raw, true, true,
@@ -32,6 +33,21 @@ internal class ConnectionFixture : DeviceService {
 }
 
 class DeviceConnectionActionsTest {
+    @Test fun cachedAliasesFollowSelectedEndpointAndEmptyListExplainsAuthorizationAndManualConnection() = runBlocking {
+        val device = ConnectionFixture()
+        device.descriptors = listOf(DeviceDescriptor("first", "Fixture", "device", setOf("first", "alias")))
+        val actions = DeviceConnectionActions(device, { "adb" }, { fail(it) })
+        try {
+            actions.discover()
+            actions.connect("alias", TouchMode.Compatibility)
+            assertEquals("alias", actions.devices.value.single().serial)
+            assertEquals(1, device.discoveries)
+            actions.disconnect(); device.descriptors = emptyList(); actions.discover()
+            assertTrue(actions.message.value!!.contains("允许 ADB 调试"))
+            assertTrue(actions.message.value!!.contains("手动填写地址"))
+        } finally { actions.closeAndJoin() }
+    }
+
     @Test fun leavingPageOnlyCancelsWaiterButExplicitCancelStopsApplicationOwnedWork() = runBlocking {
         val device = ConnectionFixture(); val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
         device.onConnect = { entered.complete(Unit); release.await() }

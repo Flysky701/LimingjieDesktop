@@ -39,7 +39,7 @@ class DeviceConnectionActions(
             discoveryPath = path
             messageState.value = null
             devicesState.value = device.discover()
-            if (devicesState.value.isEmpty()) messageState.value = "没有发现可用设备，请启动模拟器并开启 ADB 调试，或填写本机连接地址。"
+            if (devicesState.value.isEmpty()) messageState.value = "ADB 暂无已在线且授权的设备。请在模拟器中开启并允许 ADB 调试；若仍未列出，请在“手动填写地址”连接模拟器显示的端口。离线历史记录已隐藏。"
         }
     }
 
@@ -57,7 +57,13 @@ class DeviceConnectionActions(
                 if (reconnect) device.disconnect()
                 device.connect(serial, mode)
                 when (val result = device.state.value) {
-                    is DeviceConnectionState.Ready -> { connectedKey = key; onReady(result.device) }
+                    is DeviceConnectionState.Ready -> {
+                        connectedKey = key
+                        devicesState.value = devicesState.value.map { descriptor ->
+                            if (result.device.serial in descriptor.aliases) descriptor.copy(serial = result.device.serial) else descriptor
+                        }
+                        onReady(result.device)
+                    }
                     is DeviceConnectionState.Failed -> error(result.reason)
                     else -> Unit
                 }

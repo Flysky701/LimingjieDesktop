@@ -9,8 +9,6 @@ import kotlinx.coroutines.sync.withLock
 import org.xml.sax.SAXException
 import java.io.IOException
 import java.nio.file.Path
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
@@ -22,13 +20,6 @@ class AdbDeviceService(
     private val onEvent: (String) -> Unit = {},
     private val onLost: (String) -> Unit = {},
     private val touchFactory: TouchConnectionFactory = MaaTouchConnection,
-    private val emulatorCommands: () -> List<Path> = AdbLocator::emulatorCommands,
-    private val portOpen: suspend (Int) -> Boolean = { port ->
-        withContext(Dispatchers.IO) {
-            try { Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 150) }; true }
-            catch (_: IOException) { false }
-        }
-    },
 ) : DeviceService {
     private class Session(val serial: String, val touchMode: TouchMode, val capturer: ScreenCapturer, var ready: DeviceReady, val bootId: String, @Volatile var touch: TouchConnection?) {
         var failures = 0
@@ -59,31 +50,19 @@ class AdbDeviceService(
 
     override suspend fun discover(): List<DeviceDescriptor> = connectionOperation { lifecycle.withLock {
         check(!closed.get()) { "设备服务已关闭" }
-        var listed = DeviceParsers.devices(adb.execute(listOf("devices", "-l")).requireSuccess().text())
-        val commands = withContext(Dispatchers.IO) { emulatorCommands() }
-        val mumu = commands.filter { Regex("mumu|nemu", RegexOption.IGNORE_CASE).containsMatchIn(it.toString()) }
-        val ld = commands.filter { Regex("ldplayer|dnplayer|ldvbox|leidian", RegexOption.IGNORE_CASE).containsMatchIn(it.toString()) }
-        // Do not launch vendor GUI/manager executables during discovery. They may display windows.
-        // Existing ADB transports cover custom ports; unregistered custom ports can be entered manually.
-        val ports = mutableSetOf<Int>()
-        if (mumu.isNotEmpty()) ports += (0..7).map { 16384 + 32 * it } + 7555
-        if (ld.isNotEmpty()) ports += (0..7).map { 5555 + 2 * it }
-        val attempted = coroutineScope {
-            ports.filter { port -> listed.none { it.serial == "127.0.0.1:$port" && it.state == "device" } }.map { port ->
-                async {
-                    if (!portOpen(port)) false
-                    else { adb.execute(listOf("connect", "127.0.0.1:$port"), timeoutMillis = 3000); true }
-                }
-            }.awaitAll()
-        }
-        if (attempted.any { it }) listed = DeviceParsers.devices(adb.execute(listOf("devices", "-l")).requireSuccess().text())
+        // Discovery is read-only: do not guess ports and register extra transports in the global server.
+        val listed = DeviceParsers.devices(adb.execute(listOf("devices", "-l")).requireSuccess().text())
+            .filter { it.state == "device" }
+            .sortedWith(compareBy<DeviceDescriptor> { it.serial != session?.serial }
+                .thenBy { ':' !in it.serial }.thenBy { it.serial })
         val deduplicated = linkedMapOf<String, DeviceDescriptor>()
         for (device in listed) {
-            val serialNo = if (device.state == "device") shellText(device.serial, "getprop", "ro.serialno") else null
-            val bootId = if (device.state == "device") shellText(device.serial, "cat", "/proc/sys/kernel/random/boot_id") else null
-            val key = if (!serialNo.isNullOrBlank() && !bootId.isNullOrBlank()) "$serialNo\u0000$bootId" else device.serial
+            val bootId = shellText(device.serial, "cat", "/proc/sys/kernel/random/boot_id")
+                ?.takeIf { Regex("[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}").matches(it) }
+            // ro.serialno can be empty (MuMu), or cloned. Model/serial alone never prove the same instance.
+            val key = bootId?.lowercase()?.let { "boot:$it" } ?: "transport:${device.serial}"
             val previous = deduplicated[key]
-            if (previous == null || (':' in device.serial && ':' !in previous.serial)) deduplicated[key] = device
+            deduplicated[key] = previous?.copy(aliases = previous.aliases + device.serial) ?: device
         }
         deduplicated.values.toList()
     } }

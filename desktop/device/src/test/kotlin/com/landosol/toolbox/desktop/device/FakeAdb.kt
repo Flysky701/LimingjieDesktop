@@ -30,7 +30,7 @@ internal class FakeAdb : AdbExecutor {
             args == listOf("getprop", "ro.product.brand") -> success("Synthetic")
             args == listOf("getprop", "ro.build.version.release") -> success("9")
             args == listOf("wm", "size") -> success("Physical size: 1920x1080")
-            args == listOf("cat", "/proc/sys/kernel/random/boot_id") -> success("synthetic-boot")
+            args == listOf("cat", "/proc/sys/kernel/random/boot_id") -> success("10000000-1111-2222-3333-444444444444")
             args == listOf("settings", "get", "secure", "android_id") -> success("synthetic-android-id")
             args == listOf("dumpsys", "power") -> success("mWakefulness=Awake")
             args == listOf("dumpsys", "window") -> success(window)

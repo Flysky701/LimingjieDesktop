@@ -16,6 +16,7 @@ fun interface AdbProcessFactory { fun start(arguments: List<String>): Process }
 class ProcessAdbExecutor(
     override val executable: String,
     private val processFactory: AdbProcessFactory = AdbProcessFactory { ProcessBuilder(it).start() },
+    private val server: AdbServerClient? = null,
 ) : AdbExecutor {
     private val ordinary = Semaphore(4)
     private val screenshots = Semaphore(1)
@@ -39,7 +40,11 @@ class ProcessAdbExecutor(
     override suspend fun shell(serial: String, arguments: List<String>, timeoutMillis: Long): AdbResult =
         execute(listOf("shell", arguments.joinToString(" ", transform = ::shellQuote)), serial, timeoutMillis)
 
-    private suspend fun executeOnce(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean): AdbResult = withContext(Dispatchers.IO) {
+    private suspend fun executeOnce(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean): AdbResult =
+        if (closed.get()) AdbResult.Failure(AdbFailureKind.LaunchFailed, "ADB 执行器已关闭")
+        else server?.execute(arguments, serial, timeoutMillis) ?: executeProcess(arguments, serial, timeoutMillis, screenshot)
+
+    private suspend fun executeProcess(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean): AdbResult = withContext(Dispatchers.IO) {
         if (closed.get()) return@withContext AdbResult.Failure(AdbFailureKind.LaunchFailed, "ADB 执行器已关闭")
         val process = try { openInteractive(arguments, serial) }
         catch (error: IOException) {
@@ -81,7 +86,7 @@ class ProcessAdbExecutor(
     }
 
     fun release(process: Process) { active.remove(process); terminate(process) }
-    override fun close() { if (closed.compareAndSet(false, true)) active.toList().forEach(::release) }
+    override fun close() { if (closed.compareAndSet(false, true)) { server?.close(); active.toList().forEach(::release) } }
 
     companion object {
         fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"

@@ -16,7 +16,7 @@ interface AdbExecutor : AutoCloseable {
     suspend fun shell(serial: String, arguments: List<String>, timeoutMillis: Long = 10_000): AdbResult
 }
 data class AdbLocation(val path: String, val source: String, val version: String)
-data class DeviceDescriptor(val serial: String, val label: String, val state: String)
+data class DeviceDescriptor(val serial: String, val label: String, val state: String, val aliases: Set<String> = setOf(serial))
 data class DeviceFrame(val width: Int, val height: Int, val pixels: IntArray, val timestampMillis: Long)
 enum class CaptureMode { Raw, Png }
 enum class TouchMode { MaaTouch, Compatibility }
