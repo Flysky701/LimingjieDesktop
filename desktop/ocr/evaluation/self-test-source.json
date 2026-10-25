@@ -1,0 +1,13 @@
+{
+  "source": "android/app/src/test/resources/shop/imprints-20260914.jpg",
+  "roi": [
+    125,
+    230,
+    390,
+    55
+  ],
+  "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthShopItemResolver.kt:64-65",
+  "expected": "攻击型职能的随机印记",
+  "expectedSource": "android/app/src/test/resources/shop/imprints-20260914.json:items[0].titleText",
+  "transformation": "Exact pixel crop, no recoloring, scaling, generated glyphs or OCR-derived ground truth."
+}

@@ -22,3 +22,4 @@ val verifyModels by tasks.registering {
 }
 tasks.named("processResources") { dependsOn(verifyModels) }
 tasks.named("check") { dependsOn(verifyModels) }
+apply(from = "evaluation.gradle.kts")

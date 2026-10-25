@@ -1,0 +1,289 @@
+{
+  "schemaVersion": 1,
+  "created": "2026-10-25",
+  "note": "Real upstream screenshots only. No duplicated scales or synthetic text count toward coverage. Ground truth was read before OCR. Coverage remains below SPEC-20 target.",
+  "minimumSamples": 80,
+  "minimumPerKind": 8,
+  "kinds": [
+    "shop_item",
+    "relic_detail",
+    "relic_stack",
+    "role_reward",
+    "event_choice",
+    "ex_encounter"
+  ],
+  "samples": [
+    {
+      "id": "shop-imprint-1",
+      "image": "android/app/src/test/resources/shop/imprints-20260914.jpg",
+      "kind": "shop_item",
+      "roi": [
+        125,
+        230,
+        390,
+        55
+      ],
+      "expected": "攻击型职能印记",
+      "referenceText": "攻击型职能的随机印记",
+      "expectedSource": "android/app/src/test/resources/shop/imprints-20260914.json items[0]; LabyrinthShopCategoryResolutionTest.kt:12-28; screenshot manually checked",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthShopItemResolver.kt:64-67",
+      "matcher": "shop-imprint",
+      "scale": 2
+    },
+    {
+      "id": "shop-imprint-2",
+      "image": "android/app/src/test/resources/shop/imprints-20260914.jpg",
+      "kind": "shop_item",
+      "roi": [
+        703,
+        230,
+        390,
+        55
+      ],
+      "expected": "治疗型职能印记",
+      "referenceText": "治疗型职能的随机印记",
+      "expectedSource": "android/app/src/test/resources/shop/imprints-20260914.json items[1]; LabyrinthShopCategoryResolutionTest.kt:12-28; screenshot manually checked",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthShopItemResolver.kt:64-67",
+      "matcher": "shop-imprint",
+      "scale": 2
+    },
+    {
+      "id": "shop-imprint-3",
+      "image": "android/app/src/test/resources/shop/imprints-20260914.jpg",
+      "kind": "shop_item",
+      "roi": [
+        1278,
+        230,
+        390,
+        55
+      ],
+      "expected": "增益型职能印记",
+      "referenceText": "增益型职能的随机印记",
+      "expectedSource": "android/app/src/test/resources/shop/imprints-20260914.json items[2]; LabyrinthShopCategoryResolutionTest.kt:12-28; screenshot manually checked",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthShopItemResolver.kt:64-67",
+      "matcher": "shop-imprint",
+      "scale": 2
+    },
+    {
+      "id": "series-title",
+      "image": "android/app/src/test/resources/labyrinth/series-effect-panel-20261012.jpg",
+      "kind": "relic_detail",
+      "roi": [
+        490,
+        50,
+        940,
+        70
+      ],
+      "expected": "true",
+      "referenceText": "系列效果一览",
+      "expectedSource": "Screenshot title manually checked; LabyrinthRelicDetailTextTest.kt:8",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthRelicDetailResolver.kt:24",
+      "matcher": "series-title"
+    },
+    {
+      "id": "series-visible",
+      "image": "android/app/src/test/resources/labyrinth/series-effect-panel-20261012.jpg",
+      "kind": "relic_detail",
+      "roi": [
+        532,
+        150,
+        120,
+        713
+      ],
+      "expected": "ACCELERATION:1;DEBUFF:1;DEFENSE:2",
+      "referenceText": "守备\nHP2\n削弱\n1\n加速\n1\n暴击",
+      "expectedSource": "Screenshot rows manually checked; clipped bottom 暴击 count is deliberately excluded",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthRelicDetailResolver.kt:29",
+      "matcher": "series-visible",
+      "scale": 2
+    },
+    {
+      "id": "map-boss-0",
+      "image": "android/app/src/test/resources/labyrinth/final-boss-active-20260909.jpg",
+      "kind": "relic_stack",
+      "roi": [
+        360,
+        970,
+        48,
+        48
+      ],
+      "expected": "5",
+      "referenceText": "5",
+      "expectedSource": "Screenshot's bottom-left mark counter manually checked; AndroidLabyrinthNodeRelicStackResolverTest.kt:13",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthNodeRelicStackResolver.kt:211,241",
+      "matcher": "node-stack",
+      "scale": 4,
+      "referenceRoi": [
+        360,
+        970,
+        48,
+        48
+      ]
+    },
+    {
+      "id": "map-boss-1",
+      "image": "android/app/src/test/resources/labyrinth/final-boss-active-20260909.jpg",
+      "kind": "relic_stack",
+      "roi": [
+        448,
+        970,
+        48,
+        48
+      ],
+      "expected": "4",
+      "referenceText": "4",
+      "expectedSource": "Screenshot's bottom-left mark counter manually checked; AndroidLabyrinthNodeRelicStackResolverTest.kt:13",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthNodeRelicStackResolver.kt:211,241",
+      "matcher": "node-stack",
+      "scale": 4,
+      "referenceRoi": [
+        448,
+        970,
+        48,
+        48
+      ]
+    },
+    {
+      "id": "map-boss-2",
+      "image": "android/app/src/test/resources/labyrinth/final-boss-active-20260909.jpg",
+      "kind": "relic_stack",
+      "roi": [
+        536,
+        970,
+        48,
+        48
+      ],
+      "expected": "2",
+      "referenceText": "2",
+      "expectedSource": "Screenshot's bottom-left mark counter manually checked; AndroidLabyrinthNodeRelicStackResolverTest.kt:13",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthNodeRelicStackResolver.kt:211,241",
+      "matcher": "node-stack",
+      "scale": 4,
+      "referenceRoi": [
+        536,
+        970,
+        48,
+        48
+      ]
+    },
+    {
+      "id": "map-boss-3",
+      "image": "android/app/src/test/resources/labyrinth/final-boss-active-20260909.jpg",
+      "kind": "relic_stack",
+      "roi": [
+        624,
+        970,
+        48,
+        48
+      ],
+      "expected": "1",
+      "referenceText": "1",
+      "expectedSource": "Screenshot's bottom-left mark counter manually checked; AndroidLabyrinthNodeRelicStackResolverTest.kt:13",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthNodeRelicStackResolver.kt:211,241",
+      "matcher": "node-stack",
+      "scale": 4,
+      "referenceRoi": [
+        624,
+        970,
+        48,
+        48
+      ]
+    },
+    {
+      "id": "map-link-0",
+      "image": "android/app/src/test/resources/labyrinth/node-link-20260914.png",
+      "kind": "relic_stack",
+      "roi": [
+        153,
+        411,
+        20,
+        21
+      ],
+      "expected": "5",
+      "referenceText": "5",
+      "expectedSource": "Screenshot's bottom-left mark counter manually checked; AndroidLabyrinthNodeRelicStackResolverTest.kt:13",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthNodeRelicStackResolver.kt:211,241",
+      "matcher": "node-stack",
+      "scale": 4,
+      "referenceRoi": [
+        360,
+        970,
+        48,
+        48
+      ]
+    },
+    {
+      "id": "map-link-1",
+      "image": "android/app/src/test/resources/labyrinth/node-link-20260914.png",
+      "kind": "relic_stack",
+      "roi": [
+        190,
+        411,
+        20,
+        21
+      ],
+      "expected": "2",
+      "referenceText": "2",
+      "expectedSource": "Screenshot's bottom-left mark counter manually checked; AndroidLabyrinthNodeRelicStackResolverTest.kt:13",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthNodeRelicStackResolver.kt:211,241",
+      "matcher": "node-stack",
+      "scale": 4,
+      "referenceRoi": [
+        448,
+        970,
+        48,
+        48
+      ]
+    },
+    {
+      "id": "event-guild",
+      "image": "android/app/src/test/resources/labyrinth/event-guild-tank-healer-20260913.png",
+      "kind": "event_choice",
+      "roi": [
+        179,
+        59,
+        697,
+        404
+      ],
+      "expected": "1101",
+      "referenceText": "这里是公会管理协会！请问要找什么样的伙伴？\n想要坦克型成为伙伴！\n想要治疗型成为伙伴！\n坦克型职能的随机印记×2＋阿尔法金币×200\n治疗型职能的随机印记×2＋阿尔法金币×200",
+      "expectedSource": "android/app/src/test/java/com/landosol/toolbox/labyrinth/vision/LabyrinthEventFlowRegressionTest.kt:155-184",
+      "roiSource": "android/app/src/main/assets/resource-packs/cn-bilibili/labyrinth-event-ocr.json:two-choice union; LabyrinthEventRecognition.kt:226-247",
+      "matcher": "event"
+    },
+    {
+      "id": "event-fishing",
+      "image": "android/app/src/test/resources/labyrinth/event-single-choice-fishing-20260911.png",
+      "kind": "event_choice",
+      "roi": [
+        150,
+        95,
+        1620,
+        750
+      ],
+      "expected": "1314",
+      "referenceText": "发现了钓鱼地点！\n悠闲地钓鱼吧\n有50%的概率获得★1迷宫遗物×1\n并进入下一个事件",
+      "expectedSource": "android/app/src/main/assets/resource-packs/cn-bilibili/events.placeholder.json:58-60 and screenshot manually checked",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthEventChoiceResolver.kt:278",
+      "matcher": "event"
+    },
+    {
+      "id": "ex-explosion",
+      "image": "android/app/src/test/resources/ex/ex_special_detail_explosion_20260910.jpg",
+      "kind": "ex_encounter",
+      "roi": [
+        585,
+        140,
+        500,
+        70
+      ],
+      "expected": "multi_explosion_relic",
+      "referenceText": "爆炸・遗物",
+      "expectedSource": "android/app/src/test/java/com/landosol/toolbox/labyrinth/LabyrinthExEncounterCatalogTest.kt:39-46 and screenshot manually checked",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthExEncounterResolver.kt:191,34-36",
+      "matcher": "ex",
+      "scale": 2,
+      "tightenInk": true
+    }
+  ]
+}
