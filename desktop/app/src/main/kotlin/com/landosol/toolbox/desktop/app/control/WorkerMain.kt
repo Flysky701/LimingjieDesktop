@@ -1,10 +1,8 @@
 package com.landosol.toolbox.desktop.app.control
 
 import com.landosol.toolbox.desktop.app.DesktopAppGraph
-import com.landosol.toolbox.desktop.app.adapters.storage.DatabaseRecovery
 import com.landosol.toolbox.desktop.platform.DataDirectories
 import com.landosol.toolbox.desktop.platform.InstanceLock
-import com.landosol.toolbox.desktop.shared.DesktopContext
 import com.landosol.toolbox.desktop.shared.DesktopLog
 import kotlinx.coroutines.*
 
@@ -29,11 +27,16 @@ internal suspend fun runWorkerMain(args: Array<String>): Int {
         lock = InstanceLock.acquire(directory)
         DataDirectories.cleanTemporaryFiles(directory)
         DesktopLog.initialize(directory.resolve("logs"))
-        val notices = mutableListOf<String>()
-        val database = DatabaseRecovery.open(DesktopContext(directory.toFile())) { notices += it }
-        val graph = DesktopAppGraph(directory, database, startupUpdates = "--offline-startup" !in args)
-        notices.forEach(graph::addNotice)
+        val shared = SharedDataClient(SharedDataEndpoint.fromEnvironment())
+        val settings = shared.settings()
+        if ("--device-boot-id" in args) {
+            val boot = com.landosol.toolbox.desktop.platform.UserResourceLeases.canonicalBootId(argument("--device-boot-id"))
+            System.setProperty("limingjie.runtime.boot-id", boot)
+        }
+        // Runtime storage is local to this worker; account material is fetched into memory only.
+        val graph = DesktopAppGraph(directory, startupUpdates = false, sharedData = shared)
         val service = GraphControlService(graph, id, label).also { domain = it }
+        graph.settings.save(settings.copy(lastDevice = ""))
         Thread.setDefaultUncaughtExceptionHandler { _, failure ->
             DesktopLog.write('E', "Worker", "实例进程发生异常", failure)
             service.revokeActions("实例发生异常，任务已停止")

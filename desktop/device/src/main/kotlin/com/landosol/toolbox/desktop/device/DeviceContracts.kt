@@ -16,7 +16,7 @@ interface AdbExecutor : AutoCloseable {
     suspend fun shell(serial: String, arguments: List<String>, timeoutMillis: Long = 10_000): AdbResult
 }
 data class AdbLocation(val path: String, val source: String, val version: String)
-data class DeviceDescriptor(val serial: String, val label: String, val state: String, val aliases: Set<String> = setOf(serial))
+data class DeviceDescriptor(val serial: String, val label: String, val state: String, val aliases: Set<String> = setOf(serial), val bootId: String? = null)
 data class DeviceFrame(val width: Int, val height: Int, val pixels: IntArray, val timestampMillis: Long)
 enum class CaptureMode { Raw, Png }
 enum class TouchMode { MaaTouch, Compatibility }
@@ -45,6 +45,10 @@ interface DeviceService : AutoCloseable {
     val state: StateFlow<DeviceConnectionState>
     val foregroundPackage: String?
     suspend fun discover(): List<DeviceDescriptor>
+    /** Resolve a user-selected address without installing touch or sending game input. */
+    suspend fun resolveDevice(serial: String): DeviceDescriptor =
+        discover().firstOrNull { serial in it.aliases && it.bootId != null }
+            ?: throw DeviceOperationException("无法确认设备启动身份，请刷新设备或重新连接")
     suspend fun connect(serial: String, touchMode: TouchMode = TouchMode.MaaTouch)
     suspend fun disconnect()
     suspend fun capture(): DeviceFrame

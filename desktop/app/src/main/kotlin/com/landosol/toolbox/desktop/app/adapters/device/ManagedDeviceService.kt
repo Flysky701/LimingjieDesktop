@@ -62,6 +62,7 @@ class ManagedDeviceService(
     suspend fun prepare(): AdbLocation { service(refresh = true); return checkNotNull(location) }
     private fun connected() = checkNotNull(delegate) { "请先连接设备" }
     override suspend fun discover() = service().discover()
+    override suspend fun resolveDevice(serial: String) = service().resolveDevice(serial)
     override suspend fun connect(serial: String, touchMode: TouchMode) {
         val active = service()
         try { active.connect(serial, touchMode) } finally { current.value = active.state.value }

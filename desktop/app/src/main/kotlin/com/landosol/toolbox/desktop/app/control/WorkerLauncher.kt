@@ -21,8 +21,12 @@ class WorkerLauncher(
     private val receiveTimeoutMillis: Int = WorkerProtocol.LEASE_MILLIS.toInt(),
 ) {
     init { require(receiveTimeoutMillis > 0) }
-    fun start(instanceId: String, label: String, directory: Path): WorkerLink =
-        ProcessWorkerLink(instanceId, label, directory, scope, command, containProcess, receiveTimeoutMillis)
+    fun start(instanceId: String, label: String, directory: Path, sharedData: SharedDataEndpoint? = null): WorkerLink =
+        ProcessWorkerLink(instanceId, label, directory, scope, command, containProcess, receiveTimeoutMillis, sharedData)
+
+    fun startRuntime(spec: RuntimeWorkerSpec, endpoint: SharedDataEndpoint): WorkerLink =
+        ProcessWorkerLink(spec.sessionId, spec.device.name, spec.runtimeDirectory, scope, command,
+            containProcess, receiveTimeoutMillis, endpoint, listOf("--device-boot-id", checkNotNull(spec.device.bootId)))
 
     companion object {
         fun applicationCommand(): List<String> {
@@ -41,6 +45,8 @@ private class ProcessWorkerLink(
     command: List<String>,
     private val containProcess: (Long) -> AutoCloseable,
     receiveTimeoutMillis: Int,
+    sharedData: SharedDataEndpoint? = null,
+    extraArguments: List<String> = emptyList(),
 ) : WorkerLink {
     override val workerRunId: String = UUID.randomUUID().toString()
     private val mutableSnapshots = MutableStateFlow(JsonObject(emptyMap()))
@@ -66,11 +72,16 @@ private class ProcessWorkerLink(
             Files.createDirectories(directory.resolve("logs"))
             val token = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also(SecureRandom()::nextBytes))
             val listener = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).also { server = it; it.soTimeout = 60_000 }
-            val builder = ProcessBuilder(command + listOf("--worker", "--instance-id", instanceId, "--worker-run-id", workerRunId, "--instance-name", label, "--data-dir", directory.toString()))
+            val builder = ProcessBuilder(command + listOf("--worker", "--instance-id", instanceId, "--worker-run-id", workerRunId, "--instance-name", label, "--data-dir", directory.toString()) + extraArguments)
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(directory.resolve("logs/worker-console.log").toFile()))
                 .redirectErrorStream(true)
             builder.environment()[WorkerProtocol.TOKEN_ENV] = token
             builder.environment()[WorkerProtocol.PORT_ENV] = listener.localPort.toString()
+            sharedData?.let {
+                builder.environment()[SharedDataEndpoint.PORT_ENV] = it.port.toString()
+                builder.environment()[SharedDataEndpoint.TOKEN_ENV] = it.token
+                builder.environment()[SharedDataEndpoint.AUTHORITY_ENV] = it.authorityId
+            }
             ensureActive()
             val child = builder.start().also { process = it }
             // start() is blocking: publish the child before checking cancellation so finally owns it.

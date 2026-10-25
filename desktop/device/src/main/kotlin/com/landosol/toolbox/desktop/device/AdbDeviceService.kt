@@ -24,6 +24,7 @@ class AdbDeviceService(
     private val onLost: (String) -> Unit = {},
     private val touchFactory: TouchConnectionFactory = MaaTouchConnection,
     private val leases: UserResourceLeases = UserResourceLeases(),
+    private val expectedBootId: String? = System.getProperty("limingjie.runtime.boot-id"),
 ) : DeviceService {
     private class Session(val serial: String, val touchMode: TouchMode, val capturer: ScreenCapturer, var ready: DeviceReady, val bootId: String, @Volatile var touch: TouchConnection?, val lease: ResourceLease) {
         var failures = 0
@@ -68,9 +69,20 @@ class AdbDeviceService(
             // ro.serialno can be empty (MuMu), or cloned. Model/serial alone never prove the same instance.
             val key = bootId?.lowercase()?.let { "boot:$it" } ?: "transport:${device.serial}"
             val previous = deduplicated[key]
-            deduplicated[key] = previous?.copy(aliases = previous.aliases + device.serial) ?: device
+            deduplicated[key] = previous?.copy(aliases = previous.aliases + device.serial) ?: device.copy(bootId = bootId?.lowercase())
         }
         deduplicated.values.toList()
+    } }
+
+    override suspend fun resolveDevice(serial: String): DeviceDescriptor = connectionOperation { lifecycle.withLock {
+        check(!closed.get()) { "设备服务已关闭" }
+        require(serial.isNotBlank() && serial.none { it.isWhitespace() || it == '\u0000' }) { "设备地址无效" }
+        if (':' in serial && (adb.execute(listOf("get-state"), serial, timeoutMillis = 3000) as? AdbResult.Success)?.text()?.trim() != "device") {
+            adb.execute(listOf("connect", serial), timeoutMillis = 3000).requireSuccess()
+        }
+        val boot = readBootId(serial)
+        val label = shellText(serial, "getprop", "ro.product.model")?.takeIf { it.isNotBlank() } ?: serial
+        DeviceDescriptor(serial, label, "device", setOf(serial), boot)
     } }
 
     override suspend fun connect(serial: String, touchMode: TouchMode): Unit = connectionOperation { lifecycle.withLock {
@@ -102,6 +114,7 @@ class AdbDeviceService(
         if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "读取设备信息并测试截图")
         val size = DeviceParsers.screenSize(adb.shell(serial, listOf("wm", "size")).requireSuccess().text())
         val bootId = readBootId(serial)
+        check(expectedBootId == null || bootId == expectedBootId) { "模拟器已重新启动，请重新打开设备会话并确认账号绑定" }
         val lease = leases.acquireDevice(bootId)
         var touch: TouchConnection? = null
         try {
