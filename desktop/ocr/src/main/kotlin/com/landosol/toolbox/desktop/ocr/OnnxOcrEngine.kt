@@ -87,6 +87,9 @@ class OnnxOcrEngine internal constructor(
                     } catch (error: Exception) {
                         request.finish(null)
                         if (!closed) throw error
+                    } catch (error: LinkageError) {
+                        request.finish(null)
+                        if (!closed) throw error
                     }
                 }
             }
