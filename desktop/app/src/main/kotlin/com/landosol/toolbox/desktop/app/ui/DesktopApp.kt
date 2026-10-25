@@ -42,6 +42,7 @@ internal enum class Page(val label: String, val mark: String) {
 }
 
 @Composable
+@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
 fun DesktopApp(graph: DesktopAppGraph) {
     val font = remember { if (java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().availableFontFamilyNames.any { it == "Microsoft YaHei UI" }) FontFamily("Microsoft YaHei UI") else FontFamily.Default }
     MaterialTheme(colorScheme = lightColorScheme(primary = Accent, primaryContainer = Color(0xffefecfb),
