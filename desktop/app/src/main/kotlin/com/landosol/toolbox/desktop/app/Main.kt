@@ -3,165 +3,159 @@ package com.landosol.toolbox.desktop.app
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.painter.Painter
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.*
 import com.landosol.toolbox.AppVersion
-import com.landosol.toolbox.desktop.app.adapters.storage.DatabaseRecovery
-import com.landosol.toolbox.desktop.app.ui.DesktopApp
+import com.landosol.toolbox.desktop.app.adapters.storage.DesktopPreferences
+import com.landosol.toolbox.desktop.app.adapters.storage.DesktopSettingsStore
+import com.landosol.toolbox.desktop.app.control.*
+import com.landosol.toolbox.desktop.app.ui.*
 import com.landosol.toolbox.desktop.app.ui.theme.DesktopTheme
 import com.landosol.toolbox.desktop.platform.*
-import com.landosol.toolbox.desktop.shared.*
+import com.landosol.toolbox.desktop.shared.DesktopLog
 import java.awt.Dimension
 import java.awt.GraphicsEnvironment
 import java.nio.file.Files
-import java.nio.file.Path
 import javax.swing.JOptionPane
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.serialization.json.*
 import kotlin.system.exitProcess
 
-@Volatile private var crashGraph: DesktopAppGraph? = null
-private val crashDialogOpen = java.util.concurrent.atomic.AtomicBoolean(false)
-
+/** The visible process owns windows and worker lifetimes; every task Graph lives in a child JVM. */
 @OptIn(FlowPreview::class)
 fun main(args: Array<String>) {
     System.setProperty("java.net.useSystemProxies", "true")
-    if ("--self-test" in args) { exitProcess(DesktopSelfTest.run(args)) }
-    val messages = mutableListOf<String>()
+    if ("--worker" in args) exitProcess(runBlocking { runWorkerMain(args) })
+    if ("--self-test" in args) exitProcess(DesktopSelfTest.run(args))
+    val lifetime = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var lock: InstanceLock? = null
-    val graph = try {
-        val directory = DataDirectories.resolve(args)
-        DataDirectories.ensureWritable(directory)
-        if (directory.toString().length > 150) messages += "数据目录路径较长，可能超出 Windows 路径长度限制。建议使用更短的可写目录：$directory"
-        lock = InstanceLock.acquire(directory)
-        DataDirectories.cleanTemporaryFiles(directory)
-        DesktopLog.initialize(directory.resolve("logs"))
-        installCrashHandler(directory)
-        val database = runBlocking { DatabaseRecovery.open(DesktopContext(directory.toFile())) { messages.add(it) } }
-        DesktopAppGraph(directory, database).also { app -> crashGraph = app; messages.forEach(app::addNotice) }
+    lateinit var settings: DesktopSettingsStore
+    val model = try {
+        val legacy = DataDirectories.resolve(args).toAbsolutePath().normalize()
+        // The catalog must stay outside the legacy worker's recursive temporary-file cleanup.
+        val root = legacy.resolveSibling(legacy.fileName.toString() + "-instances")
+        DataDirectories.ensureWritable(root)
+        lock = InstanceLock.acquire(root)
+        settings = DesktopSettingsStore(root)
+        DesktopLog.initialize(root.resolve("logs"))
+        SupervisorModel(InstanceCatalog(root, legacy), WorkerLauncher(lifetime, WorkerProcessContainment::own), root, lifetime)
     } catch (failure: Exception) {
-        lock?.close()
+        lock?.close(); lifetime.cancel()
         JOptionPane.showMessageDialog(null, failure.message ?: "启动失败", "黎明界助手", JOptionPane.ERROR_MESSAGE)
         exitProcess(1)
     }
-    val instanceLock = lock!!
+    val instanceLock = checkNotNull(lock)
+    Runtime.getRuntime().addShutdownHook(Thread({
+        runBlocking { withTimeoutOrNull(15_000) { model.shutdown() } }
+        instanceLock.close()
+    }, "control-shutdown"))
+    Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
+        DesktopLog.write('E', "Supervisor", "线程 ${thread.name} 未处理异常", failure)
+        lifetime.launch { model.stopAll(); model.reportError("界面发生异常，已请求停止所有实例。请查看日志。") }
+    }
+    lifetime.launch { runCatching { model.restore() }.onFailure { model.reportError(it.message ?: "实例恢复失败") } }
     application {
-        val saved = graph.settings.state.value
+        val saved = remember { settings.state.value }
         val screen = GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration
-        val screenBounds = screen.bounds
-        val insets = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(screen)
-        val centered = WindowPosition.Absolute(
-            (screenBounds.x + insets.left + (screenBounds.width - insets.left - insets.right - saved.windowWidth.coerceAtLeast(1100)).coerceAtLeast(0) / 2).dp,
-            (screenBounds.y + insets.top + (screenBounds.height - insets.top - insets.bottom - saved.windowHeight.coerceAtLeast(700)).coerceAtLeast(0) / 2).dp,
-        )
+        val bounds = screen.bounds
         val restorePosition = saved.windowX?.let { x -> saved.windowY?.let { y ->
-            GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.any { device -> device.defaultConfiguration.bounds.intersects(java.awt.Rectangle(x, y, saved.windowWidth, saved.windowHeight)) }
+            GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.any { it.defaultConfiguration.bounds.intersects(java.awt.Rectangle(x, y, saved.windowWidth, saved.windowHeight)) }
                 .takeIf { it }?.let { WindowPosition.Absolute(x.dp, y.dp) }
-        } } ?: centered
+        } } ?: WindowPosition.Absolute((bounds.x + (bounds.width - saved.windowWidth).coerceAtLeast(0) / 2).dp, (bounds.y + (bounds.height - saved.windowHeight).coerceAtLeast(0) / 2).dp)
         val windowState = rememberWindowState(position = restorePosition, width = saved.windowWidth.coerceAtLeast(1100).dp, height = saved.windowHeight.coerceAtLeast(700).dp)
-        LaunchedEffect(windowState.size) {
-            val size = windowState.size
-            if (size.width < 1100.dp || size.height < 700.dp) windowState.size = androidx.compose.ui.unit.DpSize(maxOf(size.width, 1100.dp), maxOf(size.height, 700.dp))
-        }
+        val instances by model.instances.collectAsState()
+        val profiles by model.profiles.collectAsState()
+        val selectedId by model.selectedId.collectAsState()
+        val busy by model.busy.collectAsState()
+        val dirty by model.dirtyInstances.collectAsState()
+        val error by model.error.collectAsState()
+        val sessions = remember { mutableMapOf<String, RemoteControlSession>() }
+        val tabs = instances.map { item -> ControlTab(item.profile.id.toString(), item.profile.name, sessions.getOrPut(item.link.workerRunId) { RemoteControlSession(item.link) }) }
+        LaunchedEffect(instances.map { it.link.workerRunId }) { sessions.keys.retainAll(instances.map { it.link.workerRunId }.toSet()) }
+        val selected = instances.firstOrNull { it.profile.id.toString() == selectedId }
+        val emptySnapshot = remember { MutableStateFlow(JsonObject(emptyMap())) }
+        val selectedSnapshot by (selected?.link?.snapshots ?: emptySnapshot).collectAsState()
+        val projection = ControlUiSnapshot(selectedSnapshot)
+        val preferences = projection.model("preferences", DesktopPreferences())
+        val activeConsole = projection.console
         var visible by remember { mutableStateOf(true) }
         var confirmExit by remember { mutableStateOf(false) }
         var exiting by remember { mutableStateOf(false) }
-        var rememberChoice by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
-        var trayCommandPending by remember { mutableStateOf(false) }
-        var wasTaskActive by remember { mutableStateOf(false) }
-        val presentation by graph.automationOverlayCoordinator.state.collectAsState()
-        val reroll by graph.labyrinthController.uiState.collectAsState()
-        val batch by graph.labyrinthBatchController.state.collectAsState()
-        val recognition by graph.labyrinthEntryRecognitionSession.state.collectAsState()
-        val reset by graph.gameSessionResetWorkflow.state.collectAsState()
-        val starting by graph.taskStarting.collectAsState()
-        val stopping by graph.taskStopping.collectAsState()
-        val notices by graph.notices.collectAsState()
-        val taskActive = starting || stopping || reroll.isWorking || reroll.captcha != null || presentation != null || recognition.running || reset.running || batch?.stage?.name in setOf("REROLLING", "INVALIDATING_OLD_CLIENT_SESSION", "RUNNING_LABYRINTH", "RECORDING_RESULT")
         val trayState = rememberTrayState()
         val trayAvailable = java.awt.SystemTray.isSupported()
-        val uiPreferences by graph.ux.preferences.state.collectAsState()
-        val icon = remember(taskActive,recognition.status) { AppPainter(if(recognition.status.name=="ERROR") Color(0xfff85149) else if(taskActive) Color(0xff2ea043) else Color(0xff0078d4)) }
+        val icon = remember(busy) { AppPainter(if (busy) Color(0xff2ea043) else Color(0xff0078d4)) }
+        fun action(block: suspend () -> Unit) { scope.launch { try { block() } catch (cancelled: CancellationException) { throw cancelled } catch (failure: Exception) { model.reportError(failure.message ?: "操作失败") } } }
         fun quit() {
             if (exiting) return
-            val proceed:()->Unit = {
             exiting = true
             scope.launch {
-                try { withContext(Dispatchers.IO) { graph.shutdown() } }
-                finally { instanceLock.close(); exitApplication(); exitProcess(0) }
-            }
-            }
-            graph.ux.confirmNavigation?.invoke(proceed) ?: proceed()
-        }
-        fun closeRequested() {
-            if (!taskActive) quit()
-            else when (graph.settings.state.value.closeBehavior) {
-                CloseBehavior.MINIMIZE -> if (trayAvailable) visible = false else windowState.isMinimized = true
-                CloseBehavior.STOP_AND_EXIT -> quit()
-                CloseBehavior.ASK -> confirmExit = true
+                try { model.shutdown() }
+                finally { instanceLock.close(); lifetime.cancel(); exitApplication(); exitProcess(0) }
             }
         }
+        fun closeRequested() { if (busy || dirty.isNotEmpty()) confirmExit = true else quit() }
+        val callbacks = ControlShellCallbacks(
+            select = { action { model.select(it) } }, create = { action { model.create(it) } },
+            open = { action { model.open(it) } }, close = { action { model.close(it) } },
+            rename = { id, name -> action { model.rename(id, name) } },
+            stopAll = { action { model.stopAll() } }, onDirtyChanged = model::markDirty,
+        )
         LaunchedEffect(windowState) {
             snapshotFlow { Triple(windowState.position, windowState.size, windowState.placement) }.debounce(500).collect { (position, size, placement) ->
-                if (placement == WindowPlacement.Floating && size.width.value.isFinite() && size.height.value.isFinite()) {
-                    withContext(Dispatchers.IO) { graph.settings.update { it.copy(windowWidth = size.width.value.toInt(), windowHeight = size.height.value.toInt(), windowX = position.x.value.toInt(), windowY = position.y.value.toInt()) } }
+                if (placement == WindowPlacement.Floating && size.width.value.isFinite() && size.height.value.isFinite() && position.x.value.isFinite() && position.y.value.isFinite()) {
+                    withContext(Dispatchers.IO) { runCatching { settings.update { it.copy(windowWidth = size.width.value.toInt().coerceAtLeast(1100), windowHeight = size.height.value.toInt().coerceAtLeast(700), windowX = position.x.value.toInt(), windowY = position.y.value.toInt()) } }.onFailure { model.reportError("窗口位置保存失败：${it.message}") } }
                 }
             }
         }
-        LaunchedEffect(taskActive) {
-            if (!taskActive && wasTaskActive && uiPreferences.notifications) {
-                trayState.sendNotification(Notification("黎明界助手", recognition.message ?: reroll.message ?: "任务已结束"))
-                if(uiPreferences.sound) java.awt.Toolkit.getDefaultToolkit().beep()
+        instances.forEach { item -> key(item.link.workerRunId) {
+            LaunchedEffect(item.link) {
+                var previousBusy = false
+                var previousCaptcha: String? = null
+                item.link.snapshots.collect { raw ->
+                    val state = ControlUiSnapshot(raw)
+                    val prefs = state.model("preferences", DesktopPreferences())
+                    val ticket = (raw["captcha"] as? JsonObject)?.get("ticketId")?.jsonPrimitive?.contentOrNull
+                    val message = when {
+                        ticket != null && ticket != previousCaptcha -> "需要人工验证码，请切换到此标签完成验证。"
+                        previousBusy && !state.console.busy -> state.console.entry.message ?: state.console.task.message ?: "任务已结束"
+                        else -> null
+                    }
+                    if (message != null && prefs.notifications && trayAvailable) trayState.sendNotification(Notification("${item.profile.name} · 黎明界助手", message))
+                    if (message != null && prefs.sound) java.awt.Toolkit.getDefaultToolkit().beep()
+                    previousBusy = state.console.busy; previousCaptcha = ticket
+                }
             }
-            wasTaskActive = taskActive
-        }
-        if (trayAvailable) Tray(icon, state = trayState, tooltip = "黎明界助手 · ${presentation?.status ?: reroll.progress ?: "空闲"}", onAction = { visible = true; windowState.isMinimized = false }) {
+        } }
+        if (trayAvailable) Tray(icon, state = trayState, tooltip = "黎明界助手 · ${instances.size} 个实例", onAction = { visible = true; windowState.isMinimized = false }) {
             Item("显示主窗口", onClick = { visible = true; windowState.isMinimized = false })
             Separator()
-            Item(if (presentation?.paused == true) "继续" else "暂停", enabled = presentation != null && !exiting && !trayCommandPending && !stopping, onClick = {
-                presentation?.let { current ->
-                    trayCommandPending = true
-                    scope.launch { try { graph.automationOverlayCoordinator.setPaused(current.sessionId, !current.paused) } finally { trayCommandPending = false } }
-                }
-            })
-            Item("停止", enabled = taskActive && !exiting && !trayCommandPending && !stopping, onClick = {
-                trayCommandPending = true
-                scope.launch { try { graph.stopAll().join() } finally { trayCommandPending = false } }
-            })
+            Item(if (activeConsole.overlay?.paused == true) "继续当前标签" else "暂停当前标签", enabled = activeConsole.overlay != null && !exiting, onClick = { selected?.link?.let { action { it.request(ControlOps.PAUSE) } } })
+            Item("停止当前标签", enabled = selected != null && !exiting, onClick = { selected?.link?.let { action { it.request(ControlOps.STOP) } } })
+            Item("停止全部", enabled = instances.isNotEmpty() && !exiting, onClick = { action { model.stopAll() } })
             Separator()
-            Item("退出", onClick = { if (taskActive) { visible = true; confirmExit = true } else quit() })
+            Item("退出", onClick = { visible = true; closeRequested() })
         }
         Window(onCloseRequest = ::closeRequested, state = windowState, visible = visible, title = "黎明界助手 ${AppVersion.name}", icon = icon) {
             window.minimumSize = Dimension(1100, 700)
-            DesktopTheme(uiPreferences) {
-                DesktopApp(graph,window)
-                LaunchedEffect(reroll.captcha) {if(reroll.captcha!=null){
-                    if(uiPreferences.notifications)trayState.sendNotification(Notification("需要人工验证码","请回到黎明界助手完成验证。"))
-                    if(uiPreferences.sound)java.awt.Toolkit.getDefaultToolkit().beep()
-                    runCatching {java.awt.Taskbar.getTaskbar().requestWindowUserAttention(window)}
-                }}
-                if (notices.isNotEmpty()) AlertDialog(onDismissRequest = graph::dismissNotices,
-                    title = { Text("启动提示") }, text = { Text(notices.joinToString("\n\n")) },
-                    confirmButton = { TextButton(onClick = graph::dismissNotices) { Text("我知道了") } })
+            DesktopTheme(preferences) {
+                ControlTabsApp(tabs, selectedId, callbacks, window, profiles.map { AvailableControlProfile(it.id.toString(), it.name) }, error)
                 if (confirmExit) AlertDialog(
-                    onDismissRequest = { if (!exiting) confirmExit = false }, title = { Text("任务正在运行") },
-                    text = { Column { Text("关闭窗口后，可以让任务继续运行，也可以停止任务并退出。"); Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(rememberChoice, { rememberChoice = it }); Text("记住我的选择") } } },
-                    confirmButton = { TextButton(enabled = !exiting, onClick = {
-                        if (rememberChoice) graph.settings.update { it.copy(closeBehavior = CloseBehavior.STOP_AND_EXIT) }
-                        quit()
-                    }) { Text(if (exiting) "正在停止…" else "停止任务并退出") } },
+                    onDismissRequest = { if (!exiting) confirmExit = false },
+                    title = { Text("关闭黎明界助手") },
+                    text = { Text(buildString {
+                        if (busy) append("有实例正在运行。最小化后，所有标签的任务会继续。\n")
+                        if (dirty.isNotEmpty()) append("有 ${dirty.size} 个标签存在未保存修改，退出会丢弃这些修改。\n")
+                        append("退出会停止并关闭全部控制实例，已保存的账号和配置会保留。")
+                    }) },
+                    confirmButton = { TextButton(enabled = !exiting, onClick = ::quit) { Text(if (exiting) "正在停止…" else "停止全部并退出") } },
                     dismissButton = { Row {
-                        TextButton(enabled = !exiting, onClick = {
-                            if (rememberChoice) graph.settings.update { it.copy(closeBehavior = CloseBehavior.MINIMIZE) }
-                            confirmExit = false
-                            if (trayAvailable) visible = false else windowState.isMinimized = true
-                        }) { Text(if (trayAvailable) "最小化到托盘" else "最小化窗口") }
+                        TextButton(enabled = !exiting, onClick = { confirmExit = false; if (trayAvailable) visible = false else windowState.isMinimized = true }) { Text(if (trayAvailable) "最小化到托盘" else "最小化窗口") }
                         TextButton(enabled = !exiting, onClick = { confirmExit = false }) { Text("取消") }
                     } },
                 )
@@ -171,35 +165,12 @@ fun main(args: Array<String>) {
 }
 
 /** The upstream baseline has no launcher art; this simple desktop mark has no external asset. */
-private class AppPainter(private val tone:Color=Color(0xff0078d4)) : Painter() {
+private class AppPainter(private val tone: Color = Color(0xff0078d4)) : Painter() {
     override val intrinsicSize = Size(64f, 64f)
     override fun DrawScope.onDraw() {
         drawRoundRect(tone, cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * .24f))
         drawCircle(Color.White, size.minDimension * .27f)
         drawCircle(tone, size.minDimension * .22f, center + androidx.compose.ui.geometry.Offset(size.width * .11f, -size.height * .07f))
         drawCircle(Color(0xFFFFDC92), size.minDimension * .07f, center + androidx.compose.ui.geometry.Offset(size.width * .22f, size.height * .2f))
-    }
-}
-
-private fun installCrashHandler(directory: Path) {
-    Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
-        runCatching {
-            val crashes = directory.resolve("logs/crashes"); Files.createDirectories(crashes)
-            val path = crashes.resolve("crash-${System.currentTimeMillis()}.log")
-            Files.writeString(path, DesktopLog.redact("${AppVersion.display}\nJVM: ${System.getProperty("java.version")}\nOS: ${System.getProperty("os.name")} ${System.getProperty("os.arch")}\nThread: ${thread.name}\n${failure.stackTraceToString()}"))
-            DesktopLog.write('E', "Crash", "线程 ${thread.name} 未处理异常", failure)
-            if (crashDialogOpen.compareAndSet(false, true)) javax.swing.SwingUtilities.invokeLater {
-                try {
-                    val choice = JOptionPane.showOptionDialog(null, "程序发生异常。诊断记录已保存：\n$path", "黎明界助手", JOptionPane.DEFAULT_OPTION,
-                        JOptionPane.ERROR_MESSAGE, null, arrayOf("导出诊断包", "打开日志目录", "关闭"), "关闭")
-                    runCatching {
-                        when (choice) {
-                            0 -> crashGraph?.debugUrl?.let { BrowserLauncher.open("${it}logs.zip") }
-                            1 -> java.awt.Desktop.getDesktop().open(directory.resolve("logs").toFile())
-                        }
-                    }
-                } finally { crashDialogOpen.set(false) }
-            }
-        }
     }
 }

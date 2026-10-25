@@ -45,6 +45,7 @@ Generated from Gradle runtimeClasspath resolution on 2026-10-25. Coordinates inc
 | org.jetbrains.compose.ui:ui-unit-desktop:1.8.2 | [The Apache Software License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) | [Apache-2.0](Apache-2.0.txt) |
 | org.jetbrains.compose.ui:ui-util-desktop:1.8.2 | [The Apache Software License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) | [Apache-2.0](Apache-2.0.txt) |
 | org.jetbrains.kotlin:kotlin-stdlib:2.1.21 | [The Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) | [Apache-2.0](Apache-2.0.txt) |
+| org.jetbrains.kotlin:kotlin-reflect:2.1.20 | [The Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) | [Apache-2.0](Apache-2.0.txt) |
 | org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.1.21 | [The Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) | [Apache-2.0](Apache-2.0.txt) |
 | org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.1.21 | [The Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0.txt) | [Apache-2.0](Apache-2.0.txt) |
 | org.jetbrains.kotlinx:atomicfu-jvm:0.23.2 | [The Apache Software License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) | [Apache-2.0](Apache-2.0.txt) |

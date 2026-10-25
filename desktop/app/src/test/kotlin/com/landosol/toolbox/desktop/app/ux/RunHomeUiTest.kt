@@ -56,7 +56,7 @@ class RunHomeUiTest {
             compose.onNodeWithText("高级配置").performClick()
             compose.onNodeWithText("开始 F5").assertIsNotEnabled()
             compose.onNodeWithText("刷开局设置").performClick()
-            compose.onNodeWithText("刷开局设置 · 当前账号").assertExists()
+            compose.onNodeWithText("刷开局设置 · 当前账号",useUnmergedTree=true).assertExists()
             compose.onAllNodes(hasText("2") and hasAnyAncestor(isDialog())).onFirst().performClick()
             compose.onNodeWithText("保存").performClick()
             compose.waitUntil(5000){graph.labyrinthController.uiState.value.selectedDifficulty==2}

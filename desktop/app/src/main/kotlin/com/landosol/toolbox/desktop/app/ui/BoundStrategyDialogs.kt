@@ -9,6 +9,8 @@ import java.awt.event.KeyEvent
 
 @Composable internal fun WorkflowDialog(onClose:()->Unit,content:@Composable ()->Unit) {
     val parent=LocalDesktopWindow.current
+    // Offscreen test scenes have no native host and must not create a desktop window.
+    if(parent==null){content();return}
     val state=rememberDialogState(width=((parent?.width ?: 1200)-60).coerceIn(900,1200).dp,height=((parent?.height ?: 800)-70).coerceIn(500,850).dp)
     DialogWindow(onCloseRequest=onClose,state=state,title="完整任务配置 · ${LocalControlName.current}",visible=LocalControlVisible.current,resizable=true){content()}
 }
@@ -18,6 +20,7 @@ import java.awt.event.KeyEvent
  * Native close requests become Escape, preserving upstream's dirty-draft confirmation. */
 @Composable internal fun BoundStrategyDialog(content:@Composable ()->Unit) {
     val parent=LocalDesktopWindow.current
+    if(parent==null){content();return}
     val state=rememberDialogState(width=880.dp,height=((parent?.height ?: 800)-80).coerceIn(500,900).dp)
     DialogWindow(onCloseRequest={
         val target=KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner

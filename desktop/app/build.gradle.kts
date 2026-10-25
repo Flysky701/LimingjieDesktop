@@ -12,8 +12,14 @@ kotlin { jvmToolchain(21) }
 dependencies {
     implementation(project(":shared")); implementation(project(":device")); implementation(project(":ocr")); implementation(project(":platform"))
     implementation(compose.desktop.currentOs); implementation(compose.material3)
+    implementation(kotlin("reflect"))
     testImplementation(libs.junit)
     testImplementation(compose.desktop.uiTestJUnit4)
+}
+
+tasks.withType<Test>().configureEach {
+    systemProperty("limingjie.test.classpath", sourceSets["test"].runtimeClasspath.asPath)
+    providers.gradleProperty("packagedWorkerExecutable").orNull?.let { systemProperty("limingjie.test.packagedWorker", it) }
 }
 compose.desktop {
     application {
