@@ -99,3 +99,36 @@ The game protocol MessagePack and AES-CBC compatibility layer is a clean Kotlin 
 ## Geetest
 
 When Bilibili requests secondary verification, the app loads the provider's official web component for the user to complete verification manually. The app does not bundle a solver, bypass, or third-party captcha service.
+
+## Windows desktop distribution
+
+The desktop port keeps the upstream notices above, including the unresolved
+redistribution considerations for game imagery and catalog-derived data. A local
+portable build does not grant additional rights or establish that a public
+redistribution is cleared.
+
+The resolved Windows runtime dependency inventory is in
+`licenses/DEPENDENCIES.md` in the portable archive (`desktop/licenses/` in source).
+It lists the actual Maven coordinates, published POM license declarations, and
+reproduced embedded notices for Kotlin, Compose Desktop/AndroidX, coroutines,
+serialization, Room/SQLite, OkHttp/Okio, apksig, ONNX Runtime, JNA, Skiko and
+JSON-java. Shared Apache-2.0 text and separately required MIT, BSD and public-domain
+declarations are included. JNA is used under its Apache-2.0 option; its original
+dual-license notice is retained. ONNX Runtime's bundled ThirdPartyNotices is
+retained in addition to its MIT license. The included JRE retains its own
+`runtime/legal` directory.
+
+MaaTouch v1.1.0 is distributed unmodified from
+<https://github.com/MaaAssistantArknights/MaaTouch/releases/tag/v1.1.0>, under
+Apache-2.0. Its pinned asset URL, SHA-256 and license are in
+`licenses/MaaTouch/`. OCR model provenance and licenses are in `licenses/OCR/`.
+ADB is not bundled; the device page can download official Android Platform Tools
+only when the user requests it.
+
+The purple crescent-and-diamond application icon is newly drawn project artwork,
+with its vector source in `desktop/app/src/main/resources/desktop/app.svg`.
+It is not a game or upstream Android icon. The source baseline did not contain a
+reusable application icon, so this geometric icon is used for the desktop launcher.
+
+License text provenance is recorded in `licenses/SOURCES.md`. These notices do
+not replace the terms of the individual components.
