@@ -33,6 +33,20 @@ class ShimTest {
         assertThrows(IllegalArgumentException::class.java) { Bitmap.createBitmap(image, 1, 0, 2, 1) }
         assertNull(BitmapFactory.decodeStream(byteArrayOf(1, 2, 3).inputStream()))
     }
+    @Test fun bitmapDecodesUpstreamWebpCharacterIcon() {
+        val encoded = android.content.res.AssetManager().open("resource-packs/cn-bilibili/icons/characters/icon_unit_100661.webp").use { it.readBytes() }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        assertNull(BitmapFactory.decodeStream(encoded.inputStream(), null, bounds))
+        assertEquals(128, bounds.outWidth); assertEquals(128, bounds.outHeight)
+        val decoded = BitmapFactory.decodeByteArray(encoded, 0, encoded.size)!!
+        // Opaque source pixels also catch BGR/ARGB channel-order regressions.
+        assertEquals(0xfff3c0d0.toInt(), decoded.getPixel(60, 60))
+        assertEquals(0, decoded.getPixel(0, 0) ushr 24)
+        decoded.recycle()
+        val sampled = BitmapFactory.decodeStream(encoded.inputStream(), null, BitmapFactory.Options().apply { inSampleSize = 2 })!!
+        assertEquals(64, sampled.width); assertEquals(64, sampled.height)
+        sampled.recycle()
+    }
     @Test fun base64FlagsAndWhitespace() {
         assertEquals("YQ==\n", Base64.encodeToString(byteArrayOf(97), Base64.DEFAULT))
         assertEquals("YQ", Base64.encodeToString(byteArrayOf(97), Base64.NO_WRAP or Base64.NO_PADDING))
