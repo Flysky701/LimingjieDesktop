@@ -45,12 +45,14 @@ tasks.register<Zip>("packagePortableZip") {
     from(rootProject.file("licenses")) { into("LimingjieAssistant/licenses") }
     from(rootProject.file("device/licenses")) { into("LimingjieAssistant/licenses/MaaTouch") }
     from(rootProject.file("ocr/licenses")) { into("LimingjieAssistant/licenses/OCR") }
+    from(rootProject.file("ocr/MODELS.md")) { into("LimingjieAssistant/licenses/OCR") }
+    from(rootProject.file("../docs/desktop/USER_CHECKLIST.md")) { into("LimingjieAssistant") }
     from(project.file("src/main/resources/desktop/portable.flag")) { into("LimingjieAssistant") }
     outputs.file(portableChecksum)
     doFirst {
         check(System.getProperty("os.name").startsWith("Windows")) { "Portable Windows ZIP must be built on Windows" }
         check(layout.buildDirectory.file("compose/binaries/main-release/app/LimingjieAssistant/LimingjieAssistant.exe").get().asFile.isFile) { "jpackage app-image is missing" }
-        listOf("../README-desktop.md", "../LICENSE", "../THIRD_PARTY_NOTICES.md", "licenses/DEPENDENCIES.md").forEach {
+        listOf("../README-desktop.md", "../LICENSE", "../THIRD_PARTY_NOTICES.md", "../docs/desktop/USER_CHECKLIST.md", "licenses/DEPENDENCIES.md", "ocr/MODELS.md").forEach {
             check(rootProject.file(it).isFile) { "Missing distribution notice: $it" }
         }
         val inventory = rootProject.file("licenses/DEPENDENCIES.md").readText()

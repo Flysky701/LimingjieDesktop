@@ -32,7 +32,7 @@ shared 已由 M1/装配负责人提供的 AtomicFiles、Context/prefs、Encrypte
 
 上游结果类型没有 Deferred，因此 pending 状态返回 `Failed(PENDING_MESSAGE)` 并通知装配层，禁止声称 Updated。`hasPendingInstall()` 可用于 UI 区分提示；数据库继续使用旧版本。更新网络/校验失败仍由原 updater 输出。
 
-当前分支的 CN 安装包含临时 `moveAtomic`（5 次、100 ms、禁止非原子回退）；主分支新增 `AtomicFiles.move` 集成时应将该函数替换为共享实现。
+初始 WS-DE 提交使用临时 `moveAtomic`；装配集成后已删除该函数，CN 安装与 pending 保存统一使用共享 `AtomicFiles.move`（5 次、100 ms、禁止非原子回退）。
 
 ## 定向验证
 
