@@ -1,0 +1,231 @@
+{
+  "source": "HTML mockup only; all run data is illustrative; no emulator connection",
+  "layouts": [
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "light",
+      "view": "idle",
+      "overflow": false,
+      "footerBottom": 800,
+      "footerTop": 728,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "light",
+      "view": "running",
+      "overflow": false,
+      "footerBottom": 800,
+      "footerTop": 728,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "light",
+      "view": "stopped",
+      "overflow": false,
+      "footerBottom": 800,
+      "footerTop": 728,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "light",
+      "view": "strategy",
+      "overflow": false,
+      "footerBottom": 800,
+      "footerTop": 728,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "light",
+      "view": "ratings",
+      "overflow": false,
+      "footerBottom": 800,
+      "footerTop": 728,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "dark",
+      "view": "idle",
+      "overflow": false,
+      "footerBottom": 800,
+      "footerTop": 728,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "dark",
+      "view": "running",
+      "overflow": false,
+      "footerBottom": 800,
+      "footerTop": 728,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "dark",
+      "view": "stopped",
+      "overflow": false,
+      "footerBottom": 800,
+      "footerTop": 728,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "dark",
+      "view": "strategy",
+      "overflow": false,
+      "footerBottom": 800,
+      "footerTop": 728,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1280,
+      "height": 800,
+      "theme": "dark",
+      "view": "ratings",
+      "overflow": false,
+      "footerBottom": 800,
+      "footerTop": 728,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1100,
+      "height": 700,
+      "theme": "light",
+      "view": "idle",
+      "overflow": false,
+      "footerBottom": 700,
+      "footerTop": 628,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1100,
+      "height": 700,
+      "theme": "light",
+      "view": "running",
+      "overflow": false,
+      "footerBottom": 700,
+      "footerTop": 628,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1100,
+      "height": 700,
+      "theme": "light",
+      "view": "stopped",
+      "overflow": false,
+      "footerBottom": 700,
+      "footerTop": 628,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1100,
+      "height": 700,
+      "theme": "light",
+      "view": "strategy",
+      "overflow": false,
+      "footerBottom": 700,
+      "footerTop": 628,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1100,
+      "height": 700,
+      "theme": "light",
+      "view": "ratings",
+      "overflow": false,
+      "footerBottom": 700,
+      "footerTop": 628,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1100,
+      "height": 700,
+      "theme": "dark",
+      "view": "idle",
+      "overflow": false,
+      "footerBottom": 700,
+      "footerTop": 628,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1100,
+      "height": 700,
+      "theme": "dark",
+      "view": "running",
+      "overflow": false,
+      "footerBottom": 700,
+      "footerTop": 628,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1100,
+      "height": 700,
+      "theme": "dark",
+      "view": "stopped",
+      "overflow": false,
+      "footerBottom": 700,
+      "footerTop": 628,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1100,
+      "height": 700,
+      "theme": "dark",
+      "view": "strategy",
+      "overflow": false,
+      "footerBottom": 700,
+      "footerTop": 628,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    },
+    {
+      "width": 1100,
+      "height": 700,
+      "theme": "dark",
+      "view": "ratings",
+      "overflow": false,
+      "footerBottom": 700,
+      "footerTop": 628,
+      "brokenImages": 0,
+      "horizontalOverflow": []
+    }
+  ],
+  "interactions": [
+    "five task entries; selection; theme; config drawer; Escape",
+    "F6 pause; Ctrl+F search; F7 stopped state; expandable original reason",
+    "rating modified filter; reject 101; accept 0; arrow navigation; explicit restore"
+  ],
+  "browserScriptErrors": []
+}

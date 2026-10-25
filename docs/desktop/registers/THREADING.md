@@ -2,6 +2,8 @@
 
 更新：2026-10-25。依据实际实现；Main由kotlinx-coroutines-swing提供，为Swing EDT。
 
+UX-0 / UX-1：本轮仅新增 HTML 设计预览、截图工具和文档，没有新增正式程序 scope、收集器、轮询或线程。运行台限频、独立计时、记录采集与通知的资源所有权在 UX-2 之后随真实实现登记；当前不把规划项写成已存在资源。
+
 | 工作 | 实际线程/所有权 | 证据范围 |
 |---|---|---|
 | Compose/AccountViewModel/Controller | UI和控制器Main scope；ViewModel退出在Main清理 | 构造接线；全部UI线程暂无独立断言 |
