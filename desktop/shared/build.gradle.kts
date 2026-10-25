@@ -39,6 +39,9 @@ val prepareUpstreamAssets by tasks.registering(Sync::class) {
     doLast {
         val names = destinationDir.resolve("assets").walkTopDown().filter { it.isFile }.map { it.relativeTo(destinationDir).invariantSeparatorsPath }.sorted().toList()
         destinationDir.resolve("desktop/assets-manifest.txt").writeText(names.joinToString("\n", postfix = "\n"))
+        val sample = names.first { it.endsWith(".png", ignoreCase = true) }
+        val image = javax.imageio.ImageIO.read(destinationDir.resolve(sample))
+        destinationDir.resolve("desktop/sample.properties").writeText("path=$sample\nwidth=${image.width}\nheight=${image.height}\n")
     }
 }
 val generateBuildConfig by tasks.registering {

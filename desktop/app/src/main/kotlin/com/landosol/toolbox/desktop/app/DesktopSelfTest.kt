@@ -44,9 +44,20 @@ object DesktopSelfTest {
                 val names = resource("desktop/assets-manifest.txt").toString(Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }.toList()
                 require(names.isNotEmpty()) { "Empty asset manifest" }
                 names.forEach { name -> require(javaClass.classLoader.getResource(name) != null) { "Missing asset: $name" } }
-                val png = names.first { it.endsWith(".png", true) }
+                val first = checkNotNull(javaClass.classLoader.getResource(names.first()))
+                val packagedCount = if (first.protocol == "jar") {
+                    val jar = (first.openConnection() as JarURLConnection).apply { useCaches = false }
+                    jar.jarFile.use { file -> file.entries().asSequence().count { !it.isDirectory && it.name.startsWith("assets/") } }
+                } else {
+                    var root = Path.of(first.toURI())
+                    repeat(names.first().split('/').size) { root = root.parent }
+                    Files.walk(root.resolve("assets")).use { paths -> paths.filter(Files::isRegularFile).count().toInt() }
+                }
+                check(packagedCount == names.size) { "Asset count mismatch: $packagedCount versus ${names.size}" }
+                val sample = java.util.Properties().apply { resource("desktop/sample.properties").inputStream().use { load(it) } }
+                val png = sample.getProperty("path")
                 val decoded = BitmapFactory.decodeStream(resource(png).inputStream()) ?: error("Cannot decode packaged PNG")
-                try { require(decoded.width > 0 && decoded.height > 0); "${names.size} assets; $png ${decoded.width}x${decoded.height}" }
+                try { require(decoded.width == sample.getProperty("width").toInt() && decoded.height == sample.getProperty("height").toInt()); "${names.size} assets; $png ${decoded.width}x${decoded.height}" }
                 finally { decoded.recycle() }
             }
             checkItem("ocr") {
