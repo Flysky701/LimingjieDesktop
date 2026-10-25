@@ -173,7 +173,7 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                                 Text(destination.label,color=if(page==destination) Accent else Muted,style=MaterialTheme.typography.bodySmall)
                             }
                         } }
-                        Spacer(Modifier.weight(1f));Text("${AppVersion.name.replace("+","\n")}\n单设备",style=MaterialTheme.typography.labelSmall,color=Muted)
+                        Spacer(Modifier.weight(1f));Text("${AppVersion.name.replace("+","\n")}\n独立实例",style=MaterialTheme.typography.labelSmall,color=Muted)
                     }
                 }
                 VerticalDivider(color=Line)
