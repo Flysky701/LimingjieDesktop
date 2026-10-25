@@ -54,7 +54,7 @@ object DesktopSelfTest {
                     Files.walk(root.resolve("assets")).use { paths -> paths.filter(Files::isRegularFile).count().toInt() }
                 }
                 check(packagedCount == names.size) { "Asset count mismatch: $packagedCount versus ${names.size}" }
-                val sample = java.util.Properties().apply { resource("desktop/sample.properties").inputStream().use { load(it) } }
+                val sample = java.util.Properties().apply { resource("desktop/sample.properties").inputStream().reader(Charsets.UTF_8).use { load(it) } }
                 val png = sample.getProperty("path")
                 val decoded = BitmapFactory.decodeStream(resource(png).inputStream()) ?: error("Cannot decode packaged PNG")
                 try { require(decoded.width == sample.getProperty("width").toInt() && decoded.height == sample.getProperty("height").toInt()); "${names.size} assets; $png ${decoded.width}x${decoded.height}" }

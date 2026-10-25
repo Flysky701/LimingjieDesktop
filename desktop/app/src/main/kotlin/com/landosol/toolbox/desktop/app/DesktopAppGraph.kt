@@ -134,7 +134,7 @@ class DesktopAppGraph(
     }
     val debugUrl get() = debugPort?.let { "http://127.0.0.1:$it/" }
     private var rerollHostJob: Job? = null
-    private var closed = false
+    @Volatile private var closed = false
     private val installedServices = DesktopServices(OcrPort(ocr::submit), WindowsSecretProtector(), identityStore, captchaHost, DesktopLog::snapshot)
     init {
         DesktopLog.initialize(dataDirectory.resolve("logs"))
@@ -713,7 +713,7 @@ class DesktopAppGraph(
         goals: List<com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoal>,
     ): Boolean = synchronized(startLock) {
         val id = accountId ?: return false
-        if (goals.isEmpty() || stoppingState.value || !actionsAvailable() || ocr.status.value !is OcrEngineStatus.Ready) return false
+        if (goals.isEmpty() || stoppingState.value || !actionsAvailable() || ocr.status.value !is OcrEngineStatus.Ready || gameClientResolution !is GameClientResolution.Available) return false
         if (autoRunJob?.isActive == true) return false
         // The launch job ends after start() hands control to the recognition session. The batch
         // stage remains the authoritative lock for the rest of that run.
@@ -818,6 +818,7 @@ class DesktopAppGraph(
                 labyrinthBatchController.stop(reason)
                 gameSessionResetWorkflow.stop(reason)
                 labyrinthEntryRecognitionSession.stop(reason)
+                labyrinthController.uiState.first { !it.isWorking && it.captcha == null }
             } finally {
                 withContext(NonCancellable) { captureService.stopAndJoin(reason) }
                 autoRunJob = null
