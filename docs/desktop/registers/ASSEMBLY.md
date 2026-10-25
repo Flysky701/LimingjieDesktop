@@ -27,4 +27,4 @@ taskStarting 在截图准备前置起；taskStopping 在取消/释放前同步�
 
 退出最多等10秒业务停止，再清ViewModel、取消scope、关闭capture/device/MaaTouch/OCR/captcha/诊断socket与采样/Room/防睡眠/代理，Main最后释放实例锁。网络刷取不提供暂停。
 
-验证：DesktopAdaptersTest 3项（截图线程与连续失败、OCR复制/EDT、诊断ZIP与socket）通过；补5秒超时与诊断字段后受影响2项通过；原识别/重置相关15项通过。WS-DE19项、WS-B30项见报告。完整Graph/FakeDevice/OCR集成、窗口与打包正在整合，最终以FINAL_REPORT为准。未验证真实游戏登录、渠道界面与批量循环。
+验证：DesktopAdaptersTest 3项（截图线程与连续失败、OCR复制/EDT、诊断ZIP与socket）通过；补5秒超时与诊断字段后受影响2项通过；原识别/重置相关15项通过。WS-DE19项、WS-B30项见报告。完整app编译与代表性真实窗口检查已通过（UI-1）；Graph/FakeDevice/OCR集成、打包和设备实测最终以FINAL_REPORT为准。本表不把界面检查当作真实游戏登录、渠道界面或批量循环证明。

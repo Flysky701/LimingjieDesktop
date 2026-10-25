@@ -1,6 +1,6 @@
 # 桌面功能与行为对照
 
-更新：2026-10-25。基线为上游 ui/LandosolToolboxApp.kt 及其页面。这里记录源码接线，不把接通等同于真实游戏验证。完整 app 编译及窗口实看尚待 OCR 集成，后续结果在 FINAL_REPORT 汇总。
+更新：2026-10-25。基线为上游 ui/LandosolToolboxApp.kt 及其页面。完整 app 已编译，真实 Compose 窗口代表性检查已完成，见 [UI-1](../reports/UI-1.md)。源码接线与界面检查不替代真实游戏验证；设备及游戏实测以 FINAL_REPORT 为准。
 
 桌面源码位于 desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/ui/。
 
@@ -12,11 +12,11 @@
 | 刷取启停 | 完整表单 → start(retreatConfirmed=true,guildIdOverride) / stop | 确认由原表单执行；Android 通知权限不适用；刷取仅停止、不新增暂停 |
 | 画面任务 | 明显展示「只读识别」「执行入口流程」→ graph.startRecognition(dryRun) | graph 检查设备、屏幕、OCR、触控；只读无需触控。停止走 stopAll 并等待释放 |
 | 批量执行 | 完整表单 → startLabyrinthAutoRun / stopLabyrinthAutoRun | 原 batch、会话重置、终态与 checkpoint；starting/stopping 期间互斥 |
-| 账号 | AccountsPage 列表与编辑区 → 原 AccountViewModel 全部增改选删/消息方法 | 新增无默认服务器；渠道字段、换服务器必填密码、编辑留空不改密码、UID、删除确认、保存/取消均保留。点击列表只查看，设为当前另有按钮 |
+| 账号 | AccountsPage 列表与编辑区 → 原 AccountViewModel 全部增改选删/消息方法 | 新增无默认服务器；渠道字段、换服务器必填密码、编辑留空不改密码、UID、删除确认、保存/取消均保留。任务忙碌时禁用新增、字段/服务器修改、保存和删除确认，取消仍可用。假账号增改取消删除与空表单校验已实看 |
 | 设备画像 | 账号页顶部与设备页 | 当前/上次连接设备名与时间；无快照提示登录前置；android_id 仅末4位 |
 | 验证码 | shared GeetestCaptchaDialog + LoopbackCaptchaHost | 原 controller solved/error/cancel；浏览器再次打开、复制、失败提示；回环4项测试通过，真实 Geetest 未验证 |
 | 策略 | StrategiesPage → 完整 LabyrinthStrategySettingsScreen | 评分、选人、Boss、失败处理、遗物、专武、商店、事件、响应参数；draft/范围/默认恢复/未保存离开确认、防重入、保存异常、取消异常传播 |
-| 编组与评分 | 策略内部 → LabyrinthOpeningRosterScreen / LabyrinthRoleRatingsScreen | 原排序/筛选、头像搜索、0–100评分、恢复原评分、保存/取消；graph.loadLabyrinthRoleRatings |
+| 编组与评分 | 策略内部 → LabyrinthOpeningRosterScreen / LabyrinthRoleRatingsScreen | 原排序/筛选、头像搜索、0–100评分、恢复原评分、保存/取消；graph.loadLabyrinthRoleRatings。361角色及头像可显示；评分保存重启保留；空槽校验、禁存、放弃草稿均实看 |
 | 设备 | EnvironmentPages.kt / DevicesPage | 检测/手动地址、连接/断开、ADB选择下载、测速、触控模式、重连、非游戏前台中心点击测试、画像与客户端；未执行真实操作 |
 | 设置 | SettingsPage | 设备/截图/尺寸/触控/屏幕/前台/OCR/DPAPI/目录、代理/直连、用户手动网络测试、关闭行为、库更新、停止截图、关于与向导。游戏内动画确认仅提醒 |
 | 日志/预览 | TaskRail、Preview、DiagnosticsPage | 2,000条用户事件、复制/清空；默认折叠预览、独立像素副本和框、≤2fps。窄窗口收侧栏，日志页仍可用 |
@@ -26,4 +26,4 @@
 
 Android 通知、MediaProjection、无障碍和悬浮窗权限由设备/截图/触控前置替代；账号凭据说明改为 Windows 当前用户加密。复杂表单直接复用上游，少量上游诊断阶段英文保留原输出，不改变机器状态与错误字符串。
 
-已做源码盘点、WS-DE定向检查及共享桥接测试。待做完整编译后默认/最小窗口实看、空账号校验、策略保存/取消。未做真实账号、验证码、模拟器触控和游戏流程。
+已做源码盘点、WS-DE定向检查及共享桥接测试。2026-10-25 用独立临时数据目录检查默认1280×800与最小1100×700布局、全部导航、完整任务表单、账号校验与增改取消删除、策略保存/取消、未连接设备提示。界面检查未连接ADB、未发游戏登录请求；验证码、触控与游戏流程由各自实测记录说明。
