@@ -1,0 +1,20 @@
+com/landosol/toolbox/MainActivity.kt # X | Android activity
+com/landosol/toolbox/LandosolToolboxApplication.kt # A | DesktopAppGraph
+com/landosol/toolbox/data/local/AppDatabase.kt # S | Room JVM
+com/landosol/toolbox/security/AndroidKeystoreEncryptedStore.kt # S | DPAPI
+com/landosol/toolbox/protocol/bilibili/AndroidBilibiliSdkRequestProfileFactory.kt # S | emulator snapshot
+com/landosol/toolbox/protocol/bilibili/AndroidGameProtocolProfileFactory.kt # S | emulator snapshot
+com/landosol/toolbox/labyrinth/vision/AndroidChineseRoleNameOcr.kt # S | ONNX
+com/landosol/toolbox/labyrinth/debug/LabyrinthRuntimeDiagnostics.kt # S | JVM diagnostics
+com/landosol/toolbox/ui/account/GeetestCaptchaDialog.kt # S | loopback browser
+com/landosol/toolbox/automation/capture/MediaProjectionCaptureService.kt # A | desktop capture
+com/landosol/toolbox/automation/accessibility/LandosolAccessibilityService.kt # A | MaaTouch
+com/landosol/toolbox/automation/accessibility/AccessibilityChannelPromptScreen.kt # A | UIAutomator
+com/landosol/toolbox/automation/session/AndroidSessionResetBackends.kt # X | Android services
+com/landosol/toolbox/automation/overlay/AndroidAutomationNotificationHost.kt # A | tray
+com/landosol/toolbox/automation/overlay/AutomationOverlayService.kt # X | Android overlay
+com/landosol/toolbox/labyrinth/LabyrinthRerollService.kt # A | application scope
+com/landosol/toolbox/labyrinth/AndroidLabyrinthCnDatabaseRepository.kt # A | desktop SQLite
+com/landosol/toolbox/permissions/PermissionStatusReader.kt # A | environment page
+com/landosol/toolbox/ui/permissions/PermissionCenterScreen.kt # A | environment page
+com/landosol/toolbox/ui/LandosolToolboxApp.kt # A | desktop navigation

@@ -13,18 +13,6 @@ import com.landosol.toolbox.automation.accessibility.LandosolAccessibilityServic
 import com.landosol.toolbox.automation.capture.CaptureStateRegistry
 import com.landosol.toolbox.automation.overlay.AndroidAutomationNotificationHost
 
-data class PermissionCenterState(
-    val accessibilityEnabled: Boolean,
-    val accessibilityConnected: Boolean,
-    val overlayEnabled: Boolean,
-    val notificationsEnabled: Boolean,
-    val captureSessionActive: Boolean = false,
-) {
-    val canStartVisualAutomation: Boolean
-        get() = accessibilityEnabled && accessibilityConnected &&
-            notificationsEnabled && captureSessionActive
-}
-
 object PermissionStatusReader {
     fun read(context: Context): PermissionCenterState {
         val accessibilityEnabled = isAccessibilityEnabled(context)

@@ -1,0 +1,4 @@
+com/landosol/toolbox/account/AccountViewModel.kt|override fun <T : ViewModel> create(modelClass: Class<T>): T|override fun <T : ViewModel> create(modelClass: kotlin.reflect.KClass<T>, extras: androidx.lifecycle.viewmodel.CreationExtras): T|1|D-23 JVM lifecycle
+com/landosol/toolbox/account/AccountViewModel.kt|modelClass.isAssignableFrom(|modelClass.java.isAssignableFrom(|1|D-23 JVM lifecycle
+com/landosol/toolbox/clanbattle/ClanBattleViewModel.kt|override fun <T : ViewModel> create(modelClass: Class<T>): T|override fun <T : ViewModel> create(modelClass: kotlin.reflect.KClass<T>, extras: androidx.lifecycle.viewmodel.CreationExtras): T|1|D-23 JVM lifecycle
+com/landosol/toolbox/clanbattle/ClanBattleViewModel.kt|modelClass.isAssignableFrom(|modelClass.java.isAssignableFrom(|1|D-23 JVM lifecycle

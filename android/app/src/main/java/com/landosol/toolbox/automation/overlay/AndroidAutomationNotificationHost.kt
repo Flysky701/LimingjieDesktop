@@ -26,33 +26,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-internal data class AutomationNotificationContent(
-    val sessionId: AutomationSessionId,
-    val title: String,
-    val summary: String,
-    val expanded: String,
-    val paused: Boolean,
-)
-
-internal fun AutomationOverlayPresentation.notificationContent() = AutomationNotificationContent(
-    sessionId = sessionId,
-    title = title.take(120),
-    summary = buildString {
-        append(if (paused) "已暂停 · " else "")
-        append(status)
-        if (dryRun) append(" · 只读识别")
-    }.take(240),
-    expanded = listOfNotNull(status, detail?.takeIf { it.isNotBlank() }).joinToString("\n").take(4_000),
-    paused = paused,
-)
-
-internal fun automationNotificationActionMatches(
-    requestedId: Long,
-    issuedToken: String?,
-    activeId: AutomationSessionId?,
-    processToken: String,
-): Boolean = requestedId > 0L && activeId?.value == requestedId && issuedToken == processToken
-
 /** Uses the existing capture/reroll process lifetime; never creates a window or a new FGS. */
 class AndroidAutomationNotificationHost(context: Context) : AutomationOverlayHost {
     private val app = context.applicationContext as LandosolToolboxApplication

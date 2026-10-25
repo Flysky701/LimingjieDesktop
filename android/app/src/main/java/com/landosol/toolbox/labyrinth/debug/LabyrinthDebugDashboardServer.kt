@@ -39,6 +39,7 @@ class LabyrinthDebugDashboardServer(
     /** Directory for the optional per-frame archive; null disables the feature entirely. */
     private val frameArchiveDirectory: File? = null,
     private val runtimeDiagnostics: LabyrinthRuntimeDiagnostics? = null,
+    private val processLogSource: () -> ByteArray = { collectOwnProcessLogcat() },
 ) {
     private data class Snapshot(
         val json: ByteArray,
@@ -226,7 +227,7 @@ class LabyrinthDebugDashboardServer(
                 "/logs.zip", "/download/logs.zip" -> {
                     val snapshot = latest.get()
                     val history = synchronized(historyLock) { recentStates.toList() }
-                    val zip = buildDiagnosticZip(snapshot, history, collectOwnProcessLogcat(), archivedFramesSnapshot())
+                    val zip = buildDiagnosticZip(snapshot, history, processLogSource(), archivedFramesSnapshot())
                     val filename = "limingjie-debug-${timestampForFilename()}.zip"
                     respond(
                         output = output,
@@ -354,34 +355,6 @@ class LabyrinthDebugDashboardServer(
             )
         }
         bytes.toByteArray()
-    }
-
-    private fun collectOwnProcessLogcat(): ByteArray = runCatching {
-        val process = ProcessBuilder(
-            "logcat",
-            "-d",
-            "-v",
-            "threadtime",
-            "--pid=${android.os.Process.myPid()}",
-            "-t",
-            LOGCAT_LINE_LIMIT.toString(),
-        ).redirectErrorStream(true).start()
-        process.inputStream.use { input ->
-            ByteArrayOutputStream().use { output ->
-                val buffer = ByteArray(8 * 1024)
-                var total = 0
-                while (total < MAX_LOGCAT_BYTES) {
-                    val read = input.read(buffer, 0, minOf(buffer.size, MAX_LOGCAT_BYTES - total))
-                    if (read <= 0) break
-                    output.write(buffer, 0, read)
-                    total += read
-                }
-                output.toByteArray()
-            }
-        }.also { process.destroy() }
-    }.getOrElse { failure ->
-        "logcat unavailable: ${failure.message ?: failure::class.java.simpleName}\n"
-            .toByteArray(Charsets.UTF_8)
     }
 
     private fun timestampForFilename(): String =
@@ -737,6 +710,35 @@ class LabyrinthDebugDashboardServer(
     }
 
     private companion object {
+        private fun collectOwnProcessLogcat(): ByteArray = runCatching {
+            val process = ProcessBuilder(
+                "logcat",
+                "-d",
+                "-v",
+                "threadtime",
+                "--pid=${android.os.Process.myPid()}",
+                "-t",
+                LOGCAT_LINE_LIMIT.toString(),
+            ).redirectErrorStream(true).start()
+            process.inputStream.use { input ->
+                ByteArrayOutputStream().use { output ->
+                    val buffer = ByteArray(8 * 1024)
+                    var total = 0
+                    while (total < MAX_LOGCAT_BYTES) {
+                        val read = input.read(buffer, 0, minOf(buffer.size, MAX_LOGCAT_BYTES - total))
+                        if (read <= 0) break
+                        output.write(buffer, 0, read)
+                        total += read
+                    }
+                    output.toByteArray()
+                }
+            }.also { process.destroy() }
+        }.getOrElse { failure ->
+            "logcat unavailable: ${failure.message ?: failure::class.java.simpleName}\n"
+                .toByteArray(Charsets.UTF_8)
+        }
+    
+    
         const val LOG_TAG = "LabyrinthDebugHttp"
         const val IPV4_LOOPBACK = "127.0.0.1"
         const val DEFAULT_PORT = 8765

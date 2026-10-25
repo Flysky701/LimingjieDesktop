@@ -1,0 +1,17 @@
+{
+  "commit": "b809b196988b019571caf5679ccf8d7ebb7f072d",
+  "os": "Windows_NT",
+  "release": "10.0.26300",
+  "arch": "x64",
+  "mainFiles": 189,
+  "mainLines": 56587,
+  "coupledFiles": 63,
+  "coupledUiFiles": 10,
+  "testFiles": 163,
+  "testLines": 34502,
+  "assetBytes": 39464426,
+  "versionName": "1.0.18",
+  "versionCode": 10018,
+  "roomSchema": 4,
+  "captureIntervalMillis": 300
+}

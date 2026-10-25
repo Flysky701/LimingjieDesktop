@@ -3,11 +3,6 @@ package com.landosol.toolbox.protocol.bilibili
 import android.content.Context
 import android.os.Build
 
-data class GameProtocolProfile(
-    val appVersion: String,
-    val headers: Map<String, String>,
-)
-
 /**
  * 协议层的游戏包不再固定为 B 服：由调用方传入已确认的渠道包名
  * （账号所属服务器的客户端，见 GameServer），使渠道服客户端也能提供 APP-VER。

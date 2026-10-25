@@ -1,0 +1,1 @@
+com/landosol/toolbox/automation/accessibility/ForegroundWindowTrackingTest.kt # X | Android AccessibilityEvent event tracker excluded

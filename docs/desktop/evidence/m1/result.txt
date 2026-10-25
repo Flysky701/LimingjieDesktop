@@ -1,0 +1,7 @@
+Command: desktop/gradlew.bat -p desktop :shared:test :shared:checkShimCollisions :shared:checkUpstreamDrift
+Exit code: 0
+Tests: 1252; passed: 1206; skipped: 46; failures/errors: 0
+Framework shim classes checked: 25
+Room schema v4 identityHash: bfde7e38b202249fe444412498f13b28
+Android source snapshot unchanged after tests.
+Android SDK/CI validation pending; no real game verification.

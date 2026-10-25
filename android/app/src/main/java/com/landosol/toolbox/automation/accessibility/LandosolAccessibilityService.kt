@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 
-const val GAME_NOT_FOREGROUND_REASON = "游戏不在前台"
+
 
 /**
  * TYPE_APPLICATION_OVERLAY 会以宿主包名和 android.view.View 上报窗口事件。
