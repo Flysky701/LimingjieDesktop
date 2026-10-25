@@ -1,0 +1,22 @@
+started=2026-10-25T11:38:00.223525Z; mode=Compatibility; no touch methods called
+event=截图 Raw：p50 240 ms，p95 321 ms
+event=截图 Png：p50 528 ms，p95 582 ms
+event=上游只在 1920×1080 下验证过
+foreground=com.bilibili.priconne
+HIT frame=43 timeMillis=13513 file=private-trigger-1.png size=1280x720 original=UNKNOWN/0.0 final=BATTLE_FAILED/0.5652716352716353 layout=TWO_BUTTON failureConfidence=0.5652716352716353
+  coverage={endLight=0.11818181818181818, retryBlue=0.7363636363636363, legacyReportLight=0.777027027027027, currentReportBlue=0.7065972222222222, titleBlue=0.18242424242424243}
+  titleLogo=0.5362699474216752 titlePrompt=0.0 anchors=entry.title.logo:0.5362699474216752, entry.selection.count_none:0.4461900807768536, entry.selection.count_complete:0.42773008027002957, entry.selection.count_none_standard:0.3793796449715955, entry.selection.count_complete_standard:0.37373845272368494, entry.event_choice.single.select_button:0.3228762631627023, entry.dawn.ticket_label:0.3056609856192921, entry.node.retreat_standard:0.15801125223694087
+HIT frame=60 timeMillis=18962 file=private-trigger-2.png size=1280x720 original=TITLE_WAITING_TAP/0.47914419833226657 final=BATTLE_FAILED/0.6651583401583402 layout=TWO_BUTTON failureConfidence=0.6651583401583402
+  coverage={endLight=0.1318181818181818, retryBlue=0.725, legacyReportLight=0.831081081081081, currentReportBlue=0.0, titleBlue=0.4393939393939394}
+  titleLogo=0.5494686813487386 titlePrompt=0.47914419833226657 anchors=entry.title.logo:0.5494686813487386, entry.title.tap_prompt:0.47914419833226657, battle.in_progress.menu_button:0.20316778605528862, entry.event_choice.single.select_button:0.17471951748172407, entry.dawn.ticket_label:0.15481862703779914, entry.node.retreat:0.1546340380943885, entry.dawn.start_standard:0.13960342723057928, entry.shop.exit_confirm_button:0.13129970638473604
+HIT frame=61 timeMillis=19327 file=private-trigger-3.png size=1280x720 original=UNKNOWN/0.0 final=BATTLE_FAILED/0.6607138957138957 layout=TWO_BUTTON failureConfidence=0.6607138957138957
+  coverage={endLight=0.0, retryBlue=0.625, legacyReportLight=0.831081081081081, currentReportBlue=0.0, titleBlue=0.526060606060606}
+  titleLogo=0.5474684325233675 titlePrompt=0.3693656676747188 anchors=entry.title.logo:0.5474684325233675, entry.title.tap_prompt:0.3693656676747188, battle.in_progress.menu_button:0.20316778605528862, entry.dawn.start_standard:0.20197119109523196, entry.dawn.active:0.18989182674975733, entry.event_choice.single.select_button:0.16076975714783398, entry.dawn.ticket_label:0.13851572047489305, entry.shop.exit_confirm_button:0.13503604535697988
+HIT frame=62 timeMillis=19674 file=private-trigger-4.png size=1280x720 original=TITLE_WAITING_TAP/0.4694934480375481 final=BATTLE_FAILED/0.6013117663117663 layout=TWO_BUTTON failureConfidence=0.6013117663117663
+  coverage={endLight=0.06818181818181818, retryBlue=0.625, legacyReportLight=0.7837837837837838, currentReportBlue=0.0, titleBlue=0.39515151515151514}
+  titleLogo=0.5479855981988029 titlePrompt=0.4694934480375481 anchors=entry.title.logo:0.5479855981988029, entry.title.tap_prompt:0.4694934480375481, entry.dawn.active:0.2579123303513957, battle.in_progress.menu_button:0.20263229525325133, entry.event_choice.single.select_button:0.15848794330563104, entry.battle_team.roster_empty_notice:0.13937662387758218, entry.shop.exit_confirm_button:0.13531341875535488, entry.dawn.ticket_label:0.12439034164609658
+HIT frame=63 timeMillis=19999 file=private-trigger-5.png size=1280x720 original=TITLE_WAITING_TAP/0.4673722583859186 final=BATTLE_FAILED/0.6017158067158067 layout=TWO_BUTTON failureConfidence=0.6017158067158067
+  coverage={endLight=0.14772727272727273, retryBlue=0.625, legacyReportLight=0.7837837837837838, currentReportBlue=0.0, titleBlue=0.39636363636363636}
+  titleLogo=0.5480642090566046 titlePrompt=0.4673722583859186 anchors=entry.title.logo:0.5480642090566046, entry.title.tap_prompt:0.4673722583859186, battle.in_progress.menu_button:0.20263229525325133, entry.dawn.active:0.1975663106859719, entry.event_choice.single.select_button:0.1577377661570636, entry.battle_team.roster_empty_notice:0.14011426586185918, entry.shop.exit_confirm_button:0.1355484467564789, entry.dawn.ticket_label:0.12421191037795631
+SUMMARY elapsedMillis=20000 frames=63 hits=5 images=5 touchCommandCount=0
+lost=设备已断开，任务已停止

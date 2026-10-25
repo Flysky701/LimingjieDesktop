@@ -1,0 +1,5 @@
+private-trigger-1.png 1280x720 decoderDifferentPixels=0 original=UNKNOWN/0.0 layout=TWO_BUTTON failure=0.5652716352716353 final=BATTLE_FAILED sameAsRawCapture=true
+private-trigger-2.png 1280x720 decoderDifferentPixels=0 original=TITLE_WAITING_TAP/0.47914419833226657 layout=TWO_BUTTON failure=0.6651583401583402 final=BATTLE_FAILED sameAsRawCapture=true
+private-trigger-3.png 1280x720 decoderDifferentPixels=0 original=UNKNOWN/0.0 layout=TWO_BUTTON failure=0.6607138957138957 final=BATTLE_FAILED sameAsRawCapture=true
+private-trigger-4.png 1280x720 decoderDifferentPixels=0 original=TITLE_WAITING_TAP/0.4694934480375481 layout=TWO_BUTTON failure=0.6013117663117663 final=BATTLE_FAILED sameAsRawCapture=true
+private-trigger-5.png 1280x720 decoderDifferentPixels=0 original=TITLE_WAITING_TAP/0.4673722583859186 layout=TWO_BUTTON failure=0.6017158067158067 final=BATTLE_FAILED sameAsRawCapture=true

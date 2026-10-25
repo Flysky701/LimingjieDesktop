@@ -51,3 +51,36 @@
 第二次收尾发现本轮之外新启动了实例3（Android15）。没有启动、修改或关闭该实例；为避免影响并发使用，保留共享ADB server。这与第一轮在全部实例关闭后停止本轮server的收尾情况不同，不能写成此次也已停止全局server。
 
 脱敏文字摘要：`evidence/l1/readonly-1080-report.txt`。原始游戏截图含ID，仅留本机 `.tools/l2-probe-1080/`，没有提交；完整设备identity同样没有提交。
+
+## 标题误判精确抓帧与上游定位（2026-10-25）
+
+上述首尾截图并不是误判发生时的帧：四张首尾 PNG 离线回放均未触发战斗失败 detector。为确认实际原因，仅追加一次20秒只读采集，直接把真实 `DeviceService.capture()` 的每张 `PixelImage` 交给 `LabyrinthBattleFailureDetector`；只有命中时才保存同一帧、运行真实 processor 并记录原分类与颜色覆盖率。实例0开始前关闭，尺寸保持原720×1280、density240、无override，游戏实际截图1280×720；只启动游戏，不点击标题、不登录，不调用触控。采集63帧，精确命中5帧，触控命令计数0。结束后尺寸/密度未变，实例0恢复关闭，未操作外部实例3，保留共享ADB server。
+
+5张命中图逐张目视均为标题动画。保存后的PNG在真实桌面 processor 离线回放全部重现原始采集结果，包括原分类、失败布局及置信分数；全部被纯色 detector 判断为 `TWO_BUTTON` 并覆盖为 `BATTLE_FAILED`。两张的原分类为 `UNKNOWN`（标题提示正在闪烁），三张原本已经是 `TITLE_WAITING_TAP`。
+
+| 实际标题帧 | 原分类 | Logo分数 | 提示分数 | 失败分数 | 最终分类 |
+|---|---|---:|---:|---:|---|
+| 1 | UNKNOWN | 0.536270 | 0 | 0.565272 | BATTLE_FAILED |
+| 2 | TITLE_WAITING_TAP | 0.549469 | 0.479144 | 0.665158 | BATTLE_FAILED |
+| 3 | UNKNOWN | 0.547468 | 0.369366 | 0.660714 | BATTLE_FAILED |
+| 4 | TITLE_WAITING_TAP | 0.547986 | 0.469493 | 0.601312 | BATTLE_FAILED |
+| 5 | TITLE_WAITING_TAP | 0.548064 | 0.467372 | 0.601716 | BATTLE_FAILED |
+
+已排除本次怀疑的桌面图像差异：四张首尾图共5,990,400个像素，以及五张实际命中图共4,608,000个像素，ImageIO与Skia解码的完整ARGB逐像素一致，包含alpha；首尾图全部不透明。102张识别模板的两种解码结果也一致，桌面打包资源与 `android/app/src/main/assets` 原文件逐字节一致。直接从Android原目录用ImageIO读取模板，再运行共享纯Kotlin processor，在五张标题图及下表四个失败fixture上的原分类、失败结果和最终分类均与桌面装配完全一致。
+
+`LabyrinthBattleFailureRecognition.kt`、`LabyrinthEntryClassifier.kt`、`LabyrinthEntryFrameProcessor.kt` 的Android原源码与桌面构建生成源码全文一致。定位到 `LabyrinthEntryFrameProcessor` 第551行无条件运行纯色失败检测，第559行开始无条件以其结果覆盖原分类。标题动画的蓝色背景与浅色文字恰好满足该检测的颜色覆盖门槛。**本次证据已确定为共享上游已有的误判/优先级缺口，非ImageIO改Skia造成的PNG像素、alpha、资源装配或仅低分辨率问题。** 这里验证了原源码及原资源的同图行为，没有声称另行运行了Android APK中的识别流程。
+
+针对“已识别标题，或Logo达到分类器既有阈值时，不让纯色失败结果覆盖”的思路，仅做离线条件评估，没有实施：
+
+| 上游既有真实失败fixture | 布局 | Logo分数 | 原失败分数 | 拟议条件会否拦截 |
+|---|---|---:|---:|---|
+| battle/battle_failure_20260910.jpg | THREE_BUTTON | 0.044614 | 0.708013 | 否 |
+| battle/ex_battle_failure_20260917.png | THREE_BUTTON | 0.033227 | 0.704905 | 否 |
+| labyrinth/battle-failure-two-button-20261004.jpg | TWO_BUTTON | 0 | 0.684127 | 否 |
+| ex/ex_monster_detail_live_20260910.jpg | THREE_BUTTON | 0.044614 | 0.708013 | 否 |
+
+最后一项与第一项字节相同，四个文件仅代表三张独立失败图，不能扩大为四个独立场景。仅保护原 `TITLE_WAITING_TAP` 可挡住本次3/5误判；再以Logo≥0.45否决失败检测，可挡住5/5，另外两帧保留UNKNOWN，不强行判标题。0.45是分类器默认的**页面分数**门槛；原标题条件是 `min(logo,prompt)` 再加分类间距，Logo单锚并非现有标题充分条件。因此“单锚否决失败”属于新的识别仲裁政策，这些样本不足以证明对其他画面普遍可靠。当前保留上游业务原样，修正需要扩大既定“只搬移/注入、不重写识别”的范围，不能作为桌面兼容修复悄然加入。
+
+现有 `LabyrinthEntryRecognitionSession` 第5194行起在收到 `BATTLE_FAILED` 且 `combatContext == null` 时结束本次识别，并明确提示未自动点击结束或重新挑战，随后立即返回。该条件下不会盲点结束/重试；本次只读探针实际也没有任何触控。此说明限定于没有战斗上下文的现有分支，不推断保留旧上下文等未测路径的行为，也不将停止保护视为误判已修复。
+
+无ID文字证据均位于 `docs/desktop/evidence/l1/`：`title-trigger-capture.txt` 保留原始命中帧号、时刻、五个ROI覆盖率与锚分数；`title-trigger-replay.txt` 为逐帧离线复现；`title-decoder-parity.txt` 为首尾图及模板解码对照；`title-original-assets-guard-assessment.txt` 为原源码/原资源一致性及拟议条件评估；`title-trigger-lifecycle.txt` 为恢复记录。含ID的实际触发图仅保留本机 `.tools/title-offline-probe/private-trigger-*.png`，不提交。临时探针源文件及手工任务也只在该目录；生产代码、分类阈值与自动测试入口均未修改。

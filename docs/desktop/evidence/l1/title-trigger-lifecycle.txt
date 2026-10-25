@@ -1,0 +1,10 @@
+instance0OriginallyStopped=True
+Before:
+Physical size: 720x1280
+Physical density: 240
+After:
+Physical size: 720x1280
+Physical density: 240
+sizeDensityUnchanged=True
+instance0Stopped=True
+sharedAdbLeftRunning=true; instance3NotOperated=true
