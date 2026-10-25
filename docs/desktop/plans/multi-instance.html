@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Independent Instance Tabs</title>
+<link rel="stylesheet" href="C:/Users/701/.codex/skills/html-plan/runtime/htmlplan.css">
+<script src="C:/Users/701/.codex/skills/html-plan/runtime/htmlplan.js" defer></script>
+<style data-mock-shared>
+  .ui{font:14px/1.65 "Segoe UI","Microsoft YaHei",sans-serif;background:#171c24;color:#e8edf5;padding:20px;border-radius:12px}
+  .ui h3{margin:0 0 12px;font-size:18px}.ui p{margin:7px 0}.muted{color:#a3afc0}.row{display:flex;justify-content:space-between;align-items:center;gap:12px}.card{padding:14px;margin:12px 0;border:1px solid #354051;border-radius:9px;background:#202733}.badge{color:#8be2b2}.warn{color:#f4c77b}.btn{display:inline-block;padding:6px 13px;margin:7px 6px 0 0;border-radius:6px;background:#34465f}.primary{background:#2877c9}.line{border-top:1px solid #354051;margin-top:12px;padding-top:12px}.small{font-size:12px}
+</style>
+<body>
+<header>
+  <h1>Independent Instance Tabs in Limingjie</h1>
+  <details class="thread"><summary>Why · 4 requests</summary>
+    <doc-quote via="prompt" from="the user">评估同时运行多个控制实例的可能性 控制 模拟器1-账号1 模拟器2-账号2</doc-quote>
+    <doc-quote via="prompt" from="the user">目前正在运行测试 明确下多开该如何设计</doc-quote>
+    <doc-quote via="prompt" from="the user">要么在运行前卡住用户，逼他必须用1920</doc-quote>
+    <doc-quote via="prompt" from="the user">以模拟器/账号为MainID，设定多个窗口标签页，不同的账号绑定不同的模拟器，在不同的标签页中运行不同的独立实例 标签页做在这里</doc-quote>
+  </details>
+</header>
+<main><doc-plan>
+  <doc-claim id="tabs">
+    <p>Each top tab controls one worker process and one data directory.</p>
+    <doc-mock frame="none" w="460"><template><div class="ui">
+      <div class="row" style="align-items:stretch;gap:5px"><div class="card" data-ref="one" style="margin:0;border-color:#4b9ff1;background:#253c56;padding:10px"><b>模拟器 1 · 账号 1</b><br><span class="badge small">● 运行中</span></div><div class="card" data-ref="two" style="margin:0;padding:10px"><b>模拟器 2 · 账号 2</b><br><span class="warn small">● 需要验证码</span></div><span class="btn" style="margin:0;align-self:center">＋</span></div>
+      <p class="line small">当前：模拟器 1 · 账号 1 · 1920 × 1080</p>
+      <h3>批量自动执行</h3><p class="muted">任务、画面、日志和记录随当前标签切换。</p>
+      <div class="card"><p>副本执行中…</p><span class="btn">停止当前实例 F7</span><span class="btn">全部停止</span></div>
+      <p class="muted small">切换标签不会暂停其他实例。顶部始终显示所有实例的状态。</p>
+    </div></template><doc-pin ref="two" title="Independent work">The other worker runs while this tab is selected.</doc-pin></doc-mock>
+    <doc-claim><p>The UI starts workers before it sends task commands.</p>
+      <doc-calls title="Launch order · sketch" caption="The UI process has no task graph."><script type="text/plain">
+~ main(args)                                      @ desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/Main.kt:32
++   **SupervisorWindow()**                        @ desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/ui/SupervisorWindow.kt:1
++     **WorkerLauncher.start(profile)**           @ desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/WorkerLauncher.kt:1
++   **WorkerMain(profile, controlChannel)**       @ desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/WorkerMain.kt:1
+    DataDirectories.resolve(args)                 @ desktop/platform/src/main/kotlin/com/landosol/toolbox/desktop/platform/DataDirectories.kt:19
+    InstanceLock.acquire(directory)               @ desktop/platform/src/main/kotlin/com/landosol/toolbox/desktop/platform/DataDirectories.kt:59
+    DesktopAppGraph(directory, database)           @ desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/Main.kt:46
+      </script></doc-calls>
+      <doc-claim at="desktop/platform/src/main/kotlin/com/landosol/toolbox/desktop/platform/DataDirectories.kt:19"><p><b>DataDirectories.kt:19</b> · resolve()</p><doc-code src="desktop/platform/src/main/kotlin/com/landosol/toolbox/desktop/platform/DataDirectories.kt" lines="19-33"></doc-code></doc-claim>
+    </doc-claim>
+    <doc-claim><p>One process keeps the existing global services isolated.</p>
+      <doc-code src="desktop/shared/src/main/kotlin/com/landosol/toolbox/desktop/shared/DesktopBindings.kt" lines="28-35" caption="The current code permits one installed service set per process."></doc-code>
+    </doc-claim>
+    <doc-claim><p>The UI reads snapshots and sends commands through an instance client.</p>
+      <doc-schema id="instance-client" lang="kotlin" title="InstanceClient · sketch"><script type="text/plain">
+interface InstanceClient {
+    val instanceId: UUID
+    val state: StateFlow<InstanceSnapshot>
+    suspend fun send(command: InstanceCommand): CommandResult
+}
+// Every command carries instanceId, commandId, and sessionGeneration.
+// The worker rejects a stale generation or a repeated start command.
+// State and log events carry instanceId, generation, and sequence.
+// A tab change never changes the target of an in-flight command.
+// UI forms, dialogs, pending edits, and navigation stay instance-local.
+// Unselected tabs stop preview transfer only; capture keeps its task rate.
+      </script></doc-schema>
+      <doc-note tone="info">The current UI calls DesktopAppGraph directly. Tabs require a client interface for task, account, settings, and device operations.</doc-note>
+    </doc-claim>
+    <doc-claim><p>The existing profile keeps its current data path.</p>
+      <doc-mock frame="none" w="460"><template><div class="ui"><h3>新建实例标签</h3><p>名称：测试号</p><p class="muted">现有数据保留在原处，作为第一个实例。新实例使用独立目录。</p><div class="card"><b>新实例内容</b><p>任务设置：使用默认值</p><p>账号：需要单独添加</p><p>模拟器：需要单独绑定</p><p class="muted small">不复制登录状态、运行记录或设备绑定。</p></div></div></template></doc-mock>
+      <doc-ask id="new-profile"><p>What task settings does a new profile receive?</p>
+        <label><input type="radio" name="new-profile" value="defaults" checked> The standard defaults <small>Keep the first release small.</small></label>
+        <label><input type="radio" name="new-profile" value="copy-settings"> Selected settings from another profile <small>Copy task settings only; exclude accounts and device bindings.</small></label>
+      </doc-ask>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim id="binding">
+    <p>Each tab keeps one emulator and one account bound.</p>
+    <doc-mock frame="none" w="460"><template><div class="ui"><h3>测试号 · 设置绑定</h3><div class="card"><p>模拟器：模拟器 2</p><p>账号：账号 2 · 所属服务器</p><p>实际画面：1920 × 1080</p></div><p class="warn">请确认模拟器里的游戏已登录账号 2。</p><p class="muted small">在助手中选择账号，不会自动切换游戏账号。</p><span class="btn primary">保存绑定</span><p class="line small">任务运行期间不可更换绑定。停止任务并断开连接后可以修改。</p></div></template></doc-mock>
+    <doc-claim><p>A stable profile ID survives an account rename or port change.</p>
+      <doc-schema id="binding-record" lang="kotlin" title="ControlBinding · sketch"><script type="text/plain">
+data class ControlBinding(
+    val profileId: UUID,         // The stable internal MainID.
+    val displayName: String,
+    val emulatorRef: EmulatorRef, // Adapter ID, or a user-confirmed target.
+    val preferredSerial: String, // A transport address, not an identity.
+    val accountId: Long,         // Local to this profile database.
+    val serverId: String,
+    val gameUid: String?,        // From account data; not a UI account name.
+    val bindingRevision: Long,
+)
+      </script></doc-schema>
+      <doc-note tone="warn">A boot ID identifies one boot. It is not a permanent emulator ID. A model name or cloned Android ID cannot prove identity.</doc-note>
+    </doc-claim>
+    <doc-claim><p>A restart requires identity proof or a new user confirmation.</p>
+      <doc-mock frame="none" w="460"><template><div class="ui"><h3>需要重新确认模拟器</h3><p>原模拟器已重启，或连接地址已变化。</p><p class="muted">能够确认同一实例时，只恢复连接。无法确认时，请重新选择并确认绑定。</p><span class="btn primary">确认设备</span><p class="small line">重新连接后仍需手动开始任务；不会改连列表中的第一台。</p></div></template></doc-mock>
+    </doc-claim>
+    <doc-claim><p>The account lease blocks concurrent tasks for the same known account.</p>
+      <doc-code title="Account ownership · sketch" lang="kotlin"><script type="text/plain">
+// Acquire before login or another stateful account operation.
+val key = accountIdentity(serverId, gameUid)
+require(key != null) { "请先完成账号身份确认" }
+val lease = sharedAccountLeases.tryAcquire(key, profileId)
+    ?: reject("该账号正在其他实例中执行任务")
+// Hold the lease through the complete workflow and pending requests.
+// Release only after this workflow stops.
+      </script></doc-code>
+      <doc-note tone="warn">A local database ID is not an account identity. The account lease does not prove the game has the same account open. Unknown identities require a separate setup flow before concurrent tasks.</doc-note>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim id="ownership">
+    <p>Only one worker can control a real emulator.</p>
+    <doc-mock frame="none" w="460"><template><div class="ui"><h3>此模拟器已被占用</h3><p>“日常号”正在控制这台模拟器。</p><div class="card"><p>127.0.0.1:7555</p><p>127.0.0.1:16480</p><p class="muted small">两个地址指向同一台模拟器，不可分别控制。</p></div><p>先在“日常号”中断开连接，再由这里连接。</p><span class="btn">选择其他模拟器</span></div></template></doc-mock>
+    <doc-claim><p>The process acquires the device lease before it starts MaaTouch.</p>
+      <doc-calls title="Device ownership · sketch" caption="Acquire the lease before any touch service setup."><script type="text/plain">
+~ establish(serial, touchMode, initial)            @ desktop/device/src/main/kotlin/com/landosol/toolbox/desktop/device/AdbDeviceService.kt:83
+    Read boot ID and target identity               @ desktop/device/src/main/kotlin/com/landosol/toolbox/desktop/device/AdbDeviceService.kt:98
++   **SharedLease.tryAcquire(deviceKey)**           @ desktop/platform/src/main/kotlin/com/landosol/toolbox/desktop/platform/SharedLease.kt:1
++   **ConfirmSameTargetAndBoot()**                  @ desktop/device/src/main/kotlin/com/landosol/toolbox/desktop/device/AdbDeviceService.kt:99
+    touchFactory.open(adb, serial, dataDirectory)   @ desktop/device/src/main/kotlin/com/landosol/toolbox/desktop/device/AdbDeviceService.kt:108
+~     MaaTouch.open()                              @ desktop/device/src/main/kotlin/com/landosol/toolbox/desktop/device/MaaTouch.kt:112
+      </script></doc-calls>
+      <doc-claim at="desktop/device/src/main/kotlin/com/landosol/toolbox/desktop/device/MaaTouch.kt:112"><p><b>MaaTouch.kt:112</b> · open()</p><doc-code src="desktop/device/src/main/kotlin/com/landosol/toolbox/desktop/device/MaaTouch.kt" lines="112-121" caption="The current setup removes the existing MaaTouch service on the target."></doc-code></doc-claim>
+    </doc-claim>
+    <doc-claim><p>All profiles use one lock directory for the Windows user.</p>
+      <doc-code title="Shared lease rules · sketch" lang="kotlin"><script type="text/plain">
+// All installations and portable copies use this same coordination root.
+val root = localAppData.resolve("LimingjieAssistant/runtime/leases")
+val deviceKey = sha256("device:v1:$validatedBootId")
+// Open the fixed lock file; acquire an operating-system file lock.
+// Keep the handle open while the connection owns the emulator.
+// Store the profile name and PID only as display metadata.
+// Never remove the lock file or take over on a heartbeat timeout.
+// An unreadable or ambiguous identity blocks control.
+      </script></doc-code>
+      <doc-note tone="info">Matching boot IDs block two controllers even if a snapshot caused the match. This is conservative. Old releases and other automation tools do not obey these leases.</doc-note>
+    </doc-claim>
+    <doc-claim><p>The lease remains held until this session can issue no actions.</p>
+      <doc-code title="Session shutdown · sketch" lang="kotlin"><script type="text/plain">
+session.revokeActionPermit()       // Reject new and queued actions.
+session.cancelAndJoinWorkflows()   // Include login and task requests.
+session.stopCaptureAndTouch()
+// Send remote cleanup only if the target and boot still match.
+// Do not kill an old PID on a restarted or replaced emulator.
+session.closeOwnedConnections()
+session.releaseAccountLease()
+session.releaseDeviceLease()
+      </script></doc-code>
+      <doc-note tone="warn">A session epoch rejects late results after stop or reconnect. Reconnect and touch recovery must acquire or retain the same lease before they deploy a service.</doc-note>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim id="lifecycle">
+    <p>A worker fault or stop affects only its tab.</p>
+    <doc-machine name="control" caption="Each tab has this independent lifecycle."><script type="text/plain">
+machine control initial ready
+state ready # The connection is ready. The device lease is held.
+state running # The task owns the account lease.
+state fault # Actions stop. The tab shows the reason.
+state closed final # This process has released its resources.
+
+| ready | running | closed |
+| . | fault | . |
+
+ready -start-> running : Start
+running -stop-> ready : Stop
+running -lost-> fault : Fault
+fault -connect-> ready : Recheck
+ready -exit-> closed : Exit
+fault -exit-> closed : Exit
+running -exit-> closed : Stop + exit
+    </script>
+      <div data-state="ready"><doc-mock frame="none" w="420"><template><div class="ui"><h3>日常号 · 准备开始</h3><p>模拟器 1 · 账号 1 · 1920×1080</p><span class="btn primary">开始当前实例任务</span><span class="btn">断开连接</span></div></template></doc-mock></div>
+      <div data-state="running"><doc-mock frame="none" w="420"><template><div class="ui"><h3>日常号 · 运行中</h3><p>当前任务和日志仅属于日常号。</p><span class="btn">停止当前实例任务</span><p class="muted small">F5 / F7 只作用于当前选中的实例。</p></div></template></doc-mock></div>
+      <div data-state="fault"><doc-mock frame="none" w="420"><template><div class="ui"><h3>日常号 · 已停止</h3><p class="warn">模拟器已断开。自动操作已停止。</p><p>测试号继续运行。</p><span class="btn">重新连接</span><p class="muted small">连接恢复后，重新检查实际截图尺寸，手动开始。</p></div></template></doc-mock></div>
+      <div data-state="closed"><doc-mock frame="none" w="420"><template><div class="ui"><h3>日常号 · 已关闭</h3><p>日常号的任务和连接已结束。</p><p>测试号的标签和任务保持运行。</p><p class="muted small">关闭标签不删除账号、配置或记录。</p></div></template></doc-mock></div>
+    </doc-machine>
+    <doc-claim><p>Start requires a fresh 1920×1080 screenshot for that emulator.</p>
+      <doc-code src="desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/adapters/device/VisualResolutionGuard.kt" lines="27-46" caption="Keep the current guard inside each process."></doc-code>
+      <doc-note tone="info">One emulator at 1280×720 blocks only that tab. Read-only preview remains available. Existing controlled client restart rules still apply.</doc-note>
+    </doc-claim>
+    <doc-claim><p>The UI distinguishes tab close from application exit.</p>
+      <doc-mock frame="none" w="460"><template><div class="ui"><h3>当前有 2 个实例正在运行</h3><p>退出助手将停止全部实例。</p><span class="btn primary">最小化并继续</span><span class="btn">停止全部并退出</span><span class="btn">取消</span><p class="line">关闭单个标签时：只停止该实例，保留其数据。</p><p class="muted small">验证码和错误先点亮对应标签，点击后再打开该实例的处理页面。</p></div></template></doc-mock>
+      <doc-ask id="close-tab"><p>What happens when a user closes a running tab?</p>
+        <label><input type="radio" name="close-tab" value="stop" checked> Stop that instance after confirmation <small>Keep its data; release its device.</small></label>
+        <label><input type="radio" name="close-tab" value="hide"> Hide the tab and keep its worker <small>Add a visible list of all hidden workers.</small></label>
+      </doc-ask>
+    </doc-claim>
+    <doc-claim><p>A worker stops when its supervisor control channel is lost.</p>
+      <doc-code title="Supervisor ownership · sketch" lang="kotlin"><script type="text/plain">
+// One UI process owns all worker control channels.
+// Channel EOF revokes the action permit immediately.
+// A bounded heartbeat timeout also revokes the permit.
+// Drain task requests; stop capture and touch; release leases; exit.
+// The supervisor also owns worker processes for bounded exit cleanup.
+// OS exit containment is a fallback if the UI crashes or a worker hangs.
+// Never include a shared ADB server in per-worker termination.
+// UI recovery starts workers idle. It never resumes a task implicitly.
+// A worker crash marks one tab as stopped. Other workers continue.
+      </script></doc-code>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim id="release">
+    <p>Two tabs must pass independent run tests before release.</p>
+    <doc-mock frame="none" w="460"><template><div class="ui"><h3>双开交付条件</h3><div class="card"><p>① 切换标签后，截图、任务、记录仍各自正确</p><p>② 同设备不同端口：第二个实例无法接管</p><p>③ 同账号并发任务：明确拦截</p><p>④ 停止、退出、失联一个实例：另一个继续</p><p>⑤ 一台分辨率不合格：只阻止这一台</p><p>⑥ 同时启动：数据锁和诊断端口无冲突</p><p>⑦ 总界面异常退出：后台任务停止；重开不自动续跑</p><p>⑧ 切换标签、延迟回复和验证码不会串到其他实例</p></div><p class="muted small">先用假设备与离线回放验证隔离，再做两台真实模拟器验收。真实游戏流程的通过结论单独记录。</p></div></template></doc-mock>
+    <doc-claim><p>The diagnostic server reports the port it actually bound.</p>
+      <doc-calls title="Remove the port race · sketch" caption="Bind once and keep the socket."><script type="text/plain">
+~ DesktopAppGraph.debugPort                       @ desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/DesktopAppGraph.kt:149
+-   Probe a port, then close its socket            @ desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/DesktopAppGraph.kt:149
+~   LabyrinthDebugDashboardServer.start()          @ android/app/src/main/java/com/landosol/toolbox/labyrinth/debug/LabyrinthDebugDashboardServer.kt:75
++     Bind loopback port 0 and retain the socket   @ android/app/src/main/java/com/landosol/toolbox/labyrinth/debug/LabyrinthDebugDashboardServer.kt:82
++     Return the actual port after bind succeeds  @ android/app/src/main/java/com/landosol/toolbox/labyrinth/debug/LabyrinthDebugDashboardServer.kt:89
+      </script></doc-calls>
+      <doc-note tone="info">The desktop passes port 0. The Android default stays unchanged. A bind failure produces no usable URL.</doc-note>
+    </doc-claim>
+    <doc-claim><p>The first release uses two tabs as its acceptance target.</p>
+      <doc-mock frame="none" w="460"><template><div class="ui"><h3>容量范围</h3><p>第一版以“两台模拟器、两个账号”为验收目标。</p><p class="muted">逐个加载识别模型，减少同时启动的峰值。实测 CPU、内存、截图延迟后，再确定推荐多开数量。</p><p class="small line">减少预览刷新不等于降低识别频率；后者需要另行验证任务时序。</p></div></template></doc-mock>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim aux="shared"><p>The profile catalog contains paths and labels, not account secrets.</p>
+    <doc-schema id="profile-record" lang="kotlin" title="InstanceProfile and LeaseOwner · sketch"><script type="text/plain">
+data class InstanceProfile(
+    val id: UUID,
+    val name: String,
+    val dataPath: Path, // Existing default path, or a new isolated directory.
+)
+data class LeaseOwner(
+    val profileId: UUID,
+    val displayName: String,
+    val processId: Long,
+    val generation: UUID, // Diagnostic metadata, not the lock itself.
+)
+// Catalog writes use a short OS lock and atomic file replacement.
+// Model binaries can remain shared program resources.
+// Accounts, settings, logs, caches, and run data stay profile-local.
+    </script></doc-schema>
+  </doc-claim>
+  <doc-claim aux="scope"><p>This plan defines the first release; it does not change the running test.</p>
+    <doc-mock frame="none" w="460"><template><div class="ui"><h3>本轮边界</h3><p>本页是设计草案；多开标签尚未实现或实测。</p><p>第一版：顶部标签、独立后台进程、绑定与互斥、状态通信、当前/全部停止、双开验证。</p><p class="muted">后续再考虑：账号轮换、共享识别进程、自动启动模拟器。</p><p class="small line">当前 desktop.4 测试继续运行。批量启动前关闭 PCR 作为单独修复实现，不操作正在测试的游戏。</p></div></template></doc-mock>
+  </doc-claim>
+</doc-plan></main>
+</body></html>
