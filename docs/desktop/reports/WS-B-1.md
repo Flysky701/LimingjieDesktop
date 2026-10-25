@@ -21,11 +21,11 @@ ProcessAdbExecutor(executable: String)
 AdbDeviceService(adb, dataDirectory, gamePackages, onEvent = {}, onLost = {})
 ```
 
-前三项定位/下载函数与设备 I/O 为 suspend。`AdbDeviceService.close()` 同时关闭其持有的 ADB 执行器。应用须把 `onLost` 接到已有任务停止路径，不在 Ready 观察器中恢复任务。测试可额外传入 `TouchConnectionFactory`，生产默认真实 MaaTouch。
+定位/下载函数与设备 I/O 为 suspend。`AdbDeviceService.close()` 同时关闭其持有的 ADB 执行器。应用须把 `onLost` 接到已有任务停止路径，不在 Ready 观察器中恢复任务。测试可额外传入 `TouchConnectionFactory`，生产默认真实 MaaTouch。
 
 ## 验证
 
-使用项目 JDK 21 和 Gradle 缓存，执行 `:device:test`；首次 26 项中一项合成子进程默认输出编码断言失败，修正 fixture 为显式 UTF-8 后定向复跑。随后新增的签名及生命周期场景分别执行对应测试类。最终 **30 项用例均已按相关类通过**，没有跳过项。
+使用项目 JDK 21 和 Gradle 缓存，执行 `:device:test`；首次 26 项中一项合成子进程默认输出编码断言失败，修正 fixture 为显式 UTF-8 后定向复跑。随后新增的签名及生命周期场景分别执行对应测试类。最终 **31 项用例均已按相关类通过**，没有跳过项；补充覆盖关闭时取消正在重启的触控服务。
 
 - 实际子进程：64 MiB stdout 与 8 MiB stderr 同时排空、超时杀父子进程、取消杀进程、普通并发上限与截图独立通道、全部错误文案、守护进程重试上限；含中文与空格的 argv 和设备端 shell 引号验证。
 - 截图：两种头长、三种像素格式、截断/无效头/未知格式、PNG、测速失败模式淘汰。

@@ -199,6 +199,7 @@ class AdbDeviceService(
     override suspend fun disconnect() {
         connectingJobs.toList().forEach { it.cancel() }
         reconnect?.cancel()
+        monitor?.cancel()
         lifecycle.withLock {
             reconnect = null
             stopSession("设备已断开，任务已停止")

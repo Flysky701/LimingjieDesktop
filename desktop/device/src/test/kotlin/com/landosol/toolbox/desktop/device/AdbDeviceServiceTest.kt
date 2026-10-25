@@ -142,4 +142,15 @@ class AdbDeviceServiceTest {
             assertTrue(first.gestures.isEmpty()); assertEquals(1, lost.size); assertEquals(3, opens.get())
         }
     }
+    @Test fun disconnectCancelsInFlightTouchRestart() = runBlocking {
+        val first = RecordingTouch(); val restarting = CompletableDeferred<Unit>(); val opens = AtomicInteger()
+        AdbDeviceService(FakeAdb(), directory.root.toPath(), emptySet(), touchFactory = TouchConnectionFactory { _, _, _ ->
+            if (opens.incrementAndGet() == 1) first else { restarting.complete(Unit); awaitCancellation() }
+        }).use { device ->
+            device.connect("fixture"); first.alive = false
+            withTimeout(3000) { restarting.await() }
+            withTimeout(1000) { device.disconnect() }
+            assertEquals(DeviceConnectionState.Disconnected, device.state.value)
+        }
+    }
 }
