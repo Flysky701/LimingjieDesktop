@@ -187,8 +187,9 @@ class DesktopAppGraph(
     }
 
     val automationSessionManager by lazy { AutomationSessionManager() }
+    val taskHost = DesktopTaskHost()
     val automationOverlayCoordinator by lazy {
-        AutomationOverlayCoordinator()
+        AutomationOverlayCoordinator(taskHost)
     }
     @Volatile
     private var selectedServer: SelectedAccountServer = SelectedAccountServer.NoAccount
@@ -832,6 +833,7 @@ class DesktopAppGraph(
                     { debugSocket?.close(); Unit }, { diagnostics.close() }, { database.close() }, { power.close() }, { network.close() })
                     .forEach { release -> runCatching(release).onFailure { Log.e(APP_LOG_TAG, "释放桌面资源失败", it) } }
                 DesktopBindings.release(installedServices)
+                previewState.value = null
             }
         }
     }
