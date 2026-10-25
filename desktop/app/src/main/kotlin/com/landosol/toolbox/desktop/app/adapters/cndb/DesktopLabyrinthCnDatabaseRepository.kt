@@ -23,7 +23,7 @@ class DesktopLabyrinthCnDatabaseRepository(
     client: OkHttpClient = OkHttpClient(),
     private val onNotice: (String) -> Unit = {},
     source: LabyrinthCnDatabaseSource? = null,
-    private val moveFile: (Path, Path) -> Unit = ::moveAtomic,
+    private val moveFile: (Path, Path) -> Unit = AtomicFiles::move,
 ) {
     private val directory = File(context.filesDir, DATABASE_DIRECTORY)
     private val databaseFile = File(directory, DATABASE_FILE_NAME)
@@ -75,7 +75,7 @@ class DesktopLabyrinthCnDatabaseRepository(
         catch (failure: java.nio.file.AtomicMoveNotSupportedException) { throw failure }
         catch (_: java.nio.file.FileSystemException) {
             // FB-08: the validated candidate is preserved rather than reported as installed.
-            moveAtomic(candidate.toPath(), pendingFile.toPath())
+            AtomicFiles.move(candidate.toPath(), pendingFile.toPath())
             deferred = true
         }
     }
@@ -135,15 +135,6 @@ class DesktopLabyrinthCnDatabaseRepository(
             }
             return digest.digest().joinToString("") { "%02x".format(it) }
         }
-    }
-}
-
-/** FB-04; will be shared with AtomicFiles.move when the assembly owner lands that common primitive. */
-private fun moveAtomic(source: Path, target: Path) {
-    for (attempt in 0..4) {
-        try { Files.move(source, target, ATOMIC_MOVE, REPLACE_EXISTING); return }
-        catch (failure: java.nio.file.AtomicMoveNotSupportedException) { throw failure }
-        catch (failure: java.nio.file.FileSystemException) { if (attempt == 4) throw failure; Thread.sleep(100) }
     }
 }
 

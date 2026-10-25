@@ -17,14 +17,20 @@ object AtomicFiles {
                 while (buffer.hasRemaining()) channel.write(buffer)
                 channel.force(true)
             }
-            for (attempt in 0..4) {
-                try { Files.move(temporary, path, ATOMIC_MOVE, REPLACE_EXISTING); return }
-                catch (failure: java.nio.file.AtomicMoveNotSupportedException) { throw failure }
-                catch (failure: java.nio.file.FileSystemException) {
-                    if (attempt == 4) throw failure
-                    Thread.sleep(100)
-                }
-            }
+            move(temporary, path)
         } finally { Files.deleteIfExists(temporary) }
+    }
+
+    /** Atomic replacement also supports large staged databases without loading them into memory. */
+    fun move(source: Path, target: Path) {
+        require(source.toAbsolutePath().parent == target.toAbsolutePath().parent) { "Atomic replacement requires the same directory" }
+        for (attempt in 0..4) {
+            try { Files.move(source, target, ATOMIC_MOVE, REPLACE_EXISTING); return }
+            catch (failure: java.nio.file.AtomicMoveNotSupportedException) { throw failure }
+            catch (failure: java.nio.file.FileSystemException) {
+                if (attempt == 4) throw failure
+                Thread.sleep(100)
+            }
+        }
     }
 }

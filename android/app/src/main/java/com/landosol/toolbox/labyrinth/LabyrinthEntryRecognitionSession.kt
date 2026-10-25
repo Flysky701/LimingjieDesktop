@@ -1136,6 +1136,7 @@ class LabyrinthEntryRecognitionSession(
     private val runTerminalListener: (suspend (LabyrinthRunTerminalEvent) -> Unit)? = null,
     /** Channel SDK login dialogs (九游) on the way from the title, read via accessibility. */
     private val channelPrompts: com.landosol.toolbox.automation.session.ChannelLoginPromptAssistant? = null,
+    private val actionScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
     private data class QueuedFrame(
         val sessionId: AutomationSessionId,
@@ -1145,7 +1146,6 @@ class LabyrinthEntryRecognitionSession(
 
     private val mutex = Mutex()
     private val persistenceMutex = Mutex()
-    private val actionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val actionInFlight = AtomicBoolean(false)
     private val stopRequested = AtomicBoolean(false)
 

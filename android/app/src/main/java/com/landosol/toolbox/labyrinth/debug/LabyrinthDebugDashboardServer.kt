@@ -40,6 +40,8 @@ class LabyrinthDebugDashboardServer(
     private val frameArchiveDirectory: File? = null,
     private val runtimeDiagnostics: LabyrinthRuntimeDiagnostics? = null,
     private val processLogSource: () -> ByteArray = { collectOwnProcessLogcat() },
+    private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
+    private val allowAddressReuse: Boolean = true,
 ) {
     private data class Snapshot(
         val json: ByteArray,
@@ -73,8 +75,8 @@ class LabyrinthDebugDashboardServer(
     fun start() {
         if (!running.compareAndSet(false, true)) return
         val server = runCatching {
-            ServerSocket().apply {
-                reuseAddress = true
+            serverSocketFactory().apply {
+                reuseAddress = allowAddressReuse
                 // Bind synchronously so the dashboard is already reachable before the UI can
                 // launch the external browser.
                 bind(InetSocketAddress(InetAddress.getByName(IPV4_LOOPBACK), port))

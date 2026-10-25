@@ -142,9 +142,9 @@ class GameSessionResetWorkflow(
     private val debugFramePublisher: ((CapturedFrame, GameSessionResetState, LabyrinthEntryFrameResult, AutomationOverlayPresentation) -> Unit)? = null,
     /** Channel SDK login dialogs (九游) recognised through accessibility, not frames. */
     private val channelPrompts: ChannelLoginPromptAssistant? = null,
+    private val actionScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
     private val mutex = Mutex()
-    private val actionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val inFlight = AtomicBoolean(false)
     private val _state = MutableStateFlow(GameSessionResetState())
     val state: StateFlow<GameSessionResetState> = _state.asStateFlow()

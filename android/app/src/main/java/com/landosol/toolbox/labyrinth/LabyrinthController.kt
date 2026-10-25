@@ -219,11 +219,11 @@ class LabyrinthController(
     private val beforeRerollLogin: suspend (accountId: Long) -> String? = { null },
     /** Runs after a standalone (non-batch) reroll ends; the batch cold-starts the client itself. */
     private val afterStandaloneReroll: suspend (accountId: Long) -> Unit = {},
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
 ) {
     // 缺少国服游戏包时，首页构造本 Controller 不应触发 BilibiliSDK 的包查询。
     // 协调器改为按需解析：仅在登录/验证码等真实操作走到时才求值。
     private val loginCoordinator by lazy { loginCoordinatorProvider() }
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var settingsAccountId: Long? = null
     private var frozenStart: Pair<AccountListItem, LabyrinthRerollConfig>? = null
     private var startRequested = false
