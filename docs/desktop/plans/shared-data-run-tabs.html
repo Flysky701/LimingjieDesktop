@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shared Data Run Tabs</title>
+<link rel="stylesheet" href="C:/Users/701/.codex/skills/html-plan/runtime/htmlplan.css">
+<script src="C:/Users/701/.codex/skills/html-plan/runtime/htmlplan.js" defer></script>
+<style data-mock-shared>
+.ui{font:14px/1.55 "Segoe UI","Microsoft YaHei",sans-serif;background:#1f1f1f;color:#ddd;border:1px solid #454545;border-radius:10px;overflow:hidden}.bar{padding:12px;border-bottom:1px solid #444}.muted{color:#aaa}.blue{color:#4ab2ff}.green{color:#81c995}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.card{padding:12px;margin:10px;border:1px solid #454545;border-radius:8px}.btn{padding:6px 10px;border-radius:5px;background:#313131;display:inline-block}.primary{background:#174b79}.pill{padding:4px 8px;border-radius:5px;border:1px solid #696969}.foot{padding:12px;border-top:1px solid #454545;display:flex;justify-content:space-between;align-items:center}.side{padding:12px;background:#181818}.shell{display:grid;grid-template-columns:72px 1fr}.side div{padding:10px 0}.run{padding:10px;min-width:0}.tabs{display:flex;gap:5px}.tabs label{padding:8px;border:1px solid #555;border-radius:7px 7px 0 0;cursor:pointer;font-size:12px}.pane{display:none;border:1px solid #555;border-radius:0 7px 7px 7px;min-height:260px}.select{position:absolute;opacity:0;pointer-events:none}#view1:checked~.tabs label[for=view1],#view2:checked~.tabs label[for=view2]{background:#174b79;border-bottom-color:#174b79}#view1:checked~.p1,#view2:checked~.p2{display:block}.body{padding:12px}.top{display:flex;justify-content:space-between;gap:8px}.small{font-size:12px}.table{width:100%;border-collapse:collapse}.table td,.table th{padding:9px;text-align:left;border-bottom:1px solid #454545;font-weight:400}.strong{font-weight:600}
+</style>
+<body>
+<header>
+  <h1>Shared Data and Device Run Tabs</h1>
+  <details class="thread"><summary>Why · 5 requests</summary>
+    <doc-quote via="prompt" from="the user">策略，账号数据， 每个实例共用</doc-quote>
+    <doc-quote via="prompt" from="the user">设备增加管理页， 可以连接不同的模拟器</doc-quote>
+    <doc-quote via="prompt" from="the user">连接设备1并绑定账号1， P1外层增加一个大框，成为一个标签页</doc-quote>
+    <doc-quote via="prompt" from="the user">切换标签页仅仅改变运行页的视角</doc-quote>
+    <doc-quote via="prompt" from="the user">共用一套全局策略（推荐）</doc-quote>
+  </details>
+</header>
+<main><doc-plan>
+<doc-claim id="shared-library">
+  <p>All devices use one account list and one global strategy.</p>
+  <doc-mock frame="none" w="460"><template>
+    <div class="ui"><div class="bar strong">全局管理 · 所有运行页共用</div>
+      <div class="card"><div class="top"><b>账号</b><span class="blue">添加账号</span></div><p>账号 1 <span class="muted">· 绑定模拟器 1</span></p><p>账号 2 <span class="muted">· 绑定模拟器 2</span></p><div class="small muted">账号只添加一次；绑定不会切换游戏内登录账号。</div></div>
+      <div class="card" data-ref="policy"><div class="top"><b>策略与角色评分</b><span class="green">全局共用</span></div><p>全局策略 v8 已保存</p><p class="small muted">运行中的任务继续使用 v7；下次启动使用 v8。</p></div>
+      <div class="bar small muted">记录统一查看，可按设备、账号和任务筛选。</div>
+    </div>
+  </template><doc-pin ref="policy" title="One saved strategy">Each task uses a fixed version until it stops.</doc-pin></doc-mock>
+  <doc-claim>
+    <p>The main process owns shared data and all durable writes.</p>
+    <doc-flow caption="Workers use the data service through the control channel."><script type="text/plain">
+ui = Global pages
+store = Shared data service [db]
+a = Device 1 worker
+b = Device 2 worker
+| ui | store |
+| a  | b     |
+ui -> store : save
+store -> a : task data
+store -> b : task data
+a -> store : run result
+b -> store : run result
+    </script></doc-flow>
+    <doc-note tone="warn">A shared folder does not create a shared data service. Workers must not write separate account databases.</doc-note>
+    <doc-claim at="desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/control/WorkerMain.kt:33">
+      <p><b>WorkerMain.kt:33</b> · runWorkerMain()</p>
+      <doc-code src="desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/control/WorkerMain.kt" lines="28-36" hl="33-34" caption="D6 opens a complete database in each worker. This ownership must change."></doc-code>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim>
+    <p>A saved strategy applies when the next task starts.</p>
+    <doc-code title="Task strategy · sketch" lang="kotlin"><script type="text/plain">
+data class StrategyVersion(
+    val revision: Long,
+    val settings: LabyrinthStrategySettings,
+)
+// Copy all maps and sets at task start.
+val runStrategy = sharedStrategy.readImmutableVersion()
+runner.start(binding, taskOptions, runStrategy)
+// A later save does not change runStrategy.
+    </script></doc-code>
+    <doc-ask id="strategy-scope"><p>Which strategy source do all tasks use?</p>
+      <label><input type="radio" name="strategy-scope" value="one" checked> One global strategy <small>The user confirmed this choice.</small></label>
+      <label><input type="radio" name="strategy-scope" value="library"> A shared strategy library <small>Each device selects a strategy.</small></label>
+    </doc-ask>
+    <doc-note tone="info">The confirmed choice is one global strategy. Account data and strategy edits must retain the D5 validation rules.</doc-note>
+  </doc-claim>
+</doc-claim>
+
+<doc-claim id="run-view">
+  <p>Tabs change only the Run page view.</p>
+  <doc-mock frame="none" w="480"><template>
+    <div class="ui"><div class="bar top"><b>黎明界助手</b><span class="small muted">布局示意 · 点击标签切换</span></div>
+      <div class="shell"><div class="side"><div class="blue">运行</div><div>账号</div><div>策略</div><div>设备</div><div>记录</div><div>设置</div></div>
+        <div class="run" data-ref="runbox"><input class="select" type="radio" id="view1" name="view" checked><input class="select" type="radio" id="view2" name="view">
+          <div class="tabs"><label for="view1">模拟器 1 · 账号 1</label><label for="view2">模拟器 2 · 账号 2</label></div>
+          <div class="pane p1"><div class="body"><div class="row small"><span class="pill">模拟器 1</span><span class="pill">账号 1</span><span class="green">运行中</span></div><div class="card"><b>批量自动执行</b><p>目标 A · 第 2 / 10 次</p><p class="small muted">当前画面、日志和进度都属于模拟器 1。</p></div></div><div class="foot"><span class="small">全局策略 v7</span><span class="btn">暂停</span><span class="btn">停止 F7</span></div></div>
+          <div class="pane p2"><div class="body"><div class="row small"><span class="pill">模拟器 2</span><span class="pill">账号 2</span><span class="muted">空闲</span></div><div class="card"><b>开始今天的任务</b><p>目标 B · 计划 5 次</p><p class="small muted">模拟器 1 仍在后台运行。</p></div></div><div class="foot"><span class="small">下次使用策略 v8</span><span class="btn primary">开始 F5</span></div></div>
+        </div>
+      </div><div class="bar small">1 台运行中　<span class="blue">查看设备　　停止全部</span></div>
+    </div>
+  </template><doc-pin ref="runbox" title="One run view">Account and strategy pages stay outside this box.</doc-pin></doc-mock>
+  <doc-claim>
+    <p>Each device session owns its account binding and run state.</p>
+    <doc-schema id="binding" title="DeviceSession · sketch" lang="kotlin"><script type="text/plain">
+data class DeviceSession(
+    val sessionId: UUID,
+    val deviceId: UUID,
+    val accountId: Long?,
+    val activeRunId: UUID?,
+    val state: SessionState,
+)
+// accountId points to the shared account list.
+// Selecting a tab changes selectedSessionId only.
+    </script></doc-schema>
+    <doc-note tone="warn">The current database stores one selected account. Shared account records must not hold the active binding of every device.</doc-note>
+    <doc-claim at="android/app/src/main/java/com/landosol/toolbox/data/local/Daos.kt:38">
+      <p><b>Daos.kt:38</b> · AccountDao.selectAccount()</p>
+      <doc-code src="android/app/src/main/java/com/landosol/toolbox/data/local/Daos.kt" lines="38-49" hl="47" caption="The current selection clears the previous account for the whole database."></doc-code>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim>
+    <p>Start, pause, and stop affect only the visible session.</p>
+    <doc-code title="Run view control · sketch" lang="kotlin"><script type="text/plain">
+// Capture this ID when the user presses the button.
+val targetSessionId = runView.sessionId
+controls.stop(targetSessionId)
+
+// Tab selection does not call connect, login, or stop.
+runView.selectSession(nextSessionId)
+
+// This remains a separate, global action.
+controls.stopAll()
+    </script></doc-code>
+    <doc-note tone="info">Each session keeps its task options, progress, logs, preview, and drafts. A background captcha adds a badge to its tab.</doc-note>
+  </doc-claim>
+</doc-claim>
+
+<doc-claim id="device-manager">
+  <p>The device page manages all connections and account bindings.</p>
+  <doc-mock frame="none" w="480"><template><div class="ui">
+    <div class="bar top"><b>设备管理</b><span class="blue">重新检测　添加地址</span></div>
+    <table class="table small"><tr><th>设备</th><th>绑定账号</th><th>状态</th><th>操作</th></tr><tr><td>模拟器 1<br><span class="muted">1920 × 1080</span></td><td>账号 1</td><td class="green">运行中</td><td class="blue">查看运行</td></tr><tr><td>模拟器 2<br><span class="muted">1920 × 1080</span></td><td>账号 2</td><td>已连接</td><td class="blue">打开运行页</td></tr><tr><td>模拟器 3</td><td class="muted">选择账号</td><td>未连接</td><td class="blue">连接</td></tr></table>
+    <div class="bar muted small">运行时锁定绑定；停止后可换账号或断开。<br>一个模拟器的多个 ADB 地址只显示为一台设备。</div>
+  </div></template></doc-mock>
+  <doc-claim>
+    <p>A connected device opens a run tab without account copies.</p>
+    <doc-code title="Device actions · sketch" lang="kotlin"><script type="text/plain">
+val deviceId = devices.resolveStableId(adbAddress)
+devices.connect(deviceId)
+val binding = sessions.bindWhenIdle(deviceId, accountId)
+runView.open(binding.sessionId)
+// Never create a second binding for a device alias.
+// Never start a game task from connect or open.
+    </script></doc-code>
+    <doc-note tone="info">Account data stays in the main data directory. Existing D6 profile data stays intact; imports must be explicit.</doc-note>
+  </doc-claim>
+  <doc-claim>
+    <p>A running session keeps its binding until it stops.</p>
+    <doc-mock frame="none" w="440"><template><div class="ui"><div class="bar strong">模拟器 1 · 账号 1</div><div class="body"><p class="green">任务正在运行</p><p>切换标签：继续运行</p><p>更换账号、断开设备：先停止此任务</p><p>同一账号正在另一设备运行：阻止重复启动</p><p>设备离线：停止对应任务，其他设备继续</p></div></div></template></doc-mock>
+    <doc-ask id="close-tab"><p>What happens when the user closes a running tab?</p>
+      <label><input type="radio" name="close-tab" value="stop-first" checked> Ask to stop, then close <small>The user can cancel.</small></label>
+      <label><input type="radio" name="close-tab" value="hide"> Hide the view and keep the task <small>The device page can open it again.</small></label>
+    </doc-ask>
+  </doc-claim>
+  <doc-claim>
+    <p>D6 workers can keep device actions separate behind one interface.</p>
+    <doc-code src="desktop/shared/src/main/kotlin/com/landosol/toolbox/desktop/shared/DesktopBindings.kt" lines="28-34" hl="30" caption="The current services allow one installation per JVM. Worker reuse avoids a broad change to global state."></doc-code>
+    <doc-note tone="info">This is a medium to large integration change. Data ownership is the main work; the tab border is a small UI change.</doc-note>
+  </doc-claim>
+</doc-claim>
+
+<doc-claim aux="shared"><p>Shared records and runtime records have separate owners.</p>
+  <doc-schema id="owners" title="Ownership · sketch" lang="kotlin"><script type="text/plain">
+interface SharedDataService {
+    val accounts: SharedAccountRepository
+    val strategy: SharedStrategyRepository
+    val devices: SharedDeviceProfiles
+    val history: SharedRunHistory
+}
+interface DeviceRuntime {
+    val sessionId: UUID
+    val boundAccountId: Long
+    val runId: UUID?
+    val strategyRevision: Long
+    // Capture, OCR state, task state, and login session stay local.
+}
+  </script></doc-schema>
+</doc-claim>
+<doc-claim aux="scope"><p>D5 task behavior stays in place.</p>
+  <ul>
+    <li>Keep the batch PCR close check and the 1920 × 1080 screen check.</li>
+    <li>Keep account validation, strategy limits, save, cancel, and task checks.</li>
+    <li>Keep one shared account list, one global strategy, and one device page.</li>
+    <li>Use synthetic data for the first tests. Test one device before two real devices.</li>
+    <li>Keep D6 code at <code>codex/multi-instance-tabs-d6-preserved</code>, commit <code>3d449a1</code>.</li>
+    <li>This page is a design proposal. It does not change or start the running application.</li>
+  </ul>
+</doc-claim>
+</doc-plan></main>
+</body></html>
