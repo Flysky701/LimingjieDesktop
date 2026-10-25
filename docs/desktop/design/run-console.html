@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>黎明界助手 · 运行台（参考稿）</title>
+<style>
+:root{
+  --bg:#f4f5f9; --panel:#ffffff; --panel2:#f8f8fc; --line:#e6e7ef; --text:#1d1f2b; --muted:#6b6f80; --faint:#9a9db0;
+  --primary:#6952d5; --primary-weak:#efecfc; --primary-ink:#ffffff;
+  --ok:#1f9d6b; --ok-weak:#e4f5ee; --warn:#c98a10; --warn-weak:#fdf3df; --err:#d14b4b; --err-weak:#fde9e9; --info:#3a7bd5;
+  --nav:#ffffff; --shadow:0 1px 2px rgba(20,20,50,.05),0 2px 8px rgba(20,20,50,.04);
+}
+.dark{
+  --bg:#14151c; --panel:#1d1f29; --panel2:#232533; --line:#2d3040; --text:#e8e9f1; --muted:#a0a3b5; --faint:#6f7387;
+  --primary:#8c78f0; --primary-weak:#2c2850; --primary-ink:#ffffff;
+  --ok:#3cc48f; --ok-weak:#173328; --warn:#e0a83a; --warn-weak:#3a2f17; --err:#ef6b6b; --err-weak:#3d1e22; --info:#6ea4f0;
+  --nav:#181a23; --shadow:none;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{width:1280px;height:800px;overflow:hidden;font-family:"Microsoft YaHei UI","Noto Sans SC","Noto Sans CJK SC",sans-serif;font-size:13px;color:var(--text);background:var(--bg)}
+.app{display:grid;grid-template-columns:76px 1fr;grid-template-rows:52px 1fr 60px;height:800px}
+/* nav rail */
+.rail{grid-row:1/4;background:var(--nav);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px}
+.logo{width:40px;height:40px;border-radius:11px;background:var(--primary);color:#fff;font-weight:700;font-size:18px;display:flex;align-items:center;justify-content:center;margin-bottom:12px}
+.nav{width:64px;height:58px;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:var(--muted);font-size:11.5px}
+.nav svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.nav.on{background:var(--primary-weak);color:var(--primary);font-weight:600}
+.rail .grow{flex:1}
+.ver{font-size:10px;color:var(--faint);text-align:center;line-height:1.4}
+/* top bar */
+.top{grid-column:2;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+.chip{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);font-size:12.5px}
+.chip b{font-weight:600}
+.chip .sub{color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px var(--ok-weak)}
+.caret{color:var(--faint);font-size:10px}
+.top .grow{flex:1}
+.pill{height:26px;padding:0 10px;border-radius:13px;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600}
+.pill.run{background:var(--primary-weak);color:var(--primary)}
+.iconbtn{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--muted);border:1px solid var(--line);background:var(--panel2)}
+.iconbtn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8}
+/* main grid */
+.main{grid-column:2;display:grid;grid-template-columns:288px 1fr 340px;gap:14px;padding:14px;min-height:0}
+.col{display:flex;flex-direction:column;gap:14px;min-height:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:14px}
+.card h3{font-size:13.5px;font-weight:650;display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.card h3 .r{margin-left:auto;font-weight:400;font-size:12px;color:var(--primary)}
+.muted{color:var(--muted)} .faint{color:var(--faint)}
+/* readiness */
+.check{display:flex;align-items:center;gap:9px;padding:6px 0;font-size:12.5px}
+.check .ic{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none}
+.ic.ok{background:var(--ok-weak);color:var(--ok)} .ic.warn{background:var(--warn-weak);color:var(--warn)}
+.check .v{margin-left:auto;color:var(--muted);font-size:12px}
+.check .fix{margin-left:auto;color:var(--primary);font-size:12px;font-weight:600}
+/* task select */
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.opt{border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:var(--panel2)}
+.opt b{display:block;font-size:12.5px;font-weight:600;margin-bottom:2px}
+.opt span{font-size:11px;color:var(--muted)}
+.opt.on{border-color:var(--primary);background:var(--primary-weak)}
+.opt.on b{color:var(--primary)}
+.kv{display:grid;grid-template-columns:72px 1fr;row-gap:7px;font-size:12.5px;margin-top:12px}
+.kv dt{color:var(--muted)}
+.linkbtn{margin-top:12px;height:32px;border-radius:9px;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-weight:600;color:var(--primary);background:var(--panel)}
+/* live */
+.live{flex:1;display:flex;flex-direction:column;gap:12px;min-height:0}
+.hero{display:flex;align-items:flex-end;gap:12px}
+.hero .t{font-size:18px;font-weight:700}
+.hero .clock{margin-left:auto;font-variant-numeric:tabular-nums;font-size:22px;font-weight:650;letter-spacing:.5px}
+.stages{display:flex;gap:6px;margin-top:4px}
+.stage{flex:1;height:30px;border-radius:8px;background:var(--panel2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:11.5px;color:var(--muted)}
+.stage.done{background:var(--ok-weak);color:var(--ok);border-color:transparent}
+.stage.now{background:var(--primary);color:#fff;border-color:transparent;font-weight:600}
+.goal{display:grid;grid-template-columns:118px 1fr 44px;align-items:center;gap:10px;padding:5px 0;font-size:12.5px}
+.bar{height:8px;border-radius:4px;background:var(--panel2);border:1px solid var(--line);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--primary);border-radius:4px}
+.goal.cur .name{color:var(--primary);font-weight:650}
+.goal .n{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.stat{background:var(--panel2);border-radius:10px;padding:9px 10px}
+.stat b{display:block;font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.stat span{font-size:11px;color:var(--muted)}
+.route{display:flex;align-items:center;gap:0;margin:6px 0 2px}
+.node{width:16px;height:16px;border-radius:50%;border:2px solid var(--line);background:var(--panel);flex:none}
+.node.v{background:var(--primary);border-color:var(--primary)}
+.node.cur{border-color:var(--primary);box-shadow:0 0 0 4px var(--primary-weak)}
+.node.boss{border-radius:4px;transform:rotate(45deg)}
+.edge{flex:1;height:2px;background:var(--line)}
+.edge.v{background:var(--primary)}
+.team{display:flex;gap:8px;margin-top:4px}
+.ava{width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,#f6c9b5,#c9b6f2);position:relative}
+.ava:nth-child(2){background:linear-gradient(135deg,#b9d8f5,#e9c6e0)} .ava:nth-child(3){background:linear-gradient(135deg,#f3e0a8,#f0b8b8)}
+.ava:nth-child(4){background:linear-gradient(135deg,#bfe6cf,#b5c7f2)} .ava:nth-child(5){background:linear-gradient(135deg,#e5c3f3,#f5d2b0)}
+.ava em{position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);font-style:normal;font-size:10px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:0 4px;white-space:nowrap;color:var(--muted)}
+.relics{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.relic{font-size:11.5px;padding:3px 8px;border-radius:7px;background:var(--panel2);border:1px solid var(--line)}
+.decision{font-size:12.5px;padding:7px 10px;border-radius:9px;background:var(--panel2);display:flex;gap:8px;align-items:baseline}
+.decision .tag{font-size:11px;font-weight:600;color:var(--primary);flex:none}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.label{font-size:11.5px;color:var(--muted);margin-bottom:4px}
+/* right */
+.preview{position:relative;width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:linear-gradient(160deg,#2b3a67,#4a3a72 55%,#2a2440)}
+.preview .roi{position:absolute;border:2px solid #7cf0b5;border-radius:4px}
+.preview .roi.b{border-color:#ffd166}
+.preview .tagp{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;padding:3px 7px;border-radius:6px}
+.preview .fps{position:absolute;right:8px;top:8px;background:rgba(0,0,0,.45);color:#cfd3e6;font-size:10.5px;padding:2px 6px;border-radius:6px}
+.prow{display:flex;gap:8px;margin-top:8px;font-size:12px;color:var(--muted)}
+.prow b{color:var(--text);font-weight:600}
+.log{flex:1;min-height:0;display:flex;flex-direction:column}
+.filters{display:flex;gap:6px;margin-bottom:8px}
+.f{height:24px;padding:0 9px;border-radius:7px;font-size:11.5px;display:flex;align-items:center;background:var(--panel2);color:var(--muted)}
+.f.on{background:var(--primary-weak);color:var(--primary);font-weight:600}
+.f.s{margin-left:auto}
+.lines{flex:1;overflow:hidden;font-size:12px;line-height:1.55}
+.ln{display:grid;grid-template-columns:56px 1fr;gap:6px;padding:3px 0;border-bottom:1px dashed var(--line)}
+.ln .tm{color:var(--faint);font-variant-numeric:tabular-nums}
+.ln .k{font-weight:600}
+.ln.ok .k{color:var(--ok)} .ln.w .k{color:var(--warn)} .ln.e .k{color:var(--err)} .ln.i .k{color:var(--info)}
+.rep{font-size:10.5px;color:var(--faint);margin-left:4px}
+/* bottom */
+.bottom{grid-column:2;display:flex;align-items:center;gap:12px;padding:0 16px;border-top:1px solid var(--line);background:var(--panel)}
+.bottom .st b{display:block;font-size:13px}
+.bottom .st span{font-size:11.5px;color:var(--muted)}
+.bottom .grow{flex:1}
+.kbd{font-size:10.5px;color:var(--faint);margin-left:4px}
+.btn{height:38px;padding:0 18px;border-radius:10px;display:flex;align-items:center;gap:6px;font-weight:650;font-size:13px;border:1px solid var(--line);background:var(--panel);color:var(--text)}
+.btn.primary{background:var(--primary);color:#fff;border-color:transparent;padding:0 26px}
+.btn.danger{color:var(--err);border-color:var(--err-weak);background:var(--err-weak)}
+.btn.ghost{opacity:.45}
+</style></head>
+<body class="light">
+<div class="app">
+  <aside class="rail">
+    <div class="logo">黎</div>
+    <div class="nav on"><svg viewBox="0 0 24 24"><polygon points="7 4 20 12 7 20 7 4"/></svg>运行</div>
+    <div class="nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>账号</div>
+    <div class="nav"><svg viewBox="0 0 24 24"><path d="M4 6h10M4 12h16M4 18h7"/><circle cx="17" cy="6" r="2"/><circle cx="14" cy="18" r="2"/></svg>策略</div>
+    <div class="nav"><svg viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M11 18h2"/></svg>设备</div>
+    <div class="nav"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>记录</div>
+    <div class="nav"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>设置</div>
+    <div class="grow"></div>
+    <div class="ver">1.0.18<br>desktop.2</div>
+  </aside>
+
+  <header class="top">
+    <div class="chip"><span class="dot"></span><b>MuMu 12</b><span class="sub">127.0.0.1:16384 · 1280×720 · MaaTouch</span><span class="caret">▼</span></div>
+    <div class="chip"><span class="sub">账号</span><b>主号 · 国服 Bilibili</b><span class="caret">▼</span></div>
+    <div class="grow"></div>
+    <div class="pill run">● 批量执行中</div>
+    <div class="iconbtn" title="深浅色"><svg viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></div>
+  </header>
+
+  <main class="main">
+    <!-- left: readiness + task -->
+    <section class="col">
+      <div class="card">
+        <h3>就绪检查 <span class="r">重新检查</span></h3>
+        <div class="check"><span class="ic ok">✓</span>模拟器已连接<span class="v">MuMu 12</span></div>
+        <div class="check"><span class="ic ok">✓</span>分辨率与触控<span class="v">1280×720</span></div>
+        <div class="check"><span class="ic ok">✓</span>游戏在前台</div>
+        <div class="check"><span class="ic ok">✓</span>账号凭据<span class="v">已保存</span></div>
+        <div class="check"><span class="ic ok">✓</span>国服数据库<span class="v">最新</span></div>
+        <div class="check"><span class="ic ok">✓</span>识别模型<span class="v">已加载</span></div>
+        <div class="check"><span class="ic warn">!</span>关闭“播放角色加入动画”<span class="fix">我已确认</span></div>
+      </div>
+      <div class="card">
+        <h3>任务</h3>
+        <div class="seg">
+          <div class="opt on"><b>批量自动执行</b><span>按公会目标连续执行</span></div>
+          <div class="opt"><b>刷开局</b><span>刷到满意开局为止</span></div>
+          <div class="opt"><b>读取当前开局</b><span>只读，不点击</span></div>
+          <div class="opt"><b>只读识别</b><span>检查画面识别</span></div>
+        </div>
+        <dl class="kv">
+          <dt>难度</dt><dd>5</dd>
+          <dt>目标</dt><dd>5 个公会 · 共 15 次</dd>
+          <dt>首轮</dt><dd>复用已验证开局</dd>
+          <dt>策略</dt><dd>全局策略 · 已修改 3 项</dd>
+        </dl>
+        <div class="linkbtn">编辑完整配置</div>
+      </div>
+    </section>
+
+    <!-- center: live run -->
+    <section class="col live">
+      <div class="card">
+        <div class="hero">
+          <div><div class="label">当前目标 2 / 5</div><div class="t">破晓之星 · 第 1 / 3 次</div></div>
+          <div class="clock">00:42:18</div>
+        </div>
+        <div class="stages">
+          <div class="stage done">刷开局</div><div class="stage done">重置会话</div><div class="stage now">执行中</div><div class="stage">记录结果</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>本区域进度 <span class="r" style="color:var(--muted)">区域 3 · 节点 7 / 12</span></h3>
+        <div class="route">
+          <span class="node v"></span><span class="edge v"></span><span class="node v"></span><span class="edge v"></span><span class="node v"></span><span class="edge v"></span><span class="node v"></span><span class="edge v"></span><span class="node v"></span><span class="edge v"></span><span class="node v"></span><span class="edge v"></span><span class="node cur"></span><span class="edge"></span><span class="node"></span><span class="edge"></span><span class="node"></span><span class="edge"></span><span class="node"></span><span class="edge"></span><span class="node"></span><span class="edge"></span><span class="node boss"></span>
+        </div>
+        <div class="faint" style="font-size:11.5px;margin-top:6px">下一节点：商店 · 战斗：普通 · 第 1 队</div>
+        <div class="split" style="margin-top:12px">
+          <div><div class="label">当前队伍</div>
+            <div class="team"><div class="ava"><em>七七香</em></div><div class="ava"><em>亚里莎</em></div><div class="ava"><em>乌尔姆</em></div><div class="ava"><em>…</em></div><div class="ava"><em>…</em></div></div>
+          </div>
+          <div><div class="label">已获遗物 · 6</div>
+            <div class="relics"><span class="relic">遗物 A ×2</span><span class="relic">遗物 B</span><span class="relic">遗物 C</span><span class="relic">遗物 D</span><span class="relic">+2</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>批量目标</h3>
+        <div class="goal"><span class="name">美食殿堂</span><div class="bar"><i style="width:100%;background:var(--ok)"></i></div><span class="n">3/3</span></div>
+        <div class="goal cur"><span class="name">破晓之星</span><div class="bar"><i style="width:8%"></i></div><span class="n">0/3</span></div>
+        <div class="goal"><span class="name">咲恋救济院</span><div class="bar"><i style="width:0"></i></div><span class="n">0/3</span></div>
+        <div class="goal"><span class="name">王宫骑士团</span><div class="bar"><i style="width:0"></i></div><span class="n">0/3</span></div>
+        <div class="goal"><span class="name">拉比林斯</span><div class="bar"><i style="width:0"></i></div><span class="n">0/3</span></div>
+        <div class="stats" style="margin-top:10px">
+          <div class="stat"><b>4</b><span>已开始</span></div><div class="stat"><b>3</b><span>已通关</span></div><div class="stat"><b>0</b><span>异常</span></div><div class="stat"><b>12:51</b><span>平均每次</span></div>
+        </div>
+      </div>
+      <div class="decision"><span class="tag">最近决策</span><span>角色奖励：选择 亚里莎（评分 78，高于其余候选）</span></div>
+    </section>
+
+    <!-- right: preview + log -->
+    <section class="col">
+      <div class="card">
+        <h3>实时画面 <span class="r">收起</span></h3>
+        <div class="preview">
+          <span class="tagp">商店 · 置信度 0.92</span><span class="fps">≤2 fps</span>
+          <span class="roi" style="left:12%;top:30%;width:22%;height:40%"></span>
+          <span class="roi" style="left:39%;top:30%;width:22%;height:40%"></span>
+          <span class="roi b" style="left:66%;top:30%;width:22%;height:40%"></span>
+        </div>
+        <div class="prow"><span>帧 <b>8,214</b></span><span>动作 <b>132</b></span><span>上一步 <b>点击 购买</b></span></div>
+      </div>
+      <div class="card log">
+        <h3>日志 <span class="r">复制</span></h3>
+        <div class="filters"><span class="f on">关键</span><span class="f">全部</span><span class="f">警告/错误</span><span class="f s">⌕ 搜索</span></div>
+        <div class="lines">
+          <div class="ln i"><span class="tm">21:42:18</span><span><span class="k">进入</span> 商店页面</span></div>
+          <div class="ln"><span class="tm">21:42:11</span><span>战斗结束，返回地图<span class="rep">×2</span></span></div>
+          <div class="ln ok"><span class="tm">21:38:02</span><span><span class="k">选择</span> 角色奖励 · 亚里莎</span></div>
+          <div class="ln"><span class="tm">21:37:40</span><span>编组完成：第 1 队</span></div>
+          <div class="ln w"><span class="tm">21:35:12</span><span><span class="k">重试</span> 截图超时，已恢复</span></div>
+          <div class="ln ok"><span class="tm">21:29:54</span><span><span class="k">完成</span> 美食殿堂 第 3/3 次 · 通关</span></div>
+          <div class="ln i"><span class="tm">21:29:50</span><span><span class="k">开始</span> 破晓之星 第 1/3 次</span></div>
+          <div class="ln"><span class="tm">21:16:40</span><span>开局校验通过</span></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="bottom">
+    <div class="st"><b>正在执行：破晓之星 第 1/3 次</b><span>区域 3 · 节点 7/12 · 已运行 42 分钟</span></div>
+    <div class="grow"></div>
+    <div class="btn">暂停<span class="kbd">F6</span></div>
+    <div class="btn danger">停止<span class="kbd">F7</span></div>
+    <div class="btn primary ghost">开始<span class="kbd" style="color:#e8e4ff">F5</span></div>
+  </footer>
+</div>
+</body></html>
