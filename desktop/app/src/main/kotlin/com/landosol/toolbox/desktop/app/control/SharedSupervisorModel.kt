@@ -168,12 +168,8 @@ class SharedSupervisorModel(
     override suspend fun reconnectSession(sessionId: String) {
         val previous = mutex.withLock { sessions.value.firstOrNull { it.id == sessionId } } ?: return
         closeSession(sessionId)
-        val id = connectDevice(previous.serial)
-        val fresh = sessions.value.firstOrNull { it.id == id } ?: return
-        // A reboot/address reassignment has no trustworthy continuity: require an explicit new binding.
-        if (fresh.deviceId == previous.deviceId && previous.boundAccountId != null && fresh.boundAccountId == null) {
-            bindAccount(id, previous.boundAccountId)
-        }
+        // connectDevice restores only a freshly verified matching boot, including deleted-account fallback.
+        connectDevice(previous.serial)
     }
 
     override suspend fun selectSession(sessionId: String) = mutex.withLock { selectUnlocked(sessionId) }
