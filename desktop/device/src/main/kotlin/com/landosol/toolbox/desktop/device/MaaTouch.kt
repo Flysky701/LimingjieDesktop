@@ -115,7 +115,8 @@ class MaaTouchConnection private constructor(
             Files.createDirectories(local.parent)
             Files.write(local, MaaTouchProtocol.resourceBytes())
             adb.execute(listOf("push", local.toString(), MaaTouchProtocol.DEVICE_PATH), serial, 30_000).requireSuccess()
-            val cleanup = adb.shell(serial, listOf("pkill", "-f", "com.shxyke.MaaTouch"))
+            // A literal class name also matches the enclosing Android shell command and kills it.
+            val cleanup = adb.shell(serial, listOf("pkill", "-f", "[c]om[.]shxyke[.]MaaTouch[.]App"))
             if (cleanup is AdbResult.Failure && !(cleanup.kind == AdbFailureKind.NonZeroExit && cleanup.detail == "adb 退出码 1")) throw DeviceOperationException(cleanup.detail, cleanup.kind)
             val process = executor.openInteractive(listOf("shell", "CLASSPATH=${MaaTouchProtocol.DEVICE_PATH} app_process / com.shxyke.MaaTouch.App"), serial)
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
