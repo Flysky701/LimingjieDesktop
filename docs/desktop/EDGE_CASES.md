@@ -8,84 +8,84 @@
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| A-01 | 找不到 adb（没有模拟器自带的、PATH 中没有、也未指定） | 设备页显示「未找到 adb」，提供「指定路径」「下载 platform-tools」「查看说明」；不崩溃 | T | — |
-| A-02 | adb 路径包含中文或空格 | 正常执行 | T | — |
-| A-03 | adb server 版本冲突 | 停止重试，给出 R-12 的提示 | T（fixture） | — |
-| A-04 | adb server 未启动或被其他程序杀掉 | `adb start-server` 一次（FB-06）；仍失败则显示原因 | T | — |
-| A-05 | 设备 `unauthorized` | 提示在模拟器或设备上允许 USB 调试 | T（fixture） | — |
-| A-06 | 设备 `offline` | 进入 Lost → Reconnecting（FB-01） | T | — |
-| A-07 | 同时连接了多台设备 | 由用户选择；所有命令都带 `-s` | T | — |
-| A-08 | 同一设备以两种地址出现 | 按 serialno + boot_id 去重，优先 TCP 地址 | T | — |
-| A-09 | 模拟器还在开机（`sys.boot_completed` ≠ 1） | 每 2 s 复查，最长 120 s，期间显示「模拟器正在启动」；超时 Failed | T | — |
-| A-10 | Android 8 以下 | Failed：「不支持 Android 8 以下的模拟器」 | T | — |
-| A-11 | 任务运行中模拟器被关闭 | Lost；任务按上游停止路径结束并说明原因；重连 12 次后 Failed；**任务不续跑** | T（FakeAdb 时间线） | — |
-| A-12 | 模拟器重启（boot_id 变化） | 视为新会话：重新推送 MaaTouch、重新测速、刷新设备画像 | T | — |
-| A-13 | adb 命令卡住 | 超时后杀进程树，返回 `Timeout` | T | — |
-| A-14 | 输出非常大（数 MB 的 dumpsys） | 不死锁，完整读取 | T | — |
-| A-15 | 输出包含中文 | UTF-8 正确解码 | T | — |
-| A-16 | MuMu 多开，多个实例同时运行 | 列出全部实例和端口，由用户选择 | T（fixture）+ L | — |
-| A-17 | 雷电 9 的本地 ADB 连接未开启 | 检测不到时提示开启的位置 | L | — |
-| A-18 | 其他模拟器、WSA、真机 | 通过「自定义地址」实验性支持；文档写明不在官方支持范围 | D | — |
+| A-01 | 找不到 adb（没有模拟器自带的、PATH 中没有、也未指定） | 设备页显示「未找到 adb」，提供「指定路径」「下载 platform-tools」「查看说明」；不崩溃 | T | ProcessAdbExecutorTest#missingAndLaunchFailuresAreTyped；UI 展示未在该测试覆盖 |
+| A-02 | adb 路径包含中文或空格 | 正常执行 | T | ProcessAdbExecutorTest#argvSupportsChineseSpacesAndShellQuotes |
+| A-03 | adb server 版本冲突 | 停止重试，给出 R-12 的提示 | T（fixture） | ProcessAdbExecutorTest#daemonStartsOnlyOnceAndVersionConflictNeverRestarts、repeatedDaemonRestartIsConflictEvenWhenCommandSucceeds |
+| A-04 | adb server 未启动或被其他程序杀掉 | `adb start-server` 一次（FB-06）；仍失败则显示原因 | T | ProcessAdbExecutorTest#daemonStartsOnlyOnceAndVersionConflictNeverRestarts |
+| A-05 | 设备 `unauthorized` | 提示在模拟器或设备上允许 USB 调试 | T（fixture） | ProcessAdbExecutorTest#allKnownFailurePhrasesAreClassified（合成 stderr） |
+| A-06 | 设备 `offline` | 进入 Lost → Reconnecting（FB-01） | T | ProcessAdbExecutorTest#allKnownFailurePhrasesAreClassified；实际 offline 时间线待 L1-11 |
+| A-07 | 同时连接了多台设备 | 由用户选择；所有命令都带 `-s` | T | ProcessAdbExecutorTest#argvSupportsChineseSpacesAndShellQuotes；AdbDeviceServiceTest#discoveryDeduplicatesStableDeviceAndPrefersTcp |
+| A-08 | 同一设备以两种地址出现 | 按 serialno + boot_id 去重，优先 TCP 地址 | T | AdbDeviceServiceTest#discoveryDeduplicatesStableDeviceAndPrefersTcp |
+| A-09 | 模拟器还在开机（`sys.boot_completed` ≠ 1） | 每 2 s 复查，最长 120 s，期间显示「模拟器正在启动」；超时 Failed | T | AdbDeviceServiceTest#disconnectCancelsBootPollingImmediately；120 秒耗尽未验证，L1-01 |
+| A-10 | Android 8 以下 | Failed：「不支持 Android 8 以下的模拟器」 | T | AdbDeviceServiceTest#unsupportedAndroidFailsAndSleepIsVisibleWithoutWakeCommand |
+| A-11 | 任务运行中模拟器被关闭 | Lost；任务按上游停止路径结束并说明原因；重连 12 次后 Failed；**任务不续跑** | T（FakeAdb 时间线） | AdbDeviceServiceTest#failedTouchRestartLosesConnectionAndReconnectDoesNotSendActions；DesktopGraphIntegrationTest#realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources；12 次耗尽待 L1-11 |
+| A-12 | 模拟器重启（boot_id 变化） | 视为新会话：重新推送 MaaTouch、重新测速、刷新设备画像 | T | 未验证：L1-11（真实重启/boot_id 变化） |
+| A-13 | adb 命令卡住 | 超时后杀进程树，返回 `Timeout` | T | ProcessAdbExecutorTest#timeoutKillsParentAndDescendant |
+| A-14 | 输出非常大（数 MB 的 dumpsys） | 不死锁，完整读取 | T | ProcessAdbExecutorTest#drains64MbStdoutAnd8MbStderrConcurrentlyWithoutChangingBinary |
+| A-15 | 输出包含中文 | UTF-8 正确解码 | T | ProcessAdbExecutorTest#argvSupportsChineseSpacesAndShellQuotes |
+| A-16 | MuMu 多开，多个实例同时运行 | 列出全部实例和端口，由用户选择 | T（fixture）+ L | ScreenAndParserTest#discoveryAndPackageParsers（合成）；真实多开待 L1-01 |
+| A-17 | 雷电 9 的本地 ADB 连接未开启 | 检测不到时提示开启的位置 | L | 未验证：L1-01（未发现雷电安装） |
+| A-18 | 其他模拟器、WSA、真机 | 通过「自定义地址」实验性支持；文档写明不在官方支持范围 | D | 未验证：仅自定义地址入口已实现，其他模拟器支持说明待发行文档核对 |
 
 ## B. 截图
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| B-01 | Raw 头部 12 或 16 字节 | 都能正确解析 | T | — |
-| B-02 | 未知 `format` | 测速阶段淘汰 Raw，使用 PNG | T | — |
-| B-03 | 数据被截断、PNG 损坏或为空 | 丢弃本帧，计入连续失败；连续 5 次失败或 10 s 内没有成功帧 → Lost | T | — |
-| B-04 | 截图 p95 > 600 ms | 环境检查黄色警告，附调整建议 | T | — |
-| B-05 | 持续全黑帧 | 照常投递；超过 10 s 显示警告，不停止任务 | T | — |
-| B-06 | 开始时是竖屏（桌面或游戏未横屏） | 上游稳定门阻止开始，并给出上游的提示 | T（上游测试 + 桥接集成测试） | — |
-| B-07 | 运行中发生旋转 | 由上游旋转门处理 | T（上游测试） | — |
-| B-08 | 横屏但不是 1920×1080 | 警告，不阻断 | T | — |
-| B-09 | 消费者处理很慢 | 截图线程不积压，下一轮在处理完成后立即开始 | T | — |
-| B-10 | 没有注册消费者 | 帧被回收（上游 `dispatch` 语义） | T | — |
-| B-11 | 色彩空间字段不为 0 | 忽略，按像素格式解码 | T | — |
-| B-12 | 长时间运行（≥ 1 h dryRun） | 内存和句柄稳定；记录 Bitmap 创建数和回收数 | L（L2-soak） | — |
+| B-01 | Raw 头部 12 或 16 字节 | 都能正确解析 | T | ScreenAndParserTest#rawAllHeadersAndFormats |
+| B-02 | 未知 `format` | 测速阶段淘汰 Raw，使用 PNG | T | ScreenAndParserTest#benchmarkRejectsAnyFailedModeAndUsesSeparateChannel |
+| B-03 | 数据被截断、PNG 损坏或为空 | 丢弃本帧，计入连续失败；连续 5 次失败或 10 s 内没有成功帧 → Lost | T | ScreenAndParserTest#rawRejectsTruncationFormatAndInvalidDimensions、pngMatchesArgb；AdbDeviceServiceTest#fiveFailedCapturesNotifyLostBeforeReconnectAndNeverResumeTasks（5 次分支）；10 秒分支待 L1-03 |
+| B-04 | 截图 p95 > 600 ms | 环境检查黄色警告，附调整建议 | T | 未验证：L1-02（p95 警告分支） |
+| B-05 | 持续全黑帧 | 照常投递；超过 10 s 显示警告，不停止任务 | T | 未验证：L1-13 |
+| B-06 | 开始时是竖屏（桌面或游戏未横屏） | 上游稳定门阻止开始，并给出上游的提示 | T（上游测试 + 桥接集成测试） | MediaProjectionCaptureServiceTest#stable portrait metrics never consume the projection token（上游门）；桌面竖屏桥接待 L1-06 |
+| B-07 | 运行中发生旋转 | 由上游旋转门处理 | T（上游测试） | MediaProjectionCaptureServiceTest#a transient portrait rotation suspends frames and resumes after settling |
+| B-08 | 横屏但不是 1920×1080 | 警告，不阻断 | T | DesktopGraphIntegrationTest#realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources（480×270 可识别）；警告文案待 L1-02 |
+| B-09 | 消费者处理很慢 | 截图线程不积压，下一轮在处理完成后立即开始 | T | 未验证：L1-03（慢消费者节奏） |
+| B-10 | 没有注册消费者 | 帧被回收（上游 `dispatch` 语义） | T | DesktopAdaptersTest#captureUsesOwnedThreadAndStopsAfterFiveFailures（桌面帧桥接）；无消费者分支待补 |
+| B-11 | 色彩空间字段不为 0 | 忽略，按像素格式解码 | T | ScreenAndParserTest#rawAllHeadersAndFormats |
+| B-12 | 长时间运行（≥ 1 h dryRun） | 内存和句柄稳定；记录 Bitmap 创建数和回收数 | L（L2-soak） | 未验证：L2-05 |
 
 ## C. 触控与输入
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| C-01 | 坐标为负 | `Rejected("动作坐标无效")` | T | — |
-| C-02 | 坐标超出屏幕 | 不额外校验（与上游一致），在 DECISIONS 记录 | N/A 或 T（透传） | — |
-| C-03 | 滑动时长为 0、5001，或 duration + hold > 5000 | `Rejected("滑动时长超出范围")` | T | — |
-| C-04 | hold 为负 | 按 0 处理（上游 `coerceAtLeast(0)`） | T | — |
-| C-05 | 游戏不在前台 | `Rejected(GAME_NOT_FOREGROUND_REASON)` | T | — |
-| C-06 | 前台查询结果为 Unknown | 同 C-05 | T | — |
-| C-07 | MaaTouch 进程意外退出 | `Rejected("触控服务已断开")`，连接转为 Lost | T | — |
-| C-08 | MaaTouch 启动后 5 s 内没有输出头部 | 启动失败，环境检查标红并显示原因 | T | — |
-| C-09 | 设备上有残留的 MaaTouch 进程 | 启动前清理 | T | — |
-| C-10 | 并发提交多个动作 | actor 串行执行，逐个完成 | T | — |
-| C-11 | 兼容模式下 hold > 0 的滑动 | `Rejected("兼容模式不支持按住拖拽，请在设置中切换到 MaaTouch")` | T | — |
-| C-12 | 触控坐标系与帧尺寸既不相等也不互为转置 | `Rejected("触控坐标系与截图尺寸不一致")`，提示重新连接 | T | — |
-| C-13 | 模拟器设置为竖屏 1080×1920，游戏横屏 | 头部与帧互为转置，允许；坐标不缩放 | T + L | — |
-| C-14 | dryRun 会话 | 上游 `SessionBoundActionExecutor` 返回 DryRun，动作不会到达后端 | T（上游测试） | — |
-| C-15 | 用户同时用鼠标操作模拟器 | 不做防护（与上游一致），README 提醒 | D | — |
+| C-01 | 坐标为负 | `Rejected("动作坐标无效")` | T | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch（NaN）；负坐标待 L1-05 |
+| C-02 | 坐标超出屏幕 | 不额外校验（与上游一致），在 DECISIONS 记录 | N/A 或 T（透传） | 未验证：L1-05（透传行为） |
+| C-03 | 滑动时长为 0、5001，或 duration + hold > 5000 | `Rejected("滑动时长超出范围")` | T | MaaTouchTest#exactGestureBytesAndHoldWithoutDrift（总时长越界）；AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch（溢出）；0/5001 待补 |
+| C-04 | hold 为负 | 按 0 处理（上游 `coerceAtLeast(0)`） | T | MaaTouchTest#exactGestureBytesAndHoldWithoutDrift |
+| C-05 | 游戏不在前台 | `Rejected(GAME_NOT_FOREGROUND_REASON)` | T | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch；DesktopGraphIntegrationTest#realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources |
+| C-06 | 前台查询结果为 Unknown | 同 C-05 | T | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch |
+| C-07 | MaaTouch 进程意外退出 | `Rejected("触控服务已断开")`，连接转为 Lost | T | MaaTouchTest#persistentActorSerializesGesturesAndDetectsProcessExit；AdbDeviceServiceTest#failedTouchRestartLosesConnectionAndReconnectDoesNotSendActions |
+| C-08 | MaaTouch 启动后 5 s 内没有输出头部 | 启动失败，环境检查标红并显示原因 | T | 未验证：L1-05（握手超时分支） |
+| C-09 | 设备上有残留的 MaaTouch 进程 | 启动前清理 | T | MaaTouchTest#persistentActorSerializesGesturesAndDetectsProcessExit 经过清理路径；设备残留进程效果待 L1-05 |
+| C-10 | 并发提交多个动作 | actor 串行执行，逐个完成 | T | MaaTouchTest#persistentActorSerializesGesturesAndDetectsProcessExit |
+| C-11 | 兼容模式下 hold > 0 的滑动 | `Rejected("兼容模式不支持按住拖拽，请在设置中切换到 MaaTouch")` | T | AdbDeviceServiceTest#compatibilityIsExplicitAndRefusesHold |
+| C-12 | 触控坐标系与帧尺寸既不相等也不互为转置 | `Rejected("触控坐标系与截图尺寸不一致")`，提示重新连接 | T | AdbDeviceServiceTest#liveForegroundOverridesCacheAndUnknownRejectsTouch |
+| C-13 | 模拟器设置为竖屏 1080×1920，游戏横屏 | 头部与帧互为转置，允许；坐标不缩放 | T + L | MaaTouchTest#headerAndPackagedAsset（转置判定）；真实坐标待 L1-06 |
+| C-14 | dryRun 会话 | 上游 `SessionBoundActionExecutor` 返回 DryRun，动作不会到达后端 | T（上游测试） | DesktopGraphIntegrationTest#realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources |
+| C-15 | 用户同时用鼠标操作模拟器 | 不做防护（与上游一致），README 提醒 | D | 未验证：发行 README 提醒待核对；实机测试不同时手动操作 |
 
 ## D. 应用控制、前台检测、UI 节点树
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| D-01 | 当前账号对应的客户端未安装 | 上游 `NotInstalled` 结果和文案 | T | — |
-| D-02 | 安装了多个渠道客户端 | 上游 `Ambiguous` 处理 | T | — |
-| D-03 | `resolve-activity` 输出异常或没有启动入口 | 返回失败及原因 | T（fixture） | — |
-| D-04 | `am start` 退出码为 0 但输出包含 `Error:` | 判为失败 | T（fixture） | — |
-| D-05 | `force-stop` 后 3 s 内进程仍在 | 返回失败及原因 | T | — |
-| D-06 | `mCurrentFocus=null` | 改用 `mFocusedApp` | T（fixture） | — |
-| D-07 | 输入法、状态栏、系统对话框在前台 | 判为非游戏 | T（fixture） | — |
-| D-08 | 渠道 SDK 应用（如华为帐号）在前台 | 返回该应用的包名；`ChannelPromptScreen` 按规则中的包处理 | T（fixture）+ L3 | — |
-| D-09 | uiautomator 无法获取空闲状态 | 重试 3 次（FB-03），仍失败返回空列表，并显示警告 | T | — |
-| D-10 | uiautomator XML 中含 DTD 或外部实体 | 解析被拒绝 | T | — |
-| D-11 | 节点文字包含 emoji、换行或特殊字符 | 原样保留 | T | — |
-| D-12 | 点击时节点已消失或位置变化 | `GONE` | T | — |
-| D-13 | 点击时匹配到多个节点 | `GONE`（上游 `singleOrNull` 语义） | T | — |
-| D-14 | 拉取 APK 失败（空间不足等） | 显示错误；设备画像不可用，阻止登录 | T | — |
-| D-15 | 游戏更新（versionCode 或 lastUpdateTime 变化） | 重新读取签名 | T | — |
-| D-16 | 分包安装（base.apk + splits） | 只读取 base.apk 的签名 | T（fixture） | — |
-| D-17 | 模拟器屏幕休眠 | 禁止开始任务，提示唤醒 | T（fixture） | — |
-| D-18 | 游戏在运行中崩溃或被系统杀掉 | 前台变化，后续动作被拒绝，由上游会话逻辑处理 | L2 | — |
+| D-01 | 当前账号对应的客户端未安装 | 上游 `NotInstalled` 结果和文案 | T | 未验证：上游 GameClientResolverTest 可复用，具体用例由共享验收映射 |
+| D-02 | 安装了多个渠道客户端 | 上游 `Ambiguous` 处理 | T | 未验证：上游 GameClientResolverTest 可复用，具体用例由共享验收映射 |
+| D-03 | `resolve-activity` 输出异常或没有启动入口 | 返回失败及原因 | T（fixture） | ScreenAndParserTest#discoveryAndPackageParsers（正常入口）；异常输出分支待 L1-08 |
+| D-04 | `am start` 退出码为 0 但输出包含 `Error:` | 判为失败 | T（fixture） | AdbDeviceServiceTest#applicationLaunchDetectsExitZeroErrorAndForceStopPolls |
+| D-05 | `force-stop` 后 3 s 内进程仍在 | 返回失败及原因 | T | AdbDeviceServiceTest#applicationLaunchDetectsExitZeroErrorAndForceStopPolls（进程退出轮询）；3 秒耗尽待 L1-08 |
+| D-06 | `mCurrentFocus=null` | 改用 `mFocusedApp` | T（fixture） | ScreenAndParserTest#foregroundFixturesAreLiveAndFailClosed（Android 9/12 合成） |
+| D-07 | 输入法、状态栏、系统对话框在前台 | 判为非游戏 | T（fixture） | ScreenAndParserTest#foregroundFixturesAreLiveAndFailClosed（Android 9/12 合成） |
+| D-08 | 渠道 SDK 应用（如华为帐号）在前台 | 返回该应用的包名；`ChannelPromptScreen` 按规则中的包处理 | T（fixture）+ L3 | ScreenAndParserTest#foregroundFixturesAreLiveAndFailClosed（合成包名解析）；真实渠道页待 L3 |
+| D-09 | uiautomator 无法获取空闲状态 | 重试 3 次（FB-03），仍失败返回空列表，并显示警告 | T | AdbDeviceServiceTest#uiAutomatorRetriesThreeTimesThenWarnsAndCanRecover |
+| D-10 | uiautomator XML 中含 DTD 或外部实体 | 解析被拒绝 | T | ScreenAndParserTest#nodesPreserveTextBoundsAndRejectExternalEntities |
+| D-11 | 节点文字包含 emoji、换行或特殊字符 | 原样保留 | T | ScreenAndParserTest#nodesPreserveTextBoundsAndRejectExternalEntities（中文）；emoji/换行未验证，L1-10 |
+| D-12 | 点击时节点已消失或位置变化 | `GONE` | T | 未验证：L3 渠道弹窗点击 |
+| D-13 | 点击时匹配到多个节点 | `GONE`（上游 `singleOrNull` 语义） | T | 未验证：L3 渠道弹窗多节点 |
+| D-14 | 拉取 APK 失败（空间不足等） | 显示错误；设备画像不可用，阻止登录 | T | 未验证：L2-01（APK 拉取失败分支） |
+| D-15 | 游戏更新（versionCode 或 lastUpdateTime 变化） | 重新读取签名 | T | DeviceIdentityReaderTest#realApkSignatureUsesCertificateDerCachesUpdateKeyAndDeletesPulledApk |
+| D-16 | 分包安装（base.apk + splits） | 只读取 base.apk 的签名 | T（fixture） | DeviceIdentityReaderTest#realApkSignatureUsesCertificateDerCachesUpdateKeyAndDeletesPulledApk |
+| D-17 | 模拟器屏幕休眠 | 禁止开始任务，提示唤醒 | T（fixture） | AdbDeviceServiceTest#unsupportedAndroidFailsAndSleepIsVisibleWithoutWakeCommand（识别休眠不唤醒）；启动门待 L1-05 |
+| D-18 | 游戏在运行中崩溃或被系统杀掉 | 前台变化，后续动作被拒绝，由上游会话逻辑处理 | L2 | 未验证：L2-02，前台拒绝逻辑已有 C-05 证据 |
 
 ## E. OCR
 
