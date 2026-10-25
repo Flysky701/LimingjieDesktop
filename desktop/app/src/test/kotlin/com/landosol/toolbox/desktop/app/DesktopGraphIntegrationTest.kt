@@ -298,6 +298,48 @@ class DesktopGraphIntegrationTest {
         }
     }
 
+    @Test fun batchRejectsStaleServerCacheBeforeProcessQueryOrOpeningMutation() = runBlocking {
+        val fake=FixtureDevice(1920,1080,IntArray(1920*1080)).apply {
+            packageRunning=true
+            processQueryFails=true // Even a regression must stop at fake I/O, without attempting login.
+        }
+        val graph=DesktopAppGraph(directory.root.toPath().resolve("server-lag"),suppliedDevice=fake,startupUpdates=false)
+        try {
+            val accountId=graph.database.accountDao().insert(AccountEntity(alias="new-xiaomi-account",serverId=GameServer.CN_XIAOMI.storageId,
+                gameUid=null,credentialKey="synthetic-lag",isSelected=true,createdAt=1,updatedAt=1))
+            com.landosol.toolbox.security.AndroidKeystoreCredentialStore(graph.context).save("synthetic-lag",
+                com.landosol.toolbox.security.AccountCredentials("synthetic","synthetic"))
+            graph.connectDevice("fixture-only")
+            withTimeout(60_000) { graph.ocr.status.first { it is OcrEngineStatus.Ready } }
+            val ui=withTimeout(5000) { graph.labyrinthController.uiState.first { it.selectedAccount?.id==accountId && it.settingsReady } }
+            // Freeze only the asynchronous cache observer, then install the previous server value.
+            // The database and ready UI remain on the new account, making the race deterministic.
+            val observer=graph.javaClass.getDeclaredField("accountServerScope").apply { isAccessible=true }.get(graph) as CoroutineScope
+            observer.coroutineContext[Job]!!.cancelAndJoin()
+            graph.javaClass.getDeclaredField("selectedServer").apply { isAccessible=true }.set(graph,
+                com.landosol.toolbox.account.SelectedAccountServer.Known(GameServer.CN_BILIBILI))
+            assertEquals(GameServer.CN_BILIBILI,(graph.gameClientResolution as GameClientResolution.Available).server)
+            val candidateField=graph.labyrinthController.javaClass.getDeclaredField("explicitlyReadInitialOpening").apply { isAccessible=true }
+            val candidate=com.landosol.toolbox.labyrinth.batch.LabyrinthBatchReusableOpening(1,1,ui.selectedDifficulty)
+            candidateField.set(graph.labyrinthController,candidate)
+            val ledger=graph.javaClass.getDeclaredField("gameClientHardCloseLedger").apply { isAccessible=true }.get(graph)
+                as com.landosol.toolbox.automation.session.GameClientHardCloseLedger
+            ledger.issue(accountId,GameServer.CN_XIAOMI.packageName)
+
+            assertTrue(graph.startLabyrinthAutoRun(accountId,listOf(com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoal(
+                1,1,com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoalMode.ATTEMPTS))))
+            withTimeout(5000) { graph.taskStarting.first { !it } }
+            assertTrue(graph.log.text(),graph.log.text().contains("账号服务器与游戏客户端尚未同步"))
+            assertTrue("must not query or close either package",fake.processEvents.isEmpty())
+            assertEquals(0,fake.lifecycleActions.get())
+            assertEquals(0,fake.acceptedActions.get())
+            assertNull(graph.labyrinthBatchController.state.value)
+            assertEquals(candidate,candidateField.get(graph.labyrinthController))
+            assertTrue("preflight must preserve the existing ledger",ledger.consume(accountId,GameServer.CN_XIAOMI.packageName))
+            assertNotNull(graph.resolutionGuard.actionRejection())
+        } finally { withTimeout(15_000) { graph.shutdown() } }
+    }
+
     /** Map and expected route copied from the upstream workflow test; only network I/O is fake. */
     private class RerollApi : LabyrinthApi {
         val retired = mutableListOf<Long>()

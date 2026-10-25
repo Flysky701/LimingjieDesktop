@@ -761,7 +761,7 @@ class DesktopAppGraph(
         if (ui.selectedAccount?.id != id || ui.isWorking || ui.captcha != null || labyrinthEntryRecognitionSession.state.value.running) {
             return false
         }
-        val targetPackage = (gameClientResolution as GameClientResolution.Available).server.packageName
+        val frozenPackage = (gameClientResolution as GameClientResolution.Available).server.packageName
         startingState.value = true
         autoRunJob = autoRunScope.launch {
           try {
@@ -769,13 +769,17 @@ class DesktopAppGraph(
             captureService.start()
             // Only a checked startup can consume the one-shot opening or clear task state.
             resolutionGuard.actionRejection()?.let { error(it) }
-            check(labyrinthController.uiState.value.selectedAccount?.id == id && gamePackageName == targetPackage) { "账号或游戏客户端已变化，请重新启动批量任务" }
             check(ui.settingsReady) { "账号配置尚未加载完成" }
             check(goals.all { goal -> com.landosol.toolbox.labyrinth.LabyrinthRerollOptions.guilds.any { it.guildId == goal.guildId } }) { "请选择有效公会" }
             check(ui.selectedDifficulty in ui.availableDifficulties) { "请选择已解锁的有效难度" }
             check((ui.maxAttempts.toIntOrNull() ?: 0) in 1..com.landosol.toolbox.labyrinth.LabyrinthRerollOptions.MAX_ATTEMPTS) { "最大尝试次数无效" }
-            accountRepository.loadLoginMaterial(id) // Local credential validation only; no login yet.
+            // The account row is authoritative; selectedServer may lag behind the selected UI account.
+            val targetPackage = accountRepository.loadLoginMaterial(id).server.packageName
             resolutionGuard.beforeClientReset()?.let { error(it) }
+            check(labyrinthController.uiState.value.selectedAccount?.id == id &&
+                frozenPackage == targetPackage && gamePackageName == targetPackage) {
+                "账号服务器与游戏客户端尚未同步，请重新启动批量任务"
+            }
             val wasRunning = prepareBatchClient(actionDevice, targetPackage)
             currentCoroutineContext().ensureActive()
             resolutionGuard.beforeClientReset()?.let { error(it) }
