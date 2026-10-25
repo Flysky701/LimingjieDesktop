@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins { alias(libs.plugins.kotlin.jvm) }
 kotlin { jvmToolchain(21) }
 dependencies { implementation(libs.coroutines.core); implementation(libs.onnx); testImplementation(libs.junit) }
@@ -12,7 +14,7 @@ val verifyModels by tasks.registering {
     inputs.files(models)
     doLast {
         models.forEach { model ->
-            val actual = java.security.MessageDigest.getInstance("SHA-256").digest(model.asFile.readBytes())
+            val actual = MessageDigest.getInstance("SHA-256").digest(model.asFile.readBytes())
                 .joinToString("") { "%02x".format(it) }
             check(actual == modelHashes.getValue(model.asFile.name)) { "OCR model checksum mismatch: ${model.asFile.name}" }
         }
