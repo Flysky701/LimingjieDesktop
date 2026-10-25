@@ -40,7 +40,7 @@ fun main(args: Array<String>) {
         DesktopLog.initialize(directory.resolve("logs"))
         installCrashHandler(directory)
         val database = runBlocking { DatabaseRecovery.open(DesktopContext(directory.toFile())) { messages.add(it) } }
-        DesktopAppGraph(directory, database).also { app -> crashGraph = app; messages.forEach { app.log.add(it, true) } }
+        DesktopAppGraph(directory, database).also { app -> crashGraph = app; messages.forEach(app::addNotice) }
     } catch (failure: Exception) {
         lock?.close()
         JOptionPane.showMessageDialog(null, failure.message ?: "启动失败", "黎明界助手", JOptionPane.ERROR_MESSAGE)
@@ -68,6 +68,7 @@ fun main(args: Array<String>) {
         val reset by graph.gameSessionResetWorkflow.state.collectAsState()
         val starting by graph.taskStarting.collectAsState()
         val stopping by graph.taskStopping.collectAsState()
+        val notices by graph.notices.collectAsState()
         val taskActive = starting || stopping || reroll.isWorking || reroll.captcha != null || presentation != null || recognition.running || reset.running || batch?.stage?.name in setOf("REROLLING", "INVALIDATING_OLD_CLIENT_SESSION", "RUNNING_LABYRINTH", "RECORDING_RESULT")
         val trayState = rememberTrayState()
         val trayAvailable = java.awt.SystemTray.isSupported()
@@ -119,6 +120,9 @@ fun main(args: Array<String>) {
             window.minimumSize = Dimension(1100, 700)
             DesktopApp(graph)
             MaterialTheme {
+                if (notices.isNotEmpty()) AlertDialog(onDismissRequest = graph::dismissNotices,
+                    title = { Text("本地数据恢复提示") }, text = { Text(notices.joinToString("\n\n")) },
+                    confirmButton = { TextButton(onClick = graph::dismissNotices) { Text("我知道了") } })
                 if (confirmExit) AlertDialog(
                     onDismissRequest = { if (!exiting) confirmExit = false }, title = { Text("任务正在运行") },
                     text = { Column { Text("关闭窗口后，可以让任务继续运行，也可以停止任务并退出。"); Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(rememberChoice, { rememberChoice = it }); Text("记住我的选择") } } },

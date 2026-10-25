@@ -90,16 +90,20 @@ class DesktopAppGraph(
     private val startupUpdates: Boolean = true,
 ) : AutoCloseable {
     val log = UserLog()
+    private val noticeState = MutableStateFlow<List<String>>(emptyList())
+    val notices = noticeState.asStateFlow()
+    fun addNotice(message: String) { noticeState.update { it + message }; log.add(message, true) }
+    fun dismissNotices() { noticeState.value = emptyList() }
     private val failures = CoroutineExceptionHandler { _, failure ->
         Log.e("DesktopTask", "后台任务异常", failure)
         log.add("任务发生异常：${failure.message ?: failure.javaClass.simpleName}。请查看诊断日志。", true)
         if (!closed) stopAll("后台任务异常，已停止当前任务")
     }
-    val context = DesktopContext(dataDirectory.toFile()) { log.add("配置损坏，已保留备份：${it.name}", true) }
+    val context = DesktopContext(dataDirectory.toFile()) { addNotice("配置损坏，已使用默认值并保留备份：${it.absolutePath}") }
     private val filesDir get() = context.filesDir
     private val cacheDir get() = context.cacheDir
     private val assets get() = context.assets
-    val settings = DesktopSettingsStore(dataDirectory) { log.add("桌面设置已从默认值恢复，原文件已备份", true) }
+    val settings = DesktopSettingsStore(dataDirectory) { addNotice("桌面设置已从默认值恢复，原文件已备份：$it") }
     private val network = NetworkProxyController().also { it.setMode(settings.state.value.networkMode) }
     private val power = PowerSaveController()
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main + failures)

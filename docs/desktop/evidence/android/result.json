@@ -1,0 +1,21 @@
+{
+  "command": "android/gradlew.bat -p android lintDebug testDebugUnitTest assembleDebug --console=plain",
+  "exitCode": 0,
+  "jdk": "Temurin 17.0.20.1+1",
+  "sdk": "Android 35 / build-tools 34.0.0",
+  "tests": {
+    "tests": 1247,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 46
+  },
+  "lint": {
+    "Error": 0,
+    "Fatal": 0,
+    "Warning": 57,
+    "Information": 2
+  },
+  "apk": "android/app/build/outputs/apk/debug/app-debug.apk",
+  "androidWorkingTreeAfter": "clean",
+  "localLog": ".tools/android-verify.log"
+}
