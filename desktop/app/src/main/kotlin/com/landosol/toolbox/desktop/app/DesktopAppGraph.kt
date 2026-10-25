@@ -90,6 +90,7 @@ class DesktopAppGraph(
     private val startupUpdates: Boolean = true,
 ) : AutoCloseable {
     val log = UserLog()
+    val ux by lazy { com.landosol.toolbox.desktop.app.ui.DesktopUxController(this) }
     private val noticeState = MutableStateFlow<List<String>>(emptyList())
     val notices = noticeState.asStateFlow()
     fun addNotice(message: String) { noticeState.update { it + message }; log.add(message, true) }
@@ -187,6 +188,7 @@ class DesktopAppGraph(
                 is LabyrinthCnDatabaseUpdateResult.Failed ->
                     Log.w(DATABASE_UPDATE_LOG_TAG, result.reason)
             }
+            ux.refreshDatabase()
         }
     }
 
@@ -770,7 +772,7 @@ class DesktopAppGraph(
         val ready = device.state.value as? DeviceConnectionState.Ready ?: return
         persistIdentity(ready.device)
         settings.update { it.copy(lastDevice = serial) }
-        log.add("设备已就绪：${ready.device.label}，${ready.device.width} × ${ready.device.height}")
+        log.add("设备已就绪：${ready.device.label}，${ready.device.width} × ${ready.device.height}",kind=UserLogKind.KEY)
     }
 
     @Synchronized private fun persistIdentity(ready: DeviceReady) {
@@ -811,7 +813,7 @@ class DesktopAppGraph(
     fun stopAll(reason: String = "用户停止任务"): Job = synchronized(startLock) {
         stopJob?.takeIf { it.isActive }?.let { return it }
         stoppingState.value = true
-        log.add(reason)
+        log.add(reason,kind=UserLogKind.KEY)
         labyrinthController.stopWithReason(reason)
         gameClientHardCloseLedger.clear()
         val starting = autoRunJob
@@ -858,6 +860,7 @@ class DesktopAppGraph(
             if (stopped != true) Log.w(APP_LOG_TAG, "等待任务停止超过 10 秒，继续释放桌面资源")
         } finally {
             withContext(NonCancellable) {
+                ux.closeAndJoin()
                 withContext(Dispatchers.Main) { viewModels.clear() }
                 databaseUpdateScope.cancel(); accountServerScope.cancel(); autoRunScope.cancel(); mainScope.cancel(); recognitionScope.cancel(); resetScope.cancel()
                 listOf<() -> Unit>({ captureService.close() }, { device.close() }, { ocr.close() }, { captchaHost.close() },
@@ -873,7 +876,7 @@ class DesktopAppGraph(
     private fun UiNode.toPromptNode(): ChannelPromptNode = ChannelPromptNode(text, description, clickable,
         ChannelPromptBounds(bounds.left, bounds.top, bounds.right, bounds.bottom), children.map { it.toPromptNode() })
 
-    init { start() }
+    init { start(); ux.start() }
 
     private companion object {
         val ACTIVE_BATCH_STAGES = setOf(

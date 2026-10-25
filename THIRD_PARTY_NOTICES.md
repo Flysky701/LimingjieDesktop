@@ -132,3 +132,11 @@ reusable application icon, so this geometric icon is used for the desktop launch
 
 License text provenance is recorded in `licenses/SOURCES.md`. These notices do
 not replace the terms of the individual components.
+
+The desktop UI uses 20 unmodified Material Symbols Rounded SVG resources from
+[google/material-design-icons](https://github.com/google/material-design-icons),
+under Apache-2.0. The license is included in `licenses/material-symbols/LICENSE.txt`.
+The Light Modern and Dark Modern color mappings follow the default themes in
+[microsoft/vscode](https://github.com/microsoft/vscode/tree/main/extensions/theme-defaults/themes),
+under MIT; its license is included in `licenses/vscode/LICENSE.txt`. No VS Code
+code, extension, font or executable is required at runtime.

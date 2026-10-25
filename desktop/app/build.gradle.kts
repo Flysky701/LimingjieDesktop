@@ -13,6 +13,7 @@ dependencies {
     implementation(project(":shared")); implementation(project(":device")); implementation(project(":ocr")); implementation(project(":platform"))
     implementation(compose.desktop.currentOs); implementation(compose.material3)
     testImplementation(libs.junit)
+    testImplementation(compose.desktop.uiTestJUnit4)
 }
 compose.desktop {
     application {

@@ -59,7 +59,7 @@ val generateBuildConfig by tasks.registering {
     outputs.dir(output)
     doLast {
         val source = upstream.resolve("build.gradle.kts").readText()
-        val name = Regex("versionName = \"([^\"]+)\"").find(source)!!.groupValues[1] + "+desktop.1"
+        val name = Regex("versionName = \"([^\"]+)\"").find(source)!!.groupValues[1] + "+desktop.2"
         val code = Regex("versionCode = (\\d+)").find(source)!!.groupValues[1]
         output.get().file("com/landosol/toolbox/BuildConfig.kt").asFile.apply {
             parentFile.mkdirs()

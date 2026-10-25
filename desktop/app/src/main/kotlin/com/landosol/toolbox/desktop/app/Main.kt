@@ -13,6 +13,7 @@ import androidx.compose.ui.window.*
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.desktop.app.adapters.storage.DatabaseRecovery
 import com.landosol.toolbox.desktop.app.ui.DesktopApp
+import com.landosol.toolbox.desktop.app.ui.theme.DesktopTheme
 import com.landosol.toolbox.desktop.platform.*
 import com.landosol.toolbox.desktop.shared.*
 import java.awt.Dimension
@@ -85,14 +86,18 @@ fun main(args: Array<String>) {
         val taskActive = starting || stopping || reroll.isWorking || reroll.captcha != null || presentation != null || recognition.running || reset.running || batch?.stage?.name in setOf("REROLLING", "INVALIDATING_OLD_CLIENT_SESSION", "RUNNING_LABYRINTH", "RECORDING_RESULT")
         val trayState = rememberTrayState()
         val trayAvailable = java.awt.SystemTray.isSupported()
-        val icon = remember { AppPainter() }
+        val uiPreferences by graph.ux.preferences.state.collectAsState()
+        val icon = remember(taskActive,recognition.status) { AppPainter(if(recognition.status.name=="ERROR") Color(0xfff85149) else if(taskActive) Color(0xff2ea043) else Color(0xff0078d4)) }
         fun quit() {
             if (exiting) return
+            val proceed:()->Unit = {
             exiting = true
             scope.launch {
                 try { withContext(Dispatchers.IO) { graph.shutdown() } }
                 finally { instanceLock.close(); exitApplication(); exitProcess(0) }
             }
+            }
+            graph.ux.confirmNavigation?.invoke(proceed) ?: proceed()
         }
         fun closeRequested() {
             if (!taskActive) quit()
@@ -110,7 +115,10 @@ fun main(args: Array<String>) {
             }
         }
         LaunchedEffect(taskActive) {
-            if (!taskActive && wasTaskActive) trayState.sendNotification(Notification("黎明界助手", recognition.message ?: reroll.message ?: "任务已结束"))
+            if (!taskActive && wasTaskActive && uiPreferences.notifications) {
+                trayState.sendNotification(Notification("黎明界助手", recognition.message ?: reroll.message ?: "任务已结束"))
+                if(uiPreferences.sound) java.awt.Toolkit.getDefaultToolkit().beep()
+            }
             wasTaskActive = taskActive
         }
         if (trayAvailable) Tray(icon, state = trayState, tooltip = "黎明界助手 · ${presentation?.status ?: reroll.progress ?: "空闲"}", onAction = { visible = true; windowState.isMinimized = false }) {
@@ -131,8 +139,13 @@ fun main(args: Array<String>) {
         }
         Window(onCloseRequest = ::closeRequested, state = windowState, visible = visible, title = "黎明界助手 ${AppVersion.name}", icon = icon) {
             window.minimumSize = Dimension(1100, 700)
-            DesktopApp(graph)
-            MaterialTheme {
+            DesktopTheme(uiPreferences) {
+                DesktopApp(graph,window)
+                LaunchedEffect(reroll.captcha) {if(reroll.captcha!=null){
+                    if(uiPreferences.notifications)trayState.sendNotification(Notification("需要人工验证码","请回到黎明界助手完成验证。"))
+                    if(uiPreferences.sound)java.awt.Toolkit.getDefaultToolkit().beep()
+                    runCatching {java.awt.Taskbar.getTaskbar().requestWindowUserAttention(window)}
+                }}
                 if (notices.isNotEmpty()) AlertDialog(onDismissRequest = graph::dismissNotices,
                     title = { Text("启动提示") }, text = { Text(notices.joinToString("\n\n")) },
                     confirmButton = { TextButton(onClick = graph::dismissNotices) { Text("我知道了") } })
@@ -158,12 +171,12 @@ fun main(args: Array<String>) {
 }
 
 /** The upstream baseline has no launcher art; this simple desktop mark has no external asset. */
-private class AppPainter : Painter() {
+private class AppPainter(private val tone:Color=Color(0xff0078d4)) : Painter() {
     override val intrinsicSize = Size(64f, 64f)
     override fun DrawScope.onDraw() {
-        drawRoundRect(Color(0xFF7560BD), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * .24f))
+        drawRoundRect(tone, cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.width * .24f))
         drawCircle(Color.White, size.minDimension * .27f)
-        drawCircle(Color(0xFF7560BD), size.minDimension * .22f, center + androidx.compose.ui.geometry.Offset(size.width * .11f, -size.height * .07f))
+        drawCircle(tone, size.minDimension * .22f, center + androidx.compose.ui.geometry.Offset(size.width * .11f, -size.height * .07f))
         drawCircle(Color(0xFFFFDC92), size.minDimension * .07f, center + androidx.compose.ui.geometry.Offset(size.width * .22f, size.height * .2f))
     }
 }
