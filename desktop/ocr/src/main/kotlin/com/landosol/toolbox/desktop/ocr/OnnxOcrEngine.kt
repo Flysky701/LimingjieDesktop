@@ -15,7 +15,7 @@ import java.util.logging.Logger
 import kotlin.math.max
 import kotlin.math.min
 
-/** CPU PP-OCRv4 engine. The shared adapter owns pixel copying and dispatches callbacks to Main. */
+/** CPU PP-OCRv5 engine. The shared adapter owns pixel copying and dispatches callbacks to Main. */
 class OnnxOcrEngine internal constructor(
     private val backendFactory: () -> OcrBackend,
     private val warn: (String, Throwable?) -> Unit,
@@ -167,12 +167,12 @@ internal class OnnxBackend : OcrBackend {
             setInterOpNumThreads(1)
         }
         try {
-            detection = environment.createSession(resource("ch_PP-OCRv4_det_mobile.onnx"), options)
-            try { recognition = environment.createSession(resource("ch_PP-OCRv4_rec_mobile.onnx"), options) }
+            detection = environment.createSession(resource("ch_PP-OCRv5_det_mobile.onnx"), options)
+            try { recognition = environment.createSession(resource("ch_PP-OCRv5_rec_mobile.onnx"), options) }
             catch (error: Exception) { detection.close(); throw error }
         } finally { options.close() }
         try {
-            val characters = resource("ppocr_keys_v1.txt").toString(Charsets.UTF_8).lineSequence().filter { it.isNotEmpty() }.toList()
+            val characters = resource("ppocrv5_dict.txt").toString(Charsets.UTF_8).lineSequence().filter { it.isNotEmpty() }.toList()
             dictionary = listOf("") + characters + " "
         } catch (error: Exception) {
             recognition.close(); detection.close(); throw error
@@ -187,10 +187,22 @@ internal class OnnxBackend : OcrBackend {
         recognizeLine(blank)
     }
 
-    override fun recognize(image: OcrImage): String = OcrPostprocessing.join(detect(image).mapNotNull { box ->
-        val (text, score) = recognizeLine(image.crop(box))
-        if (text.isBlank()) null else RecognizedText(box, text, score)
-    })
+    override fun recognize(image: OcrImage): String {
+        val recognized = detect(image).mapNotNull { box ->
+            val (text, score) = recognizeLine(image.crop(box))
+            if (text.isBlank()) null else RecognizedText(box, text, score)
+        }
+        // FB-14: isolated, outlined counters can produce an all-zero detector map.
+        // A compact OCR crop gets one recognizer attempt with the unchanged 0.5 threshold.
+        // Larger/name/multiline crops stay on the detection path; solid images remain empty.
+        if (recognized.isEmpty() && image.width in 32..256 && image.height in 32..256 &&
+            image.width * 2 >= image.height && image.height * 2 >= image.width &&
+            image.pixels.any { (it and 0xffffff) != (image.pixels[0] and 0xffffff) }) {
+            Logger.getLogger(OnnxOcrEngine::class.java.name).fine("OCR 紧凑区域整图识别：${image.width}×${image.height}")
+            return recognizeLine(image).first
+        }
+        return OcrPostprocessing.join(recognized)
+    }
 
     private fun detect(image: OcrImage): List<TextBox> {
         val input = OcrPreprocessing.detection(image)

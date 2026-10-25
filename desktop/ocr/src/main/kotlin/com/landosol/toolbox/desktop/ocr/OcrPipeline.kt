@@ -48,13 +48,19 @@ internal object OcrPreprocessing {
     }
 
     fun recognition(image: OcrImage): TensorImage {
-        val width = ceil(48.0 * image.width / image.height).toInt().coerceIn(1, 1280)
+        val contentWidth = ceil(48.0 * image.width / image.height).toInt().coerceIn(1, 1280)
+        // PaddleOCR uses rec_image_shape=(3,48,320): short lines are padded on the right,
+        // rather than presenting the recognizer with an arbitrarily narrow sequence.
+        val width = max(320, contentWidth)
         // The recognizer expects height 48; extremely wide text is downscaled to fit then padded.
         val height = if (48.0 * image.width / image.height > 1280) max(1, (image.height * 1280.0 / image.width).roundToInt()) else 48
-        val normalized = normalized(image.resize(width, height), floatArrayOf(.5f, .5f, .5f), floatArrayOf(.5f, .5f, .5f))
-        if (height == 48) return normalized
+        val normalized = normalized(image.resize(contentWidth, height), floatArrayOf(.5f, .5f, .5f), floatArrayOf(.5f, .5f, .5f))
+        if (height == 48 && contentWidth == width) return normalized
         val values = FloatArray(3 * 48 * width)
-        repeat(3) { c -> normalized.values.copyInto(values, c * 48 * width, c * width * height, (c + 1) * width * height) }
+        repeat(3) { c -> repeat(height) { y ->
+            normalized.values.copyInto(values, c * 48 * width + y * width,
+                c * contentWidth * height + y * contentWidth, c * contentWidth * height + (y + 1) * contentWidth)
+        } }
         return TensorImage(width, 48, values)
     }
 

@@ -6,6 +6,10 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.awt.RenderingHints
+import java.awt.image.BufferedImage
+import java.io.File
+import javax.imageio.ImageIO
 
 class OnnxOcrEngineTest {
     @Test fun `loading queues up to 64 requests and rejects only excess request`() {
@@ -58,6 +62,9 @@ class OnnxOcrEngineTest {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
             while (engine.status.value !is OcrEngineStatus.Failed && System.nanoTime() < deadline) Thread.yield()
             assertTrue(engine.status.value is OcrEngineStatus.Failed)
+            if (System.getProperty("os.name").startsWith("Windows")) {
+                assertTrue((engine.status.value as OcrEngineStatus.Failed).reason.contains("vc_redist.x64.exe"))
+            }
             assertNull(result(engine))
         }
         assertEquals(1, backend.closed.get())
@@ -109,6 +116,28 @@ class OnnxOcrEngineTest {
             engine.submit(160, 48, IntArray(160 * 48) { -1 }) { future.complete(it) }
             assertEquals("", future.get(45, TimeUnit.SECONDS))
             assertEquals(OcrEngineStatus.Ready, engine.status.value)
+            val compact = CompletableFuture<String?>()
+            engine.submit(64, 64, IntArray(64 * 64) { -1 }) { compact.complete(it) }
+            assertEquals("", compact.get(10, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test fun `real 1920 pixel map counters survive compact ROI detection misses`() {
+        val screenshot = ImageIO.read(File("../../android/app/src/test/resources/labyrinth/final-boss-active-20260909.jpg"))
+        OnnxOcrEngine().use { engine ->
+            listOf("5", "4", "2", "1").forEachIndexed { index, expected ->
+                // Current upstream AndroidLabyrinthNodeRelicStackResolver OCR_DIGIT_RECTS, OCR_SCALE.
+                val crop = screenshot.getSubimage(360 + index * 88, 970, 48, 48)
+                val scaled = BufferedImage(192, 192, BufferedImage.TYPE_INT_RGB)
+                scaled.createGraphics().apply {
+                    setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR)
+                    drawImage(crop, 0, 0, 192, 192, null)
+                    dispose()
+                }
+                val result = CompletableFuture<String?>()
+                engine.submit(192, 192, scaled.getRGB(0, 0, 192, 192, null, 0, 192)) { result.complete(it) }
+                assertEquals(expected, result.get(45, TimeUnit.SECONDS))
+            }
         }
     }
 

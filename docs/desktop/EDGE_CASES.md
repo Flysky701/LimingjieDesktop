@@ -91,16 +91,17 @@
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| E-01 | 模型加载失败 | 所有请求回调 `null`；环境检查红色阻断黎明界任务 | T | — |
-| E-02 | 缺少 VC++ 运行库 | 预加载 JRE 中的 DLL；仍失败时给出安装说明 | T（self-test）+ D | — |
-| E-03 | 提交后调用方立即回收 Bitmap | 结果不受影响 | T | — |
-| E-04 | 队列满 | 回调 `null` 并记警告（FB-13） | T | — |
-| E-05 | 空白或纯色图 | 返回 `""` | T | — |
-| E-06 | ROI 很小（短边 < 32 px） | 先放大再检测 | T | — |
-| E-07 | 模型仍在加载时有请求 | 排队等待 | T | — |
-| E-08 | 回调线程 | 在 Main 上回调 | T | — |
-| E-09 | 繁体、异体字、全角符号 | 不做归一化（除非有评估集证据） | T（评估集） | — |
-| E-10 | 多行文字 | 用 `\n` 拼接，顺序正确 | T | — |
+| E-01 | 模型加载失败 | 所有请求回调 `null`；环境检查红色阻断黎明界任务 | T | `OnnxOcrEngineTest#initialization failure completes queued requests and does not retry`；UI阻断由装配验证 |
+| E-02 | 缺少 VC++ 运行库 | 预加载 JRE 中的 DLL；仍失败时给出安装说明 | T（self-test）+ D | `OnnxOcrEngineTest#native inference failure completes current and future submissions`；Windows真实模型加载测试通过；发行环境见 L3-08 |
+| E-03 | 提交后调用方立即回收 Bitmap | 结果不受影响 | T | `DesktopAdaptersTest#ocrBridgeCopiesPixelsAndReturnsOnSwingMain`，主分支共享模块验证通过 |
+| E-04 | 队列满 | 回调 `null` 并记警告（FB-13） | T | `OnnxOcrEngineTest#loading queues up to 64 requests and rejects only excess request` |
+| E-05 | 空白或纯色图 | 返回 `""` | T | `OnnxOcrEngineTest#warmUp loads real packaged models and recognizes a blank image as empty`，覆盖普通与紧凑纯白图 |
+| E-06 | ROI 很小（短边 < 32 px） | 先放大再检测 | T | `OcrPipelineTest#detection enlarges small crops and bounds large images` |
+| E-07 | 模型仍在加载时有请求 | 排队等待 | T | `OnnxOcrEngineTest#loading queues up to 64 requests and rejects only excess request` |
+| E-08 | 回调线程 | 在 Main 上回调 | T | `DesktopAdaptersTest#ocrBridgeCopiesPixelsAndReturnsOnSwingMain`，主分支共享模块验证通过；引擎本身按契约不指定UI线程 |
+| E-09 | 繁体、异体字、全角符号 | 不做归一化（除非有评估集证据） | T（评估集） | `OcrPipelineTest#join sorts rows and columns without character normalization`；完整实采覆盖未完成，见 L2-04 |
+| E-10 | 多行文字 | 用 `\n` 拼接，顺序正确 | T | `OcrPipelineTest#join sorts rows and columns without character normalization`；真实事件样本见 `ocr/evaluation/final-v5.json` |
+| E-11 | 检测器遗漏孤立数字 | 仅对有界紧凑ROI追加整图识别；不补字、不降阈值 | T | FB-14；真实1920像素地图计数回归通过；低分辨率数字5仍失败，见 D-46 |
 
 ## F. 持久化、文件与 Windows 环境
 

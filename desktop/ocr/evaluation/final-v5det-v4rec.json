@@ -1,0 +1,221 @@
+{
+  "characterErrorRate": 0.26903553299492383,
+  "targetSamples": 80,
+  "schemaVersion": 1,
+  "coverageComplete": false,
+  "p50Millis": 20.283,
+  "accuracy": 0.8571428571428571,
+  "accuracyThresholdPassed": false,
+  "byKind": {
+    "event_choice": {
+      "missingToMinimum": 6,
+      "accuracy": 1,
+      "samples": 2
+    },
+    "ex_encounter": {
+      "missingToMinimum": 7,
+      "accuracy": 1,
+      "samples": 1
+    },
+    "relic_stack": {
+      "missingToMinimum": 2,
+      "accuracy": 0.8333333333333334,
+      "samples": 6
+    },
+    "shop_item": {
+      "missingToMinimum": 5,
+      "accuracy": 1,
+      "samples": 3
+    },
+    "relic_detail": {
+      "missingToMinimum": 6,
+      "accuracy": 0.5,
+      "samples": 2
+    },
+    "role_reward": {
+      "missingToMinimum": 8,
+      "accuracy": null,
+      "samples": 0
+    }
+  },
+  "samples": 14,
+  "p95Millis": 197.4359,
+  "selfTest": {
+    "actual": "攻击型职能的随机印记",
+    "expected": "攻击型职能的随机印记",
+    "passed": true
+  },
+  "characterErrorRateDefinition": "Raw transcription edit distance including punctuation/whitespace; diagnostic only",
+  "results": [
+    {
+      "actual": "攻击型职能印记",
+      "referenceCharacters": 10,
+      "referenceText": "攻击型职能的随机印记",
+      "kind": "shop_item",
+      "expected": "攻击型职能印记",
+      "characterErrors": 0,
+      "durationMillis": 45.2854,
+      "id": "shop-imprint-1",
+      "passed": true,
+      "text": "攻击型职能的随机印记"
+    },
+    {
+      "actual": "治疗型职能印记",
+      "referenceCharacters": 10,
+      "referenceText": "治疗型职能的随机印记",
+      "kind": "shop_item",
+      "expected": "治疗型职能印记",
+      "characterErrors": 0,
+      "durationMillis": 31.2143,
+      "id": "shop-imprint-2",
+      "passed": true,
+      "text": "治疗型职能的随机印记"
+    },
+    {
+      "actual": "增益型职能印记",
+      "referenceCharacters": 10,
+      "referenceText": "增益型职能的随机印记",
+      "kind": "shop_item",
+      "expected": "增益型职能印记",
+      "characterErrors": 0,
+      "durationMillis": 28.9877,
+      "id": "shop-imprint-3",
+      "passed": true,
+      "text": "增益型职能的随机印记"
+    },
+    {
+      "actual": "true",
+      "referenceCharacters": 6,
+      "referenceText": "系列效果一览",
+      "kind": "relic_detail",
+      "expected": "true",
+      "characterErrors": 0,
+      "durationMillis": 23.0165,
+      "id": "series-title",
+      "passed": true,
+      "text": "系列效果一览"
+    },
+    {
+      "actual": "",
+      "referenceCharacters": 19,
+      "referenceText": "守备\nHP2\n削弱\n1\n加速\n1\n暴击",
+      "kind": "relic_detail",
+      "expected": "ACCELERATION:1;DEBUFF:1;DEFENSE:2",
+      "characterErrors": 5,
+      "durationMillis": 120.1845,
+      "id": "series-visible",
+      "passed": false,
+      "text": "守备\nHP\n削弱\n加速\n暴击"
+    },
+    {
+      "actual": "5",
+      "referenceCharacters": 1,
+      "referenceText": "5",
+      "kind": "relic_stack",
+      "expected": "5",
+      "characterErrors": 0,
+      "durationMillis": 16.6927,
+      "id": "map-boss-0",
+      "passed": true,
+      "text": "5"
+    },
+    {
+      "actual": "4",
+      "referenceCharacters": 1,
+      "referenceText": "4",
+      "kind": "relic_stack",
+      "expected": "4",
+      "characterErrors": 0,
+      "durationMillis": 20.283,
+      "id": "map-boss-1",
+      "passed": true,
+      "text": "4"
+    },
+    {
+      "actual": "2",
+      "referenceCharacters": 1,
+      "referenceText": "2",
+      "kind": "relic_stack",
+      "expected": "2",
+      "characterErrors": 0,
+      "durationMillis": 20.0615,
+      "id": "map-boss-2",
+      "passed": true,
+      "text": "2"
+    },
+    {
+      "actual": "1",
+      "referenceCharacters": 1,
+      "referenceText": "1",
+      "kind": "relic_stack",
+      "expected": "1",
+      "characterErrors": 0,
+      "durationMillis": 16.9218,
+      "id": "map-boss-3",
+      "passed": true,
+      "text": "1"
+    },
+    {
+      "actual": null,
+      "referenceCharacters": 1,
+      "referenceText": "5",
+      "kind": "relic_stack",
+      "expected": "5",
+      "characterErrors": 1,
+      "durationMillis": 13.6829,
+      "id": "map-link-0",
+      "passed": false,
+      "text": ""
+    },
+    {
+      "actual": "2",
+      "referenceCharacters": 1,
+      "referenceText": "2",
+      "kind": "relic_stack",
+      "expected": "2",
+      "characterErrors": 0,
+      "durationMillis": 14.1261,
+      "id": "map-link-1",
+      "passed": true,
+      "text": "2"
+    },
+    {
+      "actual": "1101",
+      "referenceCharacters": 89,
+      "referenceText": "这里是公会管理协会！请问要找什么样的伙伴？\n想要坦克型成为伙伴！\n想要治疗型成为伙伴！\n坦克型职能的随机印记×2＋阿尔法金币×200\n治疗型职能的随机印记×2＋阿尔法金币×200",
+      "kind": "event_choice",
+      "expected": "1101",
+      "characterErrors": 41,
+      "durationMillis": 197.4359,
+      "id": "event-guild",
+      "passed": true,
+      "text": "这里是公会管理协会！请问要找什么样的伙伴？\n想要坦克型 想要治疗型\n成为伙伴！ 成为伙伴！\n坦克型职能的 治疗型职能的\n随机印记×2 随机印记×2\n+阿尔法金币×200 +阿尔法金币×200"
+    },
+    {
+      "actual": "1314",
+      "referenceCharacters": 42,
+      "referenceText": "发现了钓鱼地点！\n悠闲地钓鱼吧\n有50%的概率获得★1迷宫遗物×1\n并进入下一个事件",
+      "kind": "event_choice",
+      "expected": "1314",
+      "characterErrors": 5,
+      "durationMillis": 135.8093,
+      "id": "event-fishing",
+      "passed": true,
+      "text": "地图\n发现了钓鱼地点！\n悠闲地\n钓鱼吧\n有50%的概率获得+1迷宫遗物×1\n并进入下一个事件"
+    },
+    {
+      "actual": "multi_explosion_relic",
+      "referenceCharacters": 5,
+      "referenceText": "爆炸・遗物",
+      "kind": "ex_encounter",
+      "expected": "multi_explosion_relic",
+      "characterErrors": 1,
+      "durationMillis": 15.5503,
+      "id": "ex-explosion",
+      "passed": true,
+      "text": "爆炸·遗物"
+    }
+  ],
+  "timestamp": "2026-10-25T10:56:18.416992Z",
+  "status": "FAILED_ACCURACY"
+}
