@@ -66,7 +66,8 @@ fun DesktopApp(graph: DesktopAppGraph) {
         val batch by graph.labyrinthBatchController.state.collectAsState()
         val reset by graph.gameSessionResetWorkflow.state.collectAsState()
         val starting by graph.taskStarting.collectAsState()
-        val busy = starting || task.isWorking || task.captcha != null || entry.running || reset.running || graph.busy
+        val stopping by graph.taskStopping.collectAsState()
+        val busy = starting || stopping || task.isWorking || task.captcha != null || entry.running || reset.running || graph.busy
         Surface(Modifier.fillMaxSize(), color = Background) {
             Row {
                 Surface(Modifier.width(176.dp).fillMaxHeight(), color = Color.White) {
@@ -145,7 +146,7 @@ fun DesktopApp(graph: DesktopAppGraph) {
                                     Text(if (current.paused) "继续" else "暂停")
                                 }
                             }
-                            Button(onClick = { commands.run { graph.stopAll(); withTimeout(10_000) { while (graph.busy) delay(50) } } }, enabled = busy && !commands.working) { Text(if (commands.working) "处理中…" else "停止任务") }
+                            Button(onClick = { commands.run { graph.stopAll().join() } }, enabled = busy && !stopping && !commands.working) { Text(if (commands.working || stopping) "正在停止…" else "停止任务") }
                         }
                     }
                 }

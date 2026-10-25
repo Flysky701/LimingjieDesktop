@@ -126,7 +126,7 @@ import java.time.format.DateTimeFormatter
                         onStart = { guild -> if (!graph.busy) graph.labyrinthController.start(retreatConfirmed = true, guildIdOverride = guild) else graph.labyrinthController.reportMessage("请先停止当前任务") },
                         onStop = graph.labyrinthController::stop, onDismissMessage = graph.labyrinthController::dismissMessage,
                         onStartEntryRecognition = { graph.startRecognition(true) }, onStartEntryAutomation = { graph.startRecognition(false) },
-                        onStopEntryRecognition = { actions.run { graph.labyrinthEntryRecognitionSession.stop() } },
+                        onStopEntryRecognition = { actions.run { graph.stopAll("用户停止画面任务").join() } },
                         onStartAutoRun = { goals -> if (!graph.startLabyrinthAutoRun(state.selectedAccount?.id, goals)) graph.labyrinthController.reportMessage("自动执行未启动，请确认账号、设备连接、触控和 OCR 状态，并停止其他任务后重试") },
                         onStopAutoRun = graph::stopLabyrinthAutoRun,
                         onCaptchaSolved = graph.labyrinthController::submitCaptcha,
