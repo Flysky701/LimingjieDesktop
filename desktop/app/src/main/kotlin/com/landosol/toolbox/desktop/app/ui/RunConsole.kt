@@ -128,6 +128,7 @@ import java.time.format.DateTimeFormatter
 }
 
 @Composable private fun RunReadiness(graph:DesktopAppGraph,s:RunConsoleState,selected:DesktopTask,hasGoals:Boolean,navigate:(Page)->Unit) {
+    val resolution by graph.resolutionGuard.status.collectAsState()
     val database by graph.ux.database.collectAsState()
     val foreground by graph.ux.foreground.collectAsState()
     val ocr by graph.ocr.status.collectAsState()
@@ -137,7 +138,7 @@ import java.time.format.DateTimeFormatter
     val ready=(s.device as? DeviceConnectionState.Ready)?.device
     val actions=rememberActions(graph)
     var expanded by remember{mutableStateOf(false)}
-    val missing=startMissing(selected,s.copy(busy=false,stopping=false),ocr is OcrEngineStatus.Ready,hasGoals,credentials[s.task.selectedAccount?.id])
+    val missing=startMissing(selected,s.copy(busy=false,stopping=false),ocr is OcrEngineStatus.Ready,hasGoals,credentials[s.task.selectedAccount?.id],resolution)
     ConsoleCard("就绪状态",action={TextButton(onClick={expanded=!expanded}){Text(if(expanded)"收起" else "详情",style=MaterialTheme.typography.bodySmall)}}) {
         val reason=missing
         Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(7.dp)) {
@@ -151,7 +152,7 @@ import java.time.format.DateTimeFormatter
             val inForeground=com.landosol.toolbox.protocol.bilibili.GameServer.entries.any{it.packageName==foreground}
             val items=listOf(
                 ReadinessItem("模拟器",ready?.label ?: "未连接",ready!=null,"Devices"),
-                ReadinessItem("分辨率与触控",ready?.let{"${it.width}×${it.height} · ${if(it.touchReady)"就绪" else "只读"}"} ?: "等待连接",ready!=null,"Devices",ready!=null&&(ready.width!=1920||ready.height!=1080)),
+                ReadinessItem("画面与触控",ready?.let{"${resolution.dimensionsLabel} · ${if(it.touchReady)"就绪" else "只读"}"} ?: "等待连接",ready!=null&&resolution.supported,"Devices",ready!=null&&!resolution.supported),
                 ReadinessItem("游戏前台",if(foreground==null)"开始前检查" else if(inForeground)"上次检查通过" else "请打开游戏",inForeground,"Devices",true),
                 ReadinessItem("账号",if(credentials[s.task.selectedAccount?.id]==false)"缺凭据" else s.task.selectedAccount?.alias ?: "未选择",s.task.selectedAccount!=null&&credentials[s.task.selectedAccount?.id]!=false,"Accounts"),
                 ReadinessItem("国服数据库",database,database.startsWith("已就绪"),"Settings"),
@@ -161,7 +162,7 @@ import java.time.format.DateTimeFormatter
                 Spacer(Modifier.weight(1f))
                 Text(item.detail,Modifier.widthIn(max=145.dp).clickable{navigate(Page.valueOf(item.page))},color=if(item.passed&&!item.warning)Muted else Accent,style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis)
             }}
-            TextButton(onClick={actions.run{graph.ux.refreshForeground();graph.ux.refreshDatabase()}},enabled=ready!=null&&!actions.working){Text("重新检查",style=MaterialTheme.typography.bodySmall)}
+            TextButton(onClick={actions.run{graph.recheckResolution();graph.ux.refreshForeground();graph.ux.refreshDatabase()}},enabled=ready!=null&&!s.busy&&!actions.working){Text("重新检查",style=MaterialTheme.typography.bodySmall)}
         }
         if(selected in listOf(DesktopTask.BATCH,DesktopTask.ENTRY)) {
             val confirmed=settings.gameSettingsConfirmed&&preferences.animationConfirmedVersion==AppVersion.name

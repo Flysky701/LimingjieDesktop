@@ -97,7 +97,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
                 Detail("设备", "${snapshot.brand} ${snapshot.model}")
                 Detail("系统", "Android ${snapshot.release} · API ${snapshot.sdkInt}")
                 Detail("设备标识", if (snapshot.androidId.isBlank()) "未提供（使用安装标识回落）" else "••••${snapshot.androidId.takeLast(4)}")
-                Detail("尺寸", "${snapshot.displayWidth} × ${snapshot.displayHeight}")
+                Detail("设备报告尺寸", "${snapshot.displayWidth} × ${snapshot.displayHeight}")
                 if (snapshot.packages.isEmpty()) Text("未检测到支持的游戏客户端", color = MaterialTheme.colorScheme.error)
                 snapshot.packages.forEach { (pkg, identity) -> Detail(GameServer.entries.firstOrNull { it.packageName == pkg }?.displayName ?: pkg, "${identity.versionName} (${identity.versionCode})") }
             }
@@ -106,6 +106,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
 }
 
 @Composable internal fun DeviceConnectionPanel(graph: DesktopAppGraph,autoDetect:Boolean=false) {
+    val resolution by graph.resolutionGuard.status.collectAsState()
     val busy = LocalTaskBusy.current
     val state by graph.device.state.collectAsState()
     val actions = rememberActions(graph)
@@ -122,7 +123,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
     LaunchedEffect(autoDetect, settings.adbPath) { if(autoDetect && !busy) graph.deviceConnection.discover(force = false) }
     Panel("连接模拟器") {
         // A failed attempt has one shared inline message, rather than one error per caller/page.
-        Text(if (state is DeviceConnectionState.Failed && message != null) "连接未完成" else deviceLabel(state), color = if (ready != null) com.landosol.toolbox.desktop.app.ui.theme.LocalDesktopColors.current.ok else Muted)
+        Text(if (state is DeviceConnectionState.Failed && message != null) "连接未完成" else deviceLabel(state, resolution.dimensionsLabel), color = if (ready != null) com.landosol.toolbox.desktop.app.ui.theme.LocalDesktopColors.current.ok else Muted)
         Message(message)
         Message(actions.message)
         Message(cancelActions.message)
@@ -141,6 +142,9 @@ import javax.swing.filechooser.FileNameExtensionFilter
             OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { cancelActions.run { if (connecting) graph.deviceConnection.cancel() else graph.disconnectDevice() } }, enabled = (ready != null || connecting) && !cancelActions.working && !busy) { Text(if (connecting) "取消" else "断开") }
             if (message != null && address.isNotBlank()) TextButton(onClick = { actions.run { graph.connectDevice(address.trim()) } }, enabled = canConnect) { Text("重试连接") }
         }
+        Detail("实际画面", if (ready == null) "等待连接" else resolution.dimensionsLabel)
+        Text("自动执行要求 1920 × 1080 横屏。调整模拟器后请重新检查。", color = Muted, fontSize = 12.5.sp)
+        OutlinedButton(onClick = { actions.run { graph.recheckResolution() } }, enabled = ready != null && canConnect) { Text("重新检查画面尺寸") }
         if(devices.isEmpty() && !connecting && message == null)Text("启动模拟器后点击“重新检测”，或展开手动地址。",color=Muted,style=MaterialTheme.typography.bodySmall)
         devices.forEach { device -> Surface(onClick = { address = device.serial;actions.run {graph.connectDevice(device.serial)} },enabled=canConnect && ready?.serial != device.serial,color = Background, shape = RoundedCornerShape(8.dp)) {
             Row(Modifier.fillMaxWidth().padding(10.dp)) { Text(device.label, Modifier.weight(1f)); Text("${device.serial} · ${if (ready?.serial == device.serial) "已连接" else "${device.state} · 连接 →"}", color = Muted, fontSize = 12.5.sp) }
@@ -149,6 +153,8 @@ import javax.swing.filechooser.FileNameExtensionFilter
 }
 
 @Composable internal fun SettingsPage(graph: DesktopAppGraph, openWizard: () -> Unit, openDevices: () -> Unit) {
+    val resolution by graph.resolutionGuard.status.collectAsState()
+    val busy = LocalTaskBusy.current
     val saved by graph.settings.state.collectAsState()
     val device by graph.device.state.collectAsState()
     val ocr by graph.ocr.status.collectAsState()
@@ -169,9 +175,11 @@ import javax.swing.filechooser.FileNameExtensionFilter
         Message(actions.message)
         if(group=="外观与通知")AppearanceSettings(graph)
         if(group=="运行环境") Panel("运行环境") {
-            Detail("模拟器连接", deviceLabel(device))
+            Detail("模拟器连接", deviceLabel(device, resolution.dimensionsLabel))
             Detail("截图", ready?.timing?.firstOrNull { it.mode == ready.selectedMode }?.let { "p95 ${it.p95Millis} ms${if (it.p95Millis > 600) "，偏慢" else ""}" } ?: "未完成测速")
-            Detail("分辨率", ready?.let { "${it.width} × ${it.height}${if (it.width != 1920 || it.height != 1080) "，建议 1920 × 1080 横屏" else ""}" } ?: "未读取")
+            Detail("实际画面", if (ready == null) "等待连接" else resolution.dimensionsLabel)
+            Text("自动执行要求 1920 × 1080 横屏。调整模拟器后请重新检查。", color = Muted, fontSize = 12.5.sp)
+            OutlinedButton(onClick = { actions.run { graph.recheckResolution() } }, enabled = ready != null && !busy && !actions.working) { Text("重新检查画面尺寸") }
             Detail("触控", if (ready?.touchReady == true) if (saved.touchMode == PreferredTouchMode.COMPATIBILITY) "兼容模式（速度较慢）" else "MaaTouch 就绪" else "未就绪")
             Detail("屏幕", if (ready == null) "未读取" else if (ready.awake) "已唤醒" else "未唤醒")
             Detail("游戏客户端", when (val client = graph.gameClientResolution) {

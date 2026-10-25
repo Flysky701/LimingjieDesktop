@@ -15,6 +15,8 @@ class DesktopCaptureService(
     private val preview: (CapturePixels) -> Unit = {},
     private val onWarning: (String) -> Unit = {},
     private val onLost: (String) -> Unit = {},
+    /** A controlled client restart may temporarily show the portrait launcher; never dispatch it. */
+    private val deferFrame: (CapturePixels) -> Boolean = { false },
 ) : AutoCloseable {
     private val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "desktop-capture").apply { isDaemon = true } }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -43,6 +45,7 @@ class DesktopCaptureService(
                         delay(300); continue
                     }
                     val size = CaptureDisplayMetrics(frame.width, frame.height, 160)
+                    if (deferFrame(frame)) { delay(300); continue }
                     if (captureSize == null) {
                         captureSize = stability.observe(size)
                         if (captureSize != null) {

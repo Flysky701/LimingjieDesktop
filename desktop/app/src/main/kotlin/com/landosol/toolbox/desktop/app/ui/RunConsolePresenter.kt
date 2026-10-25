@@ -2,6 +2,7 @@ package com.landosol.toolbox.desktop.app.ui
 
 import com.landosol.toolbox.desktop.app.DesktopAppGraph
 import com.landosol.toolbox.desktop.app.UserLogKind
+import com.landosol.toolbox.desktop.app.adapters.device.VisualResolutionStatus
 import com.landosol.toolbox.desktop.app.adapters.storage.*
 import com.landosol.toolbox.desktop.device.DeviceConnectionState
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
@@ -23,6 +24,7 @@ data class StopExplanation(val title:String,val reason:String,val advice:String,
 fun explainStop(halt:LabyrinthBatchHaltReason?,raw:String):StopExplanation {
     if(halt==null) {
         val rules=listOf(
+            listOf("1920 × 1080","画面尺寸不符合要求","请在模拟器中设置 1920 × 1080 横屏，再到设备页重新检查。","Devices","检查画面尺寸"),
             listOf("请先在设备页连接","模拟器未连接","连接模拟器后，再开始画面任务。","Devices","连接设备"),
             listOf("休眠","模拟器屏幕正在休眠","请先手动唤醒模拟器，再重新检查。","Devices","检查设备"),
             listOf("无法确定游戏客户端","游戏客户端未就绪","核对账号服务器，并确认模拟器中安装了对应游戏。","Devices","检查客户端"),
@@ -60,7 +62,7 @@ fun explainStop(halt:LabyrinthBatchHaltReason?,raw:String):StopExplanation {
     return StopExplanation(info[0],if(battle) "识别到了战斗失败页，但没有当前战斗信息。" else info[1],
         if(battle) "可能停在了标题画面，请先进入游戏主界面，再用只读识别检查。" else info[2],info[3],info[4],raw)
 }
-fun startMissing(task:DesktopTask,state:RunConsoleState,ocrReady:Boolean,hasGoals:Boolean,credentialsReady:Boolean?=true):String? {
+fun startMissing(task:DesktopTask,state:RunConsoleState,ocrReady:Boolean,hasGoals:Boolean,credentialsReady:Boolean?=true,resolution:VisualResolutionStatus?=null):String? {
     if(state.busy) return if(state.stopping) "正在停止任务" else "当前任务正在运行"
     if(task in listOf(DesktopTask.BATCH,DesktopTask.REROLL,DesktopTask.READ) && state.task.selectedAccount==null) return "尚未选择账号"
     if(task in listOf(DesktopTask.BATCH,DesktopTask.REROLL,DesktopTask.READ)) {
@@ -72,6 +74,7 @@ fun startMissing(task:DesktopTask,state:RunConsoleState,ocrReady:Boolean,hasGoal
         val device=(state.device as? DeviceConnectionState.Ready)?.device ?: return "模拟器未连接"
         if(!device.awake) return "模拟器屏幕正在休眠"
         if(task!=DesktopTask.RECOGNIZE && !device.touchReady) return "触控未就绪"
+        if(task!=DesktopTask.RECOGNIZE && resolution!=null && !resolution.supported) return resolution.message
         if(!ocrReady) return "识别模型尚未就绪"
     }
     if(task==DesktopTask.BATCH && !hasGoals) return "尚未配置公会目标"

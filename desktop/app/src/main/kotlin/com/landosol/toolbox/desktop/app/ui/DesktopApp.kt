@@ -49,12 +49,13 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
     val preferences by graph.ux.preferences.state.collectAsState()
     DesktopTheme(preferences) {
         val state by graph.ux.console.collectAsState()
+        val resolution by graph.resolutionGuard.status.collectAsState()
         val connectionActivity by graph.deviceConnection.activity.collectAsState()
         val connectionMessage by graph.deviceConnection.message.collectAsState()
         val connectionPending = connectionActivity != null || state.device.inProgress
-        val connectionLabel = if (state.device.inProgress) deviceLabel(state.device) else connectionActivity
+        val connectionLabel = if (state.device.inProgress) deviceLabel(state.device, resolution.dimensionsLabel) else connectionActivity
             ?: connectionMessage?.takeIf { state.device !is DeviceConnectionState.Ready }?.let { "连接提示 · $it" }
-            ?: deviceLabel(state.device)
+            ?: deviceLabel(state.device, resolution.dimensionsLabel)
         val configuration by graph.labyrinthController.uiState.collectAsState()
         val credentials by graph.ux.credentials.collectAsState()
         val settings by graph.settings.state.collectAsState()
@@ -112,12 +113,15 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
         fun navigate(target:Page) { if(target!=page)navigation.request {page=target;actions.run { withContext(Dispatchers.IO){graph.ux.preferences.update { it.copy(page=target.name) }} }} }
         LaunchedEffect(page,searchRequested){if(page==Page.Run&&searchRequested){withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(rightTab="logs")}};delay(50);runCatching{searchFocus.requestFocus()};searchRequested=false}}
         val goals=preferences.goals.map { LabyrinthBatchGoal(it.guildId,it.count,if(it.clears) LabyrinthBatchGoalMode.CLEARS else LabyrinthBatchGoalMode.ATTEMPTS) }
-        val missing=runSetupBlock(setup.dirty,fullConfiguration) ?: startMissing(selected,state,ocr is OcrEngineStatus.Ready,goals.isNotEmpty(),credentials[configuration.selectedAccount?.id])
+        val missing=runSetupBlock(setup.dirty,fullConfiguration) ?: startMissing(selected,state,ocr is OcrEngineStatus.Ready,goals.isNotEmpty(),credentials[configuration.selectedAccount?.id],resolution)
         fun launchSelected() {
             if(setup.dirty || fullConfiguration || actions.working || graph.busy) return
             val current=graph.labyrinthController.uiState.value
             val currentGoals=graph.ux.preferences.state.value.goals.map{LabyrinthBatchGoal(it.guildId,it.count,if(it.clears)LabyrinthBatchGoalMode.CLEARS else LabyrinthBatchGoalMode.ATTEMPTS)}
-            if(startMissing(selected,state.copy(task=current),graph.ocr.status.value is OcrEngineStatus.Ready,currentGoals.isNotEmpty(),graph.ux.credentials.value[current.selectedAccount?.id])!=null)return
+            startMissing(selected,state.copy(task=current),graph.ocr.status.value is OcrEngineStatus.Ready,currentGoals.isNotEmpty(),graph.ux.credentials.value[current.selectedAccount?.id],graph.resolutionGuard.status.value)?.let {
+                graph.labyrinthController.reportMessage(it)
+                return
+            }
             graph.ux.expect(selected)
             actions.run {
                 if(selected in listOf(DesktopTask.BATCH,DesktopTask.RECOGNIZE,DesktopTask.ENTRY)) graph.ux.refreshForeground()
@@ -252,6 +256,6 @@ internal class UiActions(private val scope:CoroutineScope,private val graph:Desk
 @Composable internal fun Detail(label:String,value:String) {Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(12.dp)){Text(label,Modifier.width(125.dp),color=Muted,style=MaterialTheme.typography.bodySmall);Text(value,Modifier.weight(1f),style=MaterialTheme.typography.bodySmall)}}
 @Composable internal fun Message(text:String?,onDismiss:(()->Unit)?=null){if(text!=null)Surface(color=MaterialTheme.colorScheme.primaryContainer,shape=DesktopCorners.sm){Row(Modifier.fillMaxWidth().padding(12.dp),verticalAlignment=Alignment.CenterVertically){Text(text,Modifier.weight(1f),color=MaterialTheme.colorScheme.onPrimaryContainer,style=MaterialTheme.typography.bodySmall);if(onDismiss!=null)TextButton(onClick=onDismiss){Text("关闭")}}}}
 @Composable internal fun StatusBadge(text:String){Surface(color=MaterialTheme.colorScheme.primaryContainer,shape=RoundedCornerShape(20.dp)){Text(text,Modifier.padding(horizontal=10.dp,vertical=4.dp),color=MaterialTheme.colorScheme.onPrimaryContainer,style=MaterialTheme.typography.bodySmall)}}
-internal fun deviceLabel(state:DeviceConnectionState):String=when(state){DeviceConnectionState.Disconnected->"未连接模拟器";is DeviceConnectionState.Ready->"${state.device.label} · ${state.device.serial} · ${state.device.width}×${state.device.height}";is DeviceConnectionState.Connecting->"正在连接 ${state.serial}";is DeviceConnectionState.Verifying->"正在检查 · ${state.detail}";is DeviceConnectionState.Lost->"连接中断 · ${state.reason}";is DeviceConnectionState.Failed->"连接失败 · ${state.reason}";is DeviceConnectionState.Reconnecting->"重新连接（${state.attempt}）"}
+internal fun deviceLabel(state:DeviceConnectionState, dimensions:String="画面尺寸待检查"):String=when(state){DeviceConnectionState.Disconnected->"未连接模拟器";is DeviceConnectionState.Ready->"${state.device.label} · ${state.device.serial} · $dimensions";is DeviceConnectionState.Connecting->"正在连接 ${state.serial}";is DeviceConnectionState.Verifying->"正在检查 · ${state.detail}";is DeviceConnectionState.Lost->"连接中断 · ${state.reason}";is DeviceConnectionState.Failed->"连接失败 · ${state.reason}";is DeviceConnectionState.Reconnecting->"重新连接（${state.attempt}）"}
 internal fun copyText(text:String)=Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text),null)
 @Composable internal fun StartControl(missing:String?,working:Boolean,onClick:()->Unit){Button(shape=MaterialTheme.shapes.small,onClick=onClick,enabled=missing==null&&!working){Text("开始 F5")}}

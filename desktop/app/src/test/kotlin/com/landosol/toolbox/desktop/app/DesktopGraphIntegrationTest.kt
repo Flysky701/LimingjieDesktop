@@ -90,7 +90,8 @@ class DesktopGraphIntegrationTest {
             val foregroundSession = graph.automationSessionManager.start(AutomationMode.LABYRINTH, dryRun = false) as AutomationSessionStartResult.Started
             fake.foreground = null
             val rejected = graph.automationActionExecutor.execute(foregroundSession.session.id, AutomationAction.Back)
-            assertEquals(AutomationActionResult.Rejected(AutomationAction.Back, "游戏不在前台"), rejected)
+            // A caller cannot bypass resolution checks by creating a session directly.
+            assertTrue(rejected.toString(), rejected is AutomationActionResult.Rejected)
             assertEquals(0, fake.acceptedActions.get())
             graph.automationSessionManager.stop(foregroundSession.session.id)
             fake.foreground = GameServer.CN_BILIBILI.packageName
@@ -162,8 +163,10 @@ class DesktopGraphIntegrationTest {
     @Test fun upstreamRerollPersistsAndActionReplayUsesRealGraph() = runBlocking {
         val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }
             .first { Files.exists(it.resolve("android/app/src/test/resources/shop/exit_confirmation.png")) }
-        val fixture = ImageIO.read(root.resolve("android/app/src/test/resources/shop/exit_confirmation.png").toFile())
-        assertEquals(480, fixture.width); assertEquals(270, fixture.height)
+        val original = ImageIO.read(root.resolve("android/app/src/test/resources/shop/exit_confirmation.png").toFile())
+        val fixture = java.awt.image.BufferedImage(1920,1080,java.awt.image.BufferedImage.TYPE_INT_RGB).apply {
+            createGraphics().apply { drawImage(original,0,0,1920,1080,null);dispose() }
+        }
         val fake = FixtureDevice(fixture.width, fixture.height, fixture.getRGB(0, 0, fixture.width, fixture.height, null, 0, fixture.width))
         val data = directory.root.toPath().resolve("reroll")
         val graph = DesktopAppGraph(data, suppliedDevice = fake, startupUpdates = false)
@@ -191,11 +194,14 @@ class DesktopGraphIntegrationTest {
             withTimeout(30_000) { graph.startRecognition(dryRun = false).join() }
             assertTrue(graph.log.text(), graph.labyrinthEntryRecognitionSession.state.value.running)
             withTimeout(15_000) { while (fake.actions.isEmpty()) delay(20) }
-            withTimeout(5000) { graph.stopAll("replay complete").join() }
+            // The capture worker must revoke actions and stop asynchronously, without self-joining.
+            fake.nextSize = 1280 to 720
+            withTimeout(5000) { while (graph.busy || CaptureStateRegistry.isActive()) delay(10) }
+            assertTrue(graph.log.text().contains("1280 × 720"))
             // Real fixture classification: LabyrinthEntryFrameProcessorTest:1035.
-            // SHOP_EXIT_CONFIRM_BUTTON rect (980,706,400,80), FrameProcessor:851, scaled to 480x270.
+            // SHOP_EXIT_CONFIRM_BUTTON rect (980,706,400,80), FrameProcessor:851, at 1920x1080.
             // Session:5771-5776 taps this matched anchor's centre; no handwritten action is submitted.
-            assertEquals(listOf(AutomationAction.Tap(ScreenPoint(295f, 187f))), fake.actions.toList())
+            assertEquals(listOf(AutomationAction.Tap(ScreenPoint(1180f, 746f))), fake.actions.toList())
         } finally { withTimeout(15_000) { graph.shutdown() } }
         val reopened = DesktopAppGraph(data, suppliedDevice = FixtureDevice(480, 270, intArrayOf()), startupUpdates = false)
         try {
@@ -205,6 +211,33 @@ class DesktopGraphIntegrationTest {
             assertEquals(2L, checkpoint?.enterId); assertEquals(2, checkpoint?.attempt)
             assertEquals(LabyrinthRouteVerdict.TARGET, checkpoint?.verdict)
         } finally { withTimeout(15_000) { reopened.shutdown() } }
+    }
+
+    @Test fun unsupportedResolutionBlocksRealGraphBeforeBatchMutationAndEntryActions() = runBlocking {
+        val fake = FixtureDevice(1280,720,IntArray(1280*720))
+        val graph = DesktopAppGraph(directory.root.toPath().resolve("resolution"),suppliedDevice=fake,startupUpdates=false)
+        try {
+            val accountId=graph.database.accountDao().insert(AccountEntity(alias="resolution-test",serverId=GameServer.CN_BILIBILI.storageId,
+                gameUid=null,credentialKey="synthetic-unused",isSelected=true,createdAt=1,updatedAt=1))
+            graph.connectDevice("fixture-only")
+            withTimeout(60_000) { graph.ocr.status.first { it is OcrEngineStatus.Ready } }
+            withTimeout(5000) { graph.labyrinthController.uiState.first { it.selectedAccount?.id==accountId } }
+            val ledger=graph.javaClass.getDeclaredField("gameClientHardCloseLedger").apply { isAccessible=true }.get(graph)
+                as com.landosol.toolbox.automation.session.GameClientHardCloseLedger
+            ledger.issue(accountId,GameServer.CN_BILIBILI.packageName)
+            assertTrue(graph.startLabyrinthAutoRun(accountId,listOf(com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoal(
+                1,1,com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoalMode.ATTEMPTS))))
+            withTimeout(5000) { graph.taskStarting.first { !it } }
+            assertNull("batch controller was never started",graph.labyrinthBatchController.state.value)
+            assertTrue("rejected startup must not clear the ledger",ledger.consume(accountId,GameServer.CN_BILIBILI.packageName))
+            assertTrue(graph.log.text().contains("1280 × 720"))
+            assertFalse(graph.labyrinthController.uiState.value.isWorking)
+            graph.startRecognition(dryRun=false).join()
+            assertFalse(graph.labyrinthEntryRecognitionSession.state.value.running)
+            assertEquals(0,fake.acceptedActions.get())
+            assertEquals(0,fake.lifecycleActions.get())
+            assertFalse(CaptureStateRegistry.isActive())
+        } finally { withTimeout(15_000) { graph.shutdown() } }
     }
 
     /** Map and expected route copied from the upstream workflow test; only network I/O is fake. */
@@ -236,7 +269,9 @@ class DesktopGraphIntegrationTest {
         @Volatile var foreground: String? = GameServer.CN_BILIBILI.packageName
         override val foregroundPackage get() = foreground
         val captures = AtomicInteger()
+        @Volatile var nextSize: Pair<Int,Int>? = null
         val acceptedActions = AtomicInteger()
+        val lifecycleActions = AtomicInteger()
         val actions = CopyOnWriteArrayList<AutomationAction>()
         var closed = false
         private val ready = DeviceReady("fixture-only", "upstream shop fixture", width, height, emptyList(), CaptureMode.Raw, true, true,
@@ -248,6 +283,7 @@ class DesktopGraphIntegrationTest {
         override suspend fun capture(): DeviceFrame {
             check(state.value is DeviceConnectionState.Ready) { "synthetic lost connection" }
             captures.incrementAndGet()
+            nextSize?.let { (w,h) -> return DeviceFrame(w,h,IntArray(w*h),System.currentTimeMillis()) }
             return DeviceFrame(width, height, pixels.copyOf(), System.currentTimeMillis())
         }
         fun lose() { state.value = DeviceConnectionState.Lost("synthetic device loss"); onLost("synthetic device loss") }
@@ -257,9 +293,9 @@ class DesktopGraphIntegrationTest {
         override suspend fun tap(x: Float, y: Float, expectedPackage: String) = action(expectedPackage).also { if (it is TouchResult.Completed) actions += AutomationAction.Tap(ScreenPoint(x, y)) }
         override suspend fun swipe(fromX: Float, fromY: Float, toX: Float, toY: Float, durationMillis: Long, holdMillis: Long, expectedPackage: String) = action(expectedPackage).also { if (it is TouchResult.Completed) actions += AutomationAction.Swipe(ScreenPoint(fromX, fromY), ScreenPoint(toX, toY), durationMillis, holdMillis) }
         override suspend fun back(expectedPackage: String) = action(expectedPackage).also { if (it is TouchResult.Completed) actions += AutomationAction.Back }
-        override suspend fun home() = true
-        override suspend fun launch(packageName: String) = true
-        override suspend fun forceStop(packageName: String) = true
+        override suspend fun home() = true.also { lifecycleActions.incrementAndGet() }
+        override suspend fun launch(packageName: String) = true.also { lifecycleActions.incrementAndGet() }
+        override suspend fun forceStop(packageName: String) = true.also { lifecycleActions.incrementAndGet() }
         override suspend fun uiTree() = emptyList<UiNode>()
         override fun close() { closed = true; state.value = DeviceConnectionState.Disconnected }
     }

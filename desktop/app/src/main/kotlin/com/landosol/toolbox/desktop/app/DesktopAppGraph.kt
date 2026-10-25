@@ -114,12 +114,23 @@ class DesktopAppGraph(
     val ocr = OnnxOcrEngine()
     val captchaHost = LoopbackCaptchaHost()
     val device: DeviceService = suppliedDevice ?: ManagedDeviceService(dataDirectory, { settings.state.value.adbPath }, { log.add(it) }, { reason -> stopAll(reason) })
+    val resolutionGuard = VisualResolutionGuard(device) { reason ->
+        autoRunScope.launch {
+            labyrinthController.reportMessage(reason)
+            stopAll(reason)
+        }
+    }
+    private val actionDevice: DeviceService = ResolutionGuardedDevice(device, resolutionGuard)
     val deviceConnection = DeviceConnectionActions(device, { settings.state.value.adbPath }, { log.add(it, true) })
     private val previewState = MutableStateFlow<CapturePixels?>(null)
     val preview = previewState.asStateFlow()
     val captureService = DesktopCaptureService(
-        source = { device.capture().let { CapturePixels(it.width, it.height, it.pixels, it.timestampMillis) } },
+        source = { device.capture().let {
+            resolutionGuard.observe(it.width, it.height)
+            CapturePixels(it.width, it.height, it.pixels, it.timestampMillis)
+        } },
         preview = { previewState.value = it }, onWarning = { log.add(it, true) }, onLost = { stopAll(it) },
+        deferFrame = { resolutionGuard.deferTransitionFrame(it.width, it.height) },
     )
     private val viewModels = androidx.lifecycle.ViewModelStore()
     val accounts by lazy { com.landosol.toolbox.account.AccountViewModel(accountRepository).also { viewModels.put("accounts", it) } }
@@ -166,7 +177,10 @@ class DesktopAppGraph(
                 logGameClient()
             }
         }
-        accountServerScope.launch { device.state.collect { state -> if (state is DeviceConnectionState.Ready) persistIdentity(state.device) } }
+        accountServerScope.launch { device.state.collect { state ->
+            if (state is DeviceConnectionState.Ready) persistIdentity(state.device)
+            else resolutionGuard.disarm(clearStatus = true)
+        } }
         // The dashboard is loopback-only, so it is safe to start for test/release APKs too.
         // Starting it here also makes http://127.0.0.1:8765/ immediately reachable from a
         // browser running inside the emulator, before the first recognition session starts.
@@ -230,7 +244,7 @@ class DesktopAppGraph(
             screen = DesktopChannelPromptScreen(
                 readWindows = { runBlocking(Dispatchers.IO) { device.uiTree().map { ChannelPromptWindow(it.packageName, it.toPromptNode()) } } },
                 foreground = { device.foregroundPackage },
-                tap = { x, y, pkg -> device.tap(x, y, pkg) == TouchResult.Completed },
+                tap = { x, y, pkg -> actionDevice.tap(x, y, pkg) == TouchResult.Completed },
             ),
             rules = { com.landosol.toolbox.automation.session.ChannelLoginPromptRules.forServer(selectedGameServer) },
             trace = { step -> Log.i(logTag, step) },
@@ -245,7 +259,7 @@ class DesktopAppGraph(
         get() = gamePackageName ?: NO_GAME_CLIENT_SENTINEL
 
     private val accessibilityActionBackend by lazy {
-        DeviceActionBackend(device) { actionTargetPackageName }
+        DeviceActionBackend(actionDevice) { actionTargetPackageName }
     }
     val automationActionExecutor by lazy {
         SessionBoundActionExecutor(automationSessionManager, accessibilityActionBackend)
@@ -388,7 +402,7 @@ class DesktopAppGraph(
                 )
                 Log.i(APP_LOG_TAG, "游戏启动决策：$decision 前台Activity=$foregroundActivity")
                 GameClientLaunchGate.execute(decision) {
-                    runBlocking(Dispatchers.IO) { device.launch(target) }
+                    runBlocking(Dispatchers.IO) { actionDevice.launch(target) }
                 }
             },
         )
@@ -456,14 +470,25 @@ class DesktopAppGraph(
     private val gameClientHardCloser by lazy {
         com.landosol.toolbox.automation.session.GameClientHardCloser(
             foregroundPackage = { device.foregroundPackage },
-            pressHome = { device.home() },
-            killBackgroundProcesses = { packageName -> check(runBlocking(Dispatchers.IO) { device.forceStop(packageName) }) { "无法强制停止客户端" } },
+            pressHome = { actionDevice.home() },
+            killBackgroundProcesses = { packageName -> check(runBlocking(Dispatchers.IO) { actionDevice.forceStop(packageName) }) { "无法强制停止客户端" } },
             canKillOtherApps = true,
             trace = { step -> Log.i(CLIENT_LOG_TAG, step) },
         )
     }
 
     private suspend fun hardCloseChannelClientBeforeReroll(accountId: Long): String? {
+        val isBatch = labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES
+        val closesClient = selectedGameServer?.let(com.landosol.toolbox.automation.session.ChannelSdkTraits::closesClientBeforeReroll) == true
+        if (isBatch) {
+            val rejection = if (closesClient) resolutionGuard.beforeClientReset() else resolutionGuard.actionRejection()
+            rejection?.let { return it }
+        }
+        else if (closesClient) {
+            try { resolutionGuard.checkForStart() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { return failure.message ?: "截图尺寸检查失败，请到设备页重新检查" }
+        }
         // Whatever an earlier reroll left behind is void from here on, whichever channel this is.
         gameClientHardCloseLedger.clear()
         val server = selectedGameServer
@@ -488,7 +513,7 @@ class DesktopAppGraph(
         val target = gamePackageName
         if (!consumeGameClientHardClosed(accountId, target) || target == null) return
         autoRunScope.launch {
-            if (device.launch(target)) log.add("刷开局结束，已启动游戏") else log.add("刷开局结束后启动游戏失败", true)
+            if (actionDevice.launch(target)) log.add("刷开局结束，已启动游戏") else log.add("刷开局结束后启动游戏失败", true)
         }
     }
 
@@ -546,7 +571,7 @@ class DesktopAppGraph(
                 relauncher = Relauncher {
                     val target = gamePackageName
                         ?: return@Relauncher GameClientRelaunchResult.LAUNCH_UNAVAILABLE
-                    if (device.launch(target)) GameClientRelaunchResult.LAUNCH_REQUESTED else GameClientRelaunchResult.LAUNCH_UNAVAILABLE
+                    if (actionDevice.launch(target)) GameClientRelaunchResult.LAUNCH_REQUESTED else GameClientRelaunchResult.LAUNCH_UNAVAILABLE
                 },
             ),
             captureActive = CaptureStateRegistry::isActive,
@@ -729,22 +754,19 @@ class DesktopAppGraph(
         if (ui.isWorking || ui.captcha != null || labyrinthEntryRecognitionSession.state.value.running) {
             return false
         }
-        // This one-shot candidate is consumed only at the external batch start boundary. Later
-        // cycles, including FAILED_MAX_RETRY recovery, never return here and therefore always
-        // use the normal forced-retire reroll path.
-        val firstGoal = goals.first()
-        val reusableOpening = labyrinthController.consumeReusableOpeningForBatch(
-            expectedGuildId = firstGoal.guildId,
-            expectedDifficulty = ui.selectedDifficulty,
-        )
-        val batchId = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.ROOT)
-            .format(java.util.Date())
-        // A new batch never inherits a hard close from an earlier task.
-        gameClientHardCloseLedger.clear()
         startingState.value = true
         autoRunJob = autoRunScope.launch {
           try {
+            resolutionGuard.checkForStart()
             captureService.start()
+            // Only a checked startup can consume the one-shot opening or clear task state.
+            resolutionGuard.actionRejection()?.let { error(it) }
+            val reusableOpening = labyrinthController.consumeReusableOpeningForBatch(
+                expectedGuildId = goals.first().guildId,
+                expectedDifficulty = ui.selectedDifficulty,
+            )
+            val batchId = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.ROOT).format(java.util.Date())
+            gameClientHardCloseLedger.clear()
             labyrinthBatchController.start(
                 batchId = batchId,
                 accountId = id,
@@ -753,7 +775,11 @@ class DesktopAppGraph(
                 reusableOpening = reusableOpening,
             )
           } catch (cancelled: CancellationException) { throw cancelled }
-          catch (failure: Exception) { log.add(failure.message ?: "自动执行启动失败", true); captureService.stop() }
+          catch (failure: Exception) {
+              resolutionGuard.disarm()
+              val reason = failure.message ?: "自动执行启动失败"
+              log.add(reason, true); labyrinthController.reportMessage(reason); captureService.stop()
+          }
           finally { startingState.value = false }
         }
         return true
@@ -769,11 +795,16 @@ class DesktopAppGraph(
     suspend fun connectDevice(serial: String, reconnect: Boolean = false) {
         check(!busy) { "请先停止当前任务，再切换设备" }
         deviceConnection.connect(serial.trim(), if (settings.state.value.touchMode == PreferredTouchMode.COMPATIBILITY) TouchMode.Compatibility else TouchMode.MaaTouch,
-            reconnect = reconnect, beforeConnect = { captureService.stopAndJoin("切换设备") }, onReady = { ready ->
+            reconnect = reconnect, beforeConnect = { resolutionGuard.disarm(clearStatus = true); captureService.stopAndJoin("切换设备") }, onReady = { ready ->
                 persistIdentity(ready)
                 settings.update { it.copy(lastDevice = ready.serial) }
-                log.add("设备已就绪：${ready.label}，${ready.width} × ${ready.height}",kind=UserLogKind.KEY)
+                log.add("设备已就绪：${ready.label}",kind=UserLogKind.KEY)
             })
+        if (device.state.value is DeviceConnectionState.Ready) {
+            try { recheckResolution() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { log.add("连接成功，实际截图尺寸待检查：${failure.message}", true) }
+        }
     }
 
     suspend fun checkAdb(): AdbLocation = (device as? ManagedDeviceService)?.prepare()
@@ -790,7 +821,11 @@ class DesktopAppGraph(
         }
     }
 
-    suspend fun disconnectDevice() { check(!busy) { "请先停止任务" }; deviceConnection.disconnect { captureService.stopAndJoin("断开设备") }; previewState.value = null }
+    suspend fun disconnectDevice() { check(!busy) { "请先停止任务" }; resolutionGuard.disarm(clearStatus = true); deviceConnection.disconnect { captureService.stopAndJoin("断开设备") }; previewState.value = null }
+    suspend fun recheckResolution(): VisualResolutionStatus {
+        check(!busy) { "请先停止任务，再重新检查画面尺寸" }
+        return resolutionGuard.recheck().also { log.add(it.message, !it.supported) }
+    }
     suspend fun startPreview() { captureService.start() }
     fun startRecognition(dryRun: Boolean): Job = synchronized(startLock) {
         if (busy) { log.add("请先停止当前任务", true); return Job().apply { complete() } }
@@ -799,22 +834,24 @@ class DesktopAppGraph(
         try {
             check(device.state.value is DeviceConnectionState.Ready) { "请先在设备页连接模拟器" }
             check((device.state.value as? DeviceConnectionState.Ready)?.device?.awake == true) { "模拟器屏幕正在休眠，请先手动唤醒，再启动任务" }
+            if (!dryRun) resolutionGuard.checkForStart()
             (device.state.value as? DeviceConnectionState.Ready)?.device?.let(::persistIdentity)
             check(gameClientResolution is GameClientResolution.Available) { "无法确定游戏客户端，请检查账号服务器与模拟器中安装的客户端" }
             check(ocr.status.value is OcrEngineStatus.Ready) { "OCR 尚未就绪，请查看设置与环境" }
             check(dryRun || actionsAvailable()) { "触控服务未就绪，请在设备页重新连接" }
             captureService.start()
             when (val result = labyrinthEntryRecognitionSession.start(dryRun, labyrinthController.uiState.value.selectedAccount?.id)) {
-                is LabyrinthEntryRecognitionStartResult.Blocked -> { log.add(result.reason, true); captureService.stop() }
+                is LabyrinthEntryRecognitionStartResult.Blocked -> { resolutionGuard.disarm(); log.add(result.reason, true); captureService.stop() }
                 else -> Unit
             }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { val reason = failure.message ?: "启动失败"; log.add(reason, true); labyrinthController.reportMessage(reason) }
+        catch (failure: Exception) { resolutionGuard.disarm(); val reason = failure.message ?: "启动失败"; log.add(reason, true); labyrinthController.reportMessage(reason) }
         finally { startingState.value = false }
         }.also { autoRunJob = it }
     }
     fun pauseTask() { automationOverlayCoordinator.state.value?.let { current -> autoRunScope.launch { automationOverlayCoordinator.setPaused(current.sessionId, !current.paused) } } }
     fun stopAll(reason: String = "用户停止任务"): Job = synchronized(startLock) {
+        resolutionGuard.disarm()
         stopJob?.takeIf { it.isActive }?.let { return it }
         stoppingState.value = true
         log.add(reason,kind=UserLogKind.KEY)
