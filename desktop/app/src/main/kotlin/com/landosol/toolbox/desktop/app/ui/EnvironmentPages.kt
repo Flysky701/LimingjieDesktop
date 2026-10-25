@@ -31,7 +31,7 @@ import java.nio.file.Files
 import javax.swing.JFileChooser
 import javax.swing.filechooser.FileNameExtensionFilter
 
-@Composable internal fun DevicesPage(graph: ControlSessionUi) {
+@Composable internal fun DevicesPage(graph: ControlSessionUi,managed:Boolean=false) {
     val busy = LocalTaskBusy.current
     val settings by graph.settings.state.collectAsState()
     val state by graph.device.state.collectAsState()
@@ -44,9 +44,9 @@ import javax.swing.filechooser.FileNameExtensionFilter
     var advanced by remember { mutableStateOf(false) }
     PageBody("设备", "选择一个模拟器连接。切换设备或触控模式前，请先停止任务。") {
         Message(actions.message)
-        DeviceConnectionPanel(graph)
-        TextButton(onClick={advanced=!advanced}){Text(if(advanced)"收起高级设置" else "高级：ADB 工具与路径")}
-        if(advanced) Panel("ADB 工具") {
+        if(!managed)DeviceConnectionPanel(graph)
+        if(!managed)TextButton(onClick={advanced=!advanced}){Text(if(advanced)"收起高级设置" else "高级：ADB 工具与路径")}
+        if(advanced&&!managed) Panel("ADB 工具") {
             OutlinedTextField(adbPath, { adbPath = it }, label = { Text("adb.exe 路径（留空自动查找）") }, singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = !actions.working && !busy)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { chooseFile(false, "选择 adb.exe", "exe")?.let { adbPath = it.absolutePath } }, enabled = !actions.working && !busy) { Text("选择文件") }
@@ -154,7 +154,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
     }
 }
 
-@Composable internal fun SettingsPage(graph: ControlSessionUi, openWizard: () -> Unit, openDevices: () -> Unit) {
+@Composable internal fun SettingsPage(graph: ControlSessionUi, openWizard: () -> Unit, openDevices: () -> Unit,shared:Boolean=false) {
     val resolution by graph.resolutionGuard.status.collectAsState()
     val busy = LocalTaskBusy.current
     val saved by graph.settings.state.collectAsState()
@@ -176,7 +176,17 @@ import javax.swing.filechooser.FileNameExtensionFilter
             Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(14.dp)) {
         Message(actions.message)
         if(group=="外观与通知")AppearanceSettings(graph)
-        if(group=="运行环境") Panel("运行环境") {
+        if(group=="运行环境"&&shared)Panel("运行环境"){
+            Text("各设备的连接、画面尺寸、触控和游戏客户端信息统一在设备管理中查看。",color=Muted)
+            OutlinedButton(onClick=openDevices){Text("打开设备管理")}
+            Detail("凭据加密",encryption)
+            OutlinedButton(onClick={actions.run{encryption=graph.messageRequest(ControlOps.ENCRYPTION_TEST)}},enabled=!actions.working){Text("检查加密")}
+            Row(verticalAlignment=Alignment.CenterVertically){
+                Checkbox(saved.gameSettingsConfirmed,{checked->actions.run{graph.settings.update{it.copy(gameSettingsConfirmed=checked)}})
+                Text("我已在游戏黎明界设置中关闭“播放角色加入动画”",fontSize=12.5.sp)
+            }
+        }
+        if(group=="运行环境"&&!shared) Panel("运行环境") {
             Detail("模拟器连接", deviceLabel(device, resolution.dimensionsLabel))
             Detail("截图", ready?.timing?.firstOrNull { it.mode == ready.selectedMode }?.let { "p95 ${it.p95Millis} ms${if (it.p95Millis > 600) "，偏慢" else ""}" } ?: "未完成测速")
             Detail("实际画面", if (ready == null) "等待连接" else resolution.dimensionsLabel)
@@ -286,7 +296,7 @@ internal fun chooseFile(save: Boolean, title: String, extension: String, suggest
     return file
 }
 
-@Composable internal fun SetupWizard(graph: ControlSessionUi, onFinished: () -> Unit) {
+@Composable internal fun SetupWizard(graph: ControlSessionUi,shared:Boolean=false,deviceContent:(@Composable ()->Unit)?=null,onFinished: () -> Unit) {
     var step by remember { mutableStateOf(0) }
     var accepted by remember { mutableStateOf(false) }
     var prepared by remember { mutableStateOf(false) }
@@ -310,11 +320,11 @@ internal fun chooseFile(save: Boolean, title: String, extension: String, suggest
                         1 -> {
                             Text("推荐 MuMu 12 或雷电模拟器 9，使用 1920 × 1080 横屏并打开 ADB 调试。")
                             Text("游戏内黎明界设置请关闭“播放角色加入动画”。连接也可以稍后在设备页完成。",color=Muted)
-                            DeviceConnectionPanel(graph,autoDetect=true)
+                            if(deviceContent!=null)Box(Modifier.height(400.dp)){deviceContent()} else DeviceConnectionPanel(graph,autoDetect=true)
                         }
                         2 -> {
-                            Text("添加并选择助手使用的账号。此操作不会切换模拟器里的游戏账号。",color=Muted)
-                            Box(Modifier.heightIn(min=280.dp,max=480.dp)) { AccountsPage(graph) }
+                            Text(if(shared)"添加一次账号，之后在设备管理页选择绑定。此操作不会切换模拟器里的游戏账号。" else "添加并选择助手使用的账号。此操作不会切换模拟器里的游戏账号。",color=Muted)
+                            Box(Modifier.heightIn(min=280.dp,max=480.dp)) { AccountsPage(graph,shared=shared) }
                         }
                     }
                     Message(actions.message)

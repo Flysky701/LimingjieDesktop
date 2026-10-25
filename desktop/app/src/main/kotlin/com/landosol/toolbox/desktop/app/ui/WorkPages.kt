@@ -65,7 +65,7 @@ import java.time.format.DateTimeFormatter
         } }) }
 }
 
-@Composable internal fun AccountsPage(graph: ControlSessionUi) {
+@Composable internal fun AccountsPage(graph: ControlSessionUi,bindings:Map<Long,List<String>> = emptyMap(),shared:Boolean=false) {
     val busy = LocalTaskBusy.current
     val vm = graph.accounts
     val state by vm.uiState.collectAsState()
@@ -81,7 +81,8 @@ import java.time.format.DateTimeFormatter
     val snapshot by graph.identityStore.state.collectAsState()
     PageBody("账号库", "在当前 Windows 用户下加密保存凭据。选择账号后，任务按需登录。") {
         if(busy)Message("任务运行中，停止后可新增、切换或修改账号；编辑草稿仍可取消。")
-        Message(snapshot?.let { "设备画像：${it.brand} ${it.model} · ${DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(it.capturedAtMillis))}${if (connection is DeviceConnectionState.Ready) "（当前设备）" else "（上次连接设备）"}" }
+        if(shared)Message("所有设备共用此账号库。在设备页绑定账号；绑定不会切换游戏客户端中的登录账号。")
+        else Message(snapshot?.let { "设备画像：${it.brand} ${it.model} · ${DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(it.capturedAtMillis))}${if (connection is DeviceConnectionState.Ready) "（当前设备）" else "（上次连接设备）"}" }
             ?: "尚未读取模拟器设备信息，请先在“设备”页连接模拟器。账号可以先添加，登录需要设备画像。")
         if (state.editor == null) Message(state.message, vm::dismissMessage)
         Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -95,7 +96,8 @@ import java.time.format.DateTimeFormatter
                         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(account.alias, fontWeight = FontWeight.SemiBold)
                             Text(account.serverName, color = Muted, fontSize = 12.5.sp)
-                            if (account.isSelected) Text("当前账号", color = Accent, fontSize = 12.5.sp)
+                            if(shared)bindings[account.id]?.let{Text("绑定：${it.joinToString("、")}",color=Accent,fontSize=12.5.sp)}
+                            else if (account.isSelected) Text("当前账号", color = Accent, fontSize = 12.5.sp)
                             if(account.gameUid.isNullOrBlank())Text("UID 未填",color=Muted,style=MaterialTheme.typography.bodySmall)
                             if(credentials[account.id]==false)Text("缺凭据 · 请编辑重新填写",color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
                         }
@@ -108,13 +110,13 @@ import java.time.format.DateTimeFormatter
                 else if (focus != null) Panel(focus.alias) {
                     Detail("服务器", focus.serverName)
                     Detail("游戏 UID", focus.gameUid ?: "未填写")
-                    Detail("状态", if (focus.isSelected) "当前任务账号" else "未选中")
+                    Detail(if(shared)"绑定设备" else "状态", if(shared)bindings[focus.id]?.joinToString("、") ?: "未绑定" else if (focus.isSelected) "当前任务账号" else "未选中")
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (!focus.isSelected) Button(shape=MaterialTheme.shapes.small,onClick = { if(!graph.busy)vm.selectAccount(focus.id) }, enabled = !state.isWorking && !busy) { Text("设为当前") }
+                        if (!shared&&!focus.isSelected) Button(shape=MaterialTheme.shapes.small,onClick = { if(!graph.busy)vm.selectAccount(focus.id) }, enabled = !state.isWorking && !busy) { Text("设为当前") }
                         OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { if(!graph.busy)vm.openEditAccount(focus.id) }, enabled = !state.isWorking && !busy) { Text("编辑") }
                         TextButton(onClick = { if(!graph.busy)vm.requestDelete(focus) }, enabled = !state.isWorking && !busy) { Text("删除", color = MaterialTheme.colorScheme.error) }
                     }
-                    Text("“设为当前”只选择助手使用的凭据，不会切换游戏客户端中的账号。", color = Muted, fontSize = 12.5.sp)
+                    Text(if(shared)"在设备管理页为各设备选择绑定账号。" else "“设为当前”只选择助手使用的凭据，不会切换游戏客户端中的账号。", color = Muted, fontSize = 12.5.sp)
                 } else Panel("添加你的第一个账号") { Text("选择服务器并填写账号资料。渠道服使用 uid 与 access_key，B 服使用登录账号与密码。", color = Muted) }
             }
         }

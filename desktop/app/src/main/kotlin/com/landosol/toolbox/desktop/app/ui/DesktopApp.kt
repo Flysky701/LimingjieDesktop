@@ -48,9 +48,12 @@ internal val LocalNavigationGuard=staticCompositionLocalOf { NavigationGuard() }
 internal enum class Page(val label:String,val icon:String) { Run("运行","play_arrow"),Accounts("账号","person"),Strategies("策略","tune"),Devices("设备","smartphone"),Records("记录","bar_chart"),Settings("设置","settings") }
 @Composable internal fun Symbol(name:String,label:String?=null,tint:Color=LocalContentColor.current,modifier:Modifier=Modifier.size(20.dp)) { Icon(painterResource("desktop/icons/$name.svg"),label,modifier,tint=tint) }
 
-@Composable internal fun DesktopApp(graph:ControlSessionUi,hostWindow:java.awt.Window?=null,navigationGuard:NavigationGuard?=null) {
+@Composable internal fun DesktopApp(
+    graph:ControlSessionUi,hostWindow:java.awt.Window?=null,navigationGuard:NavigationGuard?=null,
+    runOnly:Boolean=false,appearance:DesktopPreferences?=null,onNavigate:((Page)->Unit)?=null,
+) {
     val preferences by graph.ux.preferences.state.collectAsState()
-    DesktopTheme(preferences) {
+    DesktopTheme(appearance ?: preferences) {
         val state by graph.ux.console.collectAsState()
         val resolution by graph.resolutionGuard.status.collectAsState()
         val connectionActivity by graph.deviceConnection.activity.collectAsState()
@@ -72,7 +75,6 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
         val portError by graph.error.collectAsState()
         val transportError by graph.port.error.collectAsState()
         val rawSnapshot by graph.port.snapshots.collectAsState()
-        val accountVerified by graph.accountVerified.collectAsState()
         val hasSnapshot=rawSnapshot["console"] is JsonObject
         val visible=LocalControlVisible.current
         DisposableEffect(graph,navigation){graph.ux.confirmNavigation=navigation::request;onDispose{graph.ux.confirmNavigation=null}}
@@ -87,7 +89,7 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
         var hydrated by remember{mutableStateOf(false)}
         LaunchedEffect(hasSnapshot){if(hasSnapshot&&!hydrated){
             val p=ControlUiSnapshot(rawSnapshot).model("preferences",DesktopPreferences())
-            page=Page.entries.firstOrNull{it.name==p.page} ?: Page.Run
+            page=if(runOnly)Page.Run else Page.entries.firstOrNull{it.name==p.page} ?: Page.Run
             selected=DesktopTask.entries.firstOrNull{it.name==p.selectedTask} ?: DesktopTask.BATCH
             hydrated=true
         }}
@@ -125,10 +127,13 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
         }
         fun configure(){navigation.request{fullConfiguration=true}}
         val searchFocus=remember { FocusRequester() }
-        fun navigate(target:Page) { if(target!=page)navigation.request {page=target;actions.run { withContext(Dispatchers.IO){graph.ux.preferences.update { it.copy(page=target.name) }} }} }
+        fun navigate(target:Page) {
+            if(runOnly){onNavigate?.invoke(target);return}
+            if(target!=page)navigation.request {page=target;actions.run { withContext(Dispatchers.IO){graph.ux.preferences.update { it.copy(page=target.name) }} }}
+        }
         LaunchedEffect(page,searchRequested){if(page==Page.Run&&searchRequested){withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(rightTab="logs")}};delay(50);runCatching{searchFocus.requestFocus()};searchRequested=false}}
         val goals=preferences.goals.map { LabyrinthBatchGoal(it.guildId,it.count,if(it.clears) LabyrinthBatchGoalMode.CLEARS else LabyrinthBatchGoalMode.ATTEMPTS) }
-        val missing=if(connection!=WorkerConnectionStatus.CONNECTED||!hasSnapshot)"控制连接未就绪" else runSetupBlock(setup.dirty,fullConfiguration) ?: if(!accountVerified&&selected in listOf(DesktopTask.BATCH,DesktopTask.REROLL,DesktopTask.ENTRY))"先读取当前开局确认账号" else startMissing(selected,state,ocr is OcrEngineStatus.Ready,goals.isNotEmpty(),credentials[configuration.selectedAccount?.id],resolution)
+        val missing=if(connection!=WorkerConnectionStatus.CONNECTED||!hasSnapshot)"控制连接未就绪" else runSetupBlock(setup.dirty,fullConfiguration) ?: startMissing(selected,state,ocr is OcrEngineStatus.Ready,goals.isNotEmpty(),credentials[configuration.selectedAccount?.id],resolution)
         fun launchSelected() {
             if(setup.dirty || fullConfiguration || actions.working || graph.busy) return
             val current=graph.labyrinthController.uiState.value
@@ -162,7 +167,7 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
             }
         },color=Background) {
             Row {
-                Surface(Modifier.width(76.dp).fillMaxHeight(),color=LocalDesktopColors.current.rail) {
+                if(!runOnly)Surface(Modifier.width(76.dp).fillMaxHeight(),color=LocalDesktopColors.current.rail) {
                     Column(Modifier.padding(horizontal=6.dp,vertical=16.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(6.dp)) {
                         Surface(shape=DesktopCorners.md,color=MaterialTheme.colorScheme.primary) { Text("黎",Modifier.padding(10.dp),color=Color.White,fontWeight=FontWeight.Bold) }
                         Spacer(Modifier.height(8.dp))
@@ -176,10 +181,16 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                         Spacer(Modifier.weight(1f));Text("${AppVersion.name.replace("+","\n")}\n独立实例",style=MaterialTheme.typography.labelSmall,color=Muted)
                     }
                 }
-                VerticalDivider(color=Line)
+                if(!runOnly)VerticalDivider(color=Line)
                 Column(Modifier.weight(1f)) {
                     Surface(color=MaterialTheme.colorScheme.surface) {
                         Row(Modifier.fillMaxWidth().heightIn(min=56.dp).padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                            if(runOnly) {
+                                Text(connectionLabel,Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)
+                                Text("绑定账号：${state.task.selectedAccount?.alias ?: "未绑定"}",style=MaterialTheme.typography.bodySmall)
+                                TextButton(onClick={navigate(Page.Devices)}){Text("设备管理")}
+                                StatusBadge(if(state.stopping)"停止中" else if(state.overlay?.paused==true)"已暂停" else if(state.busy)"运行中" else "空闲")
+                            } else {
                             Box { OutlinedButton(shape=MaterialTheme.shapes.small,onClick={deviceMenu=true},contentPadding=PaddingValues(horizontal=10.dp,vertical=6.dp)) {
                                 Symbol("smartphone",tint=if(state.device is DeviceConnectionState.Ready) LocalDesktopColors.current.ok else Muted)
                                 Spacer(Modifier.width(7.dp));Text(connectionLabel,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.widthIn(max=360.dp),style=MaterialTheme.typography.bodySmall)
@@ -198,6 +209,7 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                             if(state.busy) Text("运行中不可切换账号",color=Muted,style=MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.weight(1f));StatusBadge(if(state.stopping) "停止中" else if(state.task.captcha!=null) "等待验证码" else if(state.overlay?.paused==true) "已暂停" else if(state.busy) "运行中" else "空闲")
                             IconButton(onClick={actions.run { withContext(Dispatchers.IO){graph.ux.preferences.update { it.copy(theme=if(isDark) DesktopThemeMode.LIGHT else DesktopThemeMode.DARK) }} }}) { Symbol(if(isDark) "light_mode" else "dark_mode","切换主题") }
+                            }
                         }
                     }
                     HorizontalDivider(color=Line)
@@ -205,7 +217,7 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                     BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                         CompositionLocalProvider(LocalContext provides graph.context,LocalTaskBusy provides (graph.busy||actions.working),LocalDesktopWindow provides hostWindow,LocalNavigationGuard provides navigation,
                             LocalConfiguration provides Configuration(maxWidth.value.toInt(),maxHeight.value.toInt())) {
-                            when(page) {
+                            when(if(runOnly)Page.Run else page) {
                                 Page.Run -> RunConsole(graph,state,selected,::selectTask,::configure,{navigate(it)},searchFocus,
                                     setup,configuration,standaloneGuild,{if(!graph.busy)standaloneGuild=it},setupMessage ?: actions.message)
                                 Page.Accounts -> AccountsPage(graph)
@@ -221,7 +233,7 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                                 };Box(Modifier.weight(1f)){FullWorkflow(graph,state,{fullConfiguration=false;navigate(Page.Strategies)},{fullConfiguration=false})} }
                             }
                             }
-                            if(hasSnapshot&&connection==WorkerConnectionStatus.CONNECTED&&(!settings.wizardCompleted || wizard)) SetupWizard(graph){wizard=false;navigate(Page.Run)}
+                            if(!runOnly&&hasSnapshot&&connection==WorkerConnectionStatus.CONNECTED&&(!settings.wizardCompleted || wizard)) SetupWizard(graph){wizard=false;navigate(Page.Run)}
                             if(visible) RemoteCaptchaDialog(graph)
                             if(confirmRetreat&&visible) AlertDialog(onDismissRequest={confirmRetreat=false},title={Text("确认彻底撤退")},text={Text("允许彻底撤退会放弃当前开局。请确认没有需要保留的进度。")},
                                 confirmButton={TextButton(onClick={confirmRetreat=false;launchSelected()}){Text("确认并开始")}},dismissButton={TextButton(onClick={confirmRetreat=false}){Text("取消")}})
