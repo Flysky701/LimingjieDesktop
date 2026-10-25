@@ -182,7 +182,9 @@ import javax.swing.filechooser.FileNameExtensionFilter
             Detail("凭据加密",encryption)
             OutlinedButton(onClick={actions.run{encryption=graph.messageRequest(ControlOps.ENCRYPTION_TEST)}},enabled=!actions.working){Text("检查加密")}
             Row(verticalAlignment=Alignment.CenterVertically){
-                Checkbox(saved.gameSettingsConfirmed,{checked->actions.run{graph.settings.update{it.copy(gameSettingsConfirmed=checked)}})
+                Checkbox(saved.gameSettingsConfirmed, { checked ->
+                    actions.run { graph.settings.update { it.copy(gameSettingsConfirmed = checked) } }
+                })
                 Text("我已在游戏黎明界设置中关闭“播放角色加入动画”",fontSize=12.5.sp)
             }
         }
