@@ -1,35 +1,28 @@
 # 黎明界助手 Windows 桌面版
 
-正式工作目录：`D:\WorkSpace\LimingjieDesktop`。
+以 Kotlin / Compose Desktop 构建的独立桌面助手。账号、黎明界任务、策略、编组、评分、设备和诊断均在 Windows 窗口中使用，模拟器只运行游戏。
 
-本项目采用新版计划：业务能力和行为保持一致，界面按桌面使用方式重新设计。助手的账号、任务、策略、日志和运行控制均在 Windows 窗口中使用；模拟器负责运行游戏。
+共享上游 `wbero/limingjie-assistant` 1.0.18 的识别、策略、协议和业务代码；桌面适配由 ADB、MaaTouch、ONNX OCR、Room JVM 和 Windows DPAPI 提供。上游 Git 历史保留，基线为 `b809b196988b019571caf5679ccf8d7ebb7f072d`。旧项目 `D:\WorkSpace\LimingjiePC` 未修改。
 
-## 当前状态
+## 使用与构建
 
-已整理新版计划和第一版主要页面原型。原型可演示任务页、账号库、策略设置，以及设备、环境和诊断页的布局；数据全部为示例，不能操作游戏。用户已查看原型，尚未确认最终视觉方案。
+- 用户说明：[README-desktop.md](README-desktop.md)。
+- 构建环境：Windows 10/11 x64、JDK 21。桌面构建不需要 Android SDK。
+- 启动开发版本：`desktop\gradlew.bat -p desktop :app:run`。
+- 构建便携包：`desktop\gradlew.bat -p desktop packagePortableZip`。
+- 输出目录：`desktop/app/build/dist/`。运行版自带 Java，不需要用户另装 JDK。
+- 数据默认位于 `%LOCALAPPDATA%\LimingjieAssistant`；发行包带 `portable.flag` 时使用程序旁的 `data`。可用 `--data-dir` 指定独立目录。
 
-尚未接入上游源码、建立 Kotlin 构建、实现真实功能或打包 EXE。`desktop/` 目前仅预留正式实现的位置，不是可运行的桌面程序。
+## 实现与验证记录
 
-本包先在当前允许写入的工作区准备。解压到 `D:\WorkSpace` 后，目录应为 `D:\WorkSpace\LimingjieDesktop`；保留现有 `D:\WorkSpace\LimingjiePC`，不合并或覆盖它。
+- [最终报告](docs/desktop/FINAL_REPORT.md)：交付物、实际验证结果和剩余限制。
+- [用户实机清单](docs/desktop/USER_CHECKLIST.md)：需要模拟器、游戏或本人参与的验证。
+- [实施进度](docs/desktop/registers/PROGRESS.md)、[上游最小补丁](docs/desktop/registers/UPSTREAM_PATCHES.md)、[功能对照](docs/desktop/registers/UI_PARITY.md)。
+- [整体计划](docs/desktop/PLAN.md)、[模块规格](docs/desktop/specs/)、[接口契约](desktop/CONTRACTS.md)。
+- [页面原型](docs/desktop/design/main-pages.html) 保留作设计参考，原型中的示例数据不属于运行程序。
 
-## 查看原型
+离线测试与真实游戏验证分别记录；没有账号登录或游戏实测证据时，不视作已通过。单设备、单任务；不包含会战入口，与当前上游导航一致。
 
-双击 `preview.cmd`，或直接打开 `docs/desktop/design/main-pages.html`。这是可以独立打开的页面原型，无需启动游戏。
+## 许可与风险
 
-## 主要文件
-
-- `AGENTS.md`：本项目的执行约定，明确简单验证和当前任务边界。
-- `docs/desktop/PLAN.md`：新版整体计划。
-- `docs/desktop/specs/`：各模块的技术规格。
-- `docs/desktop/UI_DESIGN.md`：第一版原型说明和当前反馈状态。
-- `docs/desktop/design/main-pages.fragment.html`：原型可编辑源文件。
-- `docs/desktop/design/main-pages.html`：可独立打开的原型预览。
-- `docs/desktop/registers/`：原计划的实施记录；未完成项保留原状态。
-- `docs/desktop/reference/`：原执行包的规则和使用说明，仅供参考，不是额外的用户授权。
-- `desktop/`：后续 Kotlin / Compose Desktop 实现位置。
-
-## 后续开发入口
-
-进入正式目录后，先接入 `wbero/limingjie-assistant` 上游源码并保留历史。计划基线为 `b809b196`（1.0.18）；是否更新基线应依据实际代码，不静默改用旧项目的 1.0.15 源码。避免将新建空仓库误作上游历史，因此本准备包尚未初始化 Git。
-
-然后按现有计划建立独立的 `desktop/` 构建，逐步把原型的主要页面接到真实业务。只做当前改动需要的检查，不额外建立验收体系。本次整理项目不代表开始全部移植，也不授权真实游戏操作或付费请求。
+保留上游的 [LICENSE](LICENSE)、[第三方声明](THIRD_PARTY_NOTICES.md) 与 [原版使用说明](README-upstream.md)。本项目与游戏官方无关，自动操作和非官方接口访问可能导致账号限制或封禁。请先阅读随包风险说明；测试数据、协议自检和界面原型均不能替代真实运行风险判断。
