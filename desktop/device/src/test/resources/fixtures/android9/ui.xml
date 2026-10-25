@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0"><node package="com.bilibili.priconne" text="" content-desc="" clickable="false" bounds="[0,0][1920,1080]"><node package="com.bilibili.priconne" text="登录" content-desc="确认登录" clickable="true" bounds="[10,20][110,60]"/></node></hierarchy>

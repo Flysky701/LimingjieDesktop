@@ -1,0 +1,2 @@
+mCurrentFocus=Window{f05 u0 com.bilibili.priconne/com.sdk.LoginActivity}
+mFocusedApp=ActivityRecord{f05 u0 com.bilibili.priconne/com.sdk.LoginActivity t3}

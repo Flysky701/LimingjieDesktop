@@ -1,0 +1,2 @@
+mCurrentFocus=Window{f02 u0 com.android.inputmethod.latin/.LatinIME}
+mFocusedApp=ActivityRecord{f01 u0 jp.co.cygames.princessconnectredive/.MainActivity t2}

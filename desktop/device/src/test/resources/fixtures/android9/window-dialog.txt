@@ -1,0 +1,2 @@
+mCurrentFocus=Window{f04 u0 com.android.permissioncontroller/com.android.packageinstaller.permission.ui.GrantPermissionsActivity}
+mFocusedApp=ActivityRecord{f01 u0 jp.co.cygames.princessconnectredive/.MainActivity t2}

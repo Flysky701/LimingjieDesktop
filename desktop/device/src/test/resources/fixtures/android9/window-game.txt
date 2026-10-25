@@ -1,0 +1,2 @@
+mCurrentFocus=Window{f00 u0 jp.co.cygames.princessconnectredive/.MainActivity}
+mFocusedApp=AppWindowToken{abc token=Token{def ActivityRecord{aaa u0 jp.co.cygames.princessconnectredive/.MainActivity t2}}}

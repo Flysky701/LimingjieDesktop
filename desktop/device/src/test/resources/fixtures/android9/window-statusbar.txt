@@ -1,0 +1,2 @@
+mCurrentFocus=Window{f03 u0 StatusBar}
+mFocusedApp=ActivityRecord{f01 u0 jp.co.cygames.princessconnectredive/.MainActivity t2}
