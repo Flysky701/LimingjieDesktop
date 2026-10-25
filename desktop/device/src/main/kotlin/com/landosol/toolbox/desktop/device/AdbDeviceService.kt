@@ -8,8 +8,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.xml.sax.SAXException
 import java.io.IOException
-import java.nio.file.Files
 import java.nio.file.Path
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
@@ -21,6 +22,13 @@ class AdbDeviceService(
     private val onEvent: (String) -> Unit = {},
     private val onLost: (String) -> Unit = {},
     private val touchFactory: TouchConnectionFactory = MaaTouchConnection,
+    private val emulatorCommands: () -> List<Path> = AdbLocator::emulatorCommands,
+    private val portOpen: suspend (Int) -> Boolean = { port ->
+        withContext(Dispatchers.IO) {
+            try { Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 150) }; true }
+            catch (_: IOException) { false }
+        }
+    },
 ) : DeviceService {
     private class Session(val serial: String, val touchMode: TouchMode, val capturer: ScreenCapturer, var ready: DeviceReady, val bootId: String, @Volatile var touch: TouchConnection?) {
         var failures = 0
@@ -43,32 +51,32 @@ class AdbDeviceService(
     private var reconnect: Job? = null
     override val foregroundPackage: String? get() = cachedForeground.takeIf { session != null && System.nanoTime() - foregroundUpdated <= 2_000_000_000L }
 
-    override suspend fun discover(): List<DeviceDescriptor> {
+    private suspend fun <T> connectionOperation(block: suspend () -> T): T = coroutineScope {
+        val operation = currentCoroutineContext().job
+        connectingJobs.add(operation)
+        try { block() } finally { connectingJobs.remove(operation) }
+    }
+
+    override suspend fun discover(): List<DeviceDescriptor> = connectionOperation { lifecycle.withLock {
         check(!closed.get()) { "设备服务已关闭" }
         var listed = DeviceParsers.devices(adb.execute(listOf("devices", "-l")).requireSuccess().text())
-        val commands = AdbLocator.emulatorCommands()
+        val commands = withContext(Dispatchers.IO) { emulatorCommands() }
         val mumu = commands.filter { Regex("mumu|nemu", RegexOption.IGNORE_CASE).containsMatchIn(it.toString()) }
         val ld = commands.filter { Regex("ldplayer|dnplayer|ldvbox|leidian", RegexOption.IGNORE_CASE).containsMatchIn(it.toString()) }
-        suspend fun manager(paths: List<Path>, name: String, arguments: List<String>): String? {
-            val candidate = paths.flatMap { generateSequence(it.parent) { parent -> parent.parent }.take(3).toList() }
-                .asSequence().map { it.resolve(name) }.firstOrNull(Files::isRegularFile) ?: return null
-            return ProcessAdbExecutor(candidate.toString()).use { runner -> (runner.execute(arguments, timeoutMillis = 5000) as? AdbResult.Success)?.text() }
-        }
+        // Do not launch vendor GUI/manager executables during discovery. They may display windows.
+        // Existing ADB transports cover custom ports; unregistered custom ports can be entered manually.
         val ports = mutableSetOf<Int>()
-        if (mumu.isNotEmpty()) {
-            val found = manager(mumu, "MuMuManager.exe", listOf("info", "-v", "all"))?.let(DeviceParsers::mumuPorts).orEmpty()
-            ports += found.ifEmpty { (0..7).map { 16384 + 32 * it } + 7555 }
-        }
-        if (ld.isNotEmpty()) {
-            val found = manager(ld, "ldconsole.exe", listOf("list2"))?.let(DeviceParsers::ldplayerIndices)
-            ports += (found ?: (0..7).toList()).map { 5555 + 2 * it }
-        }
-        coroutineScope {
+        if (mumu.isNotEmpty()) ports += (0..7).map { 16384 + 32 * it } + 7555
+        if (ld.isNotEmpty()) ports += (0..7).map { 5555 + 2 * it }
+        val attempted = coroutineScope {
             ports.filter { port -> listed.none { it.serial == "127.0.0.1:$port" && it.state == "device" } }.map { port ->
-                async { adb.execute(listOf("connect", "127.0.0.1:$port"), timeoutMillis = 3000) }
+                async {
+                    if (!portOpen(port)) false
+                    else { adb.execute(listOf("connect", "127.0.0.1:$port"), timeoutMillis = 3000); true }
+                }
             }.awaitAll()
         }
-        if (ports.isNotEmpty()) listed = DeviceParsers.devices(adb.execute(listOf("devices", "-l")).requireSuccess().text())
+        if (attempted.any { it }) listed = DeviceParsers.devices(adb.execute(listOf("devices", "-l")).requireSuccess().text())
         val deduplicated = linkedMapOf<String, DeviceDescriptor>()
         for (device in listed) {
             val serialNo = if (device.state == "device") shellText(device.serial, "getprop", "ro.serialno") else null
@@ -77,27 +85,26 @@ class AdbDeviceService(
             val previous = deduplicated[key]
             if (previous == null || (':' in device.serial && ':' !in previous.serial)) deduplicated[key] = device
         }
-        return deduplicated.values.toList()
-    }
+        deduplicated.values.toList()
+    } }
 
-    override suspend fun connect(serial: String, touchMode: TouchMode): Unit = coroutineScope {
-        val operation = currentCoroutineContext().job
-        connectingJobs.add(operation)
-        try { lifecycle.withLock {
+    override suspend fun connect(serial: String, touchMode: TouchMode): Unit = connectionOperation { lifecycle.withLock {
         check(!closed.get()) { "设备服务已关闭" }
         require(serial.isNotBlank() && serial.none { it.isWhitespace() || it == '\u0000' }) { "设备地址无效" }
-        reconnect?.cancel(); reconnect = null
+        if (session?.let { it.serial == serial && it.touchMode == touchMode } == true && mutableState.value is DeviceConnectionState.Ready) return@withLock
+        reconnect?.cancelAndJoin(); reconnect = null
         stopSession("切换设备，任务已停止")
         mutableState.value = DeviceConnectionState.Connecting(serial)
         try {
             activate(establish(serial, touchMode, true))
         } catch (cancelled: CancellationException) { mutableState.value = DeviceConnectionState.Disconnected; throw cancelled }
         catch (error: Exception) { mutableState.value = DeviceConnectionState.Failed(error.message ?: "连接模拟器失败") }
-        } } finally { connectingJobs.remove(operation) }
-    }
+    } }
 
     private suspend fun establish(serial: String, touchMode: TouchMode, initial: Boolean): Session {
-        if (':' in serial) adb.execute(listOf("connect", serial), timeoutMillis = 3000).requireSuccess()
+        if (':' in serial && (adb.execute(listOf("get-state"), serial, timeoutMillis = 3000) as? AdbResult.Success)?.text()?.trim() != "device") {
+            adb.execute(listOf("connect", serial), timeoutMillis = 3000).requireSuccess()
+        }
         val bootCompleted = withTimeoutOrNull(120_000) {
             if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "模拟器启动中")
             while (adb.shell(serial, listOf("getprop", "sys.boot_completed")).requireSuccess().text().trim() != "1") delay(2000)
@@ -175,10 +182,10 @@ class AdbDeviceService(
         reconnect = scope.launch {
             repeat(12) { index ->
                 delay(5000)
-                mutableState.value = DeviceConnectionState.Reconnecting(index + 1)
                 try {
                     lifecycle.withLock {
                         ensureActive()
+                        mutableState.value = DeviceConnectionState.Reconnecting(index + 1)
                         val connected = establish(value.serial, value.touchMode, false)
                         activate(connected)
                     }
@@ -198,8 +205,8 @@ class AdbDeviceService(
 
     override suspend fun disconnect() {
         connectingJobs.toList().forEach { it.cancel() }
-        reconnect?.cancel()
-        monitor?.cancel()
+        reconnect?.cancelAndJoin()
+        monitor?.cancelAndJoin()
         lifecycle.withLock {
             reconnect = null
             stopSession("设备已断开，任务已停止")

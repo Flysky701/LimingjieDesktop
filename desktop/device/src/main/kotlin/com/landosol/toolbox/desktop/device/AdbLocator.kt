@@ -7,6 +7,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
+import java.nio.file.InvalidPathException
 import java.nio.file.Path
 import java.time.Duration
 import java.util.zip.ZipInputStream
@@ -22,7 +23,34 @@ object AdbLocator {
         }.toList()
     }.distinct()
 
-    suspend fun find(configuredPath: String? = null, downloadedDirectory: Path? = null): AdbLocation? {
+    suspend fun find(configuredPath: String? = null, downloadedDirectory: Path? = null): AdbLocation? = withContext(Dispatchers.IO) {
+        resolve(configuredPath, { automaticCandidates(downloadedDirectory) }) { path ->
+            ProcessAdbExecutor(path.toString()).use { runner ->
+                (runner.execute(listOf("version"), timeoutMillis = 3000) as? AdbResult.Success)?.text()
+            }
+        }
+    }
+
+    /** A nonblank setting is an explicit selection; invalid selections must not silently use another ADB. */
+    internal suspend fun resolve(
+        configuredPath: String?,
+        automaticCandidates: suspend () -> List<Pair<Path, String>>,
+        version: suspend (Path) -> String?,
+    ): AdbLocation? {
+        val selected = configuredPath?.trim()?.takeIf { it.isNotEmpty() }
+        val candidates = if (selected != null) {
+            val path = try { Path.of(selected) } catch (_: InvalidPathException) { return null }
+            listOf(path to "用户指定")
+        } else automaticCandidates()
+        for ((path, source) in candidates.distinctBy { it.first.toAbsolutePath().normalize() }) {
+            if (!Files.isRegularFile(path)) continue
+            val output = version(path)
+            if (output != null && output.contains("Android Debug Bridge")) return AdbLocation(path.toString(), source, output.trim())
+        }
+        return null
+    }
+
+    private suspend fun automaticCandidates(downloadedDirectory: Path?): List<Pair<Path, String>> {
         val candidates = mutableListOf<Pair<Path, String>>()
         candidates += vendorCandidates(emulatorCommands()).map { it to "模拟器自带" }
         if (System.getProperty("os.name").startsWith("Windows")) {
@@ -33,16 +61,8 @@ object AdbLocator {
         }
         val executableName = if (System.getProperty("os.name").startsWith("Windows")) "adb.exe" else "adb"
         candidates += System.getenv("PATH").orEmpty().split(java.io.File.pathSeparator).filter { it.isNotBlank() }.map { Path.of(it).resolve(executableName) to "PATH" }
-        configuredPath?.takeIf { it.isNotBlank() }?.let { candidates += Path.of(it) to "用户指定" }
         downloadedDirectory?.let { candidates += it.resolve(executableName) to "已下载 platform-tools" }
-        for ((path, source) in candidates.distinctBy { it.first.toAbsolutePath().normalize() }) {
-            if (!Files.isRegularFile(path)) continue
-            ProcessAdbExecutor(path.toString()).use { runner ->
-                val version = runner.execute(listOf("version"), timeoutMillis = 3000)
-                if (version is AdbResult.Success && version.text().contains("Android Debug Bridge")) return AdbLocation(path.toString(), source, version.text().trim())
-            }
-        }
-        return null
+        return candidates
     }
 
     /** Explicit user action only. Official ADB is downloaded into the application's data directory. */

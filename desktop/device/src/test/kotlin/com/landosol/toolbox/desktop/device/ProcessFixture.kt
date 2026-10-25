@@ -15,7 +15,7 @@ object ProcessFixture {
     @JvmStatic fun main(args: Array<String>) {
         when (args[0]) {
             "echo" -> System.out.write(args.drop(1).joinToString("|").toByteArray(Charsets.UTF_8))
-            "error" -> { System.err.print(args[1]); kotlin.system.exitProcess(args[2].toInt()) }
+            "error" -> { System.err.print(args[1]); args.getOrNull(3)?.let { System.out.print(it) }; kotlin.system.exitProcess(args[2].toInt()) }
             "large" -> {
                 val other = Thread { repeat(1024) { System.err.write(ByteArray(8192) { 69 }) }; System.err.flush() }.apply { start() }
                 repeat(8192) { System.out.write(ByteArray(8192) { 42 }) }; System.out.flush(); other.join()

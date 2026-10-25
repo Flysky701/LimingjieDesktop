@@ -22,7 +22,6 @@ class ProcessAdbExecutor(
     private val active = ConcurrentHashMap.newKeySet<Process>()
     private val closed = AtomicBoolean()
     private val serverStartAttempted = AtomicBoolean()
-    private val daemonRestarts = ArrayDeque<Long>()
 
     override suspend fun execute(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean): AdbResult {
         require(timeoutMillis > 0)
@@ -58,13 +57,7 @@ class ProcessAdbExecutor(
                         val output = stdout.await()
                         val errors = stderr.await()
                         val textOutput = if (!screenshot && arguments.firstOrNull() in setOf("connect", "start-server")) output.toString(Charsets.UTF_8) else ""
-                        val repeatedRestart = if (Regex("daemon not running.*starting", RegexOption.IGNORE_CASE).containsMatchIn(errors + textOutput)) synchronized(daemonRestarts) {
-                            val now = System.nanoTime()
-                            while (daemonRestarts.isNotEmpty() && now - daemonRestarts.first() > 10_000_000_000L) daemonRestarts.removeFirst()
-                            daemonRestarts.addLast(now)
-                            daemonRestarts.size >= 2
-                        } else false
-                        val classification = if (repeatedRestart) classifyAdbFailure(1, "adb server version mismatch") else classifyAdbFailure(process.exitValue(), errors, textOutput)
+                        val classification = classifyAdbFailure(process.exitValue(), errors, textOutput)
                         classification ?: AdbResult.Success(process.exitValue(), output, errors)
                     } finally { if (!isActive) terminate(process) }
                 }
@@ -106,7 +99,8 @@ internal fun classifyAdbFailure(exitCode: Int, stderr: String, stdout: String = 
     val text = (stderr + "\n" + stdout).trim()
     val lower = text.lowercase()
     val kind = when {
-        "server version" in lower && ("doesn't match" in lower || "mismatch" in lower) -> AdbFailureKind.ServerVersionConflict
+        // ADB can recover from an old server itself. Startup diagnostics alone do not make a successful command fail.
+        exitCode != 0 && "server version" in lower && ("doesn't match" in lower || "mismatch" in lower) -> AdbFailureKind.ServerVersionConflict
         "unauthorized" in lower -> AdbFailureKind.Unauthorized
         "device offline" in lower -> AdbFailureKind.DeviceOffline
         "no devices/emulators found" in lower || Regex("device .* not found").containsMatchIn(lower) -> AdbFailureKind.DeviceNotFound
@@ -116,7 +110,7 @@ internal fun classifyAdbFailure(exitCode: Int, stderr: String, stdout: String = 
         else -> return null
     }
     val detail = when (kind) {
-        AdbFailureKind.ServerVersionConflict -> "检测到多个不同版本的 adb 在争抢（常见原因：同时打开了其他助手或手机管家）。请在设置中改用模拟器自带的 adb，或关闭其他工具后重试。"
+        AdbFailureKind.ServerVersionConflict -> "ADB 客户端与服务端版本不匹配，命令未成功。请在“设备 → ADB 工具”选择模拟器自带的 adb.exe 并保存；若仍失败，请关闭其他使用 ADB 的工具后重试。"
         AdbFailureKind.Unauthorized -> "设备尚未授权，请在模拟器或设备上允许 USB 调试。"
         else -> text.ifBlank { "adb 退出码 $exitCode" }
     }

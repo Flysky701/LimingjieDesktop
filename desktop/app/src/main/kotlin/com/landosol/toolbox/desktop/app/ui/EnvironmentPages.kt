@@ -15,6 +15,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.automation.GameClientResolution
 import com.landosol.toolbox.desktop.app.DesktopAppGraph
+import com.landosol.toolbox.desktop.app.adapters.device.inProgress
 import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
 import com.landosol.toolbox.desktop.platform.*
@@ -33,6 +34,8 @@ import javax.swing.filechooser.FileNameExtensionFilter
     val busy = LocalTaskBusy.current
     val settings by graph.settings.state.collectAsState()
     val state by graph.device.state.collectAsState()
+    val connectionActivity by graph.deviceConnection.activity.collectAsState()
+    val connectionBusy = connectionActivity != null || state.inProgress
     val ready = (state as? DeviceConnectionState.Ready)?.device
     val actions = rememberActions(graph)
     var adbPath by remember(settings.adbPath) { mutableStateOf(settings.adbPath) }
@@ -46,8 +49,8 @@ import javax.swing.filechooser.FileNameExtensionFilter
             OutlinedTextField(adbPath, { adbPath = it }, label = { Text("adb.exe 路径（留空自动查找）") }, singleLine = true, modifier = Modifier.fillMaxWidth(), enabled = !actions.working && !busy)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { chooseFile(false, "选择 adb.exe", "exe")?.let { adbPath = it.absolutePath } }, enabled = !actions.working && !busy) { Text("选择文件") }
-                Button(shape=MaterialTheme.shapes.small,onClick = { actions.run { withContext(Dispatchers.IO) { graph.settings.update { it.copy(adbPath = adbPath.trim()) }; location = AdbLocator.find(adbPath.trim().ifEmpty { null }, graph.dataDirectory.resolve("tools/platform-tools")) }; check(location != null) { "未找到有效 ADB，请检查路径或下载 Platform Tools" } } }, enabled = !actions.working && !busy && ready == null) { Text("保存并检查") }
-                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { val found = withContext(Dispatchers.IO) { AdbLocator.downloadPlatformTools(graph.dataDirectory) }; location = found; adbPath = found.path; withContext(Dispatchers.IO) { graph.settings.update { it.copy(adbPath = found.path) } }; graph.log.add("Platform Tools 已下载并配置") } }, enabled = !actions.working && !busy && ready == null) { Text("下载 Platform Tools") }
+                Button(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.deviceConnection.configure { location = null; withContext(Dispatchers.IO) { graph.settings.update { it.copy(adbPath = adbPath.trim()) }; location = graph.checkAdb() } } } }, enabled = !actions.working && !busy && !connectionBusy && ready == null) { Text("保存并检查") }
+                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.deviceConnection.configure { val found = withContext(Dispatchers.IO) { AdbLocator.downloadPlatformTools(graph.dataDirectory) }; location = found; adbPath = found.path; withContext(Dispatchers.IO) { graph.settings.update { it.copy(adbPath = found.path) }; graph.checkAdb() }; graph.log.add("Platform Tools 已下载并配置") } } }, enabled = !actions.working && !busy && !connectionBusy && ready == null) { Text("下载 Platform Tools") }
             }
             location?.let { Detail("来源", it.source); Detail("版本", it.version) }
             Text("更换 ADB 前请先断开设备。下载使用 Android 官方 Platform Tools。", color = Muted, fontSize = 12.5.sp)
@@ -68,14 +71,14 @@ import javax.swing.filechooser.FileNameExtensionFilter
                 Detail("屏幕状态", if (device.awake) "已唤醒" else "未唤醒")
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(settings.touchMode == PreferredTouchMode.MAATOUCH, { actions.run { withContext(Dispatchers.IO) { graph.settings.update { it.copy(touchMode = PreferredTouchMode.MAATOUCH) } } } }, enabled = !actions.working && !busy)
+                RadioButton(settings.touchMode == PreferredTouchMode.MAATOUCH, { actions.run { withContext(Dispatchers.IO) { graph.settings.update { it.copy(touchMode = PreferredTouchMode.MAATOUCH) } } } }, enabled = !actions.working && !busy && !connectionBusy)
                 Text("MaaTouch", Modifier.weight(1f))
-                RadioButton(settings.touchMode == PreferredTouchMode.COMPATIBILITY, { actions.run { withContext(Dispatchers.IO) { graph.settings.update { it.copy(touchMode = PreferredTouchMode.COMPATIBILITY) } } } }, enabled = !actions.working && !busy)
+                RadioButton(settings.touchMode == PreferredTouchMode.COMPATIBILITY, { actions.run { withContext(Dispatchers.IO) { graph.settings.update { it.copy(touchMode = PreferredTouchMode.COMPATIBILITY) } } } }, enabled = !actions.working && !busy && !connectionBusy)
                 Text("兼容模式", Modifier.weight(1f))
             }
             Text("MaaTouch 支持独立按住与滑动；兼容模式使用 ADB 输入，动作更慢。切换后重新连接生效。", color = Muted, fontSize = 12.5.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { checkNotNull(ready); graph.disconnectDevice(); graph.connectDevice(ready.serial) } }, enabled = ready != null && !busy && !actions.working) { Text("重新连接与测速") }
+                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.connectDevice(checkNotNull(ready).serial, reconnect = true) } }, enabled = ready != null && !busy && !actions.working && !connectionBusy) { Text("重新连接与测速") }
                 OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run {
                     val current = checkNotNull(ready)
                     val foreground = graph.device.queryForeground() ?: error("无法确定前台应用，未执行点击")
@@ -106,27 +109,41 @@ import javax.swing.filechooser.FileNameExtensionFilter
     val busy = LocalTaskBusy.current
     val state by graph.device.state.collectAsState()
     val actions = rememberActions(graph)
-    var devices by remember { mutableStateOf<List<DeviceDescriptor>>(emptyList()) }
+    val devices by graph.deviceConnection.devices.collectAsState()
+    val activity by graph.deviceConnection.activity.collectAsState()
+    val message by graph.deviceConnection.message.collectAsState()
+    val settings by graph.settings.state.collectAsState()
+    val connecting = activity != null || state.inProgress
+    val canConnect = !busy && !connecting && !actions.working
+    val ready = (state as? DeviceConnectionState.Ready)?.device
+    val cancelActions = rememberActions(graph)
     var address by remember { mutableStateOf(graph.settings.state.value.lastDevice) }
     var advanced by remember { mutableStateOf(false) }
-    LaunchedEffect(autoDetect) {if(autoDetect)actions.run {devices=graph.device.discover();if(devices.isEmpty())actions.message="尚未发现模拟器，请启动模拟器并开启 ADB 调试。"}}
+    LaunchedEffect(autoDetect, settings.adbPath) { if(autoDetect && !busy) graph.deviceConnection.discover(force = false) }
     Panel("连接模拟器") {
-        Text(deviceLabel(state), color = if (state is DeviceConnectionState.Ready) com.landosol.toolbox.desktop.app.ui.theme.LocalDesktopColors.current.ok else Muted)
+        // A failed attempt has one shared inline message, rather than one error per caller/page.
+        Text(if (state is DeviceConnectionState.Failed && message != null) "连接未完成" else deviceLabel(state), color = if (ready != null) com.landosol.toolbox.desktop.app.ui.theme.LocalDesktopColors.current.ok else Muted)
+        Message(message)
         Message(actions.message)
+        Message(cancelActions.message)
+        if (connecting) {
+            if (!state.inProgress) Text(activity ?: "正在连接", color = Muted, style = MaterialTheme.typography.bodySmall)
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
         if(busy)Text("任务运行中，停止后可连接、断开或修改设备。",color=Muted,style=MaterialTheme.typography.bodySmall)
         TextButton(onClick={advanced=!advanced}){Text(if(advanced)"收起手动地址" else "高级：手动填写地址")}
         if(advanced) Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(address, { address = it }, modifier = Modifier.weight(1f), singleLine = true, label = { Text("设备序列号或本机地址：端口") }, enabled = !actions.working && !busy)
-            Button(shape=MaterialTheme.shapes.small,onClick = { actions.run { require(address.isNotBlank()) { "请先选择设备或填写地址" }; graph.connectDevice(address.trim()) } }, enabled = address.isNotBlank() && !actions.working && !busy) { Text("连接") }
+            OutlinedTextField(address, { address = it }, modifier = Modifier.weight(1f), singleLine = true, label = { Text("设备序列号或本机地址：端口") }, enabled = canConnect)
+            Button(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.connectDevice(address.trim()) } }, enabled = address.isNotBlank() && canConnect) { Text("连接") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { devices = graph.device.discover(); if (devices.isEmpty()) actions.message = "没有发现可用设备，请启动模拟器并开启 ADB 调试，或填写本机连接地址。" } }, enabled = !actions.working && !busy) { Text("重新检测") }
-            OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.disconnectDevice() } }, enabled = state is DeviceConnectionState.Ready && !actions.working && !busy) { Text("断开") }
+            OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { actions.run { graph.deviceConnection.discover() } }, enabled = canConnect) { Text("重新检测") }
+            OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { cancelActions.run { if (connecting) graph.deviceConnection.cancel() else graph.disconnectDevice() } }, enabled = (ready != null || connecting) && !cancelActions.working && !busy) { Text(if (connecting) "取消" else "断开") }
+            if (message != null && address.isNotBlank()) TextButton(onClick = { actions.run { graph.connectDevice(address.trim()) } }, enabled = canConnect) { Text("重试连接") }
         }
-        if (actions.working) LinearProgressIndicator(Modifier.fillMaxWidth())
-        if(devices.isEmpty())Text("没有设备列表。启动模拟器后点击“重新检测”，或展开手动地址。",color=Muted,style=MaterialTheme.typography.bodySmall)
-        devices.forEach { device -> Surface(onClick = { address = device.serial;actions.run {graph.connectDevice(device.serial)} },enabled=!busy&&!actions.working,color = Background, shape = RoundedCornerShape(8.dp)) {
-            Row(Modifier.fillMaxWidth().padding(10.dp)) { Text(device.label, Modifier.weight(1f)); Text("${device.serial} · ${device.state} · 连接 →", color = Muted, fontSize = 12.5.sp) }
+        if(devices.isEmpty() && !connecting && message == null)Text("启动模拟器后点击“重新检测”，或展开手动地址。",color=Muted,style=MaterialTheme.typography.bodySmall)
+        devices.forEach { device -> Surface(onClick = { address = device.serial;actions.run {graph.connectDevice(device.serial)} },enabled=canConnect && ready?.serial != device.serial,color = Background, shape = RoundedCornerShape(8.dp)) {
+            Row(Modifier.fillMaxWidth().padding(10.dp)) { Text(device.label, Modifier.weight(1f)); Text("${device.serial} · ${if (ready?.serial == device.serial) "已连接" else "${device.state} · 连接 →"}", color = Muted, fontSize = 12.5.sp) }
         } }
     }
 }

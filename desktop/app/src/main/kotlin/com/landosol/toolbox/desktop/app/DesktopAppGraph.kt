@@ -114,6 +114,7 @@ class DesktopAppGraph(
     val ocr = OnnxOcrEngine()
     val captchaHost = LoopbackCaptchaHost()
     val device: DeviceService = suppliedDevice ?: ManagedDeviceService(dataDirectory, { settings.state.value.adbPath }, { log.add(it) }, { reason -> stopAll(reason) })
+    val deviceConnection = DeviceConnectionActions(device, { settings.state.value.adbPath }, { log.add(it, true) })
     private val previewState = MutableStateFlow<CapturePixels?>(null)
     val preview = previewState.asStateFlow()
     val captureService = DesktopCaptureService(
@@ -765,15 +766,18 @@ class DesktopAppGraph(
     fun actionsAvailable() = (device.state.value as? DeviceConnectionState.Ready)?.device?.let { it.touchReady && it.awake } == true
     val busy: Boolean get() = startingState.value || stoppingState.value || autoRunJob?.isActive == true || accounts.uiState.value.isWorking || labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES || labyrinthController.uiState.value.isWorking || labyrinthController.uiState.value.captcha != null || labyrinthEntryRecognitionSession.state.value.running || gameSessionResetWorkflow.state.value.running
 
-    suspend fun connectDevice(serial: String) {
+    suspend fun connectDevice(serial: String, reconnect: Boolean = false) {
         check(!busy) { "请先停止当前任务，再切换设备" }
-        captureService.stopAndJoin("切换设备")
-        device.connect(serial, if (settings.state.value.touchMode == PreferredTouchMode.COMPATIBILITY) TouchMode.Compatibility else TouchMode.MaaTouch)
-        val ready = device.state.value as? DeviceConnectionState.Ready ?: return
-        persistIdentity(ready.device)
-        settings.update { it.copy(lastDevice = serial) }
-        log.add("设备已就绪：${ready.device.label}，${ready.device.width} × ${ready.device.height}",kind=UserLogKind.KEY)
+        deviceConnection.connect(serial.trim(), if (settings.state.value.touchMode == PreferredTouchMode.COMPATIBILITY) TouchMode.Compatibility else TouchMode.MaaTouch,
+            reconnect = reconnect, beforeConnect = { captureService.stopAndJoin("切换设备") }, onReady = { ready ->
+                persistIdentity(ready)
+                settings.update { it.copy(lastDevice = ready.serial) }
+                log.add("设备已就绪：${ready.label}，${ready.width} × ${ready.height}",kind=UserLogKind.KEY)
+            })
     }
+
+    suspend fun checkAdb(): AdbLocation = (device as? ManagedDeviceService)?.prepare()
+        ?: checkNotNull(AdbLocator.find(settings.state.value.adbPath, dataDirectory.resolve("tools/platform-tools"))) { "未找到有效 ADB，请检查路径" }
 
     @Synchronized private fun persistIdentity(ready: DeviceReady) {
         val identity = ready.identity
@@ -786,7 +790,7 @@ class DesktopAppGraph(
         }
     }
 
-    suspend fun disconnectDevice() { check(!busy) { "请先停止任务" }; captureService.stopAndJoin("断开设备"); device.disconnect(); previewState.value = null }
+    suspend fun disconnectDevice() { check(!busy) { "请先停止任务" }; deviceConnection.disconnect { captureService.stopAndJoin("断开设备") }; previewState.value = null }
     suspend fun startPreview() { captureService.start() }
     fun startRecognition(dryRun: Boolean): Job = synchronized(startLock) {
         if (busy) { log.add("请先停止当前任务", true); return Job().apply { complete() } }
@@ -860,6 +864,7 @@ class DesktopAppGraph(
             if (stopped != true) Log.w(APP_LOG_TAG, "等待任务停止超过 10 秒，继续释放桌面资源")
         } finally {
             withContext(NonCancellable) {
+                deviceConnection.closeAndJoin()
                 ux.closeAndJoin()
                 withContext(Dispatchers.Main) { viewModels.clear() }
                 databaseUpdateScope.cancel(); accountServerScope.cancel(); autoRunScope.cancel(); mainScope.cancel(); recognitionScope.cancel(); resetScope.cancel()

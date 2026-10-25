@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.desktop.app.*
 import com.landosol.toolbox.desktop.app.adapters.storage.*
+import com.landosol.toolbox.desktop.app.adapters.device.inProgress
 import com.landosol.toolbox.desktop.app.ui.theme.*
 import com.landosol.toolbox.desktop.device.DeviceConnectionState
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
@@ -45,11 +46,18 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
     val preferences by graph.ux.preferences.state.collectAsState()
     DesktopTheme(preferences) {
         val state by graph.ux.console.collectAsState()
+        val connectionActivity by graph.deviceConnection.activity.collectAsState()
+        val connectionMessage by graph.deviceConnection.message.collectAsState()
+        val connectionPending = connectionActivity != null || state.device.inProgress
+        val connectionLabel = if (state.device.inProgress) deviceLabel(state.device) else connectionActivity
+            ?: connectionMessage?.takeIf { state.device !is DeviceConnectionState.Ready }?.let { "连接提示 · $it" }
+            ?: deviceLabel(state.device)
         val settings by graph.settings.state.collectAsState()
         val accounts by graph.accounts.uiState.collectAsState()
         val ocr by graph.ocr.status.collectAsState()
         val isDark=MaterialTheme.colorScheme.surface.luminance()<.5f
         val actions=rememberActions(graph)
+        val cancelConnection=rememberActions(graph)
         val navigation=remember{NavigationGuard()}
         DisposableEffect(graph,navigation){graph.ux.confirmNavigation=navigation::request;onDispose{graph.ux.confirmNavigation=null}}
         var searchRequested by remember{mutableStateOf(false)}
@@ -110,11 +118,12 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                         Row(Modifier.fillMaxWidth().heightIn(min=56.dp).padding(horizontal=16.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
                             Box { OutlinedButton(shape=MaterialTheme.shapes.small,onClick={deviceMenu=true},contentPadding=PaddingValues(horizontal=10.dp,vertical=6.dp)) {
                                 Symbol("smartphone",tint=if(state.device is DeviceConnectionState.Ready) LocalDesktopColors.current.ok else Muted)
-                                Spacer(Modifier.width(7.dp));Text(deviceLabel(state.device),maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.widthIn(max=360.dp),style=MaterialTheme.typography.bodySmall)
+                                Spacer(Modifier.width(7.dp));Text(connectionLabel,maxLines=1,overflow=TextOverflow.Ellipsis,modifier=Modifier.widthIn(max=360.dp),style=MaterialTheme.typography.bodySmall)
                             };DropdownMenu(deviceMenu,{deviceMenu=false}) {
                                 DropdownMenuItem(text={Text("设备详情")},onClick={deviceMenu=false;navigate(Page.Devices)})
-                                DropdownMenuItem(text={Text(if(state.busy) "任务运行中，停止后可重连" else "重新连接")},enabled=!state.busy && settings.lastDevice.isNotBlank(),onClick={deviceMenu=false;actions.run { graph.disconnectDevice();graph.connectDevice(settings.lastDevice) }})
-                                DropdownMenuItem(text={Text("断开")},enabled=!state.busy && state.device is DeviceConnectionState.Ready,onClick={deviceMenu=false;actions.run{graph.disconnectDevice()}})
+                                connectionMessage?.let { message -> DropdownMenuItem(text={Text(message)},onClick={deviceMenu=false;navigate(Page.Devices)}) }
+                                DropdownMenuItem(text={Text(if(state.busy) "任务运行中，停止后可重连" else "重新连接")},enabled=!state.busy && settings.lastDevice.isNotBlank() && !connectionPending,onClick={deviceMenu=false;actions.run { graph.connectDevice(settings.lastDevice, reconnect = true) }})
+                                DropdownMenuItem(text={Text(if(connectionPending) "取消连接操作" else "断开")},enabled=!state.busy && !cancelConnection.working && (connectionPending || state.device is DeviceConnectionState.Ready),onClick={deviceMenu=false;cancelConnection.run{if(connectionPending) graph.deviceConnection.cancel() else graph.disconnectDevice()}})
                             } }
                             Box { OutlinedButton(shape=MaterialTheme.shapes.small,onClick={accountMenu=true},enabled=!state.busy,contentPadding=PaddingValues(horizontal=10.dp,vertical=6.dp)) {
                                 Symbol("person");Spacer(Modifier.width(6.dp));Text(state.task.selectedAccount?.alias ?: "选择账号",style=MaterialTheme.typography.bodySmall)

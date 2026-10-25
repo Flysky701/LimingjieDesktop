@@ -19,7 +19,42 @@ class AdbDeviceServiceTest {
         override fun close() { alive = false }
     }
     private fun service(fake: FakeAdb, touch: RecordingTouch = RecordingTouch(), events: MutableList<String> = CopyOnWriteArrayList(), lost: MutableList<String> = CopyOnWriteArrayList()) =
-        AdbDeviceService(fake, directory.root.toPath(), emptySet(), events::add, lost::add, TouchConnectionFactory { _, _, _ -> touch })
+        AdbDeviceService(fake, directory.root.toPath(), emptySet(), events::add, lost::add, TouchConnectionFactory { _, _, _ -> touch }, emulatorCommands = { emptyList() })
+
+    @Test fun duplicateConnectionKeepsSessionAndDoesNotBenchmarkOrNotifyLostAgain() = runBlocking {
+        val adb = FakeAdb(); val lost = CopyOnWriteArrayList<String>(); val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        adb.handler = { call ->
+            if (call.arguments == listOf("getprop", "sys.boot_completed")) { entered.complete(Unit); release.await() }
+            adb.default(call)
+        }
+        service(adb, lost = lost).use { device ->
+            val first = launch { device.connect("127.0.0.1:5555") }
+            entered.await()
+            val second = launch { device.connect("127.0.0.1:5555") }
+            release.complete(Unit); joinAll(first, second)
+            val captures = adb.calls.count { it.screenshot }
+            device.connect("127.0.0.1:5555")
+            assertEquals(captures, adb.calls.count { it.screenshot })
+            assertEquals(1, adb.calls.count { it.arguments == listOf("getprop", "sys.boot_completed") })
+            assertTrue(lost.isEmpty())
+            assertFalse(adb.calls.any { it.arguments.firstOrNull() == "connect" }) // Already registered transport.
+        }
+    }
+
+    @Test fun discoveryOnlyConnectsListeningUnregisteredPortsAndKeepsReadyState() = runBlocking {
+        val adb = FakeAdb(); val checked = CopyOnWriteArrayList<Int>()
+        adb.handler = { call -> if (call.arguments == listOf("devices", "-l")) FakeAdb.success("List of devices attached\n127.0.0.1:5555 device model:Fixture") else adb.default(call) }
+        AdbDeviceService(adb, directory.root.toPath(), emptySet(),
+            emulatorCommands = { listOf(java.nio.file.Path.of("fixture/ldplayer.exe")) },
+            portOpen = { port -> checked += port; port == 5557 }).use { device ->
+            device.connect("127.0.0.1:5555", TouchMode.Compatibility)
+            val ready = device.state.value
+            device.discover()
+            assertEquals(ready, device.state.value)
+            assertFalse(5555 in checked)
+            assertEquals(listOf(listOf("connect", "127.0.0.1:5557")), adb.calls.filter { it.arguments.firstOrNull() == "connect" }.map { it.arguments })
+        }
+    }
 
     @Test fun liveForegroundOverridesCacheAndUnknownRejectsTouch() = runBlocking {
         val adb = FakeAdb(); val touch = RecordingTouch()
@@ -129,6 +164,17 @@ class AdbDeviceServiceTest {
             withTimeout(2000) { while (adb.calls.none { it.arguments == listOf("getprop", "sys.boot_completed") }) delay(10) }
             withTimeout(1000) { device.disconnect(); connecting.join() }
             assertTrue(connecting.isCancelled)
+            assertEquals(DeviceConnectionState.Disconnected, device.state.value)
+        }
+    }
+    @Test fun disconnectCancelsDiscoveryWaitingInsideAdb() = runBlocking {
+        val adb = FakeAdb(); val entered = CompletableDeferred<Unit>()
+        adb.handler = { call -> if (call.arguments == listOf("devices", "-l")) { entered.complete(Unit); awaitCancellation() } else adb.default(call) }
+        service(adb).use { device ->
+            val discovery = launch { device.discover() }
+            entered.await()
+            withTimeout(1000) { device.disconnect(); discovery.join() }
+            assertTrue(discovery.isCancelled)
             assertEquals(DeviceConnectionState.Disconnected, device.state.value)
         }
     }

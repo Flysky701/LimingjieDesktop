@@ -53,7 +53,8 @@ class ProcessAdbExecutorTest {
         )
         fixtures.forEach { (phrase, kind) -> assertEquals(phrase, kind, classifyAdbFailure(1, phrase)!!.kind) }
         assertEquals(AdbFailureKind.ConnectionRefused, classifyAdbFailure(0, "", "cannot connect to 127.0.0.1:5555")!!.kind)
-        assertTrue(classifyAdbFailure(1, "adb server version mismatch")!!.detail.contains("请在设置中改用模拟器自带的 adb"))
+        assertTrue(classifyAdbFailure(1, "adb server version mismatch")!!.detail.contains("设备 → ADB 工具"))
+        assertEquals(AdbFailureKind.ConnectionRefused, classifyAdbFailure(0, "adb server version mismatch", "failed to connect to 127.0.0.1:5555")!!.kind)
     }
     @Test fun missingAndLaunchFailuresAreTyped() = runBlocking {
         ProcessAdbExecutor(folder.root.resolve("missing/adb.exe").path).use { assertEquals(AdbFailureKind.AdbMissing, (it.execute(listOf("version")) as AdbResult.Failure).kind) }
@@ -71,10 +72,33 @@ class ProcessAdbExecutorTest {
             assertEquals(1, conflictCalls.get())
         }
     }
-    @Test fun repeatedDaemonRestartIsConflictEvenWhenCommandSucceeds() = runBlocking {
-        ProcessAdbExecutor("fake", AdbProcessFactory { ProcessFixture.start("error", "* daemon not running; starting now at tcp:5037", "0") }).use {
-            assertTrue(it.execute(listOf("devices")) is AdbResult.Success)
-            assertEquals(AdbFailureKind.ServerVersionConflict, (it.execute(listOf("devices")) as AdbResult.Failure).kind)
+    @Test fun repeatedDaemonStartupPreservesSuccessfulCommandAndDiagnostics() = runBlocking {
+        val diagnostic = "* daemon not running; starting now at tcp:5037\n* daemon started successfully"
+        val output = "List of devices attached\n127.0.0.1:5555\tdevice\n"
+        ProcessAdbExecutor("fake", AdbProcessFactory { ProcessFixture.start("error", diagnostic, "0", output) }).use {
+            repeat(2) { _ ->
+                val result = it.execute(listOf("devices")) as AdbResult.Success
+                assertEquals(output, result.text())
+                assertEquals(diagnostic, result.stderr)
+            }
+        }
+    }
+    @Test fun recoveredVersionMismatchPreservesSuccessfulConnection() = runBlocking {
+        val diagnostic = "adb server version (39) doesn't match this client (41); killing...\n* daemon started successfully"
+        ProcessAdbExecutor("fake", AdbProcessFactory { ProcessFixture.start("error", diagnostic, "0", "connected to 127.0.0.1:5555") }).use {
+            val result = it.execute(listOf("connect", "127.0.0.1:5555")) as AdbResult.Success
+            assertEquals("connected to 127.0.0.1:5555", result.text())
+            assertEquals(diagnostic, result.stderr)
+        }
+    }
+    @Test fun repeatedFailedStartupIsConnectionFailureWithoutInventedVersionConflict() = runBlocking {
+        val diagnostic = "* daemon not running; starting now at tcp:5037\n* failed to start daemon"
+        ProcessAdbExecutor("fake", AdbProcessFactory { ProcessFixture.start("error", diagnostic, "1") }).use {
+            repeat(2) { _ ->
+                val result = it.execute(listOf("devices")) as AdbResult.Failure
+                assertEquals(AdbFailureKind.ConnectionRefused, result.kind)
+                assertEquals(diagnostic, result.detail)
+            }
         }
     }
     @Test fun screenshotDoesNotWaitForFourOrdinaryCommandsAndCancellationKillsThem() = runBlocking {
