@@ -33,9 +33,21 @@
 - GC 后 heap 从第100帧的 6,699,152 字节，到第1900帧的 6,788,328 字节；中途有回落。增长约89 KB，其中探针本身保存帧间隔列表。没有观察到持续大幅增长；这不替代1小时或8小时 soak。退出后 MaaTouch=0。命令 exit 0，日志 `docs/desktop/evidence/l1/soak.log`。
 - 兼容模式通过最短路径：Tap 进入存储页、Back、hold=0 的 Swipe 列表滚动均经截图核对，hold=250 的请求被规定文案拒绝。窗口树最初仍报 null-root，但滚动后恢复；其后连续20次 uiautomator dump：成功20、idle错误0、null-root错误0。此前声音页/根页的失败仍保留，因此不能把整个过程表述为始终正常。命令 exit 0，日志 `compatibility.log`。
 - L2 仅通过连接及短时只读装配：真实 Graph + 最终 c09a3ea 的 PP-OCRv5，B服包 `com.bilibili.priconne`，版本11.7.2/352，apksig读取证书MD5为 `4502a02a00395dec05a4134ad593224d`，前台正确。启动游戏后停在“点击屏幕开始游戏”的标题页；不点击、不输入凭据、未访问账号或凭据存储。
-- L2 20秒 dryRun 处理46帧，预览存在；Graph关闭289 ms，退出后MaaTouch无残留。分类集合 `UNKNOWN / TITLE_WAITING_TAP / BATTLE_FAILED`；目视首尾仍是标题动画，说明1280×720标题动画存在战斗失败误报，不能把这次短测算作L2各场景识别通过。未为绕过此结果修改上游识别/策略。游戏截图有ID，只留本机 `.tools/l2-probe/`，不提交。
+- L2 20秒 dryRun 处理46帧，预览存在；Graph关闭289 ms，退出后MaaTouch无残留。分类集合 `UNKNOWN / TITLE_WAITING_TAP / BATTLE_FAILED`；目视首尾仍是标题动画，说明标题动画存在战斗失败误报（本轮1280×720；后续1920×1080亦重现，见下文），不能把这次短测算作L2各场景识别通过。未为绕过此结果修改上游识别/策略。游戏截图有ID，只留本机 `.tools/l2-probe/`，不提交。
 - 不具备黎明界内各画面或登录/验证码协助条件，所以未继续游戏内流程，也没有把停在标题页1小时当作游戏soak。
 - 恢复：未更改分辨率、旋转、系统设置值；结束时 wm 仍为720×1280。Settings已force-stop，Graph及触控服务已关闭；MuMu实例0通过官方Manager shutdown恢复关闭。设备列表为空后停止了本次查询自动启动的ADB守护进程（最初该进程未运行），本次没有启动其他实例。
 
 证据：`docs/desktop/evidence/l1/`保留普通设置截图及原始日志；`inspect/actions/soak/compatibility`命令成功，`settings`的补充节点确认命令因null-root失败并据实记录。真实Graph只读摘要另见 `readonly-report.txt`，没有完整identity或真实账号截图。
 
+
+## 1920×1080 标题误判复核（2026-10-25）
+
+这是针对新发现误判的一次直接复测，没有重复 L1，也未修改上游分类或游戏流程。使用同一 MuMu Android 12 实例0、同一最终 PP-OCRv5、同一真实 Graph 只读探针。开始前实例0关闭，原 `wm size` 为 `Physical size: 720x1280`、无 override，`wm density` 为 `Physical density: 240`。仅临时执行 `wm size 1080x1920`，实际游戏截图经核对为1920×1080；密度不变。
+
+结果：命令 exit 0，20秒 dryRun 处理54帧，预览存在，分类集合仍为 `UNKNOWN / TITLE_WAITING_TAP / BATTLE_FAILED`；首尾均为“点击屏幕开始游戏”的标题动画，没有发出点击。Graph关闭327 ms。本次 Raw p50/p95=322/329 ms，PNG=780/855 ms。**战斗失败误报在1920×1080下同样重现，不能归因于仅使用了非支持分辨率，也不能据此宣称标题识别通过。** 没有扩大到登录或游戏内操作，没有更改匹配阈值或上游规则。
+
+恢复过程完整记录在 `evidence/l1/display-restore-1080.txt`：第一次 finally 中设备突然 offline，原设置复核失败；没有把失败当成功。随后仅为恢复重新启动实例0，确认覆盖仍为1080×1920，执行 `wm size reset`。再次读取确认 Physical720×1280、density240、无override，与原值完全一致；实例0随后完全关闭。
+
+第二次收尾发现本轮之外新启动了实例3（Android15）。没有启动、修改或关闭该实例；为避免影响并发使用，保留共享ADB server。这与第一轮在全部实例关闭后停止本轮server的收尾情况不同，不能写成此次也已停止全局server。
+
+脱敏文字摘要：`evidence/l1/readonly-1080-report.txt`。原始游戏截图含ID，仅留本机 `.tools/l2-probe-1080/`，没有提交；完整设备identity同样没有提交。

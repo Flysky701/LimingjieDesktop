@@ -1,0 +1,5 @@
+Ready Android 12/API 32; [CaptureTiming(mode=Raw, p50Millis=322, p95Millis=329), CaptureTiming(mode=Png, p50Millis=780, p95Millis=855)]
+package=com.bilibili.priconne; version=11.7.2/352; certificateMd5=4502a02a00395dec05a4134ad593224d
+foreground=com.bilibili.priconne
+dryRun=true; running=true; frames=54; pages=[UNKNOWN, TITLE_WAITING_TAP, BATTLE_FAILED]; preview=true
+graphShutdownMillis=327

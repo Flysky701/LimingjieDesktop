@@ -1,0 +1,20 @@
+Before:
+Physical size: 720x1280
+Physical density: 240
+During:
+Physical size: 720x1280
+Override size: 1080x1920
+probeExit=0
+After:
+
+
+restoredExactly=False
+instanceStopped=True
+Recovery before:
+Physical size: 720x1280
+Override size: 1080x1920
+Recovery after:
+Physical size: 720x1280
+Physical density: 240
+restoredExactly=True
+Recovery instanceStopped=True
