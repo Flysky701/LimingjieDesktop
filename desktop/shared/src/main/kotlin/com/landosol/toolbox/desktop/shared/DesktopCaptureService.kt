@@ -86,6 +86,10 @@ class DesktopCaptureService(
             }
         }
         try { withTimeout(5_000) { ready.await() } }
+        catch (failure: TimeoutCancellationException) {
+            job?.cancel()
+            throw IllegalStateException("屏幕捕获启动超过 5 秒，请检查模拟器方向、连接和截图速度后重试", failure)
+        }
         catch (failure: Exception) { job?.cancel(); throw failure }
     }
     fun stop(reason: String = "用户停止屏幕捕获") {

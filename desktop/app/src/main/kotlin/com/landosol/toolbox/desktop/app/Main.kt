@@ -59,6 +59,8 @@ fun main(args: Array<String>) {
         var exiting by remember { mutableStateOf(false) }
         var rememberChoice by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
+        var trayCommandPending by remember { mutableStateOf(false) }
+        var wasTaskActive by remember { mutableStateOf(false) }
         val presentation by graph.automationOverlayCoordinator.state.collectAsState()
         val reroll by graph.labyrinthController.uiState.collectAsState()
         val batch by graph.labyrinthBatchController.state.collectAsState()
@@ -94,13 +96,22 @@ fun main(args: Array<String>) {
             }
         }
         LaunchedEffect(taskActive) {
-            if (!taskActive && !visible) trayState.sendNotification(Notification("黎明界助手", recognition.message ?: reroll.message ?: "任务已结束"))
+            if (!taskActive && wasTaskActive) trayState.sendNotification(Notification("黎明界助手", recognition.message ?: reroll.message ?: "任务已结束"))
+            wasTaskActive = taskActive
         }
         if (trayAvailable) Tray(icon, state = trayState, tooltip = "黎明界助手 · ${presentation?.status ?: reroll.progress ?: "空闲"}", onAction = { visible = true; windowState.isMinimized = false }) {
             Item("显示主窗口", onClick = { visible = true; windowState.isMinimized = false })
             Separator()
-            Item(if (presentation?.paused == true) "继续" else "暂停", enabled = presentation != null && !exiting, onClick = graph::pauseTask)
-            Item("停止", enabled = taskActive && !exiting, onClick = { graph.stopAll() })
+            Item(if (presentation?.paused == true) "继续" else "暂停", enabled = presentation != null && !exiting && !trayCommandPending && !stopping, onClick = {
+                presentation?.let { current ->
+                    trayCommandPending = true
+                    scope.launch { try { graph.automationOverlayCoordinator.setPaused(current.sessionId, !current.paused) } finally { trayCommandPending = false } }
+                }
+            })
+            Item("停止", enabled = taskActive && !exiting && !trayCommandPending && !stopping, onClick = {
+                trayCommandPending = true
+                scope.launch { try { graph.stopAll().join() } finally { trayCommandPending = false } }
+            })
             Separator()
             Item("退出", onClick = { if (taskActive) { visible = true; confirmExit = true } else quit() })
         }
