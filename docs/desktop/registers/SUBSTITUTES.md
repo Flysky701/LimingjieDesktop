@@ -1,76 +1,60 @@
-# SUBSTITUTES.md —— 同名替身、垫片与桌面适配器登记
+# 替身、垫片与桌面适配器
 
-**规则**：替身与上游原文件同包、同名、公共签名逐字一致（SPEC-00 §7），由 `checkSubstituteSignatures` 校验。替身只能通过 `DesktopBindings` 获得桌面能力。
-M1 由总指挥创建全部桩（未实现的方法统一 `TODO("WS-x")`），然后移交给表中的归属 WS。子代理只能修改自己 WS 的小节。
-「签名检查」列填 `checkSubstituteSignatures` 是否覆盖；「行为对照」列填与上游行为一致性的测试名。
+更新：2026-10-25。排除清单以 desktop/shared/upstream-excludes.txt 为准；同名替身保留原公共入口，原业务源码经生成目录编译。checkSubstituteSignatures 检查七个 S 类的可见函数/构造声明，Room迁移参数按JVM适配；这不是运行行为证明。M1检查已通过，诊断扩展后签名复查亦通过。
 
-## 1. 同名替身（类别 S）
+## 同名替身（shared/src/main/kotlin 下的原包路径）
 
-| 上游文件 | 替身要点 | 归属 | 签名检查 | 行为对照测试 | 状态 |
-|---|---|---|---|---|---|
-| `data/local/AppDatabase.kt` | 同实体、version 4、同 `FILE_NAME`、迁移 SQL 逐字一致、`create(context)` 用 BundledSQLiteDriver + WAL | D | | | 桩 |
-| `security/AndroidKeystoreEncryptedStore.kt` | DPAPI；entropy = `LimingjieAssistant\|v1\|<storageName>\|<key>`（竖线分隔）；密文 `v1:` + Base64 存在 prefs 垫片 | D | | | 桩 |
-| `protocol/bilibili/AndroidBilibiliSdkRequestProfileFactory.kt` | 字段来自 `DeviceIdentitySnapshot` | E | | | 桩 |
-| `protocol/bilibili/AndroidGameProtocolProfileFactory.kt`（P-04 之后） | 同上 | E | | | 桩 |
-| `labyrinth/vision/AndroidChineseRoleNameOcr.kt`（P-03 新文件） | 复制像素 → `DesktopBindings.ocr` → Main 上回调 | C | | | 桩 |
-| `labyrinth/debug/LabyrinthRuntimeDiagnostics.kt` | 同公共 API；内容为 JVM / 进程 / 设备 / 截图指标 | F | | | 桩 |
-| `ui/account/GeetestCaptchaDialog.kt` | 同签名 Composable；回环服务 + 系统浏览器 | E | | | 桩 |
+| 原文件 | 替身行为与边界 |
+|---|---|
+| data/local/AppDatabase.kt | 原9实体、版本4、库名、迁移SQL；Room JVM、BundledSQLite、WAL、IO查询 |
+| security/AndroidKeystoreEncryptedStore.kt | 原save/read/delete/clearAllForTest；IO+Mutex；通过Bindings调用DPAPI，entropy为LimingjieAssistant\|v1\|storageName\|key，prefs只保存v1:Base64密文 |
+| protocol/bilibili/AndroidBilibiliSdkRequestProfileFactory.kt | 同字段顺序/常量与派生公式；读取目标模拟器画像；android_id为空回落installId；无客户端签名阻止登录 |
+| protocol/bilibili/AndroidGameProtocolProfileFactory.kt | headers来自模拟器包版本、系统/API、brand/model；不使用PC主机信息 |
+| labyrinth/vision/AndroidChineseRoleNameOcr.kt | 同步复制像素后OcrPort提交，Main回调；可立即释放原Bitmap |
+| labyrinth/debug/LabyrinthRuntimeDiagnostics.kt | 同公共入口；守护采样，JVM/OS/CPU及装配注入的设备/截图指标，显式close |
+| ui/account/GeetestCaptchaDialog.kt | 同签名；回环会话、系统浏览器、复制链接与取消；业务回调不变 |
 
-## 2. 桌面适配器（类别 A，替代被排除的 Android 外壳）
+DPAPI实现在platform/WindowsDpapi，shared的SecretProtector经app/adapters/storage/WindowsSecretProtector适配，platform不依赖shared。失败转SecretUnavailableException（IllegalArgumentException子类），使AccountViewModel.safeMessage透传中文原因；非Windows拒绝，不回落明文。
 
-| 上游文件 | 桌面实现（路径） | 归属 | 行为对照测试 | 状态 |
-|---|---|---|---|---|
-| `automation/capture/MediaProjectionCaptureService.kt` | `shared/…/desktop/bridge/capture/DesktopCaptureService` + `:device` 截图器 | B | | |
-| `automation/accessibility/LandosolAccessibilityService.kt` | `app/…/adapters/device/DeviceActionBackend` + 前台监视器 | B | | |
-| `automation/accessibility/AccessibilityChannelPromptScreen.kt` | `app/…/adapters/device/UiAutomatorChannelPromptScreen` | B | | |
-| `automation/overlay/AndroidAutomationNotificationHost.kt` | `app/…/adapters/overlay/`（任务栏 + 托盘，实现 `AutomationOverlayHost`） | F | | |
-| `labyrinth/LabyrinthRerollService.kt` | `app/…/tasks/`（应用作用域协程 + 防睡眠） | H | | |
-| `labyrinth/AndroidLabyrinthCnDatabaseRepository.kt` | `app/…/adapters/cndb/DesktopLabyrinthCnDatabaseRepository` | D | | |
-| `permissions/PermissionStatusReader.kt`、`ui/permissions/PermissionCenterScreen.kt` | `app/…/ui/` 设置与环境页 | F | | |
-| `ui/LandosolToolboxApp.kt` | `app/…/ui/` MAA 式桌面导航与页面接线（UI_PARITY） | F | | |
-| `LandosolToolboxApplication.kt` | `app/…/DesktopAppGraph`（对照见 ASSEMBLY.md） | H | | |
-| `MainActivity.kt` | `app/…/Main.kt` | H | | |
-| `automation/session/AndroidSessionResetBackends.kt`（X） | 桌面装配中的 `GameClientHardCloser` 接线 | H | | |
-| `automation/overlay/AutomationOverlayService.kt`（X） | 无（悬浮窗由任务栏取代） | — | — | 不适用 |
+## 平台外壳替代
 
-## 3. 框架垫片（归属 A，M1 完成）
+| Android能力 | 实际桌面位置 |
+|---|---|
+| MediaProjectionCaptureService | shared/.../desktop/shared/DesktopCaptureService + device/ScreenCapturer |
+| Accessibility服务/动作 | app/adapters/device/DeviceActionBackend、ManagedDeviceService + device/AdbDeviceService/MaaTouch |
+| AccessibilityChannelPromptScreen | shared/.../DesktopChannelPromptScreen，graph传入UIAutomator/前台/点击 |
+| 通知宿主/悬浮窗 | app/DesktopTaskHost、ui/DesktopApp底栏、Main托盘；保留AutomationOverlayCoordinator |
+| LabyrinthRerollService | graph.startRerollHost、受控scope与期限、防睡眠监听 |
+| AndroidLabyrinthCnDatabaseRepository | app/adapters/cndb/DesktopLabyrinthCnDatabaseRepository；仍使用原Updater/Source/Validator/Installer/Metadata接口 |
+| 权限中心 | ui/EnvironmentPages的设备与设置页；无效Android权限入口删除 |
+| LandosolToolboxApp / MainActivity | ui/DesktopApp、Main；业务装配见ASSEMBLY |
+| AndroidSessionResetBackends | graph将HOME/force-stop/launch/前台连接到原重置流程 |
 
-| 垫片 | 语义来源 | 单测 | 状态 |
-|---|---|---|---|
-| `android.util.Log` | SPEC-00 §6.2 | | |
-| `android.os.SystemClock` | 同上 | | |
-| `android.os.Process` | 同上 | | |
-| `android.graphics.Bitmap` | 同上 | | |
-| `android.graphics.BitmapFactory`（+ `Options`） | 同上；D-26 | | |
-| `android.util.Base64` | 同上 | | |
-| `android.content.Context` | 同上；D-21 | | |
-| `android.content.SharedPreferences` + `Editor` | 同上；D-21；FB-04 | | |
-| `android.content.res.AssetManager` | 同上 | | |
-| `android.content.res.Configuration` | 同上 | | |
-| `android.content.pm.PackageManager`（仅编译） | 同上 | — | |
-| `android.view.Display`（仅 `DEFAULT_DISPLAY`） | 同上 | — | |
-| `android.util.LruCache` | 同上（保留角色评分屏幕时） | | |
-| `androidx.room.withTransaction` | 同上 | | |
-| `LocalConfiguration` / `LocalContext` | 同上；D-25 | | |
-| `asImageBitmap`（垫片 Bitmap） | 同上 | | |
-| `org.json`（依赖库，不是垫片） | SPEC-00 §2 | — | |
+国服SQLite有意逐项迁移：同文件头、只读打开、quick_check、sqlite_master/安全标识符、table_info(name/type/pk)、命名resolver→语义resolver、整数主键与引用值探测（每组400绑定）、范围/NULL过滤。备份后原子替换，占用时保留pending与独立元数据，下次读前安装；不能用Updated冒充尚未安装。细节与合成测试见WS-DE-1。
 
-（M1 扫描发现的其他垫片按同样格式追加。）
+## 框架垫片
 
-## 4. 存储映射
+shared提供android.util的Log/Base64/LruCache、os的SystemClock/Process、graphics的Bitmap/BitmapFactory、content的Context/SharedPreferences/AssetManager/Configuration、必要编译用PackageManager/Display，以及Compose LocalContext/LocalConfiguration/asImageBitmap和Room withTransaction。org.json为真实依赖。
 
-以 SPEC-30 §5 为起点，M1 扫描后补全到这里：每个 prefs 名称、文件位置、读写方、是否加密。
+Bitmap保持ARGB与所有权检查，resources从classpath读取；Context只支持任务范围内本地文件/私有prefs。commit/apply均同步原子持久化。桌面内容区通过BoxWithConstraints提供局部尺寸，不读取PC分辨率冒充模拟器。未实现的Android系统服务不模拟为成功。
 
-| prefs 名称 / 文件 | 上游读写方 | 桌面位置 | 加密 | 归属 |
-|---|---|---|---|---|
-| | | | | |
+## 存储映射
 
-## WS-F：桌面自有呈现（D-37）
+| 名称 | 桌面位置（相对data） | 读写方与保护 |
+|---|---|---|
+| labyrinth-strategy | shared_prefs/labyrinth-strategy.json | 原策略store，原codec |
+| labyrinth-reroll-settings | shared_prefs/labyrinth-reroll-settings.json | 原账号刷取设置 |
+| labyrinth-batch-checkpoints | shared_prefs/labyrinth-batch-checkpoints.json | 原批次checkpoint |
+| protocol-install-identity / install-id | shared_prefs/protocol-install-identity.json | profile工厂生成UUID，commit失败抛错 |
+| account-credentials | shared_prefs/account-credentials.json | 原CredentialStore + DPAPI密文 |
+| sdk-sessions | shared_prefs/sdk-sessions.json | 原SdkSessionStore + DPAPI密文 |
+| Room v4 | databases/landosol-toolbox.db及wal/shm | 账号元数据/路线/运行状态，不放明文密码 |
+| 设备画像 | device/identity-<设备键SHA256>.json、current.json | FileDeviceIdentityStore；摘要用于安全文件名，原设备键在JSON内部 |
+| 桌面偏好 | settings/desktop.json | DesktopSettingsStore；原子写，坏文件改名保留 |
+| 资源/国服库 | files/game-data、files/labyrinth/master-cn | 原资源激活器/桌面国服仓库 |
+| 缓存 | cache/labyrinth-frame-archive、cache/apk | 诊断与设备签名读取 |
+| 工具/日志 | tools/platform-tools、logs | ADB用户触发下载；桌面日志脱敏/滚动 |
 
-重设计页面使用 …desktop.app.ui 自有包名，不属于与上游同名同签名的替身。简记实际页面位置、复用状态 / 动作与 UI_PARITY 功能分组，不将同名替身检查套用于自有页面。上游页面可保留编译，是否直接使用以设计为准。
+SharedPreferences/settings解析损坏保留.corrupt备份；Room先只读检查，确认SQLite损坏才备份db/wal/shm后重建；不因任意打开失败清库。上游策略/检查点codec坏数据行为保持原样。
 
-| 上游功能基准 | 桌面呈现位置（执行期填写） | 业务状态 / 动作来源 | UI_PARITY 分组 / 备注 |
-|---|---|---|---|
-| LabyrinthScreen | | | |
-| AccountScreen | | | |
-| 策略 / 开局编组 / 角色评分 | | | |
+验证范围：ShimTest/RoomCompatibilityTest为M1已有检查；DesktopAdaptersTest与WS-DE/WS-B报告为本轮定向检查。完整签名/资源门槛由已有Gradle检查任务承担；UI未要求同名签名，功能对照见UI_PARITY。实际窗口、打包与实机结果分别记录，不互相替代。
