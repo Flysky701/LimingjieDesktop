@@ -6,7 +6,7 @@
 
 1. `git fetch upstream && git checkout desktop/main && git merge upstream/main`（或 rebase，按团队习惯；不要 squash 上游历史）。
 2. 冲突只可能出现在 P-xx 补丁涉及的上游文件上。解决原则：**接受上游的新内容，再重新应用纯搬移**。逐条核对 `UPSTREAM_PATCHES.md`。
-3. 执行 `./gradlew -p desktop checkUpstreamDrift`，逐项处理输出：
+3. 在仓库根执行 `desktop/gradlew.bat -p desktop :shared:checkUpstreamDrift :shared:checkSubstituteSignatures`（Linux 使用 `bash desktop/gradlew`），逐项处理输出：
 
 | 漂移类型 | 处理 |
 |---|---|
@@ -17,7 +17,7 @@
 | 画像字段变化 | 同步画像工厂替身（WS-E），更新对照测试 |
 | 国服数据库常量变化 | 同步桌面仓库 |
 
-4. 执行 `./gradlew -p desktop check`（包括上游新增的测试）。上游新增测试失败 → 先查垫片语义，不得直接排除。
+4. 执行 `desktop/gradlew.bat -p desktop check`（包括上游新增的测试）。上游新增测试失败 → 先查垫片语义，不得直接排除。
 5. 检查以下文件在上游是否有变化，有变化就更新对应登记表：
    - `ui/LandosolToolboxApp.kt` → `UI_PARITY.md`（新回调、新页面、导航变化。例如上游接入会战助手，见 EDGE J-08）
    - 黎明界、账号、策略 / 编组 / 评分页面及其对话框 → 只检查本次上游改动影响的字段、操作与状态，在 UI_PARITY §8 简记并同步桌面页面；不做无关全量盘点

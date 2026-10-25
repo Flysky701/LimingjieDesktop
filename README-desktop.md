@@ -4,7 +4,7 @@
 
 ## 安装与启动
 
-需要 Windows 10/11 x64、至少 4 GB 内存，并为模拟器和游戏预留额外内存。发行包自带 Java 21 运行环境，不需要另装 Java 或 Python。
+需要 Windows 10 1809 或以上版本 / Windows 11 x64、至少 4 GB 内存，并为模拟器和游戏预留额外内存。发行包自带 Java 21 运行环境，不需要另装 Java 或 Python。
 
 1. 下载 ZIP 和同名 `.sha256` 文件。在 PowerShell 中运行 `Get-FileHash .\LimingjieAssistant-desktop-<版本>-win-x64.zip -Algorithm SHA256`，与校验文件核对。
 2. 解压整个 `LimingjieAssistant` 文件夹到可写位置，例如 `D:\Tools\LimingjieAssistant`。不要直接在压缩包内运行，也不建议放在 Program Files。

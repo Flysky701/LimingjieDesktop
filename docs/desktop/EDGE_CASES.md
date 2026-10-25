@@ -106,86 +106,86 @@
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| F-01 | 数据目录不可写（例如放在 Program Files 下） | 阻断提示并退出，不换位置 | T | — |
-| F-02 | 同一数据目录启动第二个实例 | 提示后退出 | T | — |
-| F-03 | 原子写时文件被杀毒软件占用 | 重试（FB-04）；仍失败返回错误 | T | — |
-| F-04 | 断电或强制结束后遗留 tmp 文件 | 启动时清理 | T | — |
-| F-05 | prefs JSON 损坏 | 改名为 `.corrupt`，使用默认值并提示（FB-07） | T | — |
-| F-06 | Room 数据库损坏 | 备份到 `corrupt-<时间>/`，新建空库并提示 | T | — |
-| F-07 | 磁盘已满 | `commit()` 返回 `false`；上游的 `check` 消息显示到 UI（例如「策略保存失败，请检查存储空间」） | T | — |
-| F-08 | 数据目录被复制到另一台电脑或另一个用户 | DPAPI 解密失败，提示重新填写密码（FB-12） | T | — |
-| F-09 | 安装国服数据库时文件被占用 | 暂存，下次启动时安装（FB-08） | T | — |
-| F-10 | 数据目录路径过长（> 150 字符） | 启动时警告：可能超出 Windows 路径长度限制 | T | — |
-| F-11 | Windows 用户名包含中文（`%LOCALAPPDATA%` 含中文） | 正常工作 | CI（self-test） | — |
-| F-12 | 系统睡眠或锁屏 | 任务运行时阻止睡眠；锁屏后模拟器是否继续渲染，在 L1 中记录 | T + L1 | — |
-| F-13 | 系统时间跳变 | 计时使用单调时钟（`SystemClock` 垫片）；时间戳使用墙钟（与上游一致） | T | — |
-| F-14 | 英文版 Windows / 非中文区域设置 | UTF-8 和字体正常 | CI（self-test） | — |
-| F-15 | 监听回环端口时出现防火墙提示 | 只绑定 127.0.0.1；在 L1 中记录是否出现提示 | L1 | — |
+| F-01 | 数据目录不可写（例如放在 Program Files 下） | 阻断提示并退出，不换位置 | T | PlatformTest#resolvesDataDirectoryPrecedenceAndRejectsInvalidPath；不可写分支由DataDirectories.ensureWritable处理，权限拒绝场景待L1-16 |
+| F-02 | 同一数据目录启动第二个实例 | 提示后退出 | T | PlatformTest#sameDirectoryLockExcludesSecondInstanceAndCanReopen |
+| F-03 | 原子写时文件被杀毒软件占用 | 重试（FB-04）；仍失败返回错误 | T | AtomicFiles.move有界重试；真实杀软占用未诱发，L1-16 |
+| F-04 | 断电或强制结束后遗留 tmp 文件 | 启动时清理 | T | PlatformTest#tempCleanupLeavesNormalFiles |
+| F-05 | prefs JSON 损坏 | 改名为 `.corrupt`，使用默认值并提示（FB-07） | T | ShimTest#prefsTypesPersistenceAndCorruptionBackup；DesktopStorageTest#settingsPersistAndCorruptionIsPreserved |
+| F-06 | Room 数据库损坏 | 备份到 `corrupt-<时间>/`，新建空库并提示 | T | DesktopStorageTest#corruptRoomDatabaseIsBackedUpBeforeRecreation |
+| F-07 | 磁盘已满 | `commit()` 返回 `false`；上游的 `check` 消息显示到 UI（例如「策略保存失败，请检查存储空间」） | T | DesktopContext.commit保留false错误结果；未填满真实磁盘，L1-16与策略保存错误反馈 |
+| F-08 | 数据目录被复制到另一台电脑或另一个用户 | DPAPI 解密失败，提示重新填写密码（FB-12） | T | PlatformTest#dpapiProtectsCurrentUserAndRejectsWrongEntropyOrTampering（本机实际DPAPI）；跨电脑待L3-08 |
+| F-09 | 安装国服数据库时文件被占用 | 暂存，下次启动时安装（FB-08） | T | DesktopCnDatabaseTest#lockedInstallIsPendingUntilNextStartupAndKeepsMetadataHonest |
+| F-10 | 数据目录路径过长（> 150 字符） | 启动时警告：可能超出 Windows 路径长度限制 | T | Main启动时长度>150提示；长路径实机待L1-16 |
+| F-11 | Windows 用户名包含中文（`%LOCALAPPDATA%` 含中文） | 正常工作 | CI（self-test） | DesktopSelfTest data-dir/room/ocr；中文与空格发行验证见evidence/packaging |
+| F-12 | 系统睡眠或锁屏 | 任务运行时阻止睡眠；锁屏后模拟器是否继续渲染，在 L1 中记录 | T + L1 | PlatformTest#powerStateAlwaysUsesSameThreadAndClearsOnClose、powerStateClearsAfterNativeFailure；L1-13/15待实机 |
+| F-13 | 系统时间跳变 | 计时使用单调时钟（`SystemClock` 垫片）；时间戳使用墙钟（与上游一致） | T | ShimTest#monotonicClockAndProcess；未修改系统时钟 |
+| F-14 | 英文版 Windows / 非中文区域设置 | UTF-8 和字体正常 | CI（self-test） | DesktopSelfTest fonts和JVM UTF-8参数；非中文Windows待L3-08 |
+| F-15 | 监听回环端口时出现防火墙提示 | 只绑定 127.0.0.1；在 L1 中记录是否出现提示 | L1 | 回环服务仅127.0.0.1；L1-14记录实际防火墙表现 |
 
 ## G. 协议、网络与验证码
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| G-01 | 没有任何设备画像快照 | 阻止登录并提示先连接模拟器 | T | — |
-| G-02 | 当前未连接，使用上次设备的快照 | 账号页标明来源和时间 | T | — |
-| G-03 | `android_id` 为空 | 使用 installId（FB-11） | T | — |
-| G-04 | B 服包没有安装在当前模拟器上 | 与上游语义一致的错误 | T | — |
-| G-05 | 上游增删画像字段 | 漂移检查失败 | T（CI） | — |
-| G-06 | 系统设置了静态代理 | 跟随系统代理 | T | — |
-| G-07 | 系统使用 PAC 自动配置 | 不支持；写入 KNOWN_LIMITATIONS 和 README | D | — |
-| G-08 | 切换到「直连」 | 新请求不再走代理 | T | — |
-| G-09 | 无法打开系统浏览器 | 对话框显示可复制的链接（FB-05） | T | — |
-| G-10 | 验证超过 10 分钟未完成 | `onError("验证已超时，请重新发起登录")` | T | — |
-| G-11 | 用户关闭了浏览器标签但没有完成验证 | 对话框保持，可重新打开或取消 | T（UI） | — |
-| G-12 | 其他网页尝试请求回环服务 | 被令牌、Host、Origin 校验拒绝 | T | — |
-| G-13 | Geetest 拒绝 127.0.0.1 来源 | 启用 R-02 备选方案（需要证据） | L3 | — |
-| G-14 | 网络超时或 DNS 失败 | 上游结果类型和文案 | T（上游测试） | — |
-| G-15 | 网络中有 HTTPS 中间人代理（企业环境） | 使用 JRE 自带根证书，握手失败时显示原因；写入 KNOWN_LIMITATIONS | D | — |
+| G-01 | 没有任何设备画像快照 | 阻止登录并提示先连接模拟器 | T | DesktopBindings设备快照前置与账号页提示；无快照登录UI见G4记录 |
+| G-02 | 当前未连接，使用上次设备的快照 | 账号页标明来源和时间 | T | DesktopStorageTest#snapshotPersistsAndDeviceKeyCannotEscapeDirectory；UI_PARITY设备画像行 |
+| G-03 | `android_id` 为空 | 使用 installId（FB-11） | T | AdbDeviceServiceTest#identityDoesNotPullUnrecognizedPackagesAndNormalizesNullAndroidId；FB-11 |
+| G-04 | B 服包没有安装在当前模拟器上 | 与上游语义一致的错误 | T | 共享GameClientResolver测试；L2-01/L3-01待实机 |
+| G-05 | 上游增删画像字段 | 漂移检查失败 | T（CI） | :shared:checkUpstreamDrift及checkSubstituteSignatures |
+| G-06 | 系统设置了静态代理 | 跟随系统代理 | T | PlatformTest#proxySwitchAffectsPreviouslyCapturedSelector |
+| G-07 | 系统使用 PAC 自动配置 | 不支持；写入 KNOWN_LIMITATIONS 和 README | D | KNOWN_LIMITATIONS KL-06；README-desktop常见问题 |
+| G-08 | 切换到「直连」 | 新请求不再走代理 | T | PlatformTest#proxySwitchAffectsPreviouslyCapturedSelector |
+| G-09 | 无法打开系统浏览器 | 对话框显示可复制的链接（FB-05） | T | BrowserLauncher→验证码可复制链接；系统浏览器失败分支待L3-01 |
+| G-10 | 验证超过 10 分钟未完成 | `onError("验证已超时，请重新发起登录")` | T | LoopbackCaptchaHostTest#timeoutExpiresAndMalformedPageFailsBeforeRegistration |
+| G-11 | 用户关闭了浏览器标签但没有完成验证 | 对话框保持，可重新打开或取消 | T（UI） | GeetestCaptchaDialog保留重开/复制/取消；真实浏览器标签操作待L3-01 |
+| G-12 | 其他网页尝试请求回环服务 | 被令牌、Host、Origin 校验拒绝 | T | LoopbackCaptchaHostTest#rejectsWrongTokenHostOriginAndOversizedBody |
+| G-13 | Geetest 拒绝 127.0.0.1 来源 | 启用 R-02 备选方案（需要证据） | L3 | L3-01；未取得被拒证据，未启用KCEF |
+| G-14 | 网络超时或 DNS 失败 | 上游结果类型和文案 | T（上游测试） | 共享上游协议测试；真实网络账号请求待L3-01/02 |
+| G-15 | 网络中有 HTTPS 中间人代理（企业环境） | 使用 JRE 自带根证书，握手失败时显示原因；写入 KNOWN_LIMITATIONS | D | KNOWN_LIMITATIONS KL-07；README-desktop TLS说明 |
 
 ## H. 任务生命周期与界面
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| H-01 | 任务运行中关闭窗口 | 弹出三选一对话框 | T（UI） | — |
-| H-02 | 退出时任务 10 s 内没有停止 | 记录警告，继续退出流程 | T | — |
-| H-03 | 任务运行中设备断开 | 任务停止并说明原因 | T（FakeDevice） | — |
-| H-04 | 连续点击暂停 / 继续 / 停止 | 命令执行期间按钮禁用 | T（UI） | — |
-| H-05 | 系统不支持托盘 | 关闭行为中不提供「最小化到托盘」 | T | — |
-| H-06 | 未捕获异常 | 写崩溃日志，显示对话框 | T | — |
-| H-07 | 后台协程异常 | 停止任务，UI 显示原因 | T | — |
-| H-08 | 记住的窗口位置在已拔掉的显示器上 | 重置到主屏居中 | T | — |
-| H-09 | 高 DPI（150% / 200%） | 正常缩放 | L1（截图） | — |
-| H-10 | 首次启动没有同意风险告知 | 无法进入主界面 | T（UI） | — |
-| H-11 | 诊断面板端口被占用 | 在 8765–8775 中顺延（FB-10） | T | — |
-| H-12 | 同时启动两个需要截图的任务 | 上游会话管理器互斥（`CaptureFrameBus` 返回 Busy 等），UI 显示上游消息 | T | — |
-| H-13 | 长时间运行（8 h） | 内存、线程、句柄稳定 | L2（soak） | — |
-| H-14 | 界面空白（显卡驱动问题） | README 说明 `SKIKO_RENDER_API=SOFTWARE` | D | — |
-| H-15 | 重设计页面后典型操作 | 原功能、保存 / 取消与确认语义不变；主要操作可达 | 复用 G4 的典型流程记录 | — |
+| H-01 | 任务运行中关闭窗口 | 弹出三选一对话框 | T（UI） | Main三选一接线；任务运行时托盘实机路径见L1-16 |
+| H-02 | 退出时任务 10 s 内没有停止 | 记录警告，继续退出流程 | T | DesktopAppGraph.shutdown withTimeoutOrNull(10000)及finally释放；超时强制场景未独立注入，L1-16 |
+| H-03 | 任务运行中设备断开 | 任务停止并说明原因 | T（FakeDevice） | DesktopAdaptersTest#captureUsesOwnedThreadAndStopsAfterFiveFailures；DesktopGraphIntegrationTest |
+| H-04 | 连续点击暂停 / 继续 / 停止 | 命令执行期间按钮禁用 | T（UI） | 底栏/托盘pending与stopping互斥；Graph暂停继续见集成测试；托盘连点待L1-16 |
+| H-05 | 系统不支持托盘 | 关闭行为中不提供「最小化到托盘」 | T | Main按SystemTray.isSupported改为最小化窗口；本机支持托盘，缺托盘环境未验证 |
+| H-06 | 未捕获异常 | 写崩溃日志，显示对话框 | T | evidence/ui/07-opening-crash-before-fix.png；开发期间重写运行classpath触发，固定classpath重启后已复测 |
+| H-07 | 后台协程异常 | 停止任务，UI 显示原因 | T | graph的CoroutineExceptionHandler记录错误并停止；对应异常注入未独立验证，L2-05 |
+| H-08 | 记住的窗口位置在已拔掉的显示器上 | 重置到主屏居中 | T | Main检查保存位置是否与现有屏幕相交并居中；未实际拔显示器，L1-16 |
+| H-09 | 高 DPI（150% / 200%） | 正常缩放 | L1（截图） | G4窗口证据；125%/200%组合待L1-17 |
+| H-10 | 首次启动没有同意风险告知 | 无法进入主界面 | T（UI） | evidence/ui/01-first-run.png；SetupWizard风险告知确认后进入 |
+| H-11 | 诊断面板端口被占用 | 在 8765–8775 中顺延（FB-10） | T | DesktopAppGraph.debugPort探测；DesktopGraphIntegrationTest与FB-10 |
+| H-12 | 同时启动两个需要截图的任务 | 上游会话管理器互斥（`CaptureFrameBus` 返回 Busy 等），UI 显示上游消息 | T | 共享CaptureFrameBus/会话测试；Graph快速启停集成与taskStarting/taskStopping |
+| H-13 | 长时间运行（8 h） | 内存、线程、句柄稳定 | L2（soak） | L2-05：1h必测与可选8h，当前无模拟器 |
+| H-14 | 界面空白（显卡驱动问题） | README 说明 `SKIKO_RENDER_API=SOFTWARE` | D | README-desktop：SKIKO_RENDER_API=SOFTWARE |
+| H-15 | 重设计页面后典型操作 | 原功能、保存 / 取消与确认语义不变；主要操作可达 | 复用 G4 的典型流程记录 | evidence/ui与registers/UI_PARITY.md；只复用G4操作记录 |
 
 ## I. 打包与运行环境
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| I-01 | 解压到包含中文和空格的路径 | self-test 通过 | CI | — |
-| I-02 | SmartScreen 拦截 | README 说明处理方法和 SHA-256 校验 | D | — |
-| I-03 | 杀毒软件误报或隔离文件 | README 说明；self-test 校验 MaaTouch 的 SHA-256 | D + CI | — |
-| I-04 | JRE 缺少模块 | `includeAllModules`；self-test 的 TLS 检查 | CI | — |
-| I-05 | 系统区域设置不是 UTF-8 | JVM 参数指定 UTF-8 | CI | — |
-| I-06 | Windows 10 较旧版本 | 支持 Windows 10 1809 及以上，写入 README | D | — |
-| I-07 | ARM64 Windows | 不支持，写入 KNOWN_LIMITATIONS | D | — |
-| I-08 | Windows 上 git 把文本转成 CRLF | CI 和开发说明中设置 `core.autocrlf=false`、`core.eol=lf` | CI | — |
-| I-09 | ONNX Runtime 原生库解压到包含中文的临时目录 | 加载成功 | CI（self-test） | — |
+| I-01 | 解压到包含中文和空格的路径 | self-test 通过 | CI | evidence/packaging/self-test.json；云端Windows job未运行 |
+| I-02 | SmartScreen 拦截 | README 说明处理方法和 SHA-256 校验 | D | README-desktop校验和SmartScreen说明；L3-09待真实下载环境 |
+| I-03 | 杀毒软件误报或隔离文件 | README 说明；self-test 校验 MaaTouch 的 SHA-256 | D + CI | DesktopSelfTest maatouch；README-desktop误报说明 |
+| I-04 | JRE 缺少模块 | `includeAllModules`；self-test 的 TLS 检查 | CI | app/build.gradle.kts includeAllModules；DesktopSelfTest tls |
+| I-05 | 系统区域设置不是 UTF-8 | JVM 参数指定 UTF-8 | CI | app JVM UTF-8参数；中文路径本地self-test；非UTF-8区域待L3-08 |
+| I-06 | Windows 10 较旧版本 | 支持 Windows 10 1809 及以上，写入 README | D | README-desktop系统要求 |
+| I-07 | ARM64 Windows | 不支持，写入 KNOWN_LIMITATIONS | D | KNOWN_LIMITATIONS KL-01；仅x64发行 |
+| I-08 | Windows 上 git 把文本转成 CRLF | CI 和开发说明中设置 `core.autocrlf=false`、`core.eol=lf` | CI | desktop-ci.yml Windows checkout前设置LF；本地Git同设置 |
+| I-09 | ONNX Runtime 原生库解压到包含中文的临时目录 | 加载成功 | CI（self-test） | evidence/packaging/self-test.json；运行时临时目录亦指定中文空格路径 |
 
 ## J. 上游同步
 
 | ID | 场景 | 期望行为 | 验证 | 证据 |
 |---|---|---|---|---|
-| J-01 | 上游新增与 Android 耦合的文件 | 扫描发现，漂移检查失败并列出文件 | CI | — |
-| J-02 | 上游修改了有替身的公共签名 | 签名检查失败 | CI | — |
-| J-03 | 上游 Room schema 版本升级 | 漂移检查失败（替身需要同步迁移） | CI | — |
-| J-04 | 派生改写的目标文本变化 | 命中次数校验失败 | CI | — |
-| J-05 | 上游删除了排除清单中的文件 | `prepareUpstreamMain` 失败 | CI | — |
-| J-06 | 上游新增的测试依赖 Android | 测试编译失败 → 登记排除及理由 | CI | — |
-| J-07 | 上游修改协议字段或常量 | 漂移检查失败 | CI | — |
-| J-08 | 上游在导航中接入会战助手 | 按 UPSTREAM_SYNC 清单更新 UI_PARITY 并接入 | D | — |
-| J-09 | 上游页面内部功能变化 | 只核对受影响页面并同步，简记到 UI_PARITY；不重复验证无关功能 | 复用相关检查 | — |
+| J-01 | 上游新增与 Android 耦合的文件 | 扫描发现，漂移检查失败并列出文件 | CI | :shared:checkUpstreamDrift |
+| J-02 | 上游修改了有替身的公共签名 | 签名检查失败 | CI | :shared:checkSubstituteSignatures |
+| J-03 | 上游 Room schema 版本升级 | 漂移检查失败（替身需要同步迁移） | CI | :shared:checkUpstreamDrift；RoomCompatibilityTest版本/identityHash |
+| J-04 | 派生改写的目标文本变化 | 命中次数校验失败 | CI | :shared:prepareUpstreamMain派生替换命中数断言 |
+| J-05 | 上游删除了排除清单中的文件 | `prepareUpstreamMain` 失败 | CI | :shared:prepareUpstreamMain排除清单存在性断言 |
+| J-06 | 上游新增的测试依赖 Android | 测试编译失败 → 登记排除及理由 | CI | :shared:compileTestKotlin；upstream-test-excludes.txt只排除Android对象 |
+| J-07 | 上游修改协议字段或常量 | 漂移检查失败 | CI | :shared:checkUpstreamDrift协议文件内容锁定 |
+| J-08 | 上游在导航中接入会战助手 | 按 UPSTREAM_SYNC 清单更新 UI_PARITY 并接入 | D | registers/UPSTREAM_SYNC.md；当前会战不接入与上游一致 |
+| J-09 | 上游页面内部功能变化 | 只核对受影响页面并同步，简记到 UI_PARITY；不重复验证无关功能 | 复用相关检查 | registers/UPSTREAM_SYNC.md、UI_PARITY.md；后续同步只检查受影响页面 |
