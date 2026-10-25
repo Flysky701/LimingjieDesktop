@@ -2,6 +2,7 @@ package com.landosol.toolbox.desktop.device
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import com.landosol.toolbox.desktop.platform.UserResourceLeases
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -66,6 +67,7 @@ class MaaTouchConnection private constructor(
     private val owner: ProcessAdbExecutor,
     private val process: Process,
     private val serial: String,
+    private val bootId: String,
     override val header: MaaTouchHeader,
     private val scope: CoroutineScope,
 ) : TouchConnection {
@@ -101,16 +103,18 @@ class MaaTouchConnection private constructor(
         completion.await()
     }
     override fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        queue.close()
-        actor.cancel()
-        runBlocking { owner.shell(serial, listOf("kill", header.pid.toString()), timeoutMillis = 3000) }
-        owner.release(process)
-        scope.cancel()
+        if (closed.compareAndSet(false, true)) {
+            queue.close()
+            actor.cancel()
+            try { runBlocking { cleanupTouchPid(owner, serial, bootId, header.pid) } }
+            finally { owner.release(process); scope.cancel() }
+        }
+        check(process.waitFor(3000, java.util.concurrent.TimeUnit.MILLISECONDS)) { "触控进程尚未退出" }
     }
     companion object : TouchConnectionFactory {
         override suspend fun open(adb: AdbExecutor, serial: String, dataDirectory: Path): TouchConnection = withContext(Dispatchers.IO) {
             val executor = adb as? ProcessAdbExecutor ?: throw DeviceOperationException("当前 ADB 执行器不支持 MaaTouch 常驻连接")
+            val bootId = UserResourceLeases.canonicalBootId(adb.shell(serial, listOf("cat", "/proc/sys/kernel/random/boot_id"), 3000).requireSuccess().text().trim())
             val local = dataDirectory.resolve("tools/maatouch")
             Files.createDirectories(local.parent)
             Files.write(local, MaaTouchProtocol.resourceBytes())
@@ -138,7 +142,7 @@ class MaaTouchConnection private constructor(
             }
             // Drain stderr continuously without retaining device-specific text or an unbounded buffer.
             scope.launch { try { process.errorStream.use { input -> val buffer = ByteArray(8192); while (input.read(buffer) >= 0) { } } } catch (_: IOException) { } }
-            try { MaaTouchConnection(executor, process, serial, withTimeout(5000) { handshake.await() }, scope) }
+            try { MaaTouchConnection(executor, process, serial, bootId, withTimeout(5000) { handshake.await() }, scope) }
             catch (_: TimeoutCancellationException) {
                 executor.release(process); scope.cancel()
                 throw DeviceOperationException("MaaTouch 启动失败：5 秒内未返回头部")
@@ -146,4 +150,15 @@ class MaaTouchConnection private constructor(
             catch (error: Throwable) { executor.release(process); scope.cancel(); throw error }
         }
     }
+}
+
+/** A saved PID has no meaning after reboot. Unreadable identity also means no remote cleanup. */
+internal suspend fun cleanupTouchPid(adb: AdbExecutor, serial: String, bootId: String, pid: Long) {
+    require(pid > 0)
+    val expected = UserResourceLeases.canonicalBootId(bootId)
+    val current = (adb.shell(serial, listOf("cat", "/proc/sys/kernel/random/boot_id"), 3000) as? AdbResult.Success)?.text()?.trim()
+    if (current?.lowercase() != expected) return
+    // Recheck in the same remote shell as kill to cover reboot between the read and dispatch.
+    val script = """[ "$(cat /proc/sys/kernel/random/boot_id)" = "$expected" ] && case "$(cat /proc/$pid/cmdline)" in *com.shxyke.MaaTouch.App*) kill $pid;; esac"""
+    adb.shell(serial, listOf("sh", "-c", script), 3000)
 }

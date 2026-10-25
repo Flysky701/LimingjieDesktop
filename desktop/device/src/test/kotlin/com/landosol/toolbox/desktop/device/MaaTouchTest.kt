@@ -28,7 +28,9 @@ class MaaTouchTest {
     @Test fun persistentActorSerializesGesturesAndDetectsProcessExit() = runBlocking {
         val output = folder.root.toPath().resolve("touch.txt")
         val runner = ProcessAdbExecutor("C:/中文 模拟器/adb.exe", AdbProcessFactory { args ->
-            if (args.any { "app_process" in it }) ProcessFixture.start("touch", output.toString()) else ProcessFixture.start("echo")
+            if (args.any { "app_process" in it }) ProcessFixture.start("touch", output.toString())
+            else if (args.any { "/proc/sys/kernel/random/boot_id" in it }) ProcessFixture.start("echo", "10000000-1111-2222-3333-444444444444")
+            else ProcessFixture.start("echo")
         })
         runner.use {
             val touch = MaaTouchConnection.open(runner, "synthetic", folder.root.toPath())

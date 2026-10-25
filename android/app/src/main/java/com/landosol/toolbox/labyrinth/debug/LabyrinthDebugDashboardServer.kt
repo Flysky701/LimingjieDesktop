@@ -42,7 +42,7 @@ class LabyrinthDebugDashboardServer(
     private val processLogSource: () -> ByteArray = { collectOwnProcessLogcat() },
     private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
     private val allowAddressReuse: Boolean = true,
-) {
+) : AutoCloseable {
     private data class Snapshot(
         val json: ByteArray,
         val jpeg: ByteArray?,
@@ -52,6 +52,8 @@ class LabyrinthDebugDashboardServer(
     )
 
     private val running = AtomicBoolean(false)
+    @Volatile private var boundSocket: ServerSocket? = null
+    val boundPort: Int? get() = boundSocket?.takeIf { !it.isClosed && it.isBound }?.localPort
     private val historyLock = Any()
     /** Per-frame JPEG archive for offline replay. Off by default; toggled from the dashboard. */
     private val frameArchiveEnabled = AtomicBoolean(false)
@@ -72,26 +74,35 @@ class LabyrinthDebugDashboardServer(
     @Volatile
     private var lastJpegAt = Long.MIN_VALUE
 
-    fun start() {
+    @Synchronized fun start() {
         if (!running.compareAndSet(false, true)) return
+        var candidate: ServerSocket? = null
         val server = runCatching {
-            serverSocketFactory().apply {
+            serverSocketFactory().also { candidate = it }.apply {
                 reuseAddress = allowAddressReuse
                 // Bind synchronously so the dashboard is already reachable before the UI can
                 // launch the external browser.
                 bind(InetSocketAddress(InetAddress.getByName(IPV4_LOOPBACK), port))
             }
         }.getOrElse { failure ->
+            runCatching { candidate?.close() }
             running.set(false)
             Log.e(LOG_TAG, "debug dashboard failed to bind $IPV4_LOOPBACK:$port", failure)
             return
         }
-        Log.i(LOG_TAG, "debug dashboard listening on http://$IPV4_LOOPBACK:$port/")
+        boundSocket = server
+        Log.i(LOG_TAG, "debug dashboard listening on http://$IPV4_LOOPBACK:${server.localPort}/")
         runtimeDiagnostics?.start()
         Thread({ runServer(server) }, "labyrinth-debug-dashboard").apply {
             isDaemon = true
             start()
         }
+    }
+
+    @Synchronized override fun close() {
+        running.set(false)
+        boundSocket?.close()
+        boundSocket = null
     }
 
     fun publish(
@@ -188,7 +199,7 @@ class LabyrinthDebugDashboardServer(
     private fun runServer(server: ServerSocket) {
         runCatching {
             server.use {
-                while (running.get()) {
+                while (running.get() && boundSocket === server) {
                     val socket = server.accept()
                     Thread({ handle(socket) }, "labyrinth-debug-http").apply {
                         isDaemon = true
@@ -197,9 +208,9 @@ class LabyrinthDebugDashboardServer(
                 }
             }
         }.onFailure { failure ->
-            Log.e(LOG_TAG, "debug dashboard stopped unexpectedly on $IPV4_LOOPBACK:$port", failure)
+            if (running.get() && boundSocket === server) Log.e(LOG_TAG, "debug dashboard stopped unexpectedly on $IPV4_LOOPBACK:${server.localPort}", failure)
         }
-        running.set(false)
+        synchronized(this) { if (boundSocket === server) { running.set(false); boundSocket = null } }
     }
 
     private fun handle(socket: Socket) {
@@ -315,7 +326,7 @@ class LabyrinthDebugDashboardServer(
                     appendLine("黎明界助手调试日志包")
                     appendLine("应用版本: ${AppVersion.label}")
                     appendLine("生成时间: ${System.currentTimeMillis()}")
-                    appendLine("服务地址: http://$IPV4_LOOPBACK:$port/")
+                    appendLine("服务地址: http://$IPV4_LOOPBACK:${boundPort ?: port}/")
                     appendLine("environment.json: 导出时的 Android 版本、设备、显示器、DPI、权限与运行状态")
                     appendLine("runtime/history.ndjson: 每 10 秒后台采样的进程 CPU/内存与捕获状态，最多保留约 1 小时；不包含电脑端负载")
                     appendLine("state/latest.json: 下载瞬间的结构化识别状态")

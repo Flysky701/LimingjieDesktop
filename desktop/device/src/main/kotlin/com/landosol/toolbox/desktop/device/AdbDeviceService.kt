@@ -1,5 +1,8 @@
 package com.landosol.toolbox.desktop.device
 
+import com.landosol.toolbox.desktop.platform.ResourceLease
+import com.landosol.toolbox.desktop.platform.UserResourceLeases
+
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,8 +23,9 @@ class AdbDeviceService(
     private val onEvent: (String) -> Unit = {},
     private val onLost: (String) -> Unit = {},
     private val touchFactory: TouchConnectionFactory = MaaTouchConnection,
+    private val leases: UserResourceLeases = UserResourceLeases(),
 ) : DeviceService {
-    private class Session(val serial: String, val touchMode: TouchMode, val capturer: ScreenCapturer, var ready: DeviceReady, val bootId: String, @Volatile var touch: TouchConnection?) {
+    private class Session(val serial: String, val touchMode: TouchMode, val capturer: ScreenCapturer, var ready: DeviceReady, val bootId: String, @Volatile var touch: TouchConnection?, val lease: ResourceLease) {
         var failures = 0
         var failureSince = 0L
         var lastCaptureCompleted = 0L
@@ -32,6 +36,8 @@ class AdbDeviceService(
     private val lifecycle = Mutex()
     private val closed = AtomicBoolean()
     private val connectingJobs = ConcurrentHashMap.newKeySet<Job>()
+    private class Cleanup(val touch: TouchConnection?, val lease: ResourceLease)
+    private val pendingCleanup = ConcurrentHashMap.newKeySet<Cleanup>()
     private val mutableState = MutableStateFlow<DeviceConnectionState>(DeviceConnectionState.Disconnected)
     override val state: StateFlow<DeviceConnectionState> = mutableState.asStateFlow()
     private val identities = DeviceIdentityReader(adb, dataDirectory, gamePackages)
@@ -95,19 +101,28 @@ class AdbDeviceService(
         if (sdk < 26) throw DeviceOperationException("不支持 Android 8 以下的模拟器")
         if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "读取设备信息并测试截图")
         val size = DeviceParsers.screenSize(adb.shell(serial, listOf("wm", "size")).requireSuccess().text())
-        val bootId = adb.shell(serial, listOf("cat", "/proc/sys/kernel/random/boot_id")).requireSuccess().text().trim()
-        val identity = identities.read(serial, size)
-        val awake = DeviceParsers.awake(adb.shell(serial, listOf("dumpsys", "power")).requireSuccess().text())
-        val capturer = ScreenCapturer(adb, serial)
-        val (timing, selected) = capturer.benchmark()
-        timing.forEach { emit("截图 ${it.mode}：p50 ${it.p50Millis} ms，p95 ${it.p95Millis} ms") }
-        if (timing.any { it.p95Millis > 600 }) emit("截图耗时较长，可尝试调整模拟器渲染模式或关闭高帧率")
-        if (maxOf(size.first, size.second) != 1920 || minOf(size.first, size.second) != 1080) emit("上游只在 1920×1080 下验证过")
-        if (!awake) emit("模拟器屏幕已休眠，请先在模拟器中唤醒")
-        if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "连接触控服务")
-        val touch = if (touchMode == TouchMode.MaaTouch) touchFactory.open(adb, serial, dataDirectory) else null
-        val ready = DeviceReady(serial, identity.model.ifBlank { serial }, size.first, size.second, timing, selected, true, awake, identity)
-        return Session(serial, touchMode, capturer, ready, bootId, touch)
+        val bootId = readBootId(serial)
+        val lease = leases.acquireDevice(bootId)
+        var touch: TouchConnection? = null
+        try {
+            val identity = identities.read(serial, size)
+            val awake = DeviceParsers.awake(adb.shell(serial, listOf("dumpsys", "power")).requireSuccess().text())
+            val capturer = ScreenCapturer(adb, serial)
+            val (timing, selected) = capturer.benchmark()
+            timing.forEach { emit("截图 ${it.mode}：p50 ${it.p50Millis} ms，p95 ${it.p95Millis} ms") }
+            if (timing.any { it.p95Millis > 600 }) emit("截图耗时较长，可尝试调整模拟器渲染模式或关闭高帧率")
+            if (maxOf(size.first, size.second) != 1920 || minOf(size.first, size.second) != 1080) emit("上游只在 1920×1080 下验证过")
+            if (!awake) emit("模拟器屏幕已休眠，请先在模拟器中唤醒")
+            if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "连接触控服务")
+            check(readBootId(serial) == bootId) { "模拟器启动身份已变化，请重新连接" }
+            touch = if (touchMode == TouchMode.MaaTouch) touchFactory.open(adb, serial, dataDirectory) else null
+            check(readBootId(serial) == bootId) { "模拟器启动身份已变化，请重新连接" }
+            val ready = DeviceReady(serial, identity.model.ifBlank { serial }, size.first, size.second, timing, selected, true, awake, identity)
+            return Session(serial, touchMode, capturer, ready, bootId, touch, lease)
+            } catch (failure: Throwable) {
+            try { finishCleanup(Cleanup(touch, lease)) } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
+            throw failure
+        }
     }
 
     private fun activate(value: Session) {
@@ -123,7 +138,7 @@ class AdbDeviceService(
                     if (status is AdbResult.Failure && status.kind == AdbFailureKind.ServerVersionConflict) { lose(value, status.detail, retry = false); break }
                     if (status !is AdbResult.Success || status.text().trim() != "device") { lose(value, "设备连接已断开，任务已停止"); break }
                     val bootId = shellText(value.serial, "cat", "/proc/sys/kernel/random/boot_id")
-                    if (bootId != null && bootId != value.bootId) { lose(value, "模拟器已重启，任务已停止"); break }
+                    if (bootId?.lowercase() != value.bootId) { lose(value, "模拟器启动身份已变化或无法确认，任务已停止"); break }
                     val power = shellText(value.serial, "dumpsys", "power")
                     if (power != null && session === value) {
                         val awake = DeviceParsers.awake(power)
@@ -142,21 +157,31 @@ class AdbDeviceService(
 
     private suspend fun recoverTouch(value: Session) = lifecycle.withLock {
         if (session !== value) return@withLock
-        if (value.touchRestarted) { lose(value, "触控服务已断开，任务已停止"); return@withLock }
+        if (controlSession() !== value) return@withLock
+        if (value.touchRestarted) { loseLocked(value, "触控服务已断开，任务已停止"); return@withLock }
         value.touchRestarted = true
         value.touch?.close(); value.touch = null
-        try { value.touch = touchFactory.open(adb, value.serial, dataDirectory) }
+        try {
+            value.touch = touchFactory.open(adb, value.serial, dataDirectory)
+            controlSession() // A reboot during deployment invalidates the recovered channel too.
+        }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { lose(value, "触控服务已断开，任务已停止") }
+        catch (_: Exception) { loseLocked(value, "触控服务已断开，任务已停止") }
     }
 
-    private fun lose(value: Session, reason: String, retry: Boolean = true) {
+    private suspend fun lose(value: Session, reason: String, retry: Boolean = true) = lifecycle.withLock { loseLocked(value, reason, retry) }
+
+    private fun loseLocked(value: Session, reason: String, retry: Boolean = true) {
         if (session !== value || !mutableState.compareAndSet(DeviceConnectionState.Ready(value.ready), DeviceConnectionState.Lost(reason))) return
         session = null; cachedForeground = null; foregroundUpdated = 0
         // The application owns task cancellation. Notify synchronously before any reconnect work.
         notifyLost(reason)
-        value.touch?.close()
         monitor?.cancel()
+        try { finishCleanup(Cleanup(value.touch, value.lease)) }
+        catch (failure: Exception) {
+            mutableState.value = DeviceConnectionState.Failed("设备清理未完成，占用锁保留：${failure.message}")
+            return
+        }
         if (!retry) { mutableState.value = DeviceConnectionState.Failed(reason); return }
         reconnect = scope.launch {
             repeat(12) { index ->
@@ -198,7 +223,15 @@ class AdbDeviceService(
         session = null; cachedForeground = null; foregroundUpdated = 0
         if (previous != null) notifyLost(reason)
         monitor?.cancel(); monitor = null
-        previous?.touch?.close()
+        if (previous != null) finishCleanup(Cleanup(previous.touch, previous.lease))
+        pendingCleanup.toList().forEach(::finishCleanup)
+    }
+
+    private fun finishCleanup(value: Cleanup) {
+        pendingCleanup.add(value)
+        value.touch?.close()
+        value.lease.close()
+        pendingCleanup.remove(value)
     }
 
     override suspend fun capture(): DeviceFrame {
@@ -231,16 +264,16 @@ class AdbDeviceService(
         return foreground.takeIf { session === value }
     }
 
-    private suspend fun action(expectedPackage: String, commands: String, durationMillis: Long, compatibility: List<String>): TouchResult {
-        val value = session ?: return TouchResult.Rejected("触控服务未连接")
-        if (queryForeground() != expectedPackage) return TouchResult.Rejected("游戏不在前台")
-        if (session !== value) return TouchResult.Rejected("触控服务未连接")
-        return try {
+    private suspend fun action(expectedPackage: String, commands: String, durationMillis: Long, compatibility: List<String>): TouchResult = lifecycle.withLock {
+        val value = controlSession() ?: return@withLock TouchResult.Rejected("触控服务未连接")
+        if (queryForeground() != expectedPackage) return@withLock TouchResult.Rejected("游戏不在前台")
+        if (session !== value) return@withLock TouchResult.Rejected("触控服务未连接")
+        try {
             if (value.touchMode == TouchMode.Compatibility) adb.shell(value.serial, listOf("input") + compatibility, durationMillis + 10_000).requireSuccess()
             else {
-                val touch = value.touch ?: return TouchResult.Rejected("触控服务未连接")
-                if (!touch.alive) return TouchResult.Rejected("触控服务已断开")
-                if (!MaaTouchProtocol.matchesDimensions(touch.header, value.frameSize.first, value.frameSize.second)) return TouchResult.Rejected("触控坐标系与截图尺寸不一致")
+                val touch = value.touch ?: return@withLock TouchResult.Rejected("触控服务未连接")
+                if (!touch.alive) return@withLock TouchResult.Rejected("触控服务已断开")
+                if (!MaaTouchProtocol.matchesDimensions(touch.header, value.frameSize.first, value.frameSize.second)) return@withLock TouchResult.Rejected("触控坐标系与截图尺寸不一致")
                 touch.send(commands, durationMillis)
             }
             TouchResult.Completed
@@ -262,20 +295,20 @@ class AdbDeviceService(
 
     override suspend fun back(expectedPackage: String): TouchResult = action(expectedPackage, MaaTouchProtocol.key(4), 0, listOf("keyevent", "4"))
 
-    override suspend fun home(): Boolean {
-        val value = session ?: return false
-        return try {
+    override suspend fun home(): Boolean = lifecycle.withLock {
+        val value = controlSession() ?: return@withLock false
+        try {
             if (value.touchMode == TouchMode.Compatibility) adb.shell(value.serial, listOf("input", "keyevent", "3")).requireSuccess()
-            else (value.touch ?: return false).send(MaaTouchProtocol.key(3), 0)
+            else (value.touch ?: return@withLock false).send(MaaTouchProtocol.key(3), 0)
             true
         } catch (_: IOException) { false }
     }
 
-    override suspend fun launch(packageName: String): Boolean {
-        val serial = session?.serial ?: return false
-        val component = shellText(serial, "cmd", "package", "resolve-activity", "--brief", "-c", "android.intent.category.LAUNCHER", packageName)?.let(DeviceParsers::launchComponent) ?: return false
+    override suspend fun launch(packageName: String): Boolean = lifecycle.withLock {
+        val serial = controlSession()?.serial ?: return@withLock false
+        val component = shellText(serial, "cmd", "package", "resolve-activity", "--brief", "-c", "android.intent.category.LAUNCHER", packageName)?.let(DeviceParsers::launchComponent) ?: return@withLock false
         val output = adb.shell(serial, listOf("am", "start", "-n", component))
-        return output is AdbResult.Success && DeviceParsers.launchSucceeded(output.text() + "\n" + output.stderr)
+        output is AdbResult.Success && DeviceParsers.launchSucceeded(output.text() + "\n" + output.stderr)
     }
 
     override suspend fun isPackageRunning(packageName: String): Boolean {
@@ -294,24 +327,24 @@ class AdbDeviceService(
         }
     }
 
-    override suspend fun forceStop(packageName: String): Boolean {
-        val serial = session?.serial ?: return false
-        if (adb.shell(serial, listOf("am", "force-stop", packageName)) !is AdbResult.Success) return false
+    override suspend fun forceStop(packageName: String): Boolean = lifecycle.withLock {
+        val serial = controlSession()?.serial ?: return@withLock false
+        if (adb.shell(serial, listOf("am", "force-stop", packageName)) !is AdbResult.Success) return@withLock false
         val deadline = System.nanoTime() + 3_000_000_000L
         while (System.nanoTime() < deadline) {
             val remaining = ((deadline - System.nanoTime()) / 1_000_000).coerceIn(1, 1000)
             when (val result = adb.shell(serial, listOf("pidof", packageName), remaining)) {
-                is AdbResult.Success -> if (result.text().isBlank()) return true
-                is AdbResult.Failure -> if (result.kind == AdbFailureKind.NonZeroExit && result.detail == "adb 退出码 1") return true else return false
+                is AdbResult.Success -> if (result.text().isBlank()) return@withLock true
+                is AdbResult.Failure -> return@withLock result.kind == AdbFailureKind.NonZeroExit && result.detail == "adb 退出码 1"
             }
             delay(100)
         }
         emit("游戏进程未在 3 秒内退出")
-        return false
+        false
     }
 
-    override suspend fun uiTree(): List<UiNode> {
-        val serial = session?.serial ?: return emptyList()
+    override suspend fun uiTree(): List<UiNode> = lifecycle.withLock {
+        val serial = controlSession()?.serial ?: return@withLock emptyList()
         repeat(4) { attempt ->
             val dump = adb.shell(serial, listOf("uiautomator", "dump", "/data/local/tmp/ui.xml"))
             val text = when (dump) { is AdbResult.Success -> dump.text() + dump.stderr; is AdbResult.Failure -> dump.detail }
@@ -319,17 +352,32 @@ class AdbDeviceService(
             if (dump is AdbResult.Success && !text.contains("ERROR:", ignoreCase = true)) {
                 val xml = shellText(serial, "cat", "/data/local/tmp/ui.xml")
                 if (xml != null) {
-                    try { return DeviceParsers.uiTree(xml) }
+                    try { return@withLock DeviceParsers.uiTree(xml) }
                     catch (_: IOException) { }
                     catch (_: SAXException) { }
                     catch (_: IllegalArgumentException) { }
                 }
             }
             emit("无法读取渠道登录界面")
-            return emptyList()
+            return@withLock emptyList()
         }
         emit("无法读取渠道登录界面")
-        return emptyList()
+        emptyList()
+    }
+
+    private suspend fun readBootId(serial: String): String = UserResourceLeases.canonicalBootId(
+        adb.shell(serial, listOf("cat", "/proc/sys/kernel/random/boot_id"), 3000).requireSuccess().text().trim())
+
+    /** Under lifecycle: no control command can outlive cleanup and lease release. */
+    private suspend fun controlSession(): Session? {
+        val value = session ?: return null
+        val boot = try { readBootId(value.serial) } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        if (!value.lease.isValid || boot != value.bootId) {
+            loseLocked(value, "模拟器启动身份已变化或无法确认，任务已停止")
+            return null
+        }
+        return value
     }
 
     private suspend fun shellText(serial: String, vararg args: String): String? = (adb.shell(serial, args.toList()) as? AdbResult.Success)?.text()?.trim()
@@ -338,8 +386,12 @@ class AdbDeviceService(
     private fun notifyLost(reason: String) { try { onLost(reason) } catch (_: Exception) { emit("任务停止通知失败") } }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        runBlocking { disconnect() }
-        scope.cancel()
-        adb.close()
+        try { runBlocking { disconnect() } }
+        finally {
+            scope.cancel()
+            adb.close()
+            // Failed cleanup keeps its OS lock until cleanup succeeds or this worker exits.
+            pendingCleanup.toList().forEach { runCatching { finishCleanup(it) } }
+        }
     }
 }

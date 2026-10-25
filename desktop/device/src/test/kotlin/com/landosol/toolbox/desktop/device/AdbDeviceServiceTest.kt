@@ -1,5 +1,7 @@
 package com.landosol.toolbox.desktop.device
 
+import com.landosol.toolbox.desktop.platform.UserResourceLeases
+
 import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Rule
@@ -19,7 +21,7 @@ class AdbDeviceServiceTest {
         override fun close() { alive = false }
     }
     private fun service(fake: FakeAdb, touch: RecordingTouch = RecordingTouch(), events: MutableList<String> = CopyOnWriteArrayList(), lost: MutableList<String> = CopyOnWriteArrayList()) =
-        AdbDeviceService(fake, directory.root.toPath(), emptySet(), events::add, lost::add, TouchConnectionFactory { _, _, _ -> touch })
+        AdbDeviceService(fake, directory.root.toPath(), emptySet(), events::add, lost::add, TouchConnectionFactory { _, _, _ -> touch }, UserResourceLeases(directory.root.toPath().resolve("user-runtime")))
 
     @Test fun duplicateConnectionKeepsSessionAndDoesNotBenchmarkOrNotifyLostAgain() = runBlocking {
         val adb = FakeAdb(); val lost = CopyOnWriteArrayList<String>(); val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
@@ -139,7 +141,7 @@ class AdbDeviceServiceTest {
         val adb = FakeAdb()
         var processResult: AdbResult = FakeAdb.success("NAME\n${FakeAdb.GAME}\n")
         adb.handler = { call -> if (call.arguments.firstOrNull() == "ps") processResult else adb.default(call) }
-        AdbDeviceService(adb,directory.root.toPath(),setOf(FakeAdb.GAME),touchFactory=TouchConnectionFactory { _,_,_ -> RecordingTouch() }).use { device ->
+        AdbDeviceService(adb,directory.root.toPath(),setOf(FakeAdb.GAME),touchFactory=TouchConnectionFactory { _,_,_ -> RecordingTouch() },leases=UserResourceLeases(directory.root.toPath().resolve("user-runtime"))).use { device ->
             device.connect("fixture")
             assertTrue(device.isPackageRunning(FakeAdb.GAME))
             processResult=FakeAdb.success("NAME\n${FakeAdb.GAME}:push\n")
@@ -223,7 +225,7 @@ class AdbDeviceServiceTest {
     }
     @Test fun failedTouchRestartLosesConnectionAndReconnectDoesNotSendActions() = runBlocking {
         val adb = FakeAdb(); val lost = CopyOnWriteArrayList<String>(); val first = RecordingTouch(); val opens = AtomicInteger()
-        AdbDeviceService(adb, directory.root.toPath(), emptySet(), onLost = lost::add, touchFactory = TouchConnectionFactory { _, _, _ ->
+        AdbDeviceService(adb, directory.root.toPath(), emptySet(), onLost = lost::add, leases=UserResourceLeases(directory.root.toPath().resolve("user-runtime")), touchFactory = TouchConnectionFactory { _, _, _ ->
             when (opens.incrementAndGet()) { 1 -> first; 2 -> throw DeviceOperationException("synthetic restart failure"); else -> RecordingTouch() }
         }).use { device ->
             device.connect("fixture"); first.alive = false
@@ -236,7 +238,7 @@ class AdbDeviceServiceTest {
     }
     @Test fun disconnectCancelsInFlightTouchRestart() = runBlocking {
         val first = RecordingTouch(); val restarting = CompletableDeferred<Unit>(); val opens = AtomicInteger()
-        AdbDeviceService(FakeAdb(), directory.root.toPath(), emptySet(), touchFactory = TouchConnectionFactory { _, _, _ ->
+        AdbDeviceService(FakeAdb(), directory.root.toPath(), emptySet(), leases=UserResourceLeases(directory.root.toPath().resolve("user-runtime")), touchFactory = TouchConnectionFactory { _, _, _ ->
             if (opens.incrementAndGet() == 1) first else { restarting.complete(Unit); awaitCancellation() }
         }).use { device ->
             device.connect("fixture"); first.alive = false
