@@ -118,7 +118,7 @@ private data class PendingSessionAction(val title:String,val message:String,val 
                                 Text(destination.label,color=if(page==destination)Accent else Muted,style=MaterialTheme.typography.bodySmall)
                             }
                         }}
-                        Spacer(Modifier.weight(1f));Text(AppVersion.name,style=MaterialTheme.typography.labelSmall,color=Muted)
+                        Spacer(Modifier.weight(1f));Text(AppVersion.name.replace("+","\n"),style=MaterialTheme.typography.labelSmall,color=Muted)
                     }
                 }
                 VerticalDivider(color=Line)

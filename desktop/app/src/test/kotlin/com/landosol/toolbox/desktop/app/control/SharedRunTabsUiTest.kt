@@ -52,7 +52,8 @@ class SharedRunTabsUiTest {
         var selected by mutableStateOf("a")
         var stopAll=0
         val tabs=listOf(tab(a,alice),tab(b,bob))
-        compose.setContent{SharedRunTabsApp(global,tabs,selected,callbacks(select={selected=it},stopAll={stopAll++}))}
+        val devices=tabs.map{ManagedDeviceUi(it.deviceId,it.serial,it.name,it.id,it.boundAccountId,connected=true,busy=true,status="运行中")}
+        compose.setContent{SharedRunTabsApp(global,tabs,selected,callbacks(select={selected=it},stopAll={stopAll++}),devices=devices)}
         compose.onRoot().performKeyInput{pressKey(Key.F7)}
         compose.waitUntil(5_000){ControlOps.STOP in a.commands}
         assertFalse(ControlOps.STOP in b.commands)
