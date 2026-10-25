@@ -284,6 +284,29 @@
       "matcher": "ex",
       "scale": 2,
       "tightenInk": true
+    },
+    {
+      "id": "map-target-missed-0",
+      "image": "android/app/src/test/resources/labyrinth/node-target-missed-20260916.jpg",
+      "kind": "relic_stack",
+      "roi": [
+        360,
+        970,
+        48,
+        48
+      ],
+      "expected": "1",
+      "referenceText": "1",
+      "expectedSource": "Real upstream screenshot's sole bottom-left green HP mark counter manually checked before OCR; visible digit is 1. Existing parser contract: android/app/src/test/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthNodeRelicStackResolverTest.kt:12-16",
+      "roiSource": "android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthNodeRelicStackResolver.kt:211,241 (OCR_DIGIT_RECTS[0], OCR_SCALE)",
+      "matcher": "node-stack",
+      "scale": 4,
+      "referenceRoi": [
+        360,
+        970,
+        48,
+        48
+      ]
     }
   ]
 }
