@@ -83,7 +83,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-class DesktopAppGraph(val dataDirectory: Path, private val openedDatabase: AppDatabase? = null) : AutoCloseable {
+class DesktopAppGraph(
+    val dataDirectory: Path,
+    private val openedDatabase: AppDatabase? = null,
+    suppliedDevice: DeviceService? = null,
+    private val startupUpdates: Boolean = true,
+) : AutoCloseable {
     val log = UserLog()
     val context = DesktopContext(dataDirectory.toFile()) { log.add("配置损坏，已保留备份：${it.name}", true) }
     private val filesDir get() = context.filesDir
@@ -98,7 +103,7 @@ class DesktopAppGraph(val dataDirectory: Path, private val openedDatabase: AppDa
     val identityStore = FileDeviceIdentityStore(dataDirectory) { log.add(it, true) }
     val ocr = OnnxOcrEngine()
     val captchaHost = LoopbackCaptchaHost()
-    val device = ManagedDeviceService(dataDirectory, { settings.state.value.adbPath }, { log.add(it) }, { reason -> stopAll(reason) })
+    val device: DeviceService = suppliedDevice ?: ManagedDeviceService(dataDirectory, { settings.state.value.adbPath }, { log.add(it) }, { reason -> stopAll(reason) })
     private val previewState = MutableStateFlow<CapturePixels?>(null)
     val preview = previewState.asStateFlow()
     val captureService = DesktopCaptureService(
@@ -115,9 +120,10 @@ class DesktopAppGraph(val dataDirectory: Path, private val openedDatabase: AppDa
     val debugUrl get() = debugPort?.let { "http://127.0.0.1:$it/" }
     private var rerollHostJob: Job? = null
     private var closed = false
+    private val installedServices = DesktopServices(OcrPort(ocr::submit), WindowsSecretProtector(), identityStore, captchaHost, DesktopLog::snapshot)
     init {
         DesktopLog.initialize(dataDirectory.resolve("logs"))
-        DesktopBindings.install(DesktopServices(OcrPort(ocr::submit), WindowsSecretProtector(), identityStore, captchaHost, DesktopLog::snapshot))
+        DesktopBindings.install(installedServices)
     }
 
     private val databaseUpdateScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -152,7 +158,7 @@ class DesktopAppGraph(val dataDirectory: Path, private val openedDatabase: AppDa
         autoRunScope.launch { labyrinthController.uiState.collect { state -> (state.progress ?: state.message)?.let { log.add(it) } } }
         autoRunScope.launch { automationOverlayCoordinator.state.collect { it?.let { log.add("${it.status} ${it.detail.orEmpty()}") } } }
         autoRunScope.launch { ocr.warmUp() }
-        databaseUpdateScope.launch {
+        if (startupUpdates) databaseUpdateScope.launch {
             when (val result = labyrinthCnDatabaseRepository.updateIfNeeded()) {
                 is LabyrinthCnDatabaseUpdateResult.UpToDate ->
                     Log.i(DATABASE_UPDATE_LOG_TAG, "CN database is current: ${result.metadata.version}")
@@ -814,6 +820,7 @@ class DesktopAppGraph(val dataDirectory: Path, private val openedDatabase: AppDa
                 listOf<() -> Unit>({ captureService.close() }, { device.close() }, { ocr.close() }, { captchaHost.close() },
                     { debugSocket?.close(); Unit }, { diagnostics.close() }, { database.close() }, { power.close() }, { network.close() })
                     .forEach { release -> runCatching(release).onFailure { Log.e(APP_LOG_TAG, "释放桌面资源失败", it) } }
+                DesktopBindings.release(installedServices)
             }
         }
     }

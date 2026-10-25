@@ -28,6 +28,7 @@ data class DesktopServices(
 object DesktopBindings {
     @Volatile private var installed: DesktopServices? = null
     @Synchronized fun install(services: DesktopServices) { check(installed == null) { "DesktopBindings already installed" }; installed = services }
+    @Synchronized fun release(services: DesktopServices) { if (installed === services) installed = null }
     val services: DesktopServices get() = checkNotNull(installed) { "DesktopBindings not installed" }
     fun identity(): DeviceIdentitySnapshot = services.deviceIdentityStore.current()
         ?: throw IllegalArgumentException("尚未读取模拟器设备信息，请先在『设备』页连接模拟器")
