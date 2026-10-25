@@ -1,0 +1,13 @@
+mode=settings timestamp=2026-10-25T10:50:02.262670800Z
+locator=模拟器自带; version=Android Debug Bridge version 1.0.41
+discovered=[(127.0.0.1:16384, device)]
+截图 Raw：p50 226 ms，p95 244 ms
+截图 Png：p50 540 ms，p95 626 ms
+截图耗时较长，可尝试调整模拟器渲染模式或关闭高帧率
+上游只在 1920×1080 下验证过
+READY Android=12/API32; touch=true; awake=true; size=720x1280; mode=Raw; timing=[CaptureTiming(mode=Raw, p50Millis=226, p95Millis=244), CaptureTiming(mode=Png, p50Millis=540, p95Millis=626)]
+installedGamePackages=[package:com.bilibili.priconne]
+无法读取渠道登录界面
+snapshot=storage-before size=1280x720 nodes=0
+LOST: 设备已断开，任务已停止
+maatouchRemaining=0

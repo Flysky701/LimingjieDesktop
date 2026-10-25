@@ -1,0 +1,17 @@
+mode=compatibility timestamp=2026-10-25T11:02:33.786613900Z
+locator=模拟器自带; version=Android Debug Bridge version 1.0.41
+discovered=[(127.0.0.1:16384, device)]
+截图 Raw：p50 232 ms，p95 239 ms
+截图 Png：p50 215 ms，p95 290 ms
+上游只在 1920×1080 下验证过
+READY Android=12/API32; touch=true; awake=true; size=720x1280; mode=Png; timing=[CaptureTiming(mode=Raw, p50Millis=232, p95Millis=239), CaptureTiming(mode=Png, p50Millis=215, p95Millis=290)]
+installedGamePackages=[package:com.bilibili.priconne]
+无法读取渠道登录界面
+snapshot=compatibility-before size=1280x720 nodes=0
+无法读取渠道登录界面
+snapshot=compatibility-storage size=1280x720 nodes=0
+snapshot=compatibility-scroll size=1280x720 nodes=50
+twenty UI dumps: success=20 idle=0 nullRoot=0
+compatibility commands passed; effects require recorded image review when UI dump is unavailable
+LOST: 设备已断开，任务已停止
+maatouchRemaining=0

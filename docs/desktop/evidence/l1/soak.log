@@ -1,0 +1,30 @@
+mode=soak timestamp=2026-10-25T10:52:16.177849Z
+locator=模拟器自带; version=Android Debug Bridge version 1.0.41
+discovered=[(127.0.0.1:16384, device)]
+截图 Raw：p50 233 ms，p95 250 ms
+截图 Png：p50 220 ms，p95 313 ms
+上游只在 1920×1080 下验证过
+READY Android=12/API32; touch=true; awake=true; size=720x1280; mode=Png; timing=[CaptureTiming(mode=Raw, p50Millis=233, p95Millis=250), CaptureTiming(mode=Png, p50Millis=220, p95Millis=313)]
+installedGamePackages=[package:com.bilibili.priconne]
+frames=100 heap=6699152
+frames=200 heap=6720464
+frames=300 heap=6726224
+frames=400 heap=6774288
+frames=500 heap=6735480
+frames=600 heap=6738552
+frames=700 heap=6741832
+frames=800 heap=6744144
+frames=900 heap=6749840
+frames=1000 heap=6752704
+frames=1100 heap=6767984
+frames=1200 heap=6802256
+frames=1300 heap=6765496
+frames=1400 heap=6766984
+frames=1500 heap=6770696
+frames=1600 heap=6772904
+frames=1700 heap=6776064
+frames=1800 heap=6781472
+frames=1900 heap=6788328
+soak frames=1989 interval p50=301.2124ms p95=302.4555ms
+LOST: 设备已断开，任务已停止
+maatouchRemaining=0

@@ -1,0 +1,12 @@
+mode=inspect timestamp=2026-10-25T10:47:22.923145400Z
+locator=模拟器自带; version=Android Debug Bridge version 1.0.41
+discovered=[(127.0.0.1:16384, device)]
+截图 Raw：p50 237 ms，p95 250 ms
+截图 Png：p50 504 ms，p95 591 ms
+上游只在 1920×1080 下验证过
+READY Android=12/API32; touch=true; awake=true; size=720x1280; mode=Raw; timing=[CaptureTiming(mode=Raw, p50Millis=237, p95Millis=250), CaptureTiming(mode=Png, p50Millis=504, p95Millis=591)]
+installedGamePackages=[package:com.bilibili.priconne]
+snapshot=settings-before size=1280x720 nodes=47
+foreground 20 queries p50=100.8655ms p95=128.4282ms
+LOST: 设备已断开，任务已停止
+maatouchRemaining=0

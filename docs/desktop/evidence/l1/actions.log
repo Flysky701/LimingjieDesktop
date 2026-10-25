@@ -1,0 +1,18 @@
+mode=actions timestamp=2026-10-25T10:48:13.044322700Z
+locator=模拟器自带; version=Android Debug Bridge version 1.0.41
+discovered=[(127.0.0.1:16384, device)]
+截图 Raw：p50 219 ms，p95 233 ms
+截图 Png：p50 214 ms，p95 287 ms
+上游只在 1920×1080 下验证过
+READY Android=12/API32; touch=true; awake=true; size=720x1280; mode=Png; timing=[CaptureTiming(mode=Raw, p50Millis=219, p95Millis=233), CaptureTiming(mode=Png, p50Millis=214, p95Millis=287)]
+installedGamePackages=[package:com.bilibili.priconne]
+snapshot=tap-before size=1280x720 nodes=47
+无法读取渠道登录界面
+snapshot=tap-after size=1280x720 nodes=0
+snapshot=back-after size=1280x720 nodes=47
+snapshot=swipe-after size=1280x720 nodes=49
+snapshot=hold-after size=1280x720 nodes=47
+foreground cache changed after Home in 210ms
+settings forceStop=true; tap/swipe/hold/back all completed with changed UI trees
+LOST: 设备已断开，任务已停止
+maatouchRemaining=0
