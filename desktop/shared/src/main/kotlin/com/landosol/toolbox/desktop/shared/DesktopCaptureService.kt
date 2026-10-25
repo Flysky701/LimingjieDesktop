@@ -85,7 +85,8 @@ class DesktopCaptureService(
                 if (CaptureStateRegistry.isActive()) CaptureStateRegistry.update(CaptureState.Stopped("屏幕捕获已停止"))
             }
         }
-        ready.await()
+        try { withTimeout(5_000) { ready.await() } }
+        catch (failure: Exception) { job?.cancel(); throw failure }
     }
     fun stop(reason: String = "用户停止屏幕捕获") {
         CaptureStateRegistry.update(CaptureState.Stopped(reason))

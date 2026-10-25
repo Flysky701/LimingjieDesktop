@@ -117,7 +117,17 @@ class DesktopAppGraph(
     )
     private val viewModels = androidx.lifecycle.ViewModelStore()
     val accounts by lazy { com.landosol.toolbox.account.AccountViewModel(accountRepository).also { viewModels.put("accounts", it) } }
-    private val diagnostics by lazy { com.landosol.toolbox.labyrinth.debug.LabyrinthRuntimeDiagnostics(context) }
+    private val diagnostics by lazy { com.landosol.toolbox.labyrinth.debug.LabyrinthRuntimeDiagnostics(context).also { diagnostics ->
+        diagnostics.environmentDetails = {
+            val ready = (device.state.value as? DeviceConnectionState.Ready)?.device
+            org.json.JSONObject().put("connectionState", device.state.value.javaClass.simpleName)
+                .put("model", ready?.identity?.model ?: "unknown").put("width", ready?.width ?: 0).put("height", ready?.height ?: 0)
+                .put("captureMode", ready?.selectedMode?.name ?: "none").put("captureRunning", CaptureStateRegistry.isActive())
+                .put("touchReady", ready?.touchReady ?: false).put("awake", ready?.awake ?: false)
+                .put("lastFrameMillis", previewState.value?.timestampMillis ?: 0)
+                .put("screenshotP95Millis", ready?.timing?.firstOrNull { it.mode == ready.selectedMode }?.p95Millis ?: 0)
+        }
+    } }
     private var debugSocket: java.net.ServerSocket? = null
     val debugPort: Int? = (8765..8775).firstOrNull { port ->
         runCatching { java.net.ServerSocket().use { it.reuseAddress = false; it.bind(java.net.InetSocketAddress("127.0.0.1", port)) } }.isSuccess
@@ -150,6 +160,7 @@ class DesktopAppGraph(
                 logGameClient()
             }
         }
+        accountServerScope.launch { device.state.collect { state -> if (state is DeviceConnectionState.Ready) persistIdentity(state.device) } }
         // The dashboard is loopback-only, so it is safe to start for test/release APKs too.
         // Starting it here also makes http://127.0.0.1:8765/ immediately reachable from a
         // browser running inside the emulator, before the first recognition session starts.
@@ -753,12 +764,20 @@ class DesktopAppGraph(
         captureService.stopAndJoin("切换设备")
         device.connect(serial, if (settings.state.value.touchMode == PreferredTouchMode.COMPATIBILITY) TouchMode.Compatibility else TouchMode.MaaTouch)
         val ready = device.state.value as? DeviceConnectionState.Ready ?: return
-        val identity = ready.device.identity
-        identityStore.save(DeviceIdentitySnapshot(identity.deviceKey, identity.brand, identity.model, identity.release, identity.sdkInt,
-            identity.supportedAbis, identity.androidId, identity.displayWidth, identity.displayHeight,
-            identity.packages.mapValues { (_, item) -> GamePackageIdentity(item.versionName, item.versionCode, item.certificateMd5, item.lastUpdateTime) }, identity.capturedAtMillis))
+        persistIdentity(ready.device)
         settings.update { it.copy(lastDevice = serial) }
         log.add("设备已就绪：${ready.device.label}，${ready.device.width} × ${ready.device.height}")
+    }
+
+    @Synchronized private fun persistIdentity(ready: DeviceReady) {
+        val identity = ready.identity
+        val snapshot = DeviceIdentitySnapshot(identity.deviceKey, identity.brand, identity.model, identity.release, identity.sdkInt,
+            identity.supportedAbis, identity.androidId, identity.displayWidth, identity.displayHeight,
+            identity.packages.mapValues { (_, item) -> GamePackageIdentity(item.versionName, item.versionCode, item.certificateMd5, item.lastUpdateTime) }, identity.capturedAtMillis)
+        if (identityStore.current() != snapshot) {
+            identityStore.save(snapshot)
+            gameGateways.clear(); sdkCache = null
+        }
     }
 
     suspend fun disconnectDevice() { check(!busy) { "请先停止任务" }; captureService.stopAndJoin("断开设备"); device.disconnect(); previewState.value = null }
@@ -770,6 +789,8 @@ class DesktopAppGraph(
         try {
             check(device.state.value is DeviceConnectionState.Ready) { "请先在设备页连接模拟器" }
             check((device.state.value as? DeviceConnectionState.Ready)?.device?.awake == true) { "模拟器屏幕正在休眠，请先手动唤醒，再启动任务" }
+            (device.state.value as? DeviceConnectionState.Ready)?.device?.let(::persistIdentity)
+            check(gameClientResolution is GameClientResolution.Available) { "无法确定游戏客户端，请检查账号服务器与模拟器中安装的客户端" }
             check(ocr.status.value is OcrEngineStatus.Ready) { "OCR 尚未就绪，请查看设置与环境" }
             check(dryRun || actionsAvailable()) { "触控服务未就绪，请在设备页重新连接" }
             captureService.start()
@@ -778,7 +799,7 @@ class DesktopAppGraph(
                 else -> Unit
             }
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: Exception) { log.add(failure.message ?: "启动失败", true) }
+        catch (failure: Exception) { val reason = failure.message ?: "启动失败"; log.add(reason, true); labyrinthController.reportMessage(reason) }
         finally { startingState.value = false }
         }.also { autoRunJob = it }
     }
