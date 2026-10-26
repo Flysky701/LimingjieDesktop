@@ -5,9 +5,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.compose)
 }
-val upstreamVersion = providers.provider {
-    Regex("versionName = \"([^\"]+)\"").find(rootProject.file("../android/app/build.gradle.kts").readText())!!.groupValues[1]
-}
+// jpackage requires a numeric base version; display labels and ZIPs keep the desktop suffix.
+val desktopPackageVersion = project.version.toString().substringBefore('+')
 kotlin { jvmToolchain(21) }
 dependencies {
     implementation(project(":shared")); implementation(project(":device")); implementation(project(":ocr")); implementation(project(":platform"))
@@ -28,7 +27,7 @@ compose.desktop {
         buildTypes.release.proguard.isEnabled = false
         nativeDistributions {
             packageName = "LimingjieAssistant"
-            packageVersion = upstreamVersion.get()
+            packageVersion = desktopPackageVersion
             includeAllModules = true
             windows { iconFile.set(project.file("src/main/resources/desktop/app.ico")) }
         }

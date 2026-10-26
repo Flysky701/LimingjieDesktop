@@ -35,7 +35,7 @@ class ProcessAdbExecutorTest {
         ProcessAdbExecutor(path, AdbProcessFactory { args -> calls += args; ProcessFixture.start("echo", *args.toTypedArray()) }).use { runner ->
             val result = runner.shell("127.0.0.1:1234", listOf("echo", "含 空格", "a'b", "\$(never-execute)")) as AdbResult.Success
             assertEquals(listOf(path, "-s", "127.0.0.1:1234", "shell", "'echo' '含 空格' 'a'\\''b' '\$(never-execute)'"), calls.single())
-            assertTrue(result.text().contains("含 空格"))
+            assertEquals(calls.single().joinToString("|"), result.text())
         }
     }
     @Test fun allKnownFailurePhrasesAreClassified() {

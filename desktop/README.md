@@ -57,6 +57,8 @@ desktop\gradlew.bat -p desktop :app:test --tests '*SharedPackagedRuntimeTest' '-
 
 [Windows Desktop CI](../.github/workflows/desktop-ci.yml) 面向本项目的 Windows x64 客户端，版本读取 `desktop/build.gradle.kts`（当前 `1.0.18+desktop.7`）。默认在 `main` 的相关代码改动或 PR 上验证；普通说明文档变化不触发构建。许可证和随包模型声明等打包输入另行保留触发。开发分支可通过 PR 或手动运行验证，避免同一分支 push 与 PR 重复构建。
 
+桌面显示版本、ZIP 名、原生包的数字基础版本与派生版本测试统一读取该桌面版本；不再由 Android 版本或过时的桌面后缀分别推导。上游 Android 的协议相关版本代码继续保留原值。
+
 - 使用 Windows、JDK 21，一次完成桌面 `check`、共享源码漂移、原生模块、Compose 与 OCR 检查，不再先跑 Linux 全套后又在 Windows 重跑。先构建应用镜像并将 exe 路径传入测试，实际打包进程检查不再因缺少路径而跳过。
 - `--continue` 保留其他独立检查的结果；OCR 门槛不变，未通过仍使工作流失败，并阻止候选 ZIP 打包与上传。运行摘要直接展示测试通过/失败/跳过、OCR 准确率和覆盖，不能把本地既有结果当作该次云端结果。
 - 默认只验证，不上传 APK、大型 ZIP 或详细报告。手动选择 `package_candidate`，或推送匹配源码版本的 `desktop-v<完整桌面版本>` 标签（当前为 `desktop-v1.0.18+desktop.7`），才在全部检查通过后构建候选 ZIP、核对 SHA-256、运行中文/空格目录自检并上传 ZIP 与校验文件，保留 3 天。标签不会创建 GitHub Release。

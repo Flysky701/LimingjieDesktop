@@ -3,16 +3,20 @@ package com.landosol.toolbox.desktop.device
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.util.Base64
 
 /** Real child processes with synthetic I/O; never invokes ADB or an emulator. */
 object ProcessFixture {
+    // The Windows Java launcher converts Unicode argv through the ANSI code page (JDK-8337506).
+    // This synthetic child is not adb: carry its payload as ASCII while tests assert raw adb argv.
     private fun command(vararg args: String): List<String> = listOf(
         Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java").toString(),
         "-cp", listOf(ProcessFixture::class.java, kotlin.Unit::class.java).map { Path.of(it.protectionDomain.codeSource.location.toURI()).toString() }.distinct().joinToString(java.io.File.pathSeparator),
         ProcessFixture::class.java.name,
-    ) + args
+    ) + args.map { Base64.getEncoder().encodeToString(it.toByteArray(Charsets.UTF_8)) }
     fun start(vararg args: String): Process = ProcessBuilder(command(*args)).start()
-    @JvmStatic fun main(args: Array<String>) {
+    @JvmStatic fun main(encodedArgs: Array<String>) {
+        val args = encodedArgs.map { Base64.getDecoder().decode(it).toString(Charsets.UTF_8) }
         when (args[0]) {
             "echo" -> System.out.write(args.drop(1).joinToString("|").toByteArray(Charsets.UTF_8))
             "error" -> { System.err.print(args[1]); args.getOrNull(3)?.let { System.out.print(it) }; kotlin.system.exitProcess(args[2].toInt()) }

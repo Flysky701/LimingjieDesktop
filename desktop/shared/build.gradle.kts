@@ -28,6 +28,7 @@ val prepareUpstreamMain by tasks.registering(Sync::class) {
 val prepareUpstreamTest by tasks.registering(Sync::class) {
     val excluded = exclusions("upstream-test-excludes.txt")
     inputs.files("upstream-test-excludes.txt", "upstream-test-derived.txt")
+    inputs.property("desktopVersion", project.version.toString())
     from(upstream.resolve("src/test/java")) { exclude(excluded) }
     into(layout.buildDirectory.dir("generated/upstream/test"))
     doFirst { excluded.forEach { check(upstream.resolve("src/test/java/$it").isFile) { "Stale test exclusion: $it" } } }
@@ -37,7 +38,7 @@ val prepareUpstreamTest by tasks.registering(Sync::class) {
             val target = destinationDir.resolve(parts[0])
             val source = target.readText()
             check(source.windowed(parts[1].length).count { text -> text == parts[1] } == parts[3].toInt()) { "Derived test drift: ${parts[0]}" }
-            target.writeText(source.replace(parts[1], parts[2]))
+            target.writeText(source.replace(parts[1], parts[2].replace("@DESKTOP_VERSION@", project.version.toString())))
         }
     }
 }
@@ -55,11 +56,12 @@ val prepareUpstreamAssets by tasks.registering(Sync::class) {
 }
 val generateBuildConfig by tasks.registering {
     inputs.file(upstream.resolve("build.gradle.kts"))
+    inputs.property("desktopVersion", project.version.toString())
     val output = layout.buildDirectory.dir("generated/version")
     outputs.dir(output)
     doLast {
         val source = upstream.resolve("build.gradle.kts").readText()
-        val name = Regex("versionName = \"([^\"]+)\"").find(source)!!.groupValues[1] + "+desktop.7"
+        val name = project.version.toString()
         val code = Regex("versionCode = (\\d+)").find(source)!!.groupValues[1]
         output.get().file("com/landosol/toolbox/BuildConfig.kt").asFile.apply {
             parentFile.mkdirs()
