@@ -1,8 +1,8 @@
 # 黎明界角色输出 / 辅助 / 配队战斗模型 V2 说明
 
-2026-10-26 按当前 `data.js`、生成器和正式 Kotlin 接线核对。V2 是离线审阅模型的名称，不是桌面发行版本。当前桌面为 `1.0.18+desktop.7`；网页审阅器与正式任务的默认值可能不同，使用入口见[桌面用户说明](../README-desktop.md)。
+V2 是本目录的离线战斗审阅模型。打开 `index.html` 可查看角色、评分和配队快照；桌面使用方法见[用户指南](../README-desktop.md)。重新生成所需的评分表、攻略摘要和数据库见第 17 节。
 
-打开本目录 `index.html` 即可查看已入库快照；重新生成另需未入库的评分表、攻略摘要和数据库，不保证新检出后直接运行生成命令就能成功。输入、输出与副作用见第 17 节。
+[数据来源](#2-数据层级) · [评分与配队](#10-主力队生成现在如何使用辅助) · [数据覆盖](#13-当前覆盖率) · [重新生成](#17-输入准备与重新生成)
 
 ## V2（2026-08-31）历史修正
 
@@ -38,7 +38,7 @@ V2 针对“模型高分、真实玩家评价明显偏低”的审计结果加�
 
 ### 2.1 当前入库快照与数据库来源
 
-当前 `data.js.sources` 记录角色与战斗数据库为 **autopcr-db-builder / 202609021434.db**；这是生成该快照时的来源版本，不代表今天网络上的最新国服库。本次未下载或重新生成数据。
+当前 `data.js.sources` 记录的角色与战斗数据库为 **autopcr-db-builder / 202609021434.db**，版本对应已入库快照。
 
 生成器支持通过 `--database <可读SQLite路径>` 与 `--database-version <版本>` 显式指定数据库。默认缓存位于 `role-team-review/cache/master_cn.db`；`--update-db` 走历史公开源下载分支。早期曾对比以下来源：
 
@@ -632,7 +632,7 @@ score = min(100, raw / P95(raw of all modeled roles) × 100)
 
 实时三选一对候选本身同样使用玩家评分 / 系统适配的 70/30 混合。系统适配不再默认把候选强塞进一队，而是分别尝试候选作为一队、二队、三队成员的部署方案；一/二/三队系统权重为 `1.00 / 0.35 / 0.20`，取整体系统价值最高的落点。系统侧另加入轻量物理/法术体系一致性分，避免明显的物理核心被无必要地混入法系输出，或反之；坦克、治疗和真正有价值的混合体系不被硬性禁止。
 
-网页主力编成区域展示最多三支互不重复的五人队，按 **一队优先** 估值：先确定第一队，再用剩余角色生成后续队伍，不为理论三队总分反向削弱第一队。这不等同于正式任务的派队默认值：Kotlin 的 Boss 默认多队，并已有编组前「有效效果」扫描。历史的一队首战建议与机制边界见 [README-ex-mechanics.md](README-ex-mechanics.md)。
+网页主力编成展示最多三支互不重复的五人队，按 **一队优先** 估值：先确定第一队，再用剩余角色生成后续队伍。Kotlin 正式任务的 Boss 默认多队，编组前扫描「有效效果」。机制参考见 [README-ex-mechanics.md](README-ex-mechanics.md)。
 
 对有战斗模型的角色：
 
@@ -910,7 +910,7 @@ role-team-review/inspect-role-db.py
 - `攻略/tierlist_91x91_output/summary.json`：日服参考档位摘要。
 - 可读国服 SQLite 数据库；默认 `role-team-review/cache/master_cn.db` 和旧 `pick/.../202604021043.db` 当前也不存在。
 
-补齐输入并确认来源后，才可从仓库根目录运行。Python 生成器使用标准库；`--update-db` 会访问网络。脚本会同时覆盖 `role-team-review/data.js` 与正式资源 `android/app/src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json`，不是只刷新网页。缺少旧事件库时还会生成空事件目录，先核对完整输入并审阅输出差异。
+准备输入后，从仓库根目录运行。生成器使用 Python 标准库，`--update-db` 会访问网络。输出为 `role-team-review/data.js` 和正式资源 `android/app/src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json`；缺少旧事件库时，事件目录输出为空。重新生成后检查这两个文件的差异。
 
 使用已经准备好的默认数据库：
 
@@ -944,7 +944,7 @@ python role-team-review/combat_model.py
 python role-team-review/check-generated-data.py
 ```
 
-打开审计页：在资源管理器打开仓库内的 `role-team-review/index.html`，无需原作者的绝对路径。旧 `generate-data.mjs` 属于早期档位生成器，不包含当前 Python 战斗模型流程，不用它替代 V2 重新生成。
+在资源管理器中打开 `role-team-review/index.html` 查看结果。`generate-data.py` 用于当前 V2 模型，`generate-data.mjs` 保留早期档位生成流程。
 
 点击角色“校准”后，可以直接查看：
 
@@ -967,4 +967,4 @@ python role-team-review/check-generated-data.py
 3. 将 TP 模型接入敌人攻击 / 受击 TP，替代 18 秒 UB 参考周期。
 4. 对条件技能、堆层、变身、召唤逐类扩展 action 解释器。
 5. 根据五名候选角色真实站位解析范围 Buff 的实际受益角色。
-6. 继续审阅已接入正式资源的 `labyrinth-role-decision.json` 与 Kotlin 决策差异；该资源及角色规划器已经存在，不能再把「生成并接入」描述为尚未开始。模型改动和桌面真实游戏验收仍需各自证据。
+6. 继续核对正式资源 `labyrinth-role-decision.json` 与 Kotlin 决策的差异。

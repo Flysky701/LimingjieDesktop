@@ -1,21 +1,14 @@
 # 原桌面移植执行包索引
 
-原计划修订版 v2：2026-10-25；本索引核对日期：2026-10-26。
+原计划修订版 v2，2026-10-25。
 
-这里保存桌面移植初期的计划和执行材料。当前仓库已包含 Kotlin / Compose Desktop 实现，源码版本为 **1.0.18+desktop.7**，不再是「尚无可运行程序」的空执行包。当前入口见[项目首页](../../../README.md)、[桌面用户说明](../../../README-desktop.md)、[构建说明](../../../desktop/README.md)与[D7 交付报告](../reports/SHARED-RUN-TABS-D7.md)。
+这里保存桌面移植初期的计划与执行材料。当前使用入口见[项目首页](../../../README.md)、[使用指南](../../../README-desktop.md)、[构建说明](../../../desktop/README.md)与[D7 记录](../reports/SHARED-RUN-TABS-D7.md)。
 
 原始移植基线为上游 1.0.18（`b809b196988b019571caf5679ccf8d7ebb7f072d`）。主技术路线仍为共享 Kotlin 业务代码与桌面适配；原计划中的单设备结构已由 D7 共享数据、每设备独立运行页补充。
 
-## 阅读方式
-
-- 以仓库根目录 [AGENTS.md](../../../AGENTS.md) 和用户本轮指示确定执行范围。
-- 本目录的 [EXECUTION-PACK-AGENTS.md](EXECUTION-PACK-AGENTS.md) 是原执行包规则副本，不覆盖当前规则；旧文中的章节号、派发安排和停机条件需结合当前约定阅读。
-- [KICKOFF.md](../KICKOFF.md)、[WORKSTREAMS.md](../WORKSTREAMS.md) 是历史启动与协作方案。阅读或修改文档不自动启动后续开发、子代理、模拟器或游戏操作。
-- 原环境变量或示例命令不构成本轮真实游戏操作授权。真实账号、验证码与双模拟器游戏循环仍需按实际验收范围记录。
+执行约定见根目录 [AGENTS.md](../../../AGENTS.md)。[原规则副本](EXECUTION-PACK-AGENTS.md)、[启动方案](../KICKOFF.md)与[协作方案](../WORKSTREAMS.md)保留作历史参考。
 
 ## 设计与实现资料
-
-以下链接均指向本仓库现有文件，不需要再复制执行包或覆盖根规则。
 
 | 入口 | 内容与用途 |
 | --- | --- |
@@ -28,7 +21,7 @@
 | [SPEC-50](../specs/SPEC-50-ui.md) | 桌面交互与页面设计 |
 | [SPEC-60](../specs/SPEC-60-packaging-ci.md) | 便携包、自检与 CI |
 | [接口契约](../../../desktop/CONTRACTS.md)、[UI 设计](../UI_DESIGN.md)、[页面原型](../design/main-pages.html) | 已保存的接口与设计参考，原型使用示例数据 |
-| [边界登记](../EDGE_CASES.md)、[原验收方案](../ACCEPTANCE.md) | 历史验收口径与设备场景，不要求每次局部修改全部重跑 |
+| [边界登记](../EDGE_CASES.md)、[原验收方案](../ACCEPTANCE.md) | 历史验收口径与设备场景 |
 
 ## 维护与验证资料
 
@@ -42,4 +35,4 @@
 | [D7 报告](../reports/SHARED-RUN-TABS-D7.md) | 当前共享数据与运行标签、最终定向检查及候选包记录 |
 | [用户实机清单](../USER_CHECKLIST.md) | 历史设备与游戏检查步骤；D6 绑定流程以当前桌面用户说明为准 |
 
-当前仍有 OCR 14/15（93.33%）、覆盖不足、标题页误判和真实游戏闭环未验收等限制。执行包中的目标、计划或示例命令不表示这些项目已经通过。
+识别样本与历次结果见 [OCR 评估](../../../desktop/ocr/evaluation/README.md)。

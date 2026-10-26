@@ -1,6 +1,6 @@
 # OCR 真实样本评估
 
-2026-10-26 按当前 `manifest.json` 与入库报告核对。当前桌面使用固定 PP-OCRv5；最近完整清单结果是 **14/15（93.33%）**，详见 [final-v5-expanded.json](final-v5-expanded.json) 与[逐项输出](final-v5-expanded.tsv)。总准确率未达到 95%，遗物详情为 1/2、低于类别 85% 门槛，覆盖也未完成；结论仍为 `FAILED_ACCURACY`，不能用模型加载、自检或单元测试成功替代。
+桌面 OCR 使用固定 PP-OCRv5。本目录保存真实 ROI 的评估清单和历史结果：最近入库结果为 **14/15（93.33%）**，状态 `FAILED_ACCURACY`，详见 [JSON](final-v5-expanded.json) 与[逐项输出](final-v5-expanded.tsv)。总准确率目标为 95%，有样本类别的目标为 85%。
 
 ## 执行与输出
 
@@ -10,11 +10,11 @@
 desktop\gradlew.bat -p desktop :ocr:evaluate
 ```
 
-Linux/macOS 对应命令为 `bash desktop/gradlew -p desktop :ocr:evaluate`。新结果写入 `desktop/ocr/build/reports/ocr-eval.json` 与 `ocr-eval-diff.tsv`；本目录的 JSON/TSV 是历次入库快照，不会随执行自动覆盖。
+Linux/macOS 对应命令为 `bash desktop/gradlew -p desktop :ocr:evaluate`。新结果写入 `desktop/ocr/build/reports/ocr-eval.json` 与 `ocr-eval-diff.tsv`，本目录保留已归档快照。
 
-评估为独立 source set，仅该 source set 依赖 `shared`，生产 OCR 模块不反向依赖共享业务。识别文本直接送入上游现有匹配器，未修改匹配器或阈值；对 internal 帮助函数反射调用现有实现。
+评估使用独立 source set 并依赖 `shared`。文本送入上游匹配器，internal 帮助函数通过反射调用；生产 OCR 模块保持独立。
 
-`check` 依赖 `evaluate`：总准确率低于 95% 或任何有样本类别低于 85% 时失败。样本不足单独报告 `coverageComplete=false`；即使准确率达到门槛，覆盖不足也不能宣称 SPEC-20 完整评估完成。字符错误率含空白/标点，仅用于诊断；p50/p95 包含复制 ROI 像素至回调返回。
+`check` 依赖 `evaluate`，按上述准确率门槛判定。完整覆盖目标为 80 条、每类至少 8 条，报告通过 `coverageComplete` 表示进度。字符错误率含空白和标点；p50/p95 从复制 ROI 像素计时到回调返回。
 
 ## 当前覆盖与失败项
 
@@ -30,11 +30,11 @@ Linux/macOS 对应命令为 `bash desktop/gradlew -p desktop :ocr:evaluate`。�
 
 最近报告 p50 **23.27 ms**、p95 **151.04 ms**。残留失败是 `series-visible` 系列列表计数不完整；低分辨率 `map-link-0` 数字漏读已由有界前处理回退修复。完整来源与排除原因见 [SAMPLE_AUDIT.md](SAMPLE_AUDIT.md)。
 
-`manifest.json` 仅引用仓库内真实上游截图，ROI 来自 resolver 常量或布局映射。真值在运行 OCR 前依据截图、上游测试和已有日志确认，不以模型输出作真值。上游测试截图的数量不等于可用 OCR 场景数；助手日志、缩放诊断网页、战斗失败页和角色加入页不能冒充缺失的角色奖励三选一页。下一阶段需采集不同的真实游戏帧及 ROI/实体真值；复制、缩放变体或生成文字不填充覆盖。
+`manifest.json` 引用仓库内真实上游截图，ROI 来自 resolver 常量或布局映射，期望值依据截图、测试和日志登记。新增样本按不同真实游戏帧记录，并附 ROI 与实体真值；素材筛选规则见 [SAMPLE_AUDIT.md](SAMPLE_AUDIT.md)。
 
 ## 历次结果
 
-以下均为 2026-10-25 的保留记录，前五组只有原 14 条样本，不能混作当前 15 条清单结果。
+以下结果均归档于 2026-10-25，前五组使用原 14 条清单，最后一组扩展为 15 条。
 
 | 报告 | 模型与处理 | 正确数 | 结论 |
 | --- | --- | ---: | --- |
@@ -45,10 +45,8 @@ Linux/macOS 对应命令为 `bash desktop/gradlew -p desktop :ocr:evaluate`。�
 | [final-v5-border.json](final-v5-border.json) | 紧凑 ROI 无结果时追加一次黑边 det+rec | 13/14 | 小数字修复，系列列表仍失败 |
 | [final-v5-expanded.json](final-v5-expanded.json) | 同一 v5 管线，新增不同真实地图计数 ROI | 14/15 | 当前清单；质量与覆盖均未达标 |
 
-没有改动真值、matcher、匹配阈值或按特定文字补齐结果。
-
 ## 前处理诊断与随包自检
 
-诊断说明见 [preprocessing-diagnosis.md](preprocessing-diagnosis.md)，原始数据见 [preprocessing-diagnosis.tsv](preprocessing-diagnosis.tsv)。显式执行 `desktop\gradlew.bat -p desktop :ocr:diagnosePreprocessing` 可复现变换、检测框及原始解码得分，图像输出位于 `desktop/ocr/build/reports/preprocessing-diagnosis/`。此任务不接入 `check` 或常规 `test`，诊断变体不增加样本数。
+诊断说明见 [preprocessing-diagnosis.md](preprocessing-diagnosis.md)，原始数据见 [preprocessing-diagnosis.tsv](preprocessing-diagnosis.tsv)。执行 `desktop\gradlew.bat -p desktop :ocr:diagnosePreprocessing` 可复现变换、检测框和原始解码得分，图像输出至 `desktop/ocr/build/reports/preprocessing-diagnosis/`。这是独立诊断任务，评估样本仍以 manifest 为准。
 
-随包自检图片位于 [self-test.png](../src/main/resources/ocr/self-test.png)，是上游 `shop/imprints-20260914.jpg` 的 `(125,230,390,55)` 原像素裁剪。期望文本 `攻击型职能的随机印记` 来自对应 JSON 的第一条 `titleText`，并已在原评估阶段目视核对；来源见 [self-test-source.json](self-test-source.json)。自检只确认随包模型、原生库和资源可用，不证明整体识别质量或真实游戏流程可靠。
+随包 [self-test.png](../src/main/resources/ocr/self-test.png) 用于检查模型、原生库和资源加载。它裁自 `shop/imprints-20260914.jpg` 的 `(125,230,390,55)` 区域，期望文本为 `攻击型职能的随机印记`，来源见 [self-test-source.json](self-test-source.json)。

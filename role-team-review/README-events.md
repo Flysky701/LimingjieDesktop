@@ -1,10 +1,8 @@
 # 黎明界事件决策模拟说明
 
-2026-10-26 按当前 `data.js`、生成器及 Kotlin 事件流程核对。本文件说明离线审阅页的估值模型；桌面当前版本为 `1.0.18+desktop.7`，正式任务复用 Kotlin 事件识别和决策，不在运行时执行这个网页。当前程序入口见[桌面用户说明](../README-desktop.md)，模型与输入准备见[战斗模型说明](README-combat-model.md)。
+本页说明离线审阅器的事件估值模型。正式任务使用 Kotlin 事件识别与决策，操作方法见[桌面指南](../README-desktop.md)，数据准备见[战斗模型说明](README-combat-model.md)。
 
 ## 1. 数据来源
-
-事件不再以日文攻略表作为唯一事实源。
 
 审阅页直接读取本目录已入库的 `data.js.eventCatalog`。Python 生成器原先从以下本地数据库读取事件：
 
@@ -19,7 +17,7 @@ labyrinth_event
 labyrinth_event_choice
 ```
 
-生成 `data.js.eventCatalog`。该 `pick/` 数据库未随当前仓库提供；缺少时 `load_labyrinth_event_catalog()` 返回空列表。`--database` 参数用于角色/战斗数据，不会改变此事件目录的固定输入路径；不能只换角色数据库就宣称重新生成了完整事件目录。
+生成 `data.js.eventCatalog`。该旧库需自行准备，缺少时事件目录为空。`--database` 用于角色和战斗数据；事件目录仍从上述固定路径读取。
 
 当前已入库的 `data.js` 快照包含：
 
@@ -261,15 +259,13 @@ condition_type = 1
 condition_value = 2000 / 4000
 ```
 
-目前页面会原样显示这些条件，但**没有擅自解释成“当前α币必须达到2000/4000”**。
-
-在确认客户端对 `condition_type=1` 的真实含义之前，自动执行层不能根据这个字段隐藏或点击选项。
+页面原样展示条件字段。`condition_type=1` 的含义待核实，执行层同时依据按钮状态和页面反馈判断可用性。
 
 ---
 
 ## 10. 当前 Kotlin 自动化接入
 
-事件语义识别和决策已经接入，原先「统一暂停，等待未来接回」的说明已过时。当前路径是：
+当前调用路径：
 
 ```text
 AndroidLabyrinthEventChoiceResolver
@@ -286,7 +282,5 @@ AndroidLabyrinthEventChoiceResolver
 - 职阶角色池选项所需的已有角色资料完整。
 - 已点击但页面不变化的选项会被排除；重试有上限，所有选项都不可执行时等待或停止。
 
-`condition_type` 和 `condition_value` 仍不能未经确认就推导出全部可用条件；当前执行还会结合按钮可用状态和实际点击后页面反馈。未知页也不应恢复成盲点循环。
-
-上述接线来自当前源码检查，不能替代桌面真实事件场景验收。D7 的完整登录、验证码和游戏循环仍待验收，OCR 质量与样本覆盖限制见[评估说明](../desktop/ocr/evaluation/README.md)。
+识别样本与评估结果见 [OCR 说明](../desktop/ocr/evaluation/README.md)。
 
