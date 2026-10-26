@@ -140,7 +140,7 @@ fun main(args: Array<String>) {
                 }
             }
         } }
-        if (trayAvailable) Tray(icon, state = trayState, tooltip = "黎明界助手 · ${instances.size} 台设备", onAction = { visible = true; windowState.isMinimized = false }) {
+        if (trayAvailable) DesktopTray(icon, state = trayState, tooltip = "黎明界助手 · ${instances.size} 台设备", onAction = { visible = true; windowState.isMinimized = false }) {
             Item("显示主窗口", onClick = { visible = true; windowState.isMinimized = false })
             Separator()
             Item(if (activeConsole.overlay?.paused == true) "继续当前标签" else "暂停当前标签", enabled = activeConsole.overlay != null && !exiting, onClick = { selected?.link?.let { action { it.request(ControlOps.PAUSE) } } })

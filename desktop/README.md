@@ -1,6 +1,6 @@
 # 桌面开发与构建
 
-**当前版本：1.0.18+desktop.7**。独立 Gradle 多模块工程，使用 x64 JDK 21，桌面构建无需 Android SDK。
+**当前版本：1.0.18+desktop.8**。独立 Gradle 多模块工程，使用 x64 JDK 21，桌面构建无需 Android SDK。
 
 工具链：Gradle 8.12.1、Kotlin 2.1.20、Compose Desktop 1.8.2。配置位于 `gradle/wrapper/gradle-wrapper.properties` 和 `gradle/libs.versions.toml`。
 
@@ -80,4 +80,4 @@ desktop\gradlew.bat -p desktop :app:test --tests '*SharedPackagedRuntimeTest' '-
 | 详细报告 | 手动选择 `upload_reports`，保留 7 天 |
 | [Upstream Android Compatibility](../.github/workflows/android-ci.yml) | Android 代码/构建改动或手动触发；使用 JDK 17 执行 lint、单测和 APK 编译，仅作兼容性检查 |
 
-当前桌面标签为 `desktop-v1.0.18+desktop.7`。普通说明文档变化跳过构建；同一分支或 PR 的旧运行自动取消。Gradle 使用构建缓存，`main` 写回，其他分支只读。默认将结果写入运行摘要，按需上传文件；标签构建与 GitHub Release 分别管理。
+当前桌面标签为 `desktop-v1.0.18+desktop.8`。普通说明文档变化跳过构建；同一分支或 PR 的旧运行自动取消。Gradle 使用构建缓存，`main` 写回，其他分支只读。默认将结果写入运行摘要，按需上传文件；标签构建与 GitHub Release 分别管理。

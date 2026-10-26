@@ -1,6 +1,6 @@
 # Windows 桌面版使用指南
 
-适用版本：**1.0.18+desktop.7**。
+适用版本：**1.0.18+desktop.8**。
 
 助手在 Windows 中提供运行、账号、策略、设备、记录和设置六个页面。模拟器只需运行游戏。
 
@@ -11,7 +11,7 @@
 1. 下载 Windows ZIP 和同名 `.sha256` 文件，核对校验值：
 
    ```powershell
-   Get-FileHash .\LimingjieAssistant-desktop-1.0.18+desktop.7-win-x64.zip -Algorithm SHA256
+   Get-FileHash .\LimingjieAssistant-desktop-1.0.18+desktop.8-win-x64.zip -Algorithm SHA256
    ```
 
 2. 将整个 `LimingjieAssistant` 文件夹解压到可写目录，例如 `D:\Tools\LimingjieAssistant`。

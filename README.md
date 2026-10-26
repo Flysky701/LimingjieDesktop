@@ -2,7 +2,7 @@
 
 在 Windows 中管理《公主连结 Re:Dive》黎明界任务、账号与策略。模拟器负责运行游戏，助手负责配置、执行和查看结果。
 
-**当前版本：1.0.18+desktop.7 · Windows 10/11 x64 · Kotlin / Compose Desktop**
+**当前版本：1.0.18+desktop.8 · Windows 10/11 x64 · Kotlin / Compose Desktop**
 
 [下载 Release](https://github.com/Flysky701/LimingjieDesktop/releases/latest) · [使用指南](README-desktop.md) · [开发与构建](desktop/README.md)
 
