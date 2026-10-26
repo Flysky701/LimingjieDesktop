@@ -42,6 +42,8 @@ import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 import javax.swing.plaf.basic.BasicMenuItemUI
 import javax.swing.plaf.basic.BasicGraphicsUtils
+import javax.swing.plaf.basic.BasicPopupMenuUI
+import javax.swing.plaf.basic.BasicSeparatorUI
 import kotlin.math.roundToInt
 
 internal const val TRAY_MENU_GLYPHS = "黎明界助手显示主窗口暂停继续当前标签停止全部退出"
@@ -50,6 +52,18 @@ internal data class TrayMenuAppearance(
     val background: AwtColor, val foreground: AwtColor, val hover: AwtColor,
     val disabled: AwtColor, val outline: AwtColor, val font: Font,
 )
+
+// WindowsPopupMenuUI paints the OS's light skin even when popup.background is dark.
+// Keep Basic's menu input handling, but let the component paint its own background.
+private class TrayPopupMenuUI : BasicPopupMenuUI()
+
+private class TraySeparatorUI : BasicSeparatorUI() {
+    override fun getPreferredSize(component: JComponent) = Dimension(0, 9)
+    override fun paint(graphics: Graphics, component: JComponent) {
+        graphics.color = component.foreground
+        graphics.drawLine(0, component.height / 2, component.width - 1, component.height / 2)
+    }
+}
 
 private class TrayMenuItemUI(val appearance: TrayMenuAppearance) : BasicMenuItemUI() {
     override fun installDefaults() {
@@ -84,6 +98,7 @@ internal fun trayMenuAppearance(): TrayMenuAppearance {
 }
 
 internal fun applyTrayMenuAppearance(popup: JPopupMenu, appearance: TrayMenuAppearance) {
+    if (popup.ui !is TrayPopupMenuUI) popup.setUI(TrayPopupMenuUI())
     popup.isOpaque = true
     popup.background = appearance.background
     popup.font = appearance.font
@@ -99,9 +114,11 @@ internal fun applyTrayMenuAppearance(popup: JPopupMenu, appearance: TrayMenuAppe
             component.border = BorderFactory.createEmptyBorder(7, 12, 7, 12)
         }
         is JSeparator -> {
+            if (component.ui !is TraySeparatorUI) component.setUI(TraySeparatorUI())
+            component.isOpaque = true
             component.foreground = appearance.outline
             component.background = appearance.background
-            component.border = BorderFactory.createEmptyBorder(4, 0, 4, 0)
+            component.border = null
         }
     } }
     popup.revalidate()

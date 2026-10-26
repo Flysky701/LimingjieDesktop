@@ -14,10 +14,16 @@ import java.awt.Dimension
 import java.awt.Point
 import java.awt.Rectangle
 import java.awt.image.BufferedImage
+import java.io.File
+import javax.imageio.ImageIO
 import javax.swing.JMenu
 import javax.swing.JMenuItem
+import javax.swing.JSeparator
 import javax.swing.SwingUtilities
+import javax.swing.UIManager
+import org.junit.After
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 
@@ -48,6 +54,15 @@ class DesktopTrayPositionTest {
 @OptIn(ExperimentalComposeUiApi::class, InternalComposeUiApi::class)
 class DesktopTrayThemeTest {
     @get:Rule val compose = createComposeRule()
+    private val originalLookAndFeel = UIManager.getLookAndFeel()
+
+    @Before fun useWindowsLookAndFeelAsInTheDesktopApplication() {
+        SwingUtilities.invokeAndWait { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()) }
+    }
+
+    @After fun restoreLookAndFeel() {
+        SwingUtilities.invokeAndWait { UIManager.setLookAndFeel(originalLookAndFeel) }
+    }
 
     @Test fun existingSwingMenuRepaintsForExplicitAndSystemThemesAndKeepsActionsReactive() {
         var mode by mutableStateOf(DesktopThemeMode.DARK)
@@ -98,6 +113,27 @@ class DesktopTrayThemeTest {
                     assertEquals(Color(hover).rgb, image.getRGB(2, 2))
                     item.model.isArmed = false
                 }
+                // Render the complete popup, not only its rows: Windows' native popup
+                // painter can ignore background and leave the padding/separators white.
+                val popup = menu.popupMenu
+                popup.setSize(popup.preferredSize)
+                popup.doLayout()
+                val scale = 1.25
+                val whole = BufferedImage((popup.width * scale).toInt(), (popup.height * scale).toInt(), BufferedImage.TYPE_INT_RGB)
+                val graphics = whole.createGraphics()
+                graphics.scale(scale, scale)
+                popup.paint(graphics)
+                graphics.dispose()
+                val preview = File("build/reports/tray-menu-${background.toString(16)}.png")
+                preview.parentFile.mkdirs()
+                ImageIO.write(whole, "png", preview)
+                fun pixel(x: Int, y: Int) = whole.getRGB((x * scale).toInt(), (y * scale).toInt())
+                assertEquals("Popup padding must use the theme", Color(background).rgb, pixel(2, 2))
+                val separator = popup.components.filterIsInstance<JSeparator>().single()
+                assertEquals("Separator space must use the theme", Color(background).rgb,
+                    pixel(separator.x + separator.width / 2, separator.y + 1))
+                val outline = Color(if (background == 0x1f1f1f) 0x2b2b2b else 0xe5e5e5).rgb
+                assertEquals("Popup outline", outline, pixel(0, 0))
             }
         }
         verify(0x1f1f1f, 0x313131, 0xcccccc, 0x9d9d9d)
