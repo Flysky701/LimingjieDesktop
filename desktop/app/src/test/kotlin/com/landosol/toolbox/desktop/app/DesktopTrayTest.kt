@@ -20,6 +20,7 @@ import javax.swing.JMenu
 import javax.swing.JMenuItem
 import javax.swing.JSeparator
 import javax.swing.SwingUtilities
+import javax.swing.SwingConstants
 import javax.swing.UIManager
 import org.junit.After
 import org.junit.Assert.*
@@ -38,14 +39,14 @@ class DesktopTrayPositionTest {
     @Test fun nearRightEdgePopupFollowsClickRatherThanStickingToScreenEdge() {
         val size = Dimension(180, 220)
         val area = Rectangle(0, 0, 2048, 1112)
-        assertEquals(Point(1812, 680), trayPopupLocation(Point(2000, 900), size, area))
-        assertEquals(Point(1772, 680), trayPopupLocation(Point(1960, 900), size, area))
-        assertEquals(Point(92, 100), trayPopupLocation(Point(100, 100), size, area))
+        assertEquals(Point(1820, 680), trayPopupLocation(Point(2000, 900), size, area))
+        assertEquals(Point(1780, 680), trayPopupLocation(Point(1960, 900), size, area))
+        assertEquals(Point(100, 100), trayPopupLocation(Point(100, 100), size, area))
     }
 
     @Test fun taskbarAndNegativeMonitorOriginsAreRespected() {
         val area = Rectangle(-1920, 30, 1920, 1010)
-        assertEquals(Point(-208, 820), trayPopupLocation(Point(-20, 1060), Dimension(180, 220), area))
+        assertEquals(Point(-200, 820), trayPopupLocation(Point(-20, 1060), Dimension(180, 220), area))
         assertEquals(Point(-1920, 30), trayPopupLocation(Point(-1930, 10), Dimension(180, 220), area))
         assertEquals(Point(-1920, 30), trayPopupLocation(Point(-20, 1060), Dimension(2200, 1400), area))
     }
@@ -92,25 +93,26 @@ class DesktopTrayThemeTest {
                 assertEquals(Color(foreground), item.foreground)
                 assertEquals(if (paused) "继续当前标签" else "暂停当前标签", item.text)
                 assertEquals(enabled, item.isEnabled)
+                assertEquals(SwingConstants.LEFT, item.horizontalAlignment)
                 assertEquals(if (largeText) 14.56f else 13f, item.font.size2D, .01f)
                 assertEquals(-1, item.font.canDisplayUpTo(TRAY_MENU_GLYPHS))
                 item.setSize(item.preferredSize)
-                fun paint(): BufferedImage = BufferedImage(item.width, item.height, BufferedImage.TYPE_INT_RGB).also { image ->
+                fun paint(): BufferedImage = BufferedImage(item.width, item.height, BufferedImage.TYPE_INT_ARGB).also { image ->
                     val graphics = image.createGraphics()
-                    graphics.color = Color.MAGENTA
-                    graphics.fillRect(0, 0, image.width, image.height)
                     item.paint(graphics)
                     graphics.dispose()
                 }
                 var image = paint()
-                assertEquals(Color(background).rgb, image.getRGB(2, 2))
+                assertEquals("Normal rows reveal the glass surface", 0, Color(image.getRGB(2, 2), true).alpha)
                 // Check rendered text as well as component properties; disabled text must not disappear.
                 val textColor = Color(if (enabled) foreground else disabled).rgb
                 assertTrue((0 until image.width).any { x -> (0 until image.height).any { y -> image.getRGB(x, y) == textColor } })
+                val textStart = (0 until image.width).first { x -> (0 until image.height).any { y -> image.getRGB(x, y) == textColor } }
+                assertTrue("Text should start at the left inset, not be centered: $textStart", textStart in 12..18)
                 if (enabled) {
                     item.model.isArmed = true
                     image = paint()
-                    assertEquals(Color(hover).rgb, image.getRGB(2, 2))
+                    assertEquals(Color(hover).rgb, image.getRGB(item.width / 2, 2))
                     item.model.isArmed = false
                 }
                 // Render the complete popup, not only its rows: Windows' native popup
@@ -119,7 +121,7 @@ class DesktopTrayThemeTest {
                 popup.setSize(popup.preferredSize)
                 popup.doLayout()
                 val scale = 1.25
-                val whole = BufferedImage((popup.width * scale).toInt(), (popup.height * scale).toInt(), BufferedImage.TYPE_INT_RGB)
+                val whole = BufferedImage((popup.width * scale).toInt(), (popup.height * scale).toInt(), BufferedImage.TYPE_INT_ARGB)
                 val graphics = whole.createGraphics()
                 graphics.scale(scale, scale)
                 popup.paint(graphics)
@@ -128,12 +130,16 @@ class DesktopTrayThemeTest {
                 preview.parentFile.mkdirs()
                 ImageIO.write(whole, "png", preview)
                 fun pixel(x: Int, y: Int) = whole.getRGB((x * scale).toInt(), (y * scale).toInt())
-                assertEquals("Popup padding must use the theme", Color(background).rgb, pixel(2, 2))
+                assertEquals("Rounded popup corners must be transparent", 0, Color(pixel(0, 0), true).alpha)
+                val surface = Color(pixel(7, popup.height / 2), true)
+                assertTrue("Glass must remain translucent without fading the labels", surface.alpha in 225..250)
+                val expected = Color(background)
+                assertTrue(kotlin.math.abs(surface.red - expected.red) <= 6)
+                assertTrue(kotlin.math.abs(surface.green - expected.green) <= 6)
+                assertTrue(kotlin.math.abs(surface.blue - expected.blue) <= 6)
                 val separator = popup.components.filterIsInstance<JSeparator>().single()
-                assertEquals("Separator space must use the theme", Color(background).rgb,
+                assertEquals("Separator space must reveal the same glass surface", surface.rgb,
                     pixel(separator.x + separator.width / 2, separator.y + 1))
-                val outline = Color(if (background == 0x1f1f1f) 0x2b2b2b else 0xe5e5e5).rgb
-                assertEquals("Popup outline", outline, pixel(0, 0))
             }
         }
         verify(0x1f1f1f, 0x313131, 0xcccccc, 0x9d9d9d)

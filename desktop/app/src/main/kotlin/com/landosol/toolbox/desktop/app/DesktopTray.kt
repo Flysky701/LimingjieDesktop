@@ -14,17 +14,21 @@ import androidx.compose.ui.window.TrayState
 import androidx.compose.ui.window.setContent
 import com.landosol.toolbox.desktop.shared.DesktopLog
 import java.awt.Dimension
+import java.awt.BorderLayout
 import java.awt.Font
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.GraphicsConfiguration
+import java.awt.GraphicsDevice.WindowTranslucency
 import java.awt.GraphicsEnvironment
 import java.awt.Color as AwtColor
 import java.awt.Point
 import java.awt.Rectangle
+import java.awt.RenderingHints
 import java.awt.SystemTray
 import java.awt.Toolkit
 import java.awt.TrayIcon
+import java.awt.Window
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.event.KeyEvent
@@ -37,7 +41,11 @@ import javax.swing.JMenuItem
 import javax.swing.JDialog
 import javax.swing.JPopupMenu
 import javax.swing.JSeparator
+import javax.swing.JWindow
 import javax.swing.KeyStroke
+import javax.swing.Popup
+import javax.swing.SwingConstants
+import javax.swing.SwingUtilities
 import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 import javax.swing.plaf.basic.BasicMenuItemUI
@@ -53,15 +61,72 @@ internal data class TrayMenuAppearance(
     val disabled: AwtColor, val outline: AwtColor, val font: Font,
 )
 
-// WindowsPopupMenuUI paints the OS's light skin even when popup.background is dark.
-// Keep Basic's menu input handling, but let the component paint its own background.
-private class TrayPopupMenuUI : BasicPopupMenuUI()
+private const val TRAY_GLASS_AVAILABLE = "limingjie.tray.glassAvailable"
+
+// A dedicated transparent host avoids changing Swing's cached popup windows for other menus.
+private class TrayGlassPopup(popup: JPopupMenu, owner: Window, x: Int, y: Int) : Popup() {
+    private val window = JWindow(owner, owner.graphicsConfiguration).apply {
+        type = Window.Type.POPUP
+        focusableWindowState = false
+        isAlwaysOnTop = true
+        background = AwtColor(0, 0, 0, 0)
+        rootPane.isOpaque = false
+        (contentPane as JComponent).isOpaque = false
+        contentPane.add(popup, BorderLayout.CENTER)
+        setLocation(x, y)
+    }
+
+    override fun show() {
+        // JPopupMenu becomes visible only after getPopup returns. Pack now, as Swing's Popup does.
+        window.pack()
+        window.isVisible = true
+    }
+    override fun hide() {
+        window.isVisible = false
+        window.contentPane.removeAll()
+        window.dispose()
+    }
+}
+
+private class TrayPopupMenuUI : BasicPopupMenuUI() {
+    override fun getPopup(popup: JPopupMenu, x: Int, y: Int): Popup {
+        val owner = SwingUtilities.getWindowAncestor(popup.invoker)
+        val glass = owner != null && owner.graphicsConfiguration.device
+            .isWindowTranslucencySupported(WindowTranslucency.PERPIXEL_TRANSLUCENT)
+        popup.putClientProperty(TRAY_GLASS_AVAILABLE, glass)
+        return if (glass) TrayGlassPopup(popup, checkNotNull(owner), x, y) else super.getPopup(popup, x, y)
+    }
+
+    override fun paint(graphics: Graphics, component: JComponent) {
+        val g = graphics.create() as Graphics2D
+        try {
+            if (component.getClientProperty(TRAY_GLASS_AVAILABLE) == false) {
+                g.color = component.background
+                g.fillRect(0, 0, component.width, component.height)
+                return
+            }
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            for (spread in 4 downTo 1) {
+                val inset = 4 - spread
+                g.color = AwtColor(0, 0, 0, 10)
+                g.fillRoundRect(inset, inset + 1, component.width - inset * 2,
+                    component.height - inset * 2 - 1, 18 + spread * 2, 18 + spread * 2)
+            }
+            val color = component.background
+            g.color = AwtColor(color.red, color.green, color.blue, 232)
+            g.fillRoundRect(4, 4, component.width - 8, component.height - 8, 18, 18)
+            val outline = component.foreground
+            g.color = AwtColor(outline.red, outline.green, outline.blue, 170)
+            g.drawRoundRect(4, 4, component.width - 9, component.height - 9, 18, 18)
+        } finally { g.dispose() }
+    }
+}
 
 private class TraySeparatorUI : BasicSeparatorUI() {
     override fun getPreferredSize(component: JComponent) = Dimension(0, 9)
     override fun paint(graphics: Graphics, component: JComponent) {
         graphics.color = component.foreground
-        graphics.drawLine(0, component.height / 2, component.width - 1, component.height / 2)
+        graphics.drawLine(12, component.height / 2, component.width - 13, component.height / 2)
     }
 }
 
@@ -71,6 +136,23 @@ private class TrayMenuItemUI(val appearance: TrayMenuAppearance) : BasicMenuItem
         selectionBackground = appearance.hover
         selectionForeground = appearance.foreground
         disabledForeground = appearance.disabled
+        checkIcon = null
+        arrowIcon = null
+    }
+
+    override fun getPreferredSize(component: JComponent): Dimension = super.getPreferredSize(component).apply {
+        width = width.coerceAtLeast(176)
+        height = height.coerceAtLeast(32)
+    }
+
+    override fun paintBackground(graphics: Graphics, item: JMenuItem, background: AwtColor) {
+        if (!item.isEnabled || !item.model.isArmed) return
+        val g = graphics.create() as Graphics2D
+        try {
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            g.color = appearance.hover
+            g.fillRoundRect(0, 0, item.width, item.height, 10, 10)
+        } finally { g.dispose() }
     }
 
     override fun paintText(graphics: Graphics, item: JMenuItem, rect: Rectangle, text: String) {
@@ -79,8 +161,9 @@ private class TrayMenuItemUI(val appearance: TrayMenuAppearance) : BasicMenuItem
         val g = graphics.create() as Graphics2D
         try {
             g.color = if (item.isEnabled) appearance.foreground else appearance.disabled
+            // These tray entries are plain actions; don't reserve Windows' unused check/icon column.
             BasicGraphicsUtils.drawStringUnderlineCharAt(item, g, text, item.displayedMnemonicIndex,
-                rect.x.toFloat(), (rect.y + g.fontMetrics.ascent).toFloat())
+                item.insets.left.toFloat(), (rect.y + g.fontMetrics.ascent).toFloat())
         } finally { g.dispose() }
     }
 }
@@ -99,15 +182,17 @@ internal fun trayMenuAppearance(): TrayMenuAppearance {
 
 internal fun applyTrayMenuAppearance(popup: JPopupMenu, appearance: TrayMenuAppearance) {
     if (popup.ui !is TrayPopupMenuUI) popup.setUI(TrayPopupMenuUI())
-    popup.isOpaque = true
+    popup.isOpaque = false
     popup.background = appearance.background
+    popup.foreground = appearance.outline
     popup.font = appearance.font
-    popup.border = BorderFactory.createCompoundBorder(
-        BorderFactory.createLineBorder(appearance.outline), BorderFactory.createEmptyBorder(4, 4, 4, 4))
+    popup.border = BorderFactory.createEmptyBorder(10, 10, 10, 10)
     popup.components.forEach { component -> when (component) {
         is JMenuItem -> {
             if ((component.ui as? TrayMenuItemUI)?.appearance != appearance) component.setUI(TrayMenuItemUI(appearance))
-            component.isOpaque = true
+            component.isOpaque = false
+            component.horizontalAlignment = SwingConstants.LEFT
+            component.horizontalTextPosition = SwingConstants.RIGHT
             component.font = appearance.font
             component.background = appearance.background
             component.foreground = appearance.foreground
@@ -115,7 +200,7 @@ internal fun applyTrayMenuAppearance(popup: JPopupMenu, appearance: TrayMenuAppe
         }
         is JSeparator -> {
             if (component.ui !is TraySeparatorUI) component.setUI(TraySeparatorUI())
-            component.isOpaque = true
+            component.isOpaque = false
             component.foreground = appearance.outline
             component.background = appearance.background
             component.border = null
@@ -161,8 +246,7 @@ private fun trayScreen(point: Point): GraphicsConfiguration {
 
 /** Flip at the clicked point before clamping, so near-edge clicks keep a menu corner anchored. */
 internal fun trayPopupLocation(anchor: Point, size: Dimension, area: Rectangle): Point {
-    // Requested visual adjustment: 8 AWT units = 10 screen pixels at 125% scaling.
-    val x = (if (anchor.x + size.width > area.x + area.width) anchor.x - size.width else anchor.x) - 8
+    val x = if (anchor.x + size.width > area.x + area.width) anchor.x - size.width else anchor.x
     val y = if (anchor.y + size.height > area.y + area.height) anchor.y - size.height else anchor.y
     return Point(x.coerceIn(area.x, (area.x + area.width - size.width).coerceAtLeast(area.x)),
         y.coerceIn(area.y, (area.y + area.height - size.height).coerceAtLeast(area.y)))
@@ -198,6 +282,11 @@ internal fun DesktopTray(
         isUndecorated = true
         isAlwaysOnTop = true
         focusableWindowState = true
+        if (graphicsConfiguration.device.isWindowTranslucencySupported(WindowTranslucency.PERPIXEL_TRANSLUCENT)) {
+            background = AwtColor(0, 0, 0, 0)
+            rootPane.isOpaque = false
+            (contentPane as JComponent).isOpaque = false
+        }
         setSize(1, 1)
     } }
     val tray = remember { TrayIcon(image).apply {
@@ -228,7 +317,8 @@ internal fun DesktopTray(
                 popup.show(popupOwner.contentPane, location.x - ownerOrigin.x, location.y - ownerOrigin.y)
                 DesktopLog.write('I', "DesktopTray", "event=$physical scale=${scale.scaleX},${scale.scaleY} " +
                     "anchor=$anchor requested=$location actual=${popup.locationOnScreen} size=${popup.size} " +
-                    "background=${Integer.toHexString(popup.background.rgb)} foreground=${Integer.toHexString(currentAppearance.foreground.rgb)}")
+                    "background=${Integer.toHexString(popup.background.rgb)} foreground=${Integer.toHexString(currentAppearance.foreground.rgb)} " +
+                    "glass=${popup.getClientProperty(TRAY_GLASS_AVAILABLE)}")
             }
         })
     } }
