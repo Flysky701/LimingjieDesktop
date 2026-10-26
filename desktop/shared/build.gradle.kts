@@ -82,7 +82,12 @@ dependencies {
     api(libs.okhttp); api(libs.json)
     testImplementation(libs.junit); testImplementation(libs.coroutines.test); testImplementation(libs.mockwebserver)
 }
-ksp { arg("room.schemaLocation", layout.buildDirectory.dir("schemas").get().asFile.path) }
+val roomSchemas = layout.buildDirectory.dir("schemas")
+ksp { arg("room.schemaLocation", roomSchemas.get().asFile.path) }
+// Room writes outside KSP's generated-source directories; cache this output with the processor.
+tasks.matching { it.name == "kspKotlin" }.configureEach {
+    outputs.dir(roomSchemas).withPropertyName("roomSchemas")
+}
 tasks.test {
     workingDir(upstream)
     maxHeapSize = "2g"
