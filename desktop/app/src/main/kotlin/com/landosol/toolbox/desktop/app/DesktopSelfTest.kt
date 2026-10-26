@@ -46,9 +46,9 @@ object DesktopSelfTest {
                 "Writable data directory: $directory"
             }
             checkItem("fonts") {
-                val font = nativeTrayMenuFont()
+                val font = trayMenuFont()
                 check(font.canDisplayUpTo(TRAY_MENU_GLYPHS) == -1) { "Tray menu font cannot display Chinese: ${font.family}" }
-                "Native tray menu CJK font: ${font.family} ${font.size2D}pt"
+                "Tray menu CJK font: ${font.family} ${font.size2D}pt"
             }
             checkItem("resources") {
                 val names = resource("desktop/assets-manifest.txt").toString(Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }.toList()
