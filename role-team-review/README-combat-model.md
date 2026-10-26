@@ -1,6 +1,10 @@
 # 黎明界角色输出 / 辅助 / 配队战斗模型 V2 说明
 
-## V2（2026-08-31）本轮修正
+2026-10-26 按当前 `data.js`、生成器和正式 Kotlin 接线核对。V2 是离线审阅模型的名称，不是桌面发行版本。当前桌面为 `1.0.18+desktop.7`；网页审阅器与正式任务的默认值可能不同，使用入口见[桌面用户说明](../README-desktop.md)。
+
+打开本目录 `index.html` 即可查看已入库快照；重新生成另需未入库的评分表、攻略摘要和数据库，不保证新检出后直接运行生成命令就能成功。输入、输出与副作用见第 17 节。
+
+## V2（2026-08-31）历史修正
 
 V2 针对“模型高分、真实玩家评价明显偏低”的审计结果加入三类关键修正：
 
@@ -32,14 +36,16 @@ V2 针对“模型高分、真实玩家评价明显偏低”的审计结果加�
 
 ## 2. 数据层级
 
-### 2.1 当前国服数据库
+### 2.1 当前入库快照与数据库来源
 
-当前可获取的两个公开源：
+当前 `data.js.sources` 记录角色与战斗数据库为 **autopcr-db-builder / 202609021434.db**；这是生成该快照时的来源版本，不代表今天网络上的最新国服库。本次未下载或重新生成数据。
+
+生成器支持通过 `--database <可读SQLite路径>` 与 `--database-version <版本>` 显式指定数据库。默认缓存位于 `role-team-review/cache/master_cn.db`；`--update-db` 走历史公开源下载分支。早期曾对比以下来源：
 
 - Expugn `master_cn.db`
 - `redive.estertion.win/db/redive_cn.db.br`
 
-实测解压后完全一致：
+早期 2026-07 对比记录如下，保留用于来源追溯，不作为当前快照的哈希：
 
 ```text
 CN version: 202607231828
@@ -47,7 +53,7 @@ MD5: 561a812e44892ea6ce365b05556a3ac7
 SQLite size: 28,973,056 bytes
 ```
 
-当前库已经使用哈希表名 / 哈希字段名。生成器通过语义结构解析逻辑表，不再写死当前哈希名。
+对哈希表名 / 哈希字段名的数据库，生成器通过语义结构解析逻辑表；显式传入可读数据库时读取可读表。
 
 当前库优先提供：
 
@@ -56,13 +62,13 @@ SQLite size: 28,973,056 bytes
 
 ### 2.2 可读国服战斗数据库
 
-路径：
+旧可读库的默认回退路径：
 
 ```text
 pick/autopcr-android/app/src/main/python/cache/db/202604021043.db
 ```
 
-用于 V2 战斗模型读取：
+该文件未随本仓库提供。当前生成器优先使用所选数据库读取战斗表，旧库只在本地存在时参与回退；事件目录仍单独使用旧库固定路径。V2 涉及的主要表为：
 
 - `labyrinth_npc_unit_data`
 - `labyrinth_npc_unit_enhance_data`
@@ -80,7 +86,7 @@ pick/autopcr-android/app/src/main/python/cache/db/202604021043.db
 - `skill_data`
 - `skill_action`
 
-当前公开 2026-07 库的 `unit_data` 行数反而少于本地可读快照，因此目前采用：
+原 2026-07 公共库存在角色缺失，因此生成器保留以下规则：
 
 > **当前库事实优先；当前库没有的基础字段允许旧可读库回退，并在页面标记“旧库回退”。**
 
@@ -626,7 +632,7 @@ score = min(100, raw / P95(raw of all modeled roles) × 100)
 
 实时三选一对候选本身同样使用玩家评分 / 系统适配的 70/30 混合。系统适配不再默认把候选强塞进一队，而是分别尝试候选作为一队、二队、三队成员的部署方案；一/二/三队系统权重为 `1.00 / 0.35 / 0.20`，取整体系统价值最高的落点。系统侧另加入轻量物理/法术体系一致性分，避免明显的物理核心被无必要地混入法系输出，或反之；坦克、治疗和真正有价值的混合体系不被硬性禁止。
 
-主力编成区域仍会展示最多三支互不重复的五人队，但执行策略改为 **一队优先**：第一队必须锁定当前全池评分最高的五人，第二、第三队只能从剩余角色中生成，不能为了理论三队总分反向削弱第一队。实际战斗默认只派第一队；首战失败后才允许进入机制特化与多队兜底。EX/Boss失败后的机制应对见 `README-ex-mechanics.md`。
+网页主力编成区域展示最多三支互不重复的五人队，按 **一队优先** 估值：先确定第一队，再用剩余角色生成后续队伍，不为理论三队总分反向削弱第一队。这不等同于正式任务的派队默认值：Kotlin 的 Boss 默认多队，并已有编组前「有效效果」扫描。历史的一队首战建议与机制边界见 [README-ex-mechanics.md](README-ex-mechanics.md)。
 
 对有战斗模型的角色：
 
@@ -744,15 +750,17 @@ neko
 
 ## 13. 当前覆盖率
 
-当前生成结果：
+当前已入库 `data.js.coverage`（2026-10-26 核对）：
 
 ```text
-角色目录：373
-有真实用户评分：307
+角色目录（合卡统一后）：362
+标记可用角色：358
+有头像：358
+有真实用户评分：310
 强度表匹配：340
-物法/站位等数据库基础事实：334
-数据库战斗模型 V2：281
-技能文本回退：36
+物法/站位等数据库基础事实：333
+数据库战斗模型 V2：300
+技能文本回退：28
 ```
 
 剩余角色主要是数据库本身没有足够数据。
@@ -894,15 +902,23 @@ role-team-review/inspect-role-db.py
 
 ---
 
-## 16. 重新生成
+## 17. 输入准备与重新生成
 
-普通重新生成：
+当前仓库保留生成结果和脚本，但不含以下外部输入：
+
+- `攻略/公主连结角色黎明界强度表无图片.xlsx`：五列玩家评分及属性、职阶等资料。
+- `攻略/tierlist_91x91_output/summary.json`：日服参考档位摘要。
+- 可读国服 SQLite 数据库；默认 `role-team-review/cache/master_cn.db` 和旧 `pick/.../202604021043.db` 当前也不存在。
+
+补齐输入并确认来源后，才可从仓库根目录运行。Python 生成器使用标准库；`--update-db` 会访问网络。脚本会同时覆盖 `role-team-review/data.js` 与正式资源 `android/app/src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json`，不是只刷新网页。缺少旧事件库时还会生成空事件目录，先核对完整输入并审阅输出差异。
+
+使用已经准备好的默认数据库：
 
 ```powershell
 python role-team-review/generate-data.py
 ```
 
-尝试更新当前公开国服数据库后重新生成：
+显式尝试更新历史公开源后重新生成（不会补齐评分表和事件旧库）：
 
 ```powershell
 python role-team-review/generate-data.py --update-db
@@ -916,17 +932,19 @@ python role-team-review/generate-data.py `
   --database-version 202609021434
 ```
 
-单独检查战斗模型：
+单独检查战斗模型（仍依赖脚本内 `DEFAULT_DB` 指向的旧本地库）：
 
 ```powershell
 python role-team-review/combat_model.py
 ```
 
-打开审计页：
+只读检查现有快照的代表性角色：
 
-```text
-C:\Users\wbero\Desktop\landosol-workspace\role-team-review\index.html
+```powershell
+python role-team-review/check-generated-data.py
 ```
+
+打开审计页：在资源管理器打开仓库内的 `role-team-review/index.html`，无需原作者的绝对路径。旧 `generate-data.mjs` 属于早期档位生成器，不包含当前 Python 战斗模型流程，不用它替代 V2 重新生成。
 
 点击角色“校准”后，可以直接查看：
 
@@ -940,7 +958,7 @@ C:\Users\wbero\Desktop\landosol-workspace\role-team-review\index.html
 
 ---
 
-## 17. 后续优先级
+## 18. 后续优先级
 
 建议下一阶段依次做：
 
@@ -949,4 +967,4 @@ C:\Users\wbero\Desktop\landosol-workspace\role-team-review\index.html
 3. 将 TP 模型接入敌人攻击 / 受击 TP，替代 18 秒 UB 参考周期。
 4. 对条件技能、堆层、变身、召唤逐类扩展 action 解释器。
 5. 根据五名候选角色真实站位解析范围 Buff 的实际受益角色。
-6. 审计通过后把模型产物生成正式 `labyrinth-role-decision.json`，再接入 Android 实战选人。
+6. 继续审阅已接入正式资源的 `labyrinth-role-decision.json` 与 Kotlin 决策差异；该资源及角色规划器已经存在，不能再把「生成并接入」描述为尚未开始。模型改动和桌面真实游戏验收仍需各自证据。

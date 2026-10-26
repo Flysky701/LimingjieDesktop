@@ -1,10 +1,12 @@
 # 黎明界事件决策模拟说明
 
+2026-10-26 按当前 `data.js`、生成器及 Kotlin 事件流程核对。本文件说明离线审阅页的估值模型；桌面当前版本为 `1.0.18+desktop.7`，正式任务复用 Kotlin 事件识别和决策，不在运行时执行这个网页。当前程序入口见[桌面用户说明](../README-desktop.md)，模型与输入准备见[战斗模型说明](README-combat-model.md)。
+
 ## 1. 数据来源
 
 事件不再以日文攻略表作为唯一事实源。
 
-当前审计页直接读取：
+审阅页直接读取本目录已入库的 `data.js.eventCatalog`。Python 生成器原先从以下本地数据库读取事件：
 
 ```text
 pick/autopcr-android/app/src/main/python/cache/db/202604021043.db
@@ -17,9 +19,9 @@ labyrinth_event
 labyrinth_event_choice
 ```
 
-生成 `data.js.eventCatalog`。
+生成 `data.js.eventCatalog`。该 `pick/` 数据库未随当前仓库提供；缺少时 `load_labyrinth_event_catalog()` 返回空列表。`--database` 参数用于角色/战斗数据，不会改变此事件目录的固定输入路径；不能只换角色数据库就宣称重新生成了完整事件目录。
 
-当前国服可读库共解析出：
+当前已入库的 `data.js` 快照包含：
 
 ```text
 22 个事件状态
@@ -96,7 +98,7 @@ vs
 ★3 3800 α币
 ```
 
-事件模拟器沿用正式遗物路线：
+网页事件模拟器默认使用以下遗物路线估值；正式任务以已保存策略和 Kotlin 实现为准：
 
 ```text
 先补 4 加速
@@ -265,31 +267,26 @@ condition_value = 2000 / 4000
 
 ---
 
-## 10. Android 自动化安全状态
+## 10. 当前 Kotlin 自动化接入
 
-此前 Android 在 `EVENT_CHOICE` 页面会：
-
-```text
-默认点击第一个事件选项
-```
-
-这对当前事件体系是不安全的，因为第一个选项可能是：
+事件语义识别和决策已经接入，原先「统一暂停，等待未来接回」的说明已过时。当前路径是：
 
 ```text
-低价值角色池
-低收益金币
-NORMAL 而非 EXTREME
-提前结束赌博
+AndroidLabyrinthEventChoiceResolver
+  -> 事件与选项观测
+  -> LabyrinthEventChoicePlanner
+  -> Select(actionSafe=true) 或 Wait
+  -> LabyrinthEntryRecognitionSession 在自动执行模式派发对应按钮动作
 ```
 
-现在已经改成：
+规划器按当前角色、遗物层数、策略胜率与选项效用排序；只读识别不会点击。允许自动动作还需满足：
 
-```text
-识别到 EVENT_CHOICE -> 暂停自动点击
-等待事件语义决策
-```
+- 事件文字已连续稳定确认，推荐选项有可靠按钮映射。
+- 按钮达到可用亮蓝置信门槛；灰蓝或条件不足时保留推荐说明，但不直接点击。
+- 职阶角色池选项所需的已有角色资料完整。
+- 已点击但页面不变化的选项会被排除；重试有上限，所有选项都不可执行时等待或停止。
 
-同时取消事件 UNKNOWN 页面的盲点循环。
+`condition_type` 和 `condition_value` 仍不能未经确认就推导出全部可用条件；当前执行还会结合按钮可用状态和实际点击后页面反馈。未知页也不应恢复成盲点循环。
 
-下一步需要识别具体 `event_id / choice_id` 后，才把本页的事件策略接回 Android 自动点击。
+上述接线来自当前源码检查，不能替代桌面真实事件场景验收。D7 的完整登录、验证码和游戏循环仍待验收，OCR 质量与样本覆盖限制见[评估说明](../desktop/ocr/evaluation/README.md)。
 

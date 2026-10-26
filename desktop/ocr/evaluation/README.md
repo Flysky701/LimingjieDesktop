@@ -1,48 +1,54 @@
 # OCR 真实样本评估
 
-`manifest.json` 仅引用仓库内真实上游截图，ROI 来自当前 resolver 的常量或布局映射。真值在运行 OCR 前依据截图、上游测试和已有日志确认；不把模型输出当真值，不靠重复缩放增加样本数。
+2026-10-26 按当前 `manifest.json` 与入库报告核对。当前桌面使用固定 PP-OCRv5；最近完整清单结果是 **14/15（93.33%）**，详见 [final-v5-expanded.json](final-v5-expanded.json) 与[逐项输出](final-v5-expanded.tsv)。总准确率未达到 95%，遗物详情为 1/2、低于类别 85% 门槛，覆盖也未完成；结论仍为 `FAILED_ACCURACY`，不能用模型加载、自检或单元测试成功替代。
 
-执行 `desktop/gradlew -p desktop :ocr:evaluate`。评估是独立 source set，只有该 source set 依赖 shared；生产 OCR 模块仍不依赖 shared。文本直接送入上游现有匹配器，未修改匹配器或其阈值。对 internal 帮助函数采用反射调用其现有实现，避免复制逻辑或扩大公共接口。
+## 执行与输出
 
-输出：`desktop/ocr/build/reports/ocr-eval.json`、`ocr-eval-diff.tsv`。总准确率低于 95% 或任何有样本类别低于 85% 时任务失败；样本不足单独报告 `coverageComplete=false`，不得据此宣称 SPEC-20 的完整评估已完成。原始字符错误率含空白/标点，仅供诊断。p50/p95 包含复制 ROI 像素至回调返回。
+从仓库根目录执行，使用 JDK 21：
 
-## 当前覆盖
+```powershell
+desktop\gradlew.bat -p desktop :ocr:evaluate
+```
 
-| 类别 | 真实 ROI 数 | 距每类 8 条的缺口 |
-|---|---:|---:|
-| 商店物品 | 3 | 5 |
-| 遗物详情 | 2 | 6 |
-| 遗物堆叠 | 6 | 2 |
-| 角色奖励名 | 0 | 8 |
-| 事件选项 | 2 | 6 |
-| EX 遭遇 | 1 | 7 |
-| 合计 | 14 | 总目标 80 尚缺 66 |
+Linux/macOS 对应命令为 `bash desktop/gradlew -p desktop :ocr:evaluate`。新结果写入 `desktop/ocr/build/reports/ocr-eval.json` 与 `ocr-eval-diff.tsv`；本目录的 JSON/TSV 是历次入库快照，不会随执行自动覆盖。
 
-上游 test/resources 的 55 张图并不等同于 55 个可用 OCR 场景。例如 `ex_monster_detail_live_20260910.jpg` 实际为战斗失败页，`ex-antimatter-beast-20260911.png` 为助手日志页面，`node-shop-relic-dashboard.png` 为缩放的诊断网页截图，均未按文件名误标成原始游戏帧。角色加入页也不能冒充角色奖励名称三选一页。
+评估为独立 source set，仅该 source set 依赖 `shared`，生产 OCR 模块不反向依赖共享业务。识别文本直接送入上游现有匹配器，未修改匹配器或阈值；对 internal 帮助函数反射调用现有实现。
 
-后续 L2 需要补充：至少 8 个不同角色奖励名字 ROI、更多不同商店标题和事件、不同 EX 名称、系列面板及小数字计数，并把真实原始截图与当时 resolver ROI/实体期望一起登记。图像复制、自动生成文字或凭模型输出猜标签不能填补缺口。
+`check` 依赖 `evaluate`：总准确率低于 95% 或任何有样本类别低于 85% 时失败。样本不足单独报告 `coverageComplete=false`；即使准确率达到门槛，覆盖不足也不能宣称 SPEC-20 完整评估完成。字符错误率含空白/标点，仅用于诊断；p50/p95 包含复制 ROI 像素至回调返回。
 
-## 首次 v4 结果
+## 当前覆盖与失败项
 
-2026-10-25 使用固定 PP-OCRv4，14 条中 7 条实体解析正确（50%），p50 15.75 ms，p95 143.81 ms。三条商店印记、两条事件、EX 名称及系列标题通过；六个地图小数字输出为空，系列列表只识别守备 2，漏掉削弱 1 与加速 1。未达到准确率要求。详细原始记录保留在 `baseline-v4.json`，不得将自检成功替代这一评估结果。
+| 类别 | 正确 / 真实 ROI 数 | 距每类 8 条的缺口 |
+| --- | ---: | ---: |
+| 商店物品 | 3 / 3 | 5 |
+| 遗物详情 | 1 / 2 | 6 |
+| 遗物堆叠 | 7 / 7 | 1 |
+| 角色奖励名 | 0 / 0（无样本） | 8 |
+| 事件选项 | 2 / 2 | 6 |
+| EX 遭遇 | 1 / 1 | 7 |
+| 合计 | 14 / 15 | 总目标 80 尚缺 65 |
 
-## 最终 v5 结果与残留限制
+最近报告 p50 **23.27 ms**、p95 **151.04 ms**。残留失败是 `series-visible` 系列列表计数不完整；低分辨率 `map-link-0` 数字漏读已由有界前处理回退修复。完整来源与排除原因见 [SAMPLE_AUDIT.md](SAMPLE_AUDIT.md)。
 
-按 SPEC-20 仅对比一次 v5，原始结果见 `baseline-v5.json`：9/14，64.29%。最终保留 v5，补齐官方识别张量的 320 宽零填充，并按 D-46/FB-14 对有界短 ROI 追加一次整图识别；结果见 `final-v5.json`：12/14，85.71%，p50 18.08 ms、p95 152.78 ms。模型加载和自检样例通过不改变这一门槛结论。
+`manifest.json` 仅引用仓库内真实上游截图，ROI 来自 resolver 常量或布局映射。真值在运行 OCR 前依据截图、上游测试和已有日志确认，不以模型输出作真值。上游测试截图的数量不等于可用 OCR 场景数；助手日志、缩放诊断网页、战斗失败页和角色加入页不能冒充缺失的角色奖励三选一页。下一阶段需采集不同的真实游戏帧及 ROI/实体真值；复制、缩放变体或生成文字不填充覆盖。
 
-残留：`series-visible` 只解析出部分系列计数；`map-link-0` 的低分辨率数字 5 仍为空串。未改图片真值、上游 matcher、匹配阈值或按特定文字补齐。`check` 依赖 `evaluate`，未达到准确率时明确失败。当前结论为 G2-C 失败且覆盖不完整，而不是带着样本不足的准确率通过。
+## 历次结果
 
-最后按已观察到的 v4 单字识别优势，补做同两组模型之间的 v5 det + v4 rec 组合验证：仍为 12/14，系列列表计数更少，p95 197.44 ms。没有改善，保留纯 v5，不再尝试其他模型。原始记录为 `final-v5det-v4rec.json`。
+以下均为 2026-10-25 的保留记录，前五组只有原 14 条样本，不能混作当前 15 条清单结果。
 
-## 固定 v5 的前处理诊断与末级回退
+| 报告 | 模型与处理 | 正确数 | 结论 |
+| --- | --- | ---: | --- |
+| [baseline-v4.json](baseline-v4.json) | 固定 v4 | 7/14 | 小数字等漏读 |
+| [baseline-v5.json](baseline-v5.json) | 原始固定 v5 | 9/14 | 低于门槛 |
+| [final-v5.json](final-v5.json) | v5、320 宽零填充与短 ROI 整图识别 | 12/14 | 系列列表及一个小数字失败 |
+| [final-v5det-v4rec.json](final-v5det-v4rec.json) | v5 det + v4 rec 对照 | 12/14 | 未改善，保留纯 v5 |
+| [final-v5-border.json](final-v5-border.json) | 紧凑 ROI 无结果时追加一次黑边 det+rec | 13/14 | 小数字修复，系列列表仍失败 |
+| [final-v5-expanded.json](final-v5-expanded.json) | 同一 v5 管线，新增不同真实地图计数 ROI | 14/15 | 当前清单；质量与覆盖均未达标 |
 
-继续核查真实失败 ROI 后，补入仅在现有紧凑 ROI 原检测和整图识别都无有效结果时触发的黑边 det+rec。原14例为13/14（92.86%），p50 23.32 ms、p95 157.57 ms；`map-link-0` 修复，`series-visible` 仍失败，G2-C 与覆盖结论不变。当前结果保留在 `final-v5-border.json` / `.tsv`，此前所有模型比较和失败报告保留。
+没有改动真值、matcher、匹配阈值或按特定文字补齐结果。
 
-诊断说明见 `preprocessing-diagnosis.md`，原始数据为 `preprocessing-diagnosis.tsv`。显式执行 `:ocr:diagnosePreprocessing` 可复现变换、检测框、未经过置信阈值过滤的原始解码及其得分；图像输出在 `build/reports/preprocessing-diagnosis/`。该任务不接入 `check` 或常规 `test`，变体和人工定位的诊断裁剪不增加评估样本数，也不替代失败样本。
+## 前处理诊断与随包自检
 
-## 发行包自检样例
+诊断说明见 [preprocessing-diagnosis.md](preprocessing-diagnosis.md)，原始数据见 [preprocessing-diagnosis.tsv](preprocessing-diagnosis.tsv)。显式执行 `desktop\gradlew.bat -p desktop :ocr:diagnosePreprocessing` 可复现变换、检测框及原始解码得分，图像输出位于 `desktop/ocr/build/reports/preprocessing-diagnosis/`。此任务不接入 `check` 或常规 `test`，诊断变体不增加样本数。
 
-`src/main/resources/ocr/self-test.png` 是 `shop/imprints-20260914.jpg` 的 `(125,230,390,55)` 原像素裁剪，期望 `攻击型职能的随机印记` 来自同名 JSON 的第一条 `titleText`，同时已目视核对。没有重绘、生成或改色。来源及转换说明在 `self-test-source.json`。该样例在 v4 实际识别中逐字通过，用于确认随包原生库/模型/资源可用，不代表全面识别准确率。
-
-
-最终扩大清单（2026-10-25）：保留原14条真值，新增一张不同真实地图的计数ROI。`final-v5-expanded.json/tsv` 为 **14/15（93.33%）**，p50 **23.27ms**、p95 **151.04ms**；商店3/3、详情1/2、堆叠7/7、事件2/2、EX1/1，角色奖励0。仍为 `FAILED_ACCURACY`，样本目标尚缺65，未放松门槛。新增来源及未纳入素材的原因见 `desktop/ocr/evaluation/SAMPLE_AUDIT.md`；旧14例结果是历史基线，不是最终清单结果。
+随包自检图片位于 [self-test.png](../src/main/resources/ocr/self-test.png)，是上游 `shop/imprints-20260914.jpg` 的 `(125,230,390,55)` 原像素裁剪。期望文本 `攻击型职能的随机印记` 来自对应 JSON 的第一条 `titleText`，并已在原评估阶段目视核对；来源见 [self-test-source.json](self-test-source.json)。自检只确认随包模型、原生库和资源可用，不证明整体识别质量或真实游戏流程可靠。
