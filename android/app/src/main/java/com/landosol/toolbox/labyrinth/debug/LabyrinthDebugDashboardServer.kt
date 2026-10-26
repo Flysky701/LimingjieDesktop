@@ -485,6 +485,8 @@ class LabyrinthDebugDashboardServer(
             "trace",
             JSONObject().apply {
                 val trace = state.frameTrace
+                put("workflowOwner", trace.workflowOwner ?: JSONObject.NULL)
+                put("workflowPhase", trace.workflowPhase ?: JSONObject.NULL)
                 put("expectedPages", JSONArray(trace.expectedPages))
                 put("actionLabel", trace.actionLabel ?: JSONObject.NULL)
                 put("actionRejectReason", trace.actionRejectReason ?: JSONObject.NULL)

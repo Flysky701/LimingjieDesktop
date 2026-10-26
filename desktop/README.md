@@ -1,6 +1,8 @@
 # 桌面开发与构建
 
-**当前版本：1.0.18+desktop.7.logic.1**（业务逻辑拆解开发版）。独立 Gradle 多模块工程，使用 x64 JDK 21，桌面构建无需 Android SDK。
+**当前版本：1.0.18+desktop.7.logic.2**（业务逻辑拆解开发版）。独立 Gradle 多模块工程，使用 x64 JDK 21，桌面构建无需 Android SDK。
+
+业务模块位置、兼容接线和本次构建范围见 [逻辑拆解记录](../docs/desktop/registers/LOGIC_DECOMPOSITION.md)。
 
 工具链：Gradle 8.12.1、Kotlin 2.1.20、Compose Desktop 1.8.2。配置位于 `gradle/wrapper/gradle-wrapper.properties` 和 `gradle/libs.versions.toml`。
 

@@ -27,4 +27,8 @@ data class LabyrinthFrameTrace(
     val nodeTrackerWorldLeft: Double? = null,
     /** Predicted screen x of the target column from the tracker, when available. */
     val nodeTargetExpectedX: Double? = null,
+    /** Business owner that consumed this frame; diagnostic output only. */
+    val workflowOwner: String? = null,
+    /** Stable phase code within that owner, separate from the user-facing status text. */
+    val workflowPhase: String? = null,
 )

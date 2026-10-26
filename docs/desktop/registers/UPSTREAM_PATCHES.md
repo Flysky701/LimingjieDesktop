@@ -23,6 +23,17 @@
 | P-15 | `labyrinth/LabyrinthEntryRecognitionSession.kt` | 流程拆分与行为修正 | 特别装备流程抽取；编组停滞判断改读业务进展与动作派发，不读展示文字和日志标签 | `LabyrinthSpecialEquipmentFlow.kt`、`LabyrinthBattleTeamProgress.kt` | 明确流程边界，并防止反复刷新提示重置停滞计时 | 有：无动作、无业务进展持续达到原超时上限时会停止 | 本轮不运行 Android 测试；桌面构建结果见本节记录 | 本分支 | 已实施 |
 | P-16 | `labyrinth/LabyrinthEntryRecognitionSession.kt` | 纯搬移 | 战斗重试、节点导航及会话弹窗分类规则按业务归属移至同包文件 | `LabyrinthBattleRetryPolicy.kt`、`LabyrinthNodeExecutionRules.kt`、`LabyrinthSessionBlockRules.kt` | 减少业务规则与会话控制的混杂，保持现有调用入口 | 未有意改变；阈值、条件和返回值沿用原逻辑 | 本轮不运行 Android 测试；桌面构建结果见本节记录 | 本分支 | 已实施 |
 
+## 2026-10-27 逻辑拆解版：剩余业务流程
+
+| 编号 | 修改位置 | 类型 | 目的及内容 | 行为边界 | 构建范围 |
+| --- | --- | --- | --- | --- | --- |
+| P-17 | `labyrinth/LabyrinthEntryRecognitionSession.kt`、`labyrinth/execution/`、`LabyrinthWorkflowBindings.kt` 及分域规则/模型文件 | 业务拆解与兼容接线 | 战斗、角色扫描、EX、奖励、地图、商店、事件、结算、入口恢复、持久化和展示拆为 20 个执行模块；按域处理换页/新局重置与动作回执，门面保留原字段和入口 | 沿用原顺序、阈值、默认值、动作互斥及游戏画面确认条件；没有新增有意的游戏策略变化 | 桌面编译与便携包；不运行或修改测试，不操作游戏 |
+| P-18 | `LabyrinthFrameTrace.kt`、`LabyrinthWorkflowDiagnostics.kt`、`debug/LabyrinthDebugDashboardServer.kt` | 诊断增强 | 输出 `workflowOwner`、`workflowPhase`，帮助定位处理帧的业务模块和阶段 | 只写诊断，不用于选择动作或判断业务进展 | 同上 |
+
+本轮延续 `codex/logic-decomposition`，版本为 `1.0.18+desktop.7.logic.2`。独立基线工作树固定在 `308368d`；源码对照确认搬出的 103 个基线规则/模型声明保留原文（仅忽略空白与包内可见性变化）。两个原私有嵌套模型改为包内模型，并新增页面动作建议模型。业务执行类不持有具体会话实例，接线集中在兼容适配文件中。
+
+完整模块清单、定位入口及构建边界见 [LOGIC_DECOMPOSITION.md](LOGIC_DECOMPOSITION.md)。本轮不修改兼容工作区，也不纳入其中尚未提交的修改。静态对照和构建不代替动态行为验证。
+
 ## 2026-10-27 逻辑拆解版：编组与特别装备
 
 本分支按用户授权从移植兼容工作转向业务逻辑拆解。P-15 不属于最初移植阶段的“纯搬移或默认不变的注入缝”限制；其中停滞判断是明确的行为修正。

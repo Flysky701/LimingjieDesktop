@@ -341,32 +341,6 @@ internal fun labyrinthNodeScanConsumable(
 ): Boolean = settleRemainingMillis <= 0L && !pendingTransitionHeld
 
 /**
- * Milliseconds a post-entry tap's cooldown still has to run when a frame captured at
- * [frameTimestampMillis] is being decided; `<= 0` means the frame may act.
- *
- * The cooldown used to count from the capture time of the frame that *decided* the previous tap.
- * The tap itself lands asynchronously, 0.3-1.1 s later on the 2026-09-20 bundle 225220 device,
- * and a joined-character popup needs a further ~0.3-0.8 s to fade. So a frame captured before
- * the tap had even reached the screen — or 292 ms after it — still showed the popup, passed a
- * 650 ms cooldown measured from the older stamp, and closed it a second time. Three of the eight
- * popups in that run were double-closed; one second tap went through the fading popup onto the
- * map node behind it and raised a movement dialog that then had to be cancelled.
- *
- * Counting from the moment the gesture actually landed ([landedAtMillis]) when that is later
- * than the deciding frame makes the cooldown mean what it says: time the game has had to react.
- */
-internal fun labyrinthPostEntryCooldownRemaining(
-    frameTimestampMillis: Long,
-    dispatchedAtMillis: Long,
-    landedAtMillis: Long,
-    intervalMillis: Long,
-): Long {
-    if (dispatchedAtMillis == Long.MIN_VALUE) return 0L
-    val reference = maxOf(dispatchedAtMillis, landedAtMillis)
-    return intervalMillis - (frameTimestampMillis - reference)
-}
-
-/**
  * After a node or its movement-confirmation button was tapped, the game can render one or more
  * transitional frames before its semantic page becomes recognizable. Those frames must not erase
  * the pending route transition; otherwise the game can enter/finish a node while the local route
