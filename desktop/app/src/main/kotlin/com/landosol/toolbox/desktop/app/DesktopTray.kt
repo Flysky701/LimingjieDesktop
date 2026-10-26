@@ -12,10 +12,16 @@ import androidx.compose.ui.window.MenuScope
 import androidx.compose.ui.window.Notification
 import androidx.compose.ui.window.TrayState
 import androidx.compose.ui.window.setContent
+import com.landosol.toolbox.desktop.shared.DesktopLog
+import java.awt.Dimension
 import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.GraphicsConfiguration
 import java.awt.GraphicsEnvironment
 import java.awt.Color as AwtColor
 import java.awt.Point
+import java.awt.Rectangle
 import java.awt.SystemTray
 import java.awt.Toolkit
 import java.awt.TrayIcon
@@ -29,15 +35,18 @@ import javax.swing.JComponent
 import javax.swing.JMenu
 import javax.swing.JMenuItem
 import javax.swing.JDialog
+import javax.swing.JPopupMenu
 import javax.swing.JSeparator
 import javax.swing.KeyStroke
 import javax.swing.event.PopupMenuEvent
 import javax.swing.event.PopupMenuListener
 import javax.swing.plaf.basic.BasicMenuItemUI
+import javax.swing.plaf.basic.BasicGraphicsUtils
+import kotlin.math.roundToInt
 
 internal const val TRAY_MENU_GLYPHS = "黎明界助手显示主窗口暂停继续当前标签停止全部退出"
 
-private data class TrayMenuAppearance(
+internal data class TrayMenuAppearance(
     val background: AwtColor, val foreground: AwtColor, val hover: AwtColor,
     val disabled: AwtColor, val outline: AwtColor, val font: Font,
 )
@@ -49,6 +58,96 @@ private class TrayMenuItemUI(val appearance: TrayMenuAppearance) : BasicMenuItem
         selectionForeground = appearance.foreground
         disabledForeground = appearance.disabled
     }
+
+    override fun paintText(graphics: Graphics, item: JMenuItem, rect: Rectangle, text: String) {
+        // BasicMenuItemUI ignores disabledForeground for labels and reads the global
+        // light LookAndFeel color instead. Paint with this menu's resolved palette.
+        val g = graphics.create() as Graphics2D
+        try {
+            g.color = if (item.isEnabled) appearance.foreground else appearance.disabled
+            BasicGraphicsUtils.drawStringUnderlineCharAt(item, g, text, item.displayedMnemonicIndex,
+                rect.x.toFloat(), (rect.y + g.fontMetrics.ascent).toFloat())
+        } finally { g.dispose() }
+    }
+}
+
+@Composable
+internal fun trayMenuAppearance(): TrayMenuAppearance {
+    val menuFont = remember { trayMenuFont() }
+    val colors = MaterialTheme.colorScheme
+    return TrayMenuAppearance(
+        AwtColor(colors.surface.toArgb(), true), AwtColor(colors.onSurface.toArgb(), true),
+        AwtColor(colors.surfaceVariant.toArgb(), true), AwtColor(colors.onSurfaceVariant.toArgb(), true),
+        AwtColor(colors.outlineVariant.toArgb(), true),
+        menuFont.deriveFont(MaterialTheme.typography.bodyMedium.fontSize.value),
+    )
+}
+
+internal fun applyTrayMenuAppearance(popup: JPopupMenu, appearance: TrayMenuAppearance) {
+    popup.isOpaque = true
+    popup.background = appearance.background
+    popup.font = appearance.font
+    popup.border = BorderFactory.createCompoundBorder(
+        BorderFactory.createLineBorder(appearance.outline), BorderFactory.createEmptyBorder(4, 4, 4, 4))
+    popup.components.forEach { component -> when (component) {
+        is JMenuItem -> {
+            if ((component.ui as? TrayMenuItemUI)?.appearance != appearance) component.setUI(TrayMenuItemUI(appearance))
+            component.isOpaque = true
+            component.font = appearance.font
+            component.background = appearance.background
+            component.foreground = appearance.foreground
+            component.border = BorderFactory.createEmptyBorder(7, 12, 7, 12)
+        }
+        is JSeparator -> {
+            component.foreground = appearance.outline
+            component.background = appearance.background
+            component.border = BorderFactory.createEmptyBorder(4, 0, 4, 0)
+        }
+    } }
+    popup.revalidate()
+    popup.repaint()
+}
+
+@Composable
+internal fun rememberTrayMenu(appearance: TrayMenuAppearance, menu: @Composable MenuScope.() -> Unit): JMenu {
+    val currentMenu by rememberUpdatedState(menu)
+    val currentAppearance by rememberUpdatedState(appearance)
+    val swingMenu = remember { JMenu() }
+    val context = rememberCompositionContext()
+    DisposableEffect(swingMenu) {
+        val composition = swingMenu.setContent(context) {
+            val value = currentAppearance
+            currentMenu()
+            SideEffect { applyTrayMenuAppearance(swingMenu.popupMenu, value) }
+        }
+        onDispose { composition.dispose() }
+    }
+    return swingMenu
+}
+
+// On Windows JDK 21 the tray event is in physical pixels. AWT screen origins remain
+// physical, but sizes and offsets from each monitor's origin are DPI-scaled.
+internal fun windowsTrayPoint(point: Point, bounds: Rectangle, scaleX: Double, scaleY: Double) = Point(
+    bounds.x + ((point.x - bounds.x) / scaleX).roundToInt(),
+    bounds.y + ((point.y - bounds.y) / scaleY).roundToInt(),
+)
+
+private fun trayScreen(point: Point): GraphicsConfiguration {
+    val environment = GraphicsEnvironment.getLocalGraphicsEnvironment()
+    return environment.screenDevices.map { it.defaultConfiguration }.firstOrNull { screen ->
+        val bounds = screen.bounds
+        val scale = screen.defaultTransform
+        Rectangle(bounds.x, bounds.y, (bounds.width * scale.scaleX).roundToInt(),
+            (bounds.height * scale.scaleY).roundToInt()).contains(point)
+    } ?: environment.defaultScreenDevice.defaultConfiguration
+}
+
+/** Flip at the clicked point before clamping, so near-edge clicks keep a menu corner anchored. */
+internal fun trayPopupLocation(anchor: Point, size: Dimension, area: Rectangle): Point {
+    val x = if (anchor.x + size.width > area.x + area.width) anchor.x - size.width else anchor.x
+    val y = if (anchor.y + size.height > area.y + area.height) anchor.y - size.height else anchor.y
+    return Point(x.coerceIn(area.x, (area.x + area.width - size.width).coerceAtLeast(area.x)),
+        y.coerceIn(area.y, (area.y + area.height - size.height).coerceAtLeast(area.y)))
 }
 
 internal fun trayMenuFont(): Font {
@@ -74,16 +173,8 @@ internal fun DesktopTray(
 ) {
     val image = remember(icon) { icon.toAwtImage(Density(1f), LayoutDirection.Ltr, Size(16f, 16f)) }
     val currentAction by rememberUpdatedState(onAction)
-    val currentMenu by rememberUpdatedState(menu)
-    val menuFont = remember { trayMenuFont() }
-    val colors = MaterialTheme.colorScheme
-    val currentAppearance by rememberUpdatedState(TrayMenuAppearance(
-        AwtColor(colors.surface.toArgb(), true), AwtColor(colors.onSurface.toArgb(), true),
-        AwtColor(colors.surfaceVariant.toArgb(), true), AwtColor(colors.onSurfaceVariant.toArgb(), true),
-        AwtColor(colors.outlineVariant.toArgb(), true),
-        menuFont.deriveFont(MaterialTheme.typography.bodyMedium.fontSize.value),
-    ))
-    val swingMenu = remember { JMenu().apply { font = menuFont } }
+    val currentAppearance by rememberUpdatedState(trayMenuAppearance())
+    val swingMenu = rememberTrayMenu(currentAppearance, menu)
     val popup = swingMenu.popupMenu
     val popupOwner = remember { JDialog().apply {
         isUndecorated = true
@@ -98,41 +189,32 @@ internal fun DesktopTray(
             override fun mouseReleased(event: MouseEvent) {
                 if (!event.isPopupTrigger && event.button != MouseEvent.BUTTON3) return
                 popup.isVisible = false
-                popupOwner.location = Point(event.x, event.y)
+                applyTrayMenuAppearance(popup, currentAppearance)
+                val physical = Point(event.x, event.y)
+                val screen = trayScreen(physical)
+                val scale = screen.defaultTransform
+                val anchor = if (System.getProperty("os.name").startsWith("Windows"))
+                    windowsTrayPoint(physical, screen.bounds, scale.scaleX, scale.scaleY) else physical
+                val insets = Toolkit.getDefaultToolkit().getScreenInsets(screen)
+                val area = Rectangle(screen.bounds).apply {
+                    x += insets.left; y += insets.top
+                    width -= insets.left + insets.right; height -= insets.top + insets.bottom
+                }
+                val location = trayPopupLocation(anchor, popup.preferredSize, area)
+                popupOwner.location = location
                 popupOwner.isVisible = true
                 popupOwner.toFront()
                 popupOwner.requestFocus()
-                // Swing fits the popup inside the monitor, including a tray at the screen edge.
-                popup.show(popupOwner.contentPane, 0, 0)
+                // Windows may adjust the tiny owner's position; use its actual origin.
+                val ownerOrigin = popupOwner.contentPane.locationOnScreen
+                popup.show(popupOwner.contentPane, location.x - ownerOrigin.x, location.y - ownerOrigin.y)
+                DesktopLog.write('I', "DesktopTray", "event=$physical scale=${scale.scaleX},${scale.scaleY} " +
+                    "anchor=$anchor requested=$location actual=${popup.locationOnScreen} size=${popup.size} " +
+                    "background=${Integer.toHexString(popup.background.rgb)} foreground=${Integer.toHexString(currentAppearance.foreground.rgb)}")
             }
         })
     } }
-    val context = rememberCompositionContext()
     DisposableEffect(tray) {
-        val composition = swingMenu.setContent(context) {
-            val appearance = currentAppearance
-            currentMenu()
-            SideEffect {
-                popup.background = appearance.background
-                popup.font = appearance.font
-                popup.border = BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(appearance.outline), BorderFactory.createEmptyBorder(4, 4, 4, 4))
-                popup.components.forEach { component -> when (component) {
-                    is JMenuItem -> {
-                        if ((component.ui as? TrayMenuItemUI)?.appearance != appearance) component.setUI(TrayMenuItemUI(appearance))
-                        component.font = appearance.font
-                        component.background = appearance.background
-                        component.foreground = appearance.foreground
-                        component.border = BorderFactory.createEmptyBorder(7, 12, 7, 12)
-                    }
-                    is JSeparator -> {
-                        component.foreground = appearance.outline
-                        component.background = appearance.background
-                        component.border = BorderFactory.createEmptyBorder(4, 0, 4, 0)
-                    }
-                } }
-            }
-        }
         val focus = object : WindowAdapter() {
             override fun windowLostFocus(event: WindowEvent) {
                 var next = event.oppositeWindow
@@ -152,7 +234,7 @@ internal fun DesktopTray(
         val systemTray = SystemTray.getSystemTray()
         try { systemTray.add(tray) } catch (failure: Exception) {
             popup.removePopupMenuListener(dismiss); popupOwner.removeWindowFocusListener(focus)
-            popupOwner.dispose(); composition.dispose(); throw failure
+            popupOwner.dispose(); throw failure
         }
         onDispose {
             popup.isVisible = false
@@ -160,7 +242,6 @@ internal fun DesktopTray(
             popupOwner.removeWindowFocusListener(focus)
             popupOwner.dispose()
             systemTray.remove(tray)
-            composition.dispose()
         }
     }
     SideEffect {
