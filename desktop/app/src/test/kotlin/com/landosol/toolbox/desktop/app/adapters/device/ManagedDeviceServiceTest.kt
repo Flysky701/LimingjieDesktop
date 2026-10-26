@@ -10,6 +10,24 @@ import org.junit.rules.TemporaryFolder
 class ManagedDeviceServiceTest {
     @get:Rule val directory = TemporaryFolder()
 
+    @Test fun missingVendorTransportsAreRegisteredBeforeListingWithoutConnectingADevice() = runBlocking {
+        val device = ConnectionFixture()
+        var registered = false
+        device.onDiscover = { assertTrue(registered) }
+        ManagedDeviceService(directory.root.toPath(), { "adb" }, {}, {},
+            locate = { _, _ -> AdbLocation("adb", "fixture", "version") },
+            createService = { device }, registerEmulators = {
+                registered = true
+                device.descriptors = listOf("127.0.0.1:16384", "127.0.0.1:16416")
+                    .map { DeviceDescriptor(it, "MuMu", "device") }
+            }).use { managed ->
+            managed.prepare()
+            assertFalse(registered)
+            assertEquals(2, managed.discover().size)
+            assertEquals(0, device.connections)
+        }
+    }
+
     @Test fun successfulLookupIsReusedUntilConfigurationChanges() = runBlocking {
         var selected = "first"; var lookups = 0; val services = mutableListOf<ConnectionFixture>()
         ManagedDeviceService(directory.root.toPath(), { selected }, {}, {},

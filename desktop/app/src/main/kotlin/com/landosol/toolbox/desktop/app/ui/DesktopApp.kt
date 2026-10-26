@@ -51,6 +51,7 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
 @Composable internal fun DesktopApp(
     graph:ControlSessionUi,hostWindow:java.awt.Window?=null,navigationGuard:NavigationGuard?=null,
     runOnly:Boolean=false,appearance:DesktopPreferences?=null,onNavigate:((Page)->Unit)?=null,
+    sharedSettings:ControlSessionUi?=null,
 ) {
     val preferences by graph.ux.preferences.state.collectAsState()
     DesktopTheme(appearance ?: preferences) {
@@ -219,7 +220,7 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                             LocalConfiguration provides Configuration(maxWidth.value.toInt(),maxHeight.value.toInt())) {
                             when(if(runOnly)Page.Run else page) {
                                 Page.Run -> RunConsole(graph,state,selected,::selectTask,::configure,{navigate(it)},searchFocus,
-                                    setup,configuration,standaloneGuild,{if(!graph.busy)standaloneGuild=it},setupMessage ?: actions.message)
+                                    setup,configuration,standaloneGuild,{if(!graph.busy)standaloneGuild=it},setupMessage ?: actions.message,sharedSettings)
                                 Page.Accounts -> AccountsPage(graph)
                                 Page.Strategies -> StrategiesPage(graph)
                                 Page.Devices -> DevicesPage(graph)

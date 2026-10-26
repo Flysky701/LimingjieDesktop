@@ -22,6 +22,7 @@ data class ManagedDeviceUi(
     val connected:Boolean=false,
     val busy:Boolean=false,
     val status:String="未连接",
+    val connecting:Boolean=false,
 )
 
 data class SharedRunShellCallbacks(

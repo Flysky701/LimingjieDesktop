@@ -1,6 +1,7 @@
 package com.landosol.toolbox.desktop.app.adapters.device
 
 import com.landosol.toolbox.desktop.device.*
+import com.landosol.toolbox.desktop.platform.UserRuntimeDirectory
 import com.landosol.toolbox.protocol.bilibili.GameServer
 import java.nio.file.Path
 import kotlinx.coroutines.*
@@ -16,8 +17,10 @@ class ManagedDeviceService(
     private val onLost: (String) -> Unit,
     private val locate: suspend (String?, Path) -> AdbLocation? = { selected, downloaded -> AdbLocator.find(selected, downloaded) },
     private val createService: (AdbLocation) -> DeviceService = { location ->
-        AdbDeviceService(ProcessAdbExecutor(location.path, server = AdbServerClient()), directory, GameServer.entries.map { it.packageName }.toSet(), onEvent, onLost)
+        AdbDeviceService(ProcessAdbExecutor(location.path, server = AdbServerClient()), directory, GameServer.entries.map { it.packageName }.toSet(), onEvent, onLost,
+            verifiedPackageCache = UserRuntimeDirectory.resolve().resolve("verified-packages"))
     },
+    private val registerEmulators: suspend (AdbLocation) -> Unit = { MuMuDeviceDiscovery.registerRunning(it, onEvent) },
 ) : DeviceService {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()
@@ -61,7 +64,11 @@ class ManagedDeviceService(
     }
     suspend fun prepare(): AdbLocation { service(refresh = true); return checkNotNull(location) }
     private fun connected() = checkNotNull(delegate) { "请先连接设备" }
-    override suspend fun discover() = service().discover()
+    override suspend fun discover(): List<DeviceDescriptor> {
+        val active = service()
+        registerEmulators(mutex.withLock { checkNotNull(location) })
+        return active.discover()
+    }
     override suspend fun resolveDevice(serial: String) = service().resolveDevice(serial)
     override suspend fun connect(serial: String, touchMode: TouchMode) {
         val active = service()

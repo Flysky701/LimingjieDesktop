@@ -11,12 +11,34 @@ fun main(args: Array<String>) = runBlocking {
     require(args.size == 4 && args.take(3).all(String::isNotBlank)) { "Specify probeAdb, probeSerial and probeOutput explicitly" }
     val output = Path.of(args[2]).also(Files::createDirectories)
     val mode = args[3]
-    require(mode in setOf("inspect", "actions", "settings", "compatibility", "soak"))
+    require(mode in setOf("inspect", "actions", "settings", "compatibility", "soak", "connect-only", "identity-only", "discovery-only"))
     val messages = mutableListOf<String>()
     fun record(value: String) { synchronized(messages) { messages += value }; println(value) }
-    val adb = ProcessAdbExecutor(args[0])
+    val adb = ProcessAdbExecutor(args[0], server = if(mode in setOf("connect-only", "identity-only")) AdbServerClient() else null)
     suspend fun shell(vararg command: String) = adb.shell(args[1], command.toList()).requireSuccess().text()
-    val service = AdbDeviceService(adb, output.resolve("isolated-data"), emptySet(), ::record, { record("LOST: $it") })
+    if (mode == "discovery-only") {
+        try {
+            MuMuDeviceDiscovery.registerRunning(checkNotNull(AdbLocator.find(args[0])), ::record)
+            AdbDeviceService(adb, output.resolve("isolated-data"), emptySet()).use { service ->
+                record("discovered=" + service.discover().map { it.serial to it.label })
+            }
+        } finally { adb.close(); Files.writeString(output.resolve("discovery-only.log"), synchronized(messages) { messages.joinToString("\n") }) }
+        return@runBlocking
+    }
+    val packages = System.getProperty("limingjie.probe.packages", "").split(',').filter(String::isNotBlank).toSet()
+    if (mode == "identity-only") {
+        // Read public installation metadata only. Existing device/worker ownership is untouched.
+        try {
+            val size = DeviceParsers.screenSize(shell("wm", "size"))
+            repeat(2) { index ->
+                val start = System.nanoTime()
+                val identity = DeviceIdentityReader(adb, output.resolve("isolated-data"), packages, ::record).read(args[1], size)
+                record("identityRead=${index+1} millis=${(System.nanoTime()-start)/1_000_000} packages=${identity.packages.size}")
+            }
+        } finally { adb.close(); Files.writeString(output.resolve("identity-only.log"), synchronized(messages) { messages.joinToString("\n") }) }
+        return@runBlocking
+    }
+    val service = AdbDeviceService(adb, output.resolve("isolated-data"), packages, ::record, { record("LOST: $it") })
     try {
         record("mode=$mode timestamp=${java.time.Instant.now()}")
         val located = AdbLocator.find(args[0])
@@ -27,6 +49,7 @@ fun main(args: Array<String>) = runBlocking {
             ?: error("Connect failed: ${service.state.value}")
         record("READY Android=${ready.identity.release}/API${ready.identity.sdkInt}; touch=${ready.touchReady}; awake=${ready.awake}; size=${ready.width}x${ready.height}; mode=${ready.selectedMode}; timing=${ready.timing}")
         check(ready.touchReady)
+        if (mode == "connect-only") return@runBlocking // No launch, gesture, UI dump or saved frame.
         // Only package metadata is read; neither accounts nor application storage are queried.
         record("installedGamePackages=" + shell("pm", "list", "packages").lineSequence().filter { it.contains("priconne") || it.contains("princessconnect") }.toList())
         if (mode != "soak") {

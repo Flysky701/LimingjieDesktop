@@ -170,6 +170,81 @@ class SharedSupervisorModelTest {
         } finally { f.close() }
     }
 
+    @Test fun phase1Single06ConnectAfterRebootRetiresTheOldSessionWithoutTransferringItsBinding() = runBlocking {
+        val f = Fixture()
+        try {
+            val oldId = f.model.connectDevice("127.0.0.1:5555")
+            f.model.bindAccount(oldId, 42)
+            f.targets[0] = f.targets[0].copy(deviceId = "new-boot", bootId = "00000000-0000-4000-8000-000000000002")
+            val newId = f.model.connectDevice("127.0.0.1:5555")
+            assertNotEquals(oldId, newId)
+            assertEquals(WorkerConnectionStatus.CLOSED, f.workers.first().connection.value)
+            assertEquals(newId, f.model.sessions.value.single().id)
+            assertEquals("new-boot", f.model.devices.value.single().id)
+            assertNull(f.model.sessions.value.single().boundAccountId)
+            assertFalse(f.workers.last().operations.contains(ControlOps.ACCOUNT_SELECT))
+            assertTrue(f.global.operations.isEmpty())
+        } finally { f.close() }
+    }
+
+    @Test fun phase1Single07DiscoveryRetiresOnlyTheSessionWhoseAddressHasANewBoot() = runBlocking {
+        val f = Fixture()
+        try {
+            f.targets += RuntimeDeviceTarget("device-b", "127.0.0.1:5557", "模拟器 B",
+                setOf("127.0.0.1:5557"), "00000000-0000-4000-8000-000000000003")
+            f.model.connectDevice("127.0.0.1:5555")
+            val unaffected = f.model.connectDevice("127.0.0.1:5557")
+            f.model.bindAccount(unaffected, 84)
+            f.targets[0] = f.targets[0].copy(deviceId = "new-boot", bootId = "00000000-0000-4000-8000-000000000002")
+            f.model.refreshDevices(true)
+            assertEquals(WorkerConnectionStatus.CLOSED, f.workers.first().connection.value)
+            assertEquals(unaffected, f.model.sessions.value.single().id)
+            assertEquals(WorkerConnectionStatus.CONNECTED, f.workers.last().connection.value)
+            assertEquals(84L, f.model.sessions.value.single().boundAccountId)
+            assertEquals(setOf("new-boot", "device-b"), f.model.devices.value.map { it.id }.toSet())
+            assertEquals(2, f.workers.size) // Detection must not launch a replacement worker.
+        } finally { f.close() }
+    }
+
+    @Test fun phase1Single08RebootDetectionPreservesUnsavedDraftsAndBusyTasks() = runBlocking {
+        val f = Fixture()
+        try {
+            val id = f.model.connectDevice("127.0.0.1:5555")
+            f.targets[0] = f.targets[0].copy(deviceId = "new-boot", bootId = "00000000-0000-4000-8000-000000000002")
+            f.model.markDirty(id, true)
+            assertTrue(runCatching { f.model.connectDevice("127.0.0.1:5555") }.isFailure)
+            f.model.markDirty(id, false)
+            f.workers.single().snapshots.value = buildJsonObject { put("console", buildJsonObject { put("busy", true) }) }
+            assertTrue(runCatching { f.model.refreshDevices(true) }.isFailure)
+            assertEquals(id, f.model.sessions.value.single().id)
+            assertEquals(WorkerConnectionStatus.CONNECTED, f.workers.single().connection.value)
+            assertEquals(1, f.workers.size)
+        } finally { f.close() }
+    }
+
+    @Test fun phase1Single09PreparationPhaseRemainsVisibleUntilTheDeviceIsReady() = runBlocking {
+        val f = Fixture()
+        try {
+            f.gate = CompletableDeferred()
+            val connection = async { f.model.connectDevice("127.0.0.1:5555") }
+            withTimeout(5_000) { while (f.workers.isEmpty()) yield() }
+            f.workers.single().snapshots.value = buildJsonObject {
+                put("console", buildJsonObject { put("device", buildJsonObject { put("_type", "Verifying"); put("detail", "核验游戏安装信息") }) })
+            }
+            withTimeout(5_000) { while (f.model.devices.value.singleOrNull()?.connecting != true) yield() }
+            assertEquals("核验游戏安装信息", f.model.devices.value.single().status)
+            f.gate!!.complete(Unit)
+            connection.await()
+            f.workers.single().snapshots.value = buildJsonObject {
+                put("console", buildJsonObject { put("device", buildJsonObject { put("_type", "Ready") }) })
+            }
+            withTimeout(5_000) { while (f.model.devices.value.singleOrNull()?.connected != true) yield() }
+            assertFalse(f.model.devices.value.single().connecting)
+            assertEquals("已连接", f.model.devices.value.single().status)
+            assertEquals(1, f.workers.size)
+        } finally { f.close() }
+    }
+
     @Test fun phase2ConcurrentAliasesProduceOneWorkerAndTwoDevicesRemainIndependent() = runBlocking {
         val f = Fixture()
         try {

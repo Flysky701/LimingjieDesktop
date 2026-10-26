@@ -3,14 +3,23 @@ package com.landosol.toolbox.desktop.device
 import com.android.apksig.ApkVerifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.*
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
-/** APK bytes exist only during inspection. Cache keys include the device and package update time. */
-class DeviceIdentityReader(private val adb: AdbExecutor, private val dataDirectory: Path, private val gamePackages: Set<String>) {
-    private data class CacheKey(val deviceKey: String, val packageName: String, val versionCode: Long, val updated: String)
+/** APK bytes exist only during inspection; only a verified public certificate digest is cached. */
+class DeviceIdentityReader(private val adb: AdbExecutor, private val dataDirectory: Path, private val gamePackages: Set<String>,
+    private val onEvent: (String) -> Unit = {},
+    private val verifiedCacheDirectory: Path = dataDirectory.resolve("cache/verified-packages")) {
+    private data class CacheKey(val deviceKey: String, val packageName: String, val versionCode: Long, val updated: String,
+        val sdk: Int, val apkPath: String, val apkStamp: String) {
+        val fingerprint get() = digest("SHA-256", listOf(deviceKey, packageName, versionCode.toString(), updated, sdk.toString(), apkPath, apkStamp).joinToString("\u0000").toByteArray())
+        val persistent get() = updated.isNotBlank() && apkStamp.matches(Regex("[0-9]+:[0-9]+"))
+    }
     private val certificateCache = ConcurrentHashMap<CacheKey, String>()
 
     suspend fun read(serial: String, size: Pair<Int, Int>): DeviceIdentity {
@@ -27,8 +36,16 @@ class DeviceIdentityReader(private val adb: AdbExecutor, private val dataDirecto
             .map(String::trim).filter { it.startsWith("package:") }.map { it.removePrefix("package:") }.filter { it in gamePackages }.toList()
         val packages = installed.associateWith { pkg ->
             val (name, code, updated) = DeviceParsers.packageVersion(adb.shell(serial, listOf("dumpsys", "package", pkg)).requireSuccess().text())
-            val cacheKey = CacheKey(key, pkg, code, updated)
-            val certificate = certificateCache[cacheKey] ?: readCertificate(serial, pkg, sdk).also {
+            val source = DeviceParsers.baseApk(adb.shell(serial, listOf("pm", "path", pkg)).requireSuccess().text())
+                ?: throw DeviceOperationException("无法读取游戏安装包：$pkg")
+            val stamp = (adb.shell(serial, listOf("stat", "-c", "%s:%Y", source)) as? AdbResult.Success)?.text()?.trim().orEmpty()
+            val cacheKey = CacheKey(key, pkg, code, updated, sdk, source, stamp)
+            val cached = certificateCache[cacheKey] ?: readVerifiedCertificate(cacheKey)
+            val certificate = cached ?: readCertificate(serial, source, sdk).also {
+                saveVerifiedCertificate(cacheKey, it)
+            }
+            if (cached != null) onEvent("复用已校验的游戏签名：$pkg")
+            certificate.also {
                 certificateCache.keys.removeIf { old -> old.deviceKey == key && old.packageName == pkg }
                 certificateCache[cacheKey] = it
             }
@@ -37,9 +54,31 @@ class DeviceIdentityReader(private val adb: AdbExecutor, private val dataDirecto
         return DeviceIdentity(key, brand, model, release, sdk, abis, androidId, maxOf(size.first, size.second), minOf(size.first, size.second), packages, System.currentTimeMillis())
     }
 
-    private suspend fun readCertificate(serial: String, packageName: String, sdk: Int): String {
-        val source = DeviceParsers.baseApk(adb.shell(serial, listOf("pm", "path", packageName)).requireSuccess().text())
-            ?: throw DeviceOperationException("无法读取游戏安装包：$packageName")
+    private fun readVerifiedCertificate(key: CacheKey): String? = runCatching {
+        if (!key.persistent) return null
+        val file = verifiedCacheDirectory.resolve("${key.fingerprint}.json")
+        if (!Files.isRegularFile(file) || Files.size(file) > 2048) return null
+        val value = Json.parseToJsonElement(Files.readString(file)).jsonObject
+        value["certificateMd5"]?.jsonPrimitive?.contentOrNull
+            ?.takeIf { value["fingerprint"]?.jsonPrimitive?.contentOrNull == key.fingerprint && it.matches(Regex("[0-9a-f]{32}")) }
+    }.getOrNull()
+
+    private fun saveVerifiedCertificate(key: CacheKey, certificate: String) {
+        if (!key.persistent) return
+        runCatching {
+            val directory = verifiedCacheDirectory
+            Files.createDirectories(directory)
+            val temporary = Files.createTempFile(directory, "verified-", ".writing")
+            try {
+                Files.writeString(temporary, buildJsonObject { put("fingerprint", key.fingerprint); put("certificateMd5", certificate) }.toString())
+                val target = directory.resolve("${key.fingerprint}.json")
+                try { Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING) }
+                catch (_: AtomicMoveNotSupportedException) { Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING) }
+            } finally { Files.deleteIfExists(temporary) }
+        } // A cache write failure cannot turn a verified package into a connection failure.
+    }
+
+    private suspend fun readCertificate(serial: String, source: String, sdk: Int): String {
         return withContext(Dispatchers.IO) {
             val directory = dataDirectory.resolve("cache/apk")
             Files.createDirectories(directory)

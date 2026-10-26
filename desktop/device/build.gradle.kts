@@ -29,6 +29,7 @@ tasks.register<JavaExec>("probeDevice") {
     systemProperty("file.encoding", "UTF-8")
     systemProperty("stdout.encoding", "UTF-8")
     systemProperty("stderr.encoding", "UTF-8")
+    systemProperty("limingjie.probe.packages", providers.gradleProperty("probePackages").orElse("").get())
     args(providers.gradleProperty("probeAdb").orElse("").get(), providers.gradleProperty("probeSerial").orElse("").get(),
         providers.gradleProperty("probeOutput").orElse("").get(), providers.gradleProperty("probeMode").orElse("inspect").get())
 }

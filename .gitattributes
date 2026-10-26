@@ -14,3 +14,6 @@ gradlew text eol=lf
 # "\n" separators, so a CRLF working copy would make the comparison fail -- the same reason gradlew
 # is pinned above. Keep it byte-verbatim.
 android/app/src/test/resources/*-golden.txt text eol=lf
+
+# This OCR resource is verified byte-for-byte against its pinned SHA-256.
+desktop/ocr/src/main/resources/ocr/ppocrv5_dict.txt text eol=lf

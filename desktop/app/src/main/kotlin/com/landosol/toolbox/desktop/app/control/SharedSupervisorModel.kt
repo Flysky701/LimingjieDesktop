@@ -75,6 +75,7 @@ class SharedSupervisorModel(
 
     override suspend fun refreshDevices(force: Boolean) {
         val discovered = inventory.discover(force)
+        retireReplacedSessions(discovered)
         mutex.withLock {
             check(!closing) { "总控正在退出" }
             known.replaceAll { _, value -> value.copy(connectionState = "offline") }
@@ -87,6 +88,7 @@ class SharedSupervisorModel(
     override suspend fun connectDevice(serial: String): String {
         val target = inventory.resolve(serial.trim())
         require(target.bootId != null && target.connectionState == "device") { "无法确认设备身份，请刷新后重试" }
+        retireReplacedSessions(listOf(target))
         return deviceLocks.computeIfAbsent(target.deviceId) { Mutex() }.withLock {
             var created = false
             var restoreBinding: Long? = null
@@ -236,6 +238,27 @@ class SharedSupervisorModel(
     override fun reportError(message: String) { errors.value = message }
     override fun dismissError() { errors.value = null }
 
+    /** A fresh boot at a worker's own transport invalidates that runtime, not its saved data.
+     * Retire it before adding the replacement; never transfer an old boot's account binding.
+     */
+    private suspend fun retireReplacedSessions(targets: List<RuntimeDeviceTarget>) {
+        val replaced = mutex.withLock {
+            check(!closing) { "总控正在退出" }
+            sessions.value.filter { item ->
+                val previous = known[item.deviceId]
+                previous?.bootId != null && targets.any { target ->
+                    target.connectionState == "device" && target.bootId != null && target.bootId != previous.bootId &&
+                        (item.serial == target.serial || item.serial in target.aliases)
+                }
+            }.map { it.id }
+        }
+        replaced.forEach { id -> withSession(id) { item ->
+            check(id !in dirty.value) { "模拟器已重新启动，请先保存或取消旧运行页的修改，再重新连接。" }
+            check(!ControlSnapshot(item.link.snapshots.value).busy) { "模拟器已重新启动，请先停止旧运行页的任务，再重新连接。" }
+            remove(item)
+        } }
+    }
+
     private fun rememberDevice(target: RuntimeDeviceTarget) {
         val previous = known[target.deviceId]
         // Drop stale offline address rows only when no session still owns their previous boot.
@@ -249,19 +272,28 @@ class SharedSupervisorModel(
             val item = sessions.value.firstOrNull { it.deviceId == device.deviceId }
             val snapshot = item?.let { ControlSnapshot(it.link.snapshots.value) }
             val state = snapshot?.section("console")?.get("device") as? JsonObject
-            val ready = state?.wireString("_type") == "Ready"
+            val phase = state?.wireString("_type")
+            val ready = phase == "Ready"
+            val transport = item?.link?.connection?.value
+            val connecting = transport == WorkerConnectionStatus.STARTING ||
+                (transport == WorkerConnectionStatus.CONNECTED && phase in setOf("Connecting", "Verifying", "Lost", "Reconnecting"))
             val status = when {
-                item?.link?.connection?.value == WorkerConnectionStatus.LOST -> "会话已断开"
-                item?.link?.connection?.value == WorkerConnectionStatus.STARTING -> "正在打开"
+                transport == WorkerConnectionStatus.LOST -> "会话已断开"
+                transport == WorkerConnectionStatus.CLOSED -> "会话已关闭"
+                transport == WorkerConnectionStatus.STARTING -> "正在打开"
                 snapshot?.busy == true -> "运行中"
                 ready -> "已连接"
+                phase == "Verifying" -> state?.wireString("detail") ?: "正在核验设备"
+                phase == "Connecting" -> "正在连接"
+                phase in setOf("Lost", "Reconnecting") -> "正在重新连接"
+                phase == "Failed" -> "连接失败"
                 device.connectionState != "device" -> "离线"
                 item != null -> "连接中或已断开"
                 else -> "未连接"
             }
             ManagedRuntimeDevice(device.deviceId, item?.serial ?: device.serial, device.name, device.aliases,
                 item?.id, item?.boundAccountId, ready && item?.link?.connection?.value == WorkerConnectionStatus.CONNECTED,
-                snapshot?.busy == true, status)
+                snapshot?.busy == true, status, connecting)
         }
     }
 

@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,6 +21,10 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.AppVersion
@@ -42,6 +47,7 @@ import java.time.format.DateTimeFormatter
     configure:()->Unit,navigate:(Page)->Unit,searchFocus:FocusRequester,
     setup:RunSetupDraft,configuration:LabyrinthUiState,standaloneGuild:Int,selectGuild:(Int)->Unit,
     setupMessage:String?,
+    sharedSettings:ControlSessionUi?=null,
 ) {
     val preferences by graph.ux.preferences.state.collectAsState()
     val history by graph.ux.history.records.collectAsState()
@@ -106,7 +112,7 @@ import java.time.format.DateTimeFormatter
                 }
             }
             Column(Modifier.width(if(compact)280.dp else 310.dp).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                RunReadiness(graph,s,selected,preferences.goals.isNotEmpty(),navigate)
+                RunReadiness(graph,s,selected,preferences.goals.isNotEmpty(),navigate,sharedSettings ?: graph)
                 Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) {
                     listOf("logs" to "日志","preview" to "画面").forEach{(key,label)->
                         FilterChip(selected=preferences.rightTab==key,onClick={actions.run{withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(rightTab=key)}}}},label={Text(label)},modifier=Modifier.weight(1f))
@@ -129,23 +135,32 @@ import java.time.format.DateTimeFormatter
     }
 }
 
-@Composable private fun RunReadiness(graph:ControlSessionUi,s:RunConsoleState,selected:DesktopTask,hasGoals:Boolean,navigate:(Page)->Unit) {
+@Composable internal fun RunReadiness(graph:ControlSessionUi,s:RunConsoleState,selected:DesktopTask,hasGoals:Boolean,navigate:(Page)->Unit,settingsOwner:ControlSessionUi=graph) {
     val resolution by graph.resolutionGuard.status.collectAsState()
     val database by graph.ux.database.collectAsState()
     val foreground by graph.ux.foreground.collectAsState()
     val ocr by graph.ocr.status.collectAsState()
     val preferences by graph.ux.preferences.state.collectAsState()
-    val settings by graph.settings.state.collectAsState()
+    val settings by settingsOwner.settings.state.collectAsState()
     val credentials by graph.ux.credentials.collectAsState()
     val ready=(s.device as? DeviceConnectionState.Ready)?.device
     val actions=rememberActions(graph)
     var expanded by remember{mutableStateOf(false)}
     val missing=startMissing(selected,s.copy(busy=false,stopping=false),ocr is OcrEngineStatus.Ready,hasGoals,credentials[s.task.selectedAccount?.id],resolution)
-    ConsoleCard("就绪状态",action={TextButton(onClick={expanded=!expanded}){Text(if(expanded)"收起" else "详情",style=MaterialTheme.typography.bodySmall)}}) {
+    val needsConfirmation=selected in listOf(DesktopTask.BATCH,DesktopTask.ENTRY)
+    val confirmed=settings.gameSettingsConfirmed&&preferences.animationConfirmedVersion==AppVersion.name
+    val pendingConfirmation=needsConfirmation&&!confirmed
+    val tone=if(s.busy)Accent else if(missing!=null||pendingConfirmation)LocalDesktopColors.current.warn else LocalDesktopColors.current.ok
+    ConsoleCard("运行检查",action={TextButton(onClick={expanded=!expanded}){Text(if(expanded)"收起" else "展开检查项",style=MaterialTheme.typography.bodySmall)}}) {
         val reason=missing
-        Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(7.dp)) {
-            Symbol(if(reason==null)"check_circle" else "warning",tint=if(reason==null)LocalDesktopColors.current.ok else LocalDesktopColors.current.warn,modifier=Modifier.size(17.dp))
-            Text(if(s.busy)"任务进行中" else reason ?: "当前任务已就绪",style=MaterialTheme.typography.bodySmall)
+        Surface(Modifier.fillMaxWidth(),shape=DesktopCorners.sm,color=tone.copy(alpha=.09f)) {
+            Row(Modifier.padding(10.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)) {
+                Symbol(if(!s.busy&&(reason!=null||pendingConfirmation))"warning" else "check_circle",tint=tone,modifier=Modifier.size(20.dp))
+                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(3.dp)) {
+                    Text(when{s.busy->"任务进行中";reason!=null->"尚有检查项未通过";pendingConfirmation->"待确认游戏设置";else->"准备完成"},style=MaterialTheme.typography.bodyMedium,fontWeight=FontWeight.Medium,color=tone)
+                    Text(when{s.busy->"运行中使用开始时的配置";reason!=null->reason;pendingConfirmation->"基础检查通过，请完成下方确认";else->"当前任务的基础检查已通过"},style=MaterialTheme.typography.bodySmall,color=Muted)
+                }
+            }
         }
         if(reason!=null&&!s.busy) TextButton(onClick={navigate(when{reason.contains("账号")->Page.Accounts;reason.contains("目标")||reason.contains("配置")->Page.Run;reason.contains("模型")->Page.Settings;else->Page.Devices})},contentPadding=PaddingValues(horizontal=0.dp,vertical=2.dp)) {
             Text(when{reason.contains("账号")->"选择或编辑账号 →";reason.contains("目标")||reason.contains("配置")->"填写任务配置";reason.contains("模型")->"查看识别模型 →";else->"检查设备 →"},style=MaterialTheme.typography.bodySmall)
@@ -165,15 +180,27 @@ import java.time.format.DateTimeFormatter
                 Text(item.detail,Modifier.widthIn(max=145.dp).clickable{navigate(Page.valueOf(item.page))},color=if(item.passed&&!item.warning)Muted else Accent,style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis)
             }}
             TextButton(onClick={actions.run{graph.recheckResolution();graph.ux.refreshForeground();graph.ux.refreshDatabase()}},enabled=ready!=null&&!s.busy&&!actions.working){Text("重新检查",style=MaterialTheme.typography.bodySmall)}
+            if(settingsOwner!==graph)TextButton(onClick={navigate(Page.Settings)}){Text("打开设置",style=MaterialTheme.typography.bodySmall)}
         }
-        if(selected in listOf(DesktopTask.BATCH,DesktopTask.ENTRY)) {
-            val confirmed=settings.gameSettingsConfirmed&&preferences.animationConfirmedVersion==AppVersion.name
-            Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)) {
-                Checkbox(confirmed,{checked->actions.run{withContext(Dispatchers.IO){graph.settings.update{it.copy(gameSettingsConfirmed=checked)};graph.ux.preferences.update{it.copy(animationConfirmedVersion=if(checked)AppVersion.name else "")}}}},modifier=Modifier.size(26.dp))
-                Text("已在游戏关闭角色加入动画",style=MaterialTheme.typography.bodySmall,color=if(confirmed)Muted else LocalDesktopColors.current.warn)
+        if(needsConfirmation) {
+            HorizontalDivider(color=Line,modifier=Modifier.padding(vertical=3.dp))
+            Row(Modifier.fillMaxWidth().heightIn(min=52.dp).semantics{contentDescription="确认已关闭角色加入动画"}.toggleable(
+                value=confirmed,enabled=!s.busy&&!actions.working&&!LocalTaskBusy.current,role=Role.Checkbox,
+                onValueChange={checked->actions.run{
+                    settingsOwner.settings.update{it.copy(gameSettingsConfirmed=checked)}
+                    graph.ux.preferences.update{it.copy(animationConfirmedVersion=if(checked)AppVersion.name else "")}
+                }}),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(7.dp)) {
+                Checkbox(confirmed,null,enabled=!s.busy&&!actions.working,modifier=Modifier.size(30.dp))
+                Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(3.dp)) {
+                    Text("已关闭角色加入动画",style=MaterialTheme.typography.bodySmall)
+                    Text("游戏内「黎明界设置」",style=MaterialTheme.typography.labelSmall,color=Muted)
+                }
             }
         }
-        Message(actions.message)
+        actions.message?.let{message->Row(Modifier.fillMaxWidth().padding(top=3.dp),horizontalArrangement=Arrangement.spacedBy(6.dp)){
+            Symbol("error",tint=MaterialTheme.colorScheme.error,modifier=Modifier.size(16.dp))
+            Text("操作未完成：$message",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
+        }}
     }
 }
 @Composable internal fun ConsoleCard(title:String,modifier:Modifier=Modifier,action:(@Composable ()->Unit)?=null,content:@Composable ColumnScope.()->Unit){Surface(modifier.fillMaxWidth(),color=MaterialTheme.colorScheme.surface,shape=DesktopCorners.lg,border=BorderStroke(1.dp,Line)){Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){Row(verticalAlignment=Alignment.CenterVertically){Text(title,Modifier.weight(1f),style=MaterialTheme.typography.titleSmall);action?.invoke()};content()}}}

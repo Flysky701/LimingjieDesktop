@@ -25,6 +25,7 @@ class AdbDeviceService(
     private val touchFactory: TouchConnectionFactory = MaaTouchConnection,
     private val leases: UserResourceLeases = UserResourceLeases(),
     private val expectedBootId: String? = System.getProperty("limingjie.runtime.boot-id"),
+    private val verifiedPackageCache: Path = dataDirectory.resolve("cache/verified-packages"),
 ) : DeviceService {
     private class Session(val serial: String, val touchMode: TouchMode, val capturer: ScreenCapturer, var ready: DeviceReady, val bootId: String, @Volatile var touch: TouchConnection?, val lease: ResourceLease) {
         var failures = 0
@@ -41,7 +42,7 @@ class AdbDeviceService(
     private val pendingCleanup = ConcurrentHashMap.newKeySet<Cleanup>()
     private val mutableState = MutableStateFlow<DeviceConnectionState>(DeviceConnectionState.Disconnected)
     override val state: StateFlow<DeviceConnectionState> = mutableState.asStateFlow()
-    private val identities = DeviceIdentityReader(adb, dataDirectory, gamePackages)
+    private val identities = DeviceIdentityReader(adb, dataDirectory, gamePackages, ::emit, verifiedPackageCache)
     @Volatile private var session: Session? = null
     @Volatile private var cachedForeground: String? = null
     @Volatile private var foregroundUpdated = 0L
@@ -111,16 +112,19 @@ class AdbDeviceService(
         val sdk = adb.shell(serial, listOf("getprop", "ro.build.version.sdk")).requireSuccess().text().trim().toIntOrNull()
             ?: throw DeviceOperationException("无法读取 Android 版本")
         if (sdk < 26) throw DeviceOperationException("不支持 Android 8 以下的模拟器")
-        if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "读取设备信息并测试截图")
+        if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "核验游戏安装信息（首次较慢）")
         val size = DeviceParsers.screenSize(adb.shell(serial, listOf("wm", "size")).requireSuccess().text())
         val bootId = readBootId(serial)
         check(expectedBootId == null || bootId == expectedBootId) { "模拟器已重新启动，请重新打开设备会话并确认账号绑定" }
         val lease = leases.acquireDevice(bootId)
         var touch: TouchConnection? = null
         try {
+            val identityStarted = System.nanoTime()
             val identity = identities.read(serial, size)
+            emit("设备信息与游戏签名检查：${(System.nanoTime() - identityStarted) / 1_000_000} ms")
             val awake = DeviceParsers.awake(adb.shell(serial, listOf("dumpsys", "power")).requireSuccess().text())
             val capturer = ScreenCapturer(adb, serial)
+            if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "测试截图速度")
             val (timing, selected) = capturer.benchmark()
             timing.forEach { emit("截图 ${it.mode}：p50 ${it.p50Millis} ms，p95 ${it.p95Millis} ms") }
             if (timing.any { it.p95Millis > 600 }) emit("截图耗时较长，可尝试调整模拟器渲染模式或关闭高帧率")

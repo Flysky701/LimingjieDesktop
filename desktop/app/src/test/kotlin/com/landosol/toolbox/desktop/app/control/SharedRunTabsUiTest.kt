@@ -102,9 +102,31 @@ class SharedRunTabsUiTest {
         compose.runOnIdle{assertTrue(a.commands.isEmpty());assertTrue(b.commands.isEmpty());assertTrue(global.commands.isEmpty())}
     }
 
+    @Test fun preparingADeviceDisplaysItsPhaseAndDisablesRepeatedConnection(){
+        val global=FakePort("global")
+        val a=FakePort("a")
+        val device=ManagedDeviceUi("device-a","serial-a","设备 a","a",connected=false,status="核验游戏安装信息",connecting=true)
+        compose.setContent{SharedRunTabsApp(global,listOf(tab(a,alice)),"a",callbacks(),devices=listOf(device))}
+        compose.onNodeWithText("设备").performClick()
+        compose.onNodeWithText("核验游戏安装信息").assertIsDisplayed()
+        compose.onNodeWithText("正在连接…").assertIsNotEnabled()
+        compose.runOnIdle{assertTrue(a.commands.isEmpty());assertTrue(global.commands.isEmpty())}
+    }
+
+    @Test fun reconnectingAnExistingDeviceUsesItsSessionInsteadOfAddingAnother(){
+        val global=FakePort("global",accounts=listOf(alice))
+        val a=FakePort("a",alice)
+        var reconnected:String?=null
+        val device=ManagedDeviceUi("device-a","serial-a","设备 a","a",alice.id,connected=false,busy=false,status="离线")
+        compose.setContent{SharedRunTabsApp(global,listOf(tab(a,alice)),"a",callbacks(reconnect={reconnected=it}),devices=listOf(device))}
+        compose.onNodeWithText("设备").performClick()
+        compose.onNodeWithText("重新连接").performClick()
+        compose.runOnIdle{assertEquals("a",reconnected);assertTrue(a.commands.isEmpty());assertTrue(global.commands.isEmpty())}
+    }
+
     private fun tab(port:FakePort,account:AccountListItem)=DeviceRunTab(port.instanceId,"设备 ${port.instanceId}",port,"device-${port.instanceId}","serial-${port.instanceId}",account.id)
-    private fun callbacks(select:(String)->Unit={},stopAll:()->Unit={})=SharedRunShellCallbacks(
-        selectSession=select,discover={},connect={},bindAccount={_,_->},disconnect={},closeSession={},reconnectSession={},stopAll=stopAll,
+    private fun callbacks(select:(String)->Unit={},stopAll:()->Unit={},reconnect:(String)->Unit={})=SharedRunShellCallbacks(
+        selectSession=select,discover={},connect={},bindAccount={_,_->},disconnect={},closeSession={},reconnectSession=reconnect,stopAll=stopAll,
     )
 
     private class FakePort(

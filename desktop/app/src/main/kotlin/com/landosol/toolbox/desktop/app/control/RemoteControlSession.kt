@@ -191,13 +191,19 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         private val message=MutableStateFlow<String?>(null)
         private var baseline:AccountEditorState?=null
         val dirty get()=editor.value!=null&&editor.value!=baseline
-        fun copyDraftFrom(other:AccountsView){baseline=other.baseline;editor.value=other.editor.value;deletion.value=other.deletion.value;message.value=other.message.value}
+        fun copyDraftFrom(other:AccountsView){baseline=other.baseline;editor.value=other.editor.value;deletion.value=other.deletion.value;message.value=other.message.value;publish()}
         private val backend=field{it.model("accounts",AccountUiState())}
-        val uiState=combine(backend,editor,deletion,working,message){s,e,d,w,m->s.copy(editor=e,deleteCandidate=d,isWorking=s.isWorking||w,message=m ?: s.message)}.stateIn(scope,SharingStarted.Eagerly,AccountUiState())
-        fun openNewAccount(){if(!busy){baseline=AccountEditorState();editor.value=baseline;message.value=null}}
+        private fun snapshot():AccountUiState=backend.value.let{s->s.copy(editor=editor.value,deleteCandidate=deletion.value,isWorking=s.isWorking||working.value,message=message.value ?: s.message)}
+        private val mutableUiState=MutableStateFlow(snapshot())
+        val uiState=mutableUiState.asStateFlow()
+        private fun publish(){mutableUiState.value=snapshot()}
+        init{scope.launch{combine(backend,editor,deletion,working,message){_,_,_,_,_->Unit}.collect{publish()}}}
+        fun openNewAccount(){if(!busy){baseline=AccountEditorState();editor.value=baseline;message.value=null;publish()}}
         fun openEditAccount(id:Long){scope.launch{working.value=true;try{val reply=request(ControlOps.ACCOUNT_EDIT,buildJsonObject{put("id",id)});baseline=ControlModelCodec.decode(reply["editor"] ?: reply);editor.value=baseline;message.value=null}catch(cancelled:CancellationException){throw cancelled}catch(e:Exception){message.value=e.message}finally{working.value=false}}}
-        fun updateEditor(change:(AccountEditorState)->AccountEditorState){if(!busy)editor.value=editor.value?.let(change)}
-        fun dismissEditor(){editor.value=null;message.value=null}
+        // TextField/IME callbacks must receive their new text in the same UI turn.
+        // Async combine/stateIn feedback can reapply an old composing buffer and duplicate input.
+        fun updateEditor(change:(AccountEditorState)->AccountEditorState){if(!busy){editor.value=editor.value?.let(change);publish()}}
+        fun dismissEditor(){editor.value=null;message.value=null;publish()}
         fun dismissMessage(){message.value=null}
         fun selectAccount(id:Long){fire(ControlOps.ACCOUNT_SELECT,buildJsonObject{put("id",id)})}
         fun requestDelete(account:AccountListItem){if(!busy)deletion.value=account}

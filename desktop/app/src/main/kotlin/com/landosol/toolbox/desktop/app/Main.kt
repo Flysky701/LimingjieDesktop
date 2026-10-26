@@ -153,7 +153,7 @@ fun main(args: Array<String>) {
             window.minimumSize = Dimension(1100, 700)
             DesktopTheme(preferences) {
                 SharedRunTabsApp(sharedHost.control, tabs, selectedId, callbacks,
-                    devices.map { ManagedDeviceUi(it.id, it.serial, it.name, it.sessionId, it.boundAccountId, it.connected, it.busy, it.status) }, window, error)
+                    devices.map { ManagedDeviceUi(it.id, it.serial, it.name, it.sessionId, it.boundAccountId, it.connected, it.busy, it.status, it.connecting) }, window, error)
                 if (confirmExit) AlertDialog(
                     onDismissRequest = { if (!exiting) confirmExit = false },
                     title = { Text("关闭黎明界助手") },

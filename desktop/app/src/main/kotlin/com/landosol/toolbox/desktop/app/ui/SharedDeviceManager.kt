@@ -55,7 +55,9 @@ import com.landosol.toolbox.desktop.device.AdbLocation
                     StatusBadge(device.status)
                 }
                 Row(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
-                    if(!device.connected)Button(onClick={callbacks.connect(device.serial)},enabled=!device.busy,shape=MaterialTheme.shapes.small){Text("连接")}
+                    if(!device.connected)Button(onClick={
+                        device.sessionId?.let(callbacks.reconnectSession) ?: callbacks.connect(device.serial)
+                    },enabled=!device.busy&&!device.connecting,shape=MaterialTheme.shapes.small){Text(when{device.connecting->"正在连接…";device.sessionId==null->"连接";else->"重新连接"})}
                     device.sessionId?.let{id->
                         Box{
                             OutlinedButton(onClick={binding=device.id},enabled=device.connected&&!device.busy,shape=MaterialTheme.shapes.small){Text(if(account==null)"绑定账号" else "更换绑定")}

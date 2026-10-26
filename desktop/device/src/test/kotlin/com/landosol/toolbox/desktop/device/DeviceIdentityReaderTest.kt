@@ -44,21 +44,34 @@ class DeviceIdentityReaderTest {
         assertEquals(expected, DeviceIdentityReader.certificateMd5(v23, 28))
         assertEquals(expected, DeviceIdentityReader.certificateMd5(v23, 26))
         assertEquals(expected, DeviceIdentityReader.certificateMd5(v1, 26))
-        val fake = FakeAdb(); var updated = "2026-10-25 10:00:00"
+        val fake = FakeAdb(); var updated = "2026-10-25 10:00:00"; var apkStamp = "12345:1761386400"
         fake.handler = { call -> when {
             call.arguments == listOf("pm", "list", "packages") -> FakeAdb.success("package:${FakeAdb.GAME}\npackage:com.unrelated")
             call.arguments == listOf("dumpsys", "package", FakeAdb.GAME) -> FakeAdb.success("versionName=1.0\nversionCode=1 minSdk=26\nlastUpdateTime=$updated")
             call.arguments == listOf("pm", "path", FakeAdb.GAME) -> FakeAdb.success("package:/data/app/fixture/split_config.apk\npackage:/data/app/fixture/base.apk")
+            call.arguments.firstOrNull() == "stat" -> FakeAdb.success(apkStamp)
             call.arguments.firstOrNull() == "pull" -> { Files.copy(v23, Path.of(call.arguments[2]), java.nio.file.StandardCopyOption.REPLACE_EXISTING); FakeAdb.success("copied") }
             else -> fake.default(call)
         } }
         val reader = DeviceIdentityReader(fake, directory.root.toPath(), setOf(FakeAdb.GAME))
         repeat(2) { assertEquals(expected, reader.read("fixture", 1920 to 1080).packages[FakeAdb.GAME]!!.certificateMd5) }
         assertEquals(1, fake.calls.count { it.arguments.firstOrNull() == "pull" })
+        // A recreated worker must reuse the previous verification, not pull the APK again.
+        DeviceIdentityReader(fake, directory.root.toPath().resolve("new-worker"), setOf(FakeAdb.GAME),
+            verifiedCacheDirectory = directory.root.toPath().resolve("cache/verified-packages")).read("fixture", 1920 to 1080)
+        assertEquals(1, fake.calls.count { it.arguments.firstOrNull() == "pull" })
         assertTrue(fake.calls.filter { it.arguments.firstOrNull() == "pull" }.all { it.arguments[1].endsWith("/base.apk") })
         updated = "2026-10-25 11:00:00"
         reader.read("fixture", 1920 to 1080)
         assertEquals(2, fake.calls.count { it.arguments.firstOrNull() == "pull" })
+        apkStamp = "12346:1761390000"
+        DeviceIdentityReader(fake, directory.root.toPath(), setOf(FakeAdb.GAME)).read("fixture", 1920 to 1080)
+        assertEquals(3, fake.calls.count { it.arguments.firstOrNull() == "pull" })
+        Files.list(directory.root.toPath().resolve("cache/verified-packages")).use { files ->
+            files.forEach { Files.writeString(it, "corrupt-cache") }
+        }
+        DeviceIdentityReader(fake, directory.root.toPath(), setOf(FakeAdb.GAME)).read("fixture", 1920 to 1080)
+        assertEquals(4, fake.calls.count { it.arguments.firstOrNull() == "pull" })
         Files.list(directory.root.toPath().resolve("cache/apk")).use { assertEquals(0L, it.count()) }
     }
 

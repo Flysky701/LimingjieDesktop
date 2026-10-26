@@ -93,6 +93,7 @@ private data class PendingSessionAction(val title:String,val message:String,val 
     val deviceCallbacks=callbacks.copy(
         bindAccount={id,account->confirmDraftChange(id,"丢弃修改并更换绑定？","丢弃并绑定"){callbacks.bindAccount(id,account)}},
         disconnect={id->confirmDraftChange(id,"丢弃修改并断开设备？","丢弃并断开"){callbacks.disconnect(id)}},
+        reconnectSession={id->confirmDraftChange(id,"丢弃修改并重新连接？","丢弃并重新连接"){callbacks.reconnectSession(id)}},
     )
     val bindings=devices.mapNotNull{row->row.boundAccountId?.let{it to row.name}}.groupBy({it.first},{it.second})
     DesktopTheme(preferences){
@@ -173,7 +174,7 @@ private data class PendingSessionAction(val title:String,val message:String,val 
                                                         Text("此设备的控制进程已断开",Modifier.weight(1f),color=Muted)
                                                         TextButton(onClick={confirmDraftChange(tab.id,"丢弃修改并重新连接？","丢弃并重新连接"){callbacks.reconnectSession(tab.id)}}){Text("重新连接控制进程")}
                                                     }
-                                                    Box(Modifier.weight(1f)){DesktopApp(view,hostWindow,runOnly=true,appearance=preferences,onNavigate={page=it})}
+                                                    Box(Modifier.weight(1f)){DesktopApp(view,hostWindow,runOnly=true,appearance=preferences,onNavigate={page=it},sharedSettings=global)}
                                                 }
                                             }
                                         }}
