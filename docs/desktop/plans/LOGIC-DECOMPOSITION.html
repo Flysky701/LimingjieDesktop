@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>黎明界业务逻辑拆解方案</title>
+<link rel="stylesheet" href="htmlplan.css">
+<script src="htmlplan.js" defer></script>
+<style>
+body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+header h1 { letter-spacing: -.035em; }
+.catalog { overflow-x:auto; border:1px solid #deddd8; border-radius:10px; }
+.catalog table { width:100%; border-collapse:collapse; font-size:13px; line-height:1.65; }
+.catalog th,.catalog td { text-align:left; vertical-align:top; padding:12px; border-bottom:1px solid #e8e6e1; }
+.catalog th { background:#f4f3ee; white-space:nowrap; }
+.catalog code { overflow-wrap:anywhere; font-size:12px; }
+.catalog tr:last-child td { border-bottom:0; }
+</style>
+<style data-mock-shared>
+.panel { font:14px/1.7 "Segoe UI","Microsoft YaHei",sans-serif; color:#253047; background:#fff; border:1px solid #dddfe4; border-radius:12px; overflow:hidden; }
+.head { background:#f1f4f8; padding:14px 18px; font-weight:700; }
+.row { padding:12px 18px; border-top:1px solid #edf0f4; }
+.row b { display:block; color:#244c88; }
+.dim { font-size:12px; color:#68778d; }
+.tag { display:inline-block; padding:2px 8px; margin-right:5px; border-radius:5px; background:#e9eff9; color:#28518a; font-size:12px; }
+.warn { background:#fff6e7; color:#925b16; padding:12px 18px; }
+.good { background:#eef8f2; color:#246443; padding:12px 18px; }
+.code { font-family:Consolas,monospace; font-size:12px; overflow-wrap:anywhere; }
+.rail { border-left:2px solid #c6d4ea; margin:14px 20px; padding-left:16px; }
+.step { padding:6px 0 12px; }
+.step b { color:#274c87; }
+</style>
+<body>
+<header>
+  <h1>黎明界 游戏业务 逻辑拆解 方案</h1>
+  <details class="thread"><summary>依据 · 本轮需求与代码基线</summary>
+    <doc-quote via="prompt" from="用户">现在计划对原项目的逻辑进行系统性的拆解归类， 保持低耦合高内聚的设计模式</doc-quote>
+    <doc-quote via="prompt" from="用户">该版本的目标是完全拆解逻辑</doc-quote>
+    <doc-quote via="prompt" from="用户">主要是游戏行为， 与预期不符， 应该是业务代码部分</doc-quote>
+    <doc-quote via="prompt" from="用户">有几个问题， 业务是耦合的， 无法快速验证<br>版本采用并行工作树进行验证</doc-quote>
+    <doc-quote via="prompt" from="用户">这个版本单开GIt分支， 与现有的兼容版本并行</doc-quote>
+    <p>分析日期：2026-10-27。最初分析依据 308368d 与当时兼容版工作区。拆解版现已独立建立在已提交基线 308368de66535662cab75fce8c250d7533fbeb40 上；兼容线正在修改的未提交修复未带入。这里的“原项目”指 android/app 中供桌面复用的 Kotlin 业务源码。D:\WorkSpace\LimingjiePC 不属于本轮分析与修改对象。</p>
+    <p>拆解版分支：codex/logic-decomposition。工作树：C:\Users\701\.codex\worktrees\logic-decomposition\LimingjieDesktop。本次只迁入并保存拆解方案，尚未改写业务逻辑。</p>
+    <p>兼容版继续使用 codex/ux-round-2 与 D:\Project\LimingjieDesktop。两条线独立提交；兼容修复定稿后按完整提交及其依赖同步，不能直接覆盖工作区。同步后重新验证受影响业务链。</p>
+    <p>本文件是下一版实施方案，尚未实施重构。结论来自静态代码审查；没有运行游戏，也没有认定某个具体故障的根因。旧 PLAN 的移植目标作为历史基线；本轮新增目标是业务拆解与定位能力。</p>
+    <p>本次修订：采用并行工作树对照版本。现有业务耦合，验证从完整链路开始；业务分类是目标边界，不代表当前能够独立拆改、快速验收或立即并行开发。</p>
+  </details>
+</header>
+<main><doc-plan>
+
+<doc-claim id="ownership">
+  <p>每条游戏规则和每份运行状态都有唯一归属。</p>
+  <doc-mock frame="none" w="470"><template>
+    <div class="panel"><div class="head">按业务划分，再在业务内部区分职责</div>
+      <div class="row"><b>入口与开局</b>进入、继续、初始选角、刷开局、开局命中条件。</div>
+      <div class="row"><b>路线与节点</b>选路、地图定位、移动确认、节点完成与区域切换。</div>
+      <div class="row"><b>战斗与编组</b>评分、配队、阵容搜索、特别装备、Boss 多队、重试。</div>
+      <div class="row"><b>奖励、商店与事件</b>分别管理选择、购买、刷新、事件分支及获得确认。</div>
+      <div class="row"><b>会话与整轮任务</b>恢复登录、暂停停止、批量目标、终局与结果计数。</div>
+      <div class="good">每个业务包含自己的规则、状态、流程和案例。识别与外部操作通过明确输入输出连接。</div>
+    </div>
+  </template></doc-mock>
+  <doc-claim>
+    <p>现有文件按规则、流程和适配职责分别归类。</p>
+    <div class="catalog"><table>
+      <thead><tr><th>业务归属</th><th>现有入口或代表文件</th><th>拆解后的责任与状态所有者</th><th>定位问题</th></tr></thead>
+      <tbody>
+        <tr><td>入口与开局</td><td><code>LabyrinthEntryActionPlanner.kt</code><br><code>LabyrinthOpeningRosterPolicy.kt</code><br><code>LabyrinthRerollWorkflow.kt</code></td><td>entry 管页面导航；opening 管开局目标与候选匹配。入口阶段、选角尝试、刷开局检查点分别归属各自流程。</td><td>为何继续旧开局、为何选这个角色、为何重刷。</td></tr>
+        <tr><td>路线与节点</td><td><code>RouteSearch.kt</code><br><code>node/LabyrinthNodeSession.kt</code><br><code>node/LabyrinthNodeActionPlanner.kt</code></td><td>route 管目标、已访问节点和移动确认；视口与几何计算留在识别侧。只在确认后推进节点进度。</td><td>路线选错、节点点错、移动后未推进。</td></tr>
+        <tr><td>战斗与编组</td><td><code>LabyrinthRoleDecisionPolicy.kt</code><br><code>LabyrinthBattleTeamRecommendation.kt</code><br><code>LabyrinthBattleTeamSelectionPlan.kt</code></td><td>battle 内区分角色模型、评分、阵容优化和执行流程。编组、Boss 队次、装备阶段、重试预算各有状态类型。</td><td>推荐错误、角色找不到、重复编组、错误重试。</td></tr>
+        <tr><td>奖励与遗物</td><td><code>LabyrinthRoleRewardChoicePlanner.kt</code><br><code>LabyrinthRelicChoicePolicy.kt</code><br><code>LabyrinthRelicAcquisitionGate.kt</code><br><code>LabyrinthRelicStackLedger.kt</code></td><td>reward 管待选项与待确认获得项；角色与遗物规则保持分开。获得回执更新本轮阵容和遗物快照。</td><td>选了未获得、同一奖励重复计入、旧阵容残留。</td></tr>
+        <tr><td>商店</td><td><code>LabyrinthShopPolicy.kt</code><br><code>LabyrinthEntryRecognitionSession.kt</code> 中 shop 字段及分支</td><td>shop 管购买目标、确认阶段、刷新与本轮计数；获得角色或遗物后通过事件交给 reward。</td><td>买错、重复买、刷新次数或购买计数不符。</td></tr>
+        <tr><td>事件与遭遇</td><td><code>LabyrinthEventChoicePlanner.kt</code><br><code>LabyrinthExEncounterStrategy.kt</code><br><code>LabyrinthEncounterFormation.kt</code></td><td>event 管选项、自由选角与事件完成；遭遇策略向 battle 提供战斗上下文，不直接改编组状态。</td><td>事件选项错误、弹窗抢占、事件奖励与开局混淆。</td></tr>
+        <tr><td>批量与终局</td><td><code>batch/LabyrinthBatchController.kt</code><br><code>LabyrinthAutoRunWorkflow.kt</code><br><code>LabyrinthExecutionGate.kt</code></td><td>run 管单轮生命周期；batch 管目标与计数。沿用已有类型化终局事件，记录幂等，不从提示文字推断成败。</td><td>计数多一次、失败当通关、重复恢复半轮任务。</td></tr>
+        <tr><td>登录与恢复</td><td><code>automation/session/GameSessionResetWorkflow.kt</code><br><code>SessionBlockClassifier.kt</code><br><code>protocol/bilibili/*</code></td><td>recovery 管恢复阶段；登录用例通过协议端口执行。保留服务器差异、验证码、超时与取消语义。</td><td>过期后仍操作、登录状态不同步、恢复循环。</td></tr>
+        <tr><td>账号、配置与数据</td><td><code>account/*</code><br><code>LabyrinthStrategySettings.kt</code><br><code>LabyrinthRunState.kt</code><br><code>gamedata/*</code></td><td>account/config 管校验与保存取消；run 状态、路线、策略、数据版本各有 Repository。Room/文件实现移到适配层。</td><td>配置未生效、保存错误、快照来源不明。</td></tr>
+        <tr><td>会战</td><td><code>clanbattle/ClanBattleStateMachine.kt</code><br><code>SwitchAxisCoordinator.kt</code><br><code>axis/*</code></td><td>独立 clanbattle 业务。复用现有状态机与轴校验；纳入全量归类，维持当前未接入桌面导航的状态。</td><td>避免全量拆解遗漏暂未显示的业务。</td></tr>
+        <tr><td>输入识别</td><td><code>vision/*</code><br><code>node/*Classifier/Mapper/Matcher*</code><br><code>desktop/ocr</code></td><td>识别器给出观察、证据与置信度；保留合法的扫描提示端口。不能直接选择业务动作或修改购买/战斗状态。</td><td>分清“看错了”与“看对但选错了”。</td></tr>
+        <tr><td>外部适配与展示</td><td><code>AutomationActions.kt</code><br><code>desktop/device</code><br><code>data/local</code><br><code>DesktopAppGraph.kt</code><br><code>GraphControlService.kt</code></td><td>设备、网络、数据库、时间是端口实现；Graph 负责组装和生命周期；UI/IPC 转换命令与状态，不复制游戏规则。</td><td>分清规则、输入输出与桌面接线故障。</td></tr>
+      </tbody>
+    </table></div>
+    <doc-note>上表是目标业务边界，不能直接当作并行任务清单。先登记全部源码的入口、状态所有者、读写依赖与调用链，再按可验证的闭环拆出迁移批次。一个文件可拆向多个业务；涉及同一共享状态的改动先在同一工作树完成。纯常量、模型和成熟算法允许整体保留。</doc-note>
+    <doc-claim at="android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt:1097">
+      <p><b>LabyrinthEntryRecognitionSession.kt:1097</b> · LabyrinthEntryRecognitionSession</p>
+      <doc-code src="android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt" lines="1097-1120" caption="当前会话直接接收多种业务策略、状态存储与路线操作。"></doc-code>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim>
+    <p>业务规则只依赖模型，外部操作通过端口执行。</p>
+    <doc-flow caption="箭头表示依赖；具体实现由装配入口注入。">
+<script type="text/plain">
+ui = UI / IPC
+flow = Flow
+rules = Rules
+ports = Ports
+adapters = Adapters
+graph = Graph
+| ui | flow | rules |
+| graph | adapters | ports |
+ui -> flow : command
+flow -> rules : decide
+flow -> ports : effect
+adapters -> ports : implement
+graph -> flow : build
+graph -> adapters : inject
+</script>
+    </doc-flow>
+    <doc-note>先建立包边界和入口，最终把纯规则与模型提取到一个共用 Kotlin 模块。流程可依赖协程，但规则不依赖 Android、Compose、Room、ADB 或全局服务。先使用现有接口，不为每个函数新增接口。</doc-note>
+    <doc-claim at="android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthRunState.kt:155">
+      <p><b>LabyrinthRunState.kt:155</b> · RoomLabyrinthRunStateStore</p>
+      <doc-code src="android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthRunState.kt" lines="155-174" caption="当前模型、合并规则、接口和 Room 实现在同一文件；可按职责搬移。"></doc-code>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim>
+    <p>同一时刻只有一个业务流程拥有动作执行权。</p>
+    <doc-schema lang="kotlin" id="flow-contract" title="业务流程契约 · sketch">
+<script type="text/plain">
+// 按业务定义 S，避免一个可写 GlobalContext 被所有流程共享。
+interface Flow<S> {
+    fun step(state: S, event: GameEvent, context: RunContext): Transition<S>
+}
+data class Transition<S>(
+    val nextState: S,
+    val decision: FlowDecision, // Wait / Execute / Complete / Stop / NotHandled
+    val progress: Progress,     // 结构化结果，不比较 UI 文案
+    val effects: List<Effect>, // 动作、存储等请求；在外层执行
+)
+// 跨业务通过有类型的事件交接，禁止直接改另一个流程的状态。
+</script>
+    </doc-schema>
+    <doc-note>先保留现有屏幕占用优先级，显式记录“会话阻断 → 模态流程 → 当前业务”。特别装备、商店与事件弹窗的关系按当前分支逐条迁移，不能凭名称统一排序。状态更新与外部回执在单个会话内顺序处理；保留最新帧覆盖旧帧的策略，不擅自改帧调度。</doc-note>
+    <doc-claim at="android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt:2534">
+      <p><b>LabyrinthEntryRecognitionSession.kt:2534</b> · processFrameResult</p>
+      <doc-code src="android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt" lines="2534-2558" caption="特别装备模态与通用确认存在明确优先级；拆文件时必须保留。"></doc-code>
+    </doc-claim>
+  </doc-claim>
+</doc-claim>
+
+<doc-claim id="diagnosis">
+  <p>每次动作都能查到依据、执行结果和游戏确认。</p>
+  <doc-mock frame="none" w="470"><template>
+    <div class="panel"><div class="head">业务诊断 · 示例方案，尚未实现</div>
+      <div class="row"><span class="tag">战斗 / 编组</span><span class="tag">案例 A · 第 128 个事件</span></div>
+      <div class="rail">
+        <div class="step"><b>观察</b><br>编组页；角色 A 可见；当前已选 3 人。<div class="dim">帧 86 · 识别证据与坐标可展开</div></div>
+        <div class="step"><b>规则</b><br>目标阵容缺少 A，且入口未被弹窗遮挡。<div class="dim">ruleId / 策略快照 / 候选与淘汰原因</div></div>
+        <div class="step"><b>决定</b><br>选择 A。动作来源：编组流程。</div>
+        <div class="step"><b>执行</b><br>设备接受点击；这不代表角色已经选中。</div>
+        <div class="step"><b>确认</b><br>后续观察仍为 3 人 → 等待确认 → 超时。</div>
+      </div>
+      <div class="warn">故障定位：动作已发出但游戏结果未确认。检查落点、遮挡与识别证据，再决定是否重试。</div>
+    </div>
+  </template></doc-mock>
+  <doc-claim>
+    <p>业务进展由明确结果决定，诊断信息只向外输出。</p>
+    <doc-code src="android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt" lines="5921-5945" caption="现状：动作日志与提示文字变化参与停滞判断，形成可确认的职责耦合。"></doc-code>
+    <doc-note>改为返回 Progress 与 Decision；文案和日志由结果生成。首次搬移先保持原判定语义并记录差异。若改成“只有游戏确认才算进展”，这是独立行为修复，必须有预期案例，不能混入纯搬移。</doc-note>
+    <doc-claim at="android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthFrameTrace.kt:3">
+      <p><b>LabyrinthFrameTrace.kt:3</b> · LabyrinthFrameTrace</p>
+      <doc-code src="android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthFrameTrace.kt" lines="3-20" caption="注释声明诊断不参与决策，但上面的编组路径读取了它。这里只确认不一致，尚不认定故障根因。"></doc-code>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim>
+    <p>动作计划、设备接受和业务确认使用不同结果类型。</p>
+    <doc-schema lang="kotlin" id="action-receipt" title="动作结果与确认 · sketch">
+<script type="text/plain">
+sealed interface ActionEvent {
+    data class Proposed(val decisionId: String, val plan: ActionPlan) : ActionEvent
+    data class Sent(val decisionId: String, val receipt: DeviceReceipt) : ActionEvent
+    data class Rejected(val decisionId: String, val reason: ReasonCode) : ActionEvent
+    data class Confirmed(val decisionId: String, val evidence: GameEvidence) : ActionEvent
+    data class TimedOut(val decisionId: String, val elapsedMs: Long) : ActionEvent
+}
+// 暂停、停止、旧会话与 DryRun 的现有语义仍由会话执行器管理。
+// 未确认不能直接重复购买、刷新或撤退；先按该业务的恢复规则核对状态。
+</script>
+    </doc-schema>
+    <doc-note>游戏操作的确认必须是业务专属证据，例如队伍成员变化、进入目标节点或奖励出现。诊断字段不能把“调用成功”显示成“业务已完成”。取消后到达的旧回执用 sessionId 与 generation 丢弃。</doc-note>
+    <doc-claim at="android/app/src/main/java/com/landosol/toolbox/automation/AutomationActions.kt:44">
+      <p><b>AutomationActions.kt:44</b> · SessionBoundActionExecutor</p>
+      <doc-code src="android/app/src/main/java/com/landosol/toolbox/automation/AutomationActions.kt" lines="44-68" caption="现有执行器把后端 Completed 映射成 Executed；游戏结果需由业务流程另行确认。"></doc-code>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim>
+    <p>故障记录指出第一个偏离预期的环节。</p>
+    <div class="catalog"><table>
+      <thead><tr><th>观察到的证据</th><th>先查哪里</th><th>保留什么</th></tr></thead>
+      <tbody>
+        <tr><td>原始画面与 Observation 不符</td><td>识别、区域映射、缓存时效</td><td>原尺寸截图、原始识别结果、模型/资源版本</td></tr>
+        <tr><td>观察正确，选项与预期不符</td><td>配置、候选排序、业务规则</td><td>候选、分项得分、过滤原因、规则编号、策略快照</td></tr>
+        <tr><td>决策正确，执行参数不符</td><td>动作规划与坐标转换</td><td>语义目标、识别框、分辨率、最终动作参数</td></tr>
+        <tr><td>动作发出，结果未确认</td><td>后端回执、页面遮挡、确认条件</td><td>动作前后观察、超时预算、已用重试次数</td></tr>
+        <tr><td>单步正确，下一步状态错误</td><td>交接、异步回执、持久化恢复</td><td>状态前后值、事件顺序、run/session/generation</td></tr>
+      </tbody>
+    </table></div>
+    <doc-note>复用当前诊断面板和导出 ZIP。补充稳定 reasonCode、规则依据和关联编号；日常只保留有界事件记录，详细证据按需采集。账号用本地替代编号，协议回执只保留业务所需字段，不记录密码、token 或 cookie。</doc-note>
+  </doc-claim>
+</doc-claim>
+
+<doc-claim id="replay">
+  <p>保存的故障案例能离线重放到首次决策分歧。</p>
+  <doc-mock frame="none" w="470"><template>
+    <div class="panel"><div class="head">案例对比 · 示例方案，尚未实现</div>
+      <div class="row"><b>输入包</b>初始状态 + 策略快照 + 游戏数据版本 + 有序事件 + 时间与外部结果。</div>
+      <div class="row"><b>模式一：观察 → 业务决策</b>固定识别结果，直接定位规则、状态与流程错误。</div>
+      <div class="row"><b>模式二：原图 → 识别 → 业务决策</b>确认是否从识别开始偏离；需要原尺寸无损图。</div>
+      <div class="warn">首次分歧：事件 128 / battle.selection<br>当前结果：选择 A<br>业务预期：等待装备弹窗关闭<br>候选原因：被 modal.specialEquipment 占用</div>
+      <div class="row dim">上面是说明诊断方式的假设案例，不是本次已复现的 BUG。</div>
+    </div>
+  </template></doc-mock>
+  <doc-claim>
+    <p>现有识别回放扩展为带状态的业务回放。</p>
+    <doc-calls title="现有能力与新增入口" caption="保留现有识别回放；业务回放增加明确输入，不接真实设备。">
+<script type="text/plain">
+  LabyrinthReplayHarness.replayBundle() @ android/app/src/test/java/com/landosol/toolbox/labyrinth/replay/LabyrinthReplayHarness.kt:93
+    LabyrinthEntryFrameProcessor.process() @ android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthEntryFrameProcessor.kt:468
++ **BusinessReplayHarness.runCase()** @ android/app/src/test/java/com/landosol/toolbox/labyrinth/replay/BusinessReplayHarness.kt:1
++   **RecordedEventSource** @ android/app/src/test/java/com/landosol/toolbox/labyrinth/replay/RecordedEventSource.kt:1
++   **RecordingEffectRunner** @ android/app/src/test/java/com/landosol/toolbox/labyrinth/replay/RecordingEffectRunner.kt:1
+</script>
+    </doc-calls>
+    <doc-note>使用已有 JUnit、协程测试工具与真实 Graph 的假设备入口。初期先对照动作请求、公开状态、持久化结果和终局计数；旧版本没有的内部决策记录不是开工前提。随着业务拆出，再补内部原因对照。固定时间推进、事件顺序、外部结果和必要随机源；缺少回执或初始状态时标注“证据不足”。这项能力需要逐步建立，不能视为现成的快速验证。</doc-note>
+    <doc-claim at="android/app/src/test/java/com/landosol/toolbox/labyrinth/replay/LabyrinthReplayHarness.kt:68">
+      <p><b>LabyrinthReplayHarness.kt:68</b> · LabyrinthReplayHarness</p>
+      <doc-code src="android/app/src/test/java/com/landosol/toolbox/labyrinth/replay/LabyrinthReplayHarness.kt" lines="68-90" caption="现有 Harness 重跑 FrameProcessor，没有运行整条业务状态与决策链。"></doc-code>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim>
+    <p>兼容案例与 BUG 预期分别记录。</p>
+    <doc-schema lang="kotlin" id="behavior-case" title="行为案例 · sketch">
+<script type="text/plain">
+data class BehaviorCase(
+    val id: String,
+    val initial: RunSnapshot,
+    val config: StrategySnapshot,
+    val versions: CaseVersions,
+    val events: List<RecordedEvent>,
+    val observed: List<DecisionExpectation>, // 当前行为，用于搬移对比
+    val expected: List<DecisionExpectation>, // 业务意图，可与 observed 不同
+    val expectationSource: String, // 用户说明、现有规格或已确认规则
+)
+</script>
+    </doc-schema>
+    <doc-note>重构通过不等于旧行为正确。存在差异的案例保留两套结果；先确认预期，再单独修复规则。当前用户只描述了业务行为异常，未提供具体场景，因此不编造 BUG 清单或宣称已修复。</doc-note>
+  </doc-claim>
+  <doc-claim>
+    <p>诊断图片与业务事件保持可核对的关联。</p>
+    <doc-code src="android/app/src/main/java/com/landosol/toolbox/labyrinth/debug/LabyrinthDebugDashboardServer.kt" lines="752-771" caption="现有归档图片宽度为 960，并有数量上限；缩放图适合查看，不保证像素级回放一致。"></doc-code>
+    <doc-note>观察回放直接使用记录的 Observation。识别排查另存目标时段的原尺寸无损图及 frameId；记录缺帧、资源缺失和时间缺口。优先复用当前有界归档机制，不默认全程录屏或无限保留。</doc-note>
+  </doc-claim>
+</doc-claim>
+
+<doc-claim id="worktrees">
+  <p>基线、重构与集成版本在独立工作树中对照验证。</p>
+  <doc-mock frame="none" w="470"><template>
+    <div class="panel"><div class="head">并行工作树 · 同源版本，独立运行数据</div>
+      <div class="row"><b>基线树 · codex/logic-baseline</b>固定当前行为，用同一案例记录旧版结果。业务实现保持不动。</div>
+      <div class="row"><b>重构树 · codex/logic-decomposition</b>已独立创建；后续保持整条链路可运行，通过旧入口委托，逐段抽取职责。</div>
+      <div class="row"><b>验证树 · codex/logic-integration</b>按依赖顺序组合候选提交，验证跨业务交接，并与基线比较。</div>
+      <div class="good">并行执行离线对照；证据与边界成熟后，再增加职责互不重叠的开发树。</div>
+      <div class="row dim">重构树已经建立；固定基线树和集成验证树在实际验证时按需建立。现有兼容版工作树继续独立维护。</div>
+    </div>
+  </template></doc-mock>
+  <doc-claim>
+    <p>所有验证树使用同一基线和相同案例。</p>
+    <doc-schema lang="kotlin" id="worktree-comparison" title="版本对照记录 · sketch">
+<script type="text/plain">
+data class VersionComparison(
+    val baseCommit: String,
+    val candidateCommits: List<String>,
+    val fixtureVersion: String,
+    val initialDataVersion: String,
+    val configAndResourceVersions: CaseVersions,
+    val baselineOutput: BehaviorOutput,
+    val candidateOutput: BehaviorOutput,
+    val firstDifference: BehaviorDifference?,
+    val conclusion: ComparisonConclusion, // 一致 / 已确认修复 / 回归 / 证据不足
+)
+</script>
+    </doc-schema>
+    <doc-note>拆解分支已从已提交的 308368d 建立，作为明确的初始对照基线。兼容版目录仍有进行中的修改，未将它们作为已定稿基线纳入。验证树须明确记录使用哪个基线；纳入后续兼容修复时，先形成完整提交，再同步相关版本并更新对照记录，不能沿用旧结果。已有 multi-instance-tabs、shared-run-tabs、ux-vscode 属于其他工作，不直接重置或复用。</doc-note>
+    <doc-note>同一案例、同一初始数据副本、同一配置与资源版本分别输入两树。公共测试适配保持同版，只观测外部结果；若需补基线观测点，单独提交并确认业务输出不变。初期只比较两版共有的字段，不把新增诊断字段当作行为差异。</doc-note>
+  </doc-claim>
+  <doc-claim>
+    <p>验证覆盖跨业务闭环，再定位内部差异。</p>
+    <div class="catalog"><table>
+      <thead><tr><th>场景闭环</th><th>需要保留的关联</th><th>对照结果</th></tr></thead>
+      <tbody>
+        <tr><td>编组 → 特别装备 → 战斗 → 奖励 → 回地图</td><td>队伍、装备模态、战斗上下文、获得记录、路线交接</td><td>动作顺序与目标、确认与超时、阵容与路线状态</td></tr>
+        <tr><td>商店 → 购买确认 → 角色/遗物获得 → 后续编组</td><td>购买预算、待获得项、遗物层数、角色集合与策略快照</td><td>购买/刷新次数、获得是否重复、下一次配队输入</td></tr>
+        <tr><td>会话失效 → 恢复 → 重载进度 → 继续或终止</td><td>会话代次、旧动作回执、账号、路线与恢复阶段</td><td>旧回执丢弃、状态恢复、终止原因与后续动作</td></tr>
+        <tr><td>刷开局 → 保存路线 → 重置 → 进入 → 终局计数</td><td>服务器开局、设备会话、路线持久化、单轮与批量任务</td><td>开局命中、重复启动、通关/尝试计数与检查点</td></tr>
+      </tbody>
+    </table></div>
+    <doc-note>按修改选择相关闭环；不要求每一小步跑完整游戏。案例从已知可恢复的真实逻辑状态开始，缺少前置状态时延长输入片段，不能用随意构造的中间状态证明正确。单类测试用于定位，闭环对照用于验收本批迁移。</doc-note>
+    <doc-claim at="desktop/app/src/test/kotlin/com/landosol/toolbox/desktop/app/DesktopGraphIntegrationTest.kt:163">
+      <p><b>DesktopGraphIntegrationTest.kt:163</b> · upstreamRerollPersistsAndActionReplayUsesRealGraph</p>
+      <doc-code src="desktop/app/src/test/kotlin/com/landosol/toolbox/desktop/app/DesktopGraphIntegrationTest.kt" lines="163-184" caption="已有真实 Graph 配合假设备与测试数据的接入点；需要扩展场景，不能宣称已有完整业务覆盖。"></doc-code>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim>
+    <p>共享契约先稳定，互不重叠的改动再并行。</p>
+    <doc-mock frame="none" w="470"><template>
+      <div class="panel"><div class="head">工作树之间的合并顺序</div>
+        <div class="row"><b>先处理公共入口</b>Session、Controller、状态模型和 Flow/Action 契约由一个工作树统一改动。先提供委托边界。</div>
+        <div class="row"><b>再分配业务实现</b>仅将已具备边界与案例的业务分到独立树；明确所依赖的契约提交和允许修改的文件。</div>
+        <div class="row"><b>逐批集成</b>公共契约 → 对应业务 → 接线 → 闭环对照。每个候选先单独验证，再组合验证受影响交接点。</div>
+        <div class="row"><b>保留可追溯结果</b>候选提交、案例版本、首个差异和预期来源一同记录。失败撤回本批，后续依赖提交重新排队。</div>
+      </div>
+    </template></doc-mock>
+    <doc-note>有 Git 合并无冲突，不代表业务状态兼容。候选依赖未合并的公共改动时，显式带入依赖或等待，不能悄悄各改一套契约。修改契约后，只重验受影响消费者和交接案例。</doc-note>
+  </doc-claim>
+  <doc-claim>
+    <p>各工作树独立存放运行数据与验证输出。</p>
+    <doc-code title="本地验证目录 · sketch" lang="text"><script type="text/plain">
+validation/<case>/
+  inputs/                 # 同版、只读、可重复的案例输入
+  baseline/data/          # 独立测试数据库与设置
+  baseline/data-run-tabs/ # 独立设备会话缓存
+  baseline/results/
+  candidate/data/
+  candidate/data-run-tabs/
+  candidate/results/
+  integration/data/
+  integration/data-run-tabs/
+  integration/results/
+</script></doc-code>
+    <doc-note>应用显式使用各自的 --data-dir；同时隔离相邻的 -run-tabs 目录、诊断端口和输出。离线假设备可并行运行。真实游戏的同一模拟器由一个版本独占，另一版本等待；不把同时点击同一设备当成版本对照。长链路案例按资源容量限并发，避免负载改变实际超时结果。</doc-note>
+  </doc-claim>
+</doc-claim>
+
+<doc-claim id="migration">
+  <p>全部业务分批迁出，运行链始终可追踪。</p>
+  <doc-mock frame="none" w="470"><template>
+    <div class="panel"><div class="head">建议实施顺序 · 完成目标覆盖全部业务</div>
+      <div class="row"><b>0 · 固定基线，建立工作树对照</b>保存本版基线，登记耦合关系；让一条完整业务链能在独立数据下重复运行。</div>
+      <div class="row"><b>1 · 建立观测与委托边界</b>先比较两版共有的外部结果，再类型化进展和动作回执；保留整条链路可运行。</div>
+      <div class="row"><b>2 · 在重构树完成首批抽取</b>默认围绕编组与特别装备抽取职责，验证延伸到战斗、奖励与回地图交接。</div>
+      <div class="row"><b>3 · 按依赖扩展并行范围</b>接口稳定后拆分不重叠的业务树；在集成树按依赖合并，覆盖全部业务及受影响交接。</div>
+      <div class="row"><b>4 · 收敛编译边界与旧入口</b>统一共享业务模块、清退兼容入口，核对集成版与基线差异及已确认修复。</div>
+      <div class="good">每批交付：候选提交 + 完整闭环结果 + 首个差异 + 已知偏差。独立编译或单类测试通过只表示局部结果。</div>
+    </div>
+  </template></doc-mock>
+  <doc-ask id="pilot">
+    <p>第一批抽取以哪条业务链为中心？</p>
+    <label><input type="radio" name="pilot" value="battle" checked> 编组、装备到战斗结算 <small>验证包含奖励与回地图交接。</small></label>
+    <label><input type="radio" name="pilot" value="specific-bug"> 先处理我提供的具体异常 <small>按真实故障调整首批边界。</small></label>
+  </doc-ask>
+  <doc-claim>
+    <p>抽取后的纯业务代码由 Android 与桌面共同编译。</p>
+    <doc-tree caption="目标目录为草图；迁移前逐项确定归属，不创建第二份业务实现。">
+<script type="text/plain">
+repository/
+  + business/                    # neutral Kotlin module, one source of truth
+    src/main/kotlin/
+      model/
+      labyrinth/
+        entry/
+        opening/
+        route/
+        battle/
+        reward/
+        shop/
+        event/
+        run/
+      account/
+      clanbattle/
+  ~ android/app/                 # Android adapters and migration facade
+  ~ desktop/shared/              # compatibility and remaining upstream source
+  ~ desktop/app/                 # desktop adapters and composition
+</script>
+    </doc-tree>
+    <doc-ask id="boundary">
+      <p>最终采用哪种隔离边界？</p>
+      <label><input type="radio" name="boundary" value="module" checked> 共享业务模块 <small>编译依赖约束规则与平台隔离。</small></label>
+      <label><input type="radio" name="boundary" value="packages"> 仅在现有工程内拆包 <small>构建改动更少，依赖约束较弱。</small></label>
+    </doc-ask>
+    <doc-note>推荐先拆包、稳定接口后再抽取一个 business 模块，不为每项功能增加 Gradle 模块。若选择仅拆包，最后的模块迁移取消，归类、状态所有权和回放目标仍保留。上游同步继续从单一源码维护；搬移与必要补丁登记到既有清单。</doc-note>
+    <doc-claim at="desktop/shared/build.gradle.kts:12">
+      <p><b>desktop/shared/build.gradle.kts:12</b> · prepareUpstreamMain</p>
+      <doc-code src="desktop/shared/build.gradle.kts" lines="12-26" caption="桌面通过 Sync 生成上游源码；修改源文件与接入配置，不能手改 build/generated。"></doc-code>
+    </doc-claim>
+  </doc-claim>
+  <doc-claim>
+    <p>每批迁移比较闭环结果，失败可单独撤回。</p>
+    <div class="catalog"><table>
+      <thead><tr><th>迁移范围</th><th>必要验证</th><th>撤回边界</th></tr></thead>
+      <tbody>
+        <tr><td>纯规则与模型</td><td>复用 Policy/Planner 测试定位差异；在其实际调用链核对决定、状态与后续结果。</td><td>独立搬移提交，保留原公共入口。</td></tr>
+        <tr><td>战斗/商店/节点流程</td><td>同案例比较基线与候选的完整交接；覆盖本批相关的成功、已知异常、未确认动作及超时。</td><td>以可运行闭环为一批；同一版本的运行路径只执行一套实现。</td></tr>
+        <tr><td>共享生命周期</td><td>暂停/停止、旧会话回执、异常恢复、跨轮状态清理；仅覆盖受影响组合。</td><td>保留入口外观；不以双执行比较真实游戏行为。</td></tr>
+        <tr><td>模块和存储适配</td><td>受影响端编译、既有源码漂移与签名检查；保存取消、检查点恢复相关用例。</td><td>本版本优先保持数据格式，避免把数据迁移混进重构。</td></tr>
+      </tbody>
+    </table></div>
+    <doc-note>耦合路径的集成对照是本版迁移的必要证据，单类通过不能替代它。按影响选择闭环，不默认全量回归，也不承诺每批都能快速验证。提交时遵守实际 CI 门禁；离线回放通过不宣称实机通过。</doc-note>
+  </doc-claim>
+  <doc-claim>
+    <p>完成标准检查职责与可定位性，不检查拆出多少文件。</p>
+    <doc-mock frame="none" w="470"><template>
+      <div class="panel"><div class="head">“完全拆解逻辑”的完成标准</div>
+        <div class="row">全部原有业务能力都登记归属、入口、状态、外部读写和验证案例；保留项说明理由。</div>
+        <div class="row">旧 Session 与 Controller 只编排生命周期和委托业务；游戏规则不散落在 UI、日志或装配代码中。</div>
+        <div class="row">业务之间不直接修改对方状态；编译依赖或包检查能发现反向依赖。</div>
+        <div class="row">动作可追到规则、输入、执行回执与游戏确认；关闭详细日志不改变决策。</div>
+        <div class="row">每条迁移业务链在基线、候选与集成版上有对应闭环结果；关键业务交接纳入验证。已确认 BUG 有独立预期，旧行为偏差不被掩盖。</div>
+        <div class="row">同一源码供两端使用，旧实现已退场或仅保留兼容委托；配置默认值、保存取消、任务互斥保持。</div>
+      </div>
+    </template></doc-mock>
+    <doc-note>本次分析没有完成以上实施标准。文件行数仅用于找热点，不把“全部拆到固定行数”或“每个类都必须有接口”当作目标。</doc-note>
+  </doc-claim>
+</doc-claim>
+
+<doc-claim aux="shared">
+  <p>各流程共用一份事件关联契约。</p>
+  <doc-schema id="trace-record" lang="kotlin" title="事件记录 · sketch">
+<script type="text/plain">
+data class TraceRecord(
+    val context: TraceContext, // deviceAlias / sessionId / generation / runId
+    val sequence: Long,       // 会话内有序事件；不以墙钟排序
+    val sourceFrameId: Long?,
+    val decisionId: String?,
+    val flowAndRule: RuleRef,
+    val inputAndVersions: EvidenceRef, // 观察、策略、模型、资源、数据版本
+    val stateChange: StateChange,
+    val result: DecisionOrReceipt,
+    val timing: RecordedTiming,
+)
+</script>
+  </doc-schema>
+  <doc-note>这是诊断与回放的数据草图，不是新的中心业务模型。正式业务状态仍由各流程拥有。引用的快照必须随案例保留，只有编号而没有内容不能保证复现。</doc-note>
+</doc-claim>
+<doc-claim aux="scope">
+  <p>本版本聚焦业务拆解与故障定位。</p>
+  <ul>
+    <li>继续使用 Kotlin / Compose Desktop 与共享上游源码路线；设备进程隔离、ADB、OCR 引擎和协议格式沿用现状。</li>
+    <li>不借重构调整角色评分权重、识别阈值、兜底点、购买刷新规则或撤退条件；确认后的 BUG 修复独立说明行为变化。</li>
+    <li>账号校验、默认值、合法范围、保存取消、任务互斥与必要确认继续有效；真实数据不因拆解重建。</li>
+    <li>复用现有诊断面板与回放基础；不建立微服务、插件平台、通用规则引擎或全新测试框架。</li>
+    <li>当前 9,720 行会话、2,477 行角色策略、1,276 行 Controller 和 1,126 行桌面 Graph 是审查热点；并非全部都有已确认 BUG。</li>
+  </ul>
+</doc-claim>
+</doc-plan></main>
+</body></html>
