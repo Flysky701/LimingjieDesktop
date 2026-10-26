@@ -26,6 +26,8 @@ desktop\gradlew.bat -p desktop check
 
 便携包包含 Java 21、用户说明和许可。ADB 可由用户提供或在设备页下载。
 
+Windows ZIP 会裁剪 ONNX Runtime、SQLite 和 JNA 中其他平台的原生库及调试符号，保留 Windows x64 运行库、Java 代码、识别模型与完整许可声明。
+
 ## 模块
 
 | 模块 | 职责 |

@@ -118,6 +118,10 @@ dual-license notice is retained. ONNX Runtime's bundled ThirdPartyNotices is
 retained in addition to its MIT license. The included JRE retains its own
 `runtime/legal` directory.
 
+The Windows portable ZIP filters unused native-platform resources and debug symbols
+from the ONNX Runtime, bundled SQLite and JNA JARs. Java classes, Windows x64
+runtime libraries and their license/NOTICE files are retained unchanged.
+
 MaaTouch v1.1.0 is distributed unmodified from
 <https://github.com/MaaAssistantArknights/MaaTouch/releases/tag/v1.1.0>, under
 Apache-2.0. Its pinned asset URL, SHA-256 and license are in

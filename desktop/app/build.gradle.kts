@@ -1,4 +1,10 @@
 import java.security.MessageDigest
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
+import java.util.zip.Deflater
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
+import java.util.zip.ZipOutputStream
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -31,6 +37,73 @@ compose.desktop {
             includeAllModules = true
             windows { iconFile.set(project.file("src/main/resources/desktop/app.ico")) }
         }
+    }
+}
+
+fun runtimeEntry(source: ZipEntry) = ZipEntry(source.name).also { it.time = source.time }
+
+/** Keep the original Java API, notices and Windows x64 native code in multi-platform JARs. */
+fun windowsRuntimeJar(source: File, destination: File): Int = ZipFile(source).use { jar ->
+    val entries = jar.entries().asSequence().toList()
+    val nativeExtensions = listOf(".dll", ".so", ".dylib", ".jnilib")
+    val otherJnaRoots = entries.map { it.name }.filter { name ->
+        name.startsWith("com/sun/jna/") && nativeExtensions.any(name::endsWith) &&
+            !name.startsWith("com/sun/jna/win32-x86-64/")
+    }.map { it.substringBeforeLast('/') + "/" }.toSet()
+    val removed = entries.filter { entry ->
+        val name = entry.name
+        name.endsWith(".pdb", ignoreCase = true) ||
+            (name.startsWith("ai/onnxruntime/native/") && name != "ai/onnxruntime/native/" &&
+                !name.startsWith("ai/onnxruntime/native/win-x64/")) ||
+            (name.startsWith("natives/") && name != "natives/" &&
+                !name.startsWith("natives/windows_x64/")) ||
+            otherJnaRoots.any(name::startsWith)
+    }.map { it.name }.toSet()
+    if (removed.isEmpty()) return@use 0
+    check(entries.none { entry -> listOf(".SF", ".RSA", ".DSA", ".EC").any { entry.name.uppercase().endsWith(it) } }) {
+        "Cannot filter a signed runtime JAR: ${source.name}"
+    }
+    ZipOutputStream(destination.outputStream().buffered()).use { output ->
+        output.setLevel(Deflater.BEST_COMPRESSION)
+        entries.filterNot { it.name in removed }.forEach { entry ->
+            output.putNextEntry(runtimeEntry(entry))
+            if (!entry.isDirectory) jar.getInputStream(entry).use { it.copyTo(output) }
+            output.closeEntry()
+        }
+    }
+    removed.size
+}
+
+fun windowsPortableArchive(archive: File, temporary: File) {
+    val rebuilt = temporary.resolve("windows-portable.zip")
+    val originalJar = temporary.resolve("native-source.jar")
+    val filteredJar = temporary.resolve("native-windows.jar")
+    try {
+        ZipFile(archive).use { source ->
+            ZipOutputStream(rebuilt.outputStream().buffered()).use { output ->
+                output.setLevel(Deflater.BEST_COMPRESSION)
+                source.entries().asSequence().forEach { entry ->
+                    output.putNextEntry(runtimeEntry(entry))
+                    val name = entry.name.substringAfterLast('/')
+                    val runtime = listOf("onnxruntime-", "sqlite-bundled-jvm-", "jna-").any(name::startsWith)
+                    if (!entry.isDirectory && entry.name.contains("/app/") && name.endsWith(".jar") && runtime) {
+                        source.getInputStream(entry).use { input -> originalJar.outputStream().use { input.copyTo(it) } }
+                        val removed = windowsRuntimeJar(originalJar, filteredJar)
+                        val selected = if (removed > 0) filteredJar else originalJar
+                        selected.inputStream().use { it.copyTo(output) }
+                        if (removed > 0) println("Windows runtime: $name, ${originalJar.length()} -> ${selected.length()} bytes ($removed unused entries removed)")
+                    } else if (!entry.isDirectory) {
+                        source.getInputStream(entry).use { it.copyTo(output) }
+                    }
+                    output.closeEntry()
+                }
+            }
+        }
+        Files.move(rebuilt.toPath(), archive.toPath(), REPLACE_EXISTING)
+    } finally {
+        Files.deleteIfExists(originalJar.toPath())
+        Files.deleteIfExists(filteredJar.toPath())
+        Files.deleteIfExists(rebuilt.toPath())
     }
 }
 
@@ -71,6 +144,7 @@ tasks.register<Zip>("packagePortableZip") {
         }
     }
     doLast {
+        windowsPortableArchive(archiveFile.get().asFile, temporaryDir)
         val digest = MessageDigest.getInstance("SHA-256")
         archiveFile.get().asFile.inputStream().buffered().use { input ->
             val buffer = ByteArray(1024 * 1024)
