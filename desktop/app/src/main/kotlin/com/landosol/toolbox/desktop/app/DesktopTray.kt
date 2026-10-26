@@ -161,7 +161,8 @@ private fun trayScreen(point: Point): GraphicsConfiguration {
 
 /** Flip at the clicked point before clamping, so near-edge clicks keep a menu corner anchored. */
 internal fun trayPopupLocation(anchor: Point, size: Dimension, area: Rectangle): Point {
-    val x = if (anchor.x + size.width > area.x + area.width) anchor.x - size.width else anchor.x
+    // Requested visual adjustment: 8 AWT units = 10 screen pixels at 125% scaling.
+    val x = (if (anchor.x + size.width > area.x + area.width) anchor.x - size.width else anchor.x) - 8
     val y = if (anchor.y + size.height > area.y + area.height) anchor.y - size.height else anchor.y
     return Point(x.coerceIn(area.x, (area.x + area.width - size.width).coerceAtLeast(area.x)),
         y.coerceIn(area.y, (area.y + area.height - size.height).coerceAtLeast(area.y)))

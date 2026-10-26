@@ -38,14 +38,14 @@ class DesktopTrayPositionTest {
     @Test fun nearRightEdgePopupFollowsClickRatherThanStickingToScreenEdge() {
         val size = Dimension(180, 220)
         val area = Rectangle(0, 0, 2048, 1112)
-        assertEquals(Point(1820, 680), trayPopupLocation(Point(2000, 900), size, area))
-        assertEquals(Point(1780, 680), trayPopupLocation(Point(1960, 900), size, area))
-        assertEquals(Point(100, 100), trayPopupLocation(Point(100, 100), size, area))
+        assertEquals(Point(1812, 680), trayPopupLocation(Point(2000, 900), size, area))
+        assertEquals(Point(1772, 680), trayPopupLocation(Point(1960, 900), size, area))
+        assertEquals(Point(92, 100), trayPopupLocation(Point(100, 100), size, area))
     }
 
     @Test fun taskbarAndNegativeMonitorOriginsAreRespected() {
         val area = Rectangle(-1920, 30, 1920, 1010)
-        assertEquals(Point(-200, 820), trayPopupLocation(Point(-20, 1060), Dimension(180, 220), area))
+        assertEquals(Point(-208, 820), trayPopupLocation(Point(-20, 1060), Dimension(180, 220), area))
         assertEquals(Point(-1920, 30), trayPopupLocation(Point(-1930, 10), Dimension(180, 220), area))
         assertEquals(Point(-1920, 30), trayPopupLocation(Point(-20, 1060), Dimension(2200, 1400), area))
     }
