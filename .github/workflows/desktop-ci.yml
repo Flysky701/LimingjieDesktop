@@ -1,106 +1,141 @@
-name: Desktop CI
+name: Windows Desktop CI
+run-name: Windows desktop · ${{ github.ref_name }} · ${{ github.event_name }}
 
 on:
   push:
-    branches: ['desktop/**']
-    paths: ['desktop/**', 'android/app/src/**', 'android/app/build.gradle.kts', 'android/app/schemas/**', 'docs/desktop/**', 'README-desktop.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', '.github/workflows/desktop-ci.yml']
+    branches: [main]
+    tags: ['desktop-v*']
+    paths: &desktop-paths
+      - 'desktop/**'
+      - '!desktop/**/*.md'
+      - 'desktop/licenses/**'
+      - 'desktop/device/licenses/**'
+      - 'desktop/ocr/licenses/**'
+      - 'desktop/ocr/MODELS.md'
+      - 'android/app/src/**'
+      - '!android/app/src/**/*.md'
+      - 'android/app/schemas/**'
+      - 'android/app/build.gradle.kts'
+      - '.gitattributes'
+      - '.github/workflows/desktop-ci.yml'
+      - '.github/scripts/ci-summary.py'
   pull_request:
-    paths: ['desktop/**', 'android/app/src/**', 'android/app/build.gradle.kts', 'android/app/schemas/**', 'docs/desktop/**', 'README-desktop.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', '.github/workflows/desktop-ci.yml']
+    paths: *desktop-paths
   workflow_dispatch:
+    inputs:
+      package_candidate:
+        description: 'Build and upload a Windows candidate ZIP after all checks pass'
+        type: boolean
+        default: false
+      upload_reports:
+        description: 'Upload detailed reports (requires available artifact storage)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+concurrency:
+  group: windows-desktop-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  jvm-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Verify JVM modules and OCR acceptance
-        run: bash desktop/gradlew -p desktop check
-      - name: Confirm upstream fixtures remain unchanged
-        if: always()
-        shell: bash
-        run: |
-          changes="$(git status --porcelain --untracked-files=all -- android/)"
-          if [ -n "$changes" ]; then printf '%s\n' "$changes"; exit 1; fi
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: desktop-jvm-reports
-          path: |
-            desktop/**/build/reports/
-            desktop/**/build/test-results/
-
-  android-verify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Verify upstream Android project
-        working-directory: android
-        run: ./gradlew lintDebug testDebugUnitTest assembleDebug
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: desktop-android-verification
-          path: |
-            android/app/build/reports/
-            android/app/build/outputs/apk/debug/app-debug.apk
-
-  windows-package:
-    needs: jvm-test
+  windows:
+    name: Windows x64 verification
     runs-on: windows-latest
-    steps:
-      - name: Preserve LF before checkout
+    timeout-minutes: 45
+    defaults:
+      run:
         shell: pwsh
+    steps:
+      - name: Preserve verified resource bytes
         run: |
           git config --global core.autocrlf false
           git config --global core.eol lf
       - uses: actions/checkout@v4
+      - name: Read desktop client version
+        id: metadata
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $source = Get-Content -Raw -Encoding UTF8 desktop/build.gradle.kts
+          $match = [regex]::Match($source, 'version\s*=\s*"(\d+\.\d+\.\d+\+desktop\.\d+)"')
+          if (-not $match.Success) { throw 'Desktop version is missing from desktop/build.gradle.kts' }
+          $version = $match.Groups[1].Value
+          if ($env:REF_TYPE -eq 'tag' -and $env:REF_NAME -ne "desktop-v$version") {
+            throw "Desktop tag must match desktop-v$version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "archive=LimingjieAssistant-desktop-$version-win-x64.zip" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Verify Windows behavior and package
-        shell: pwsh
-        run: desktop/gradlew.bat -p desktop check :app:packagePortableZip
-      - name: Verify portable image from Chinese and spaced directory
-        shell: pwsh
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: Verify desktop modules, Windows runtime and OCR quality
+        run: |
+          $executable = Join-Path $env:GITHUB_WORKSPACE 'desktop/app/build/compose/binaries/main-release/app/LimingjieAssistant/LimingjieAssistant.exe'
+          & desktop/gradlew.bat -p desktop :app:createReleaseDistributable check --continue --build-cache --no-daemon --max-workers=2 --stacktrace --console=plain "-PpackagedWorkerExecutable=$executable"
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop verification failed; see the test and OCR summary' }
+      - name: Build Windows candidate ZIP
+        if: inputs.package_candidate == true || startsWith(github.ref, 'refs/tags/desktop-v')
+        run: |
+          & desktop/gradlew.bat -p desktop :app:packagePortableZip --build-cache --no-daemon --max-workers=2 --stacktrace --console=plain
+          if ($LASTEXITCODE -ne 0) { throw 'Windows candidate packaging failed' }
+      - name: Verify candidate checksum and portable runtime
+        if: inputs.package_candidate == true || startsWith(github.ref, 'refs/tags/desktop-v')
+        env:
+          ARCHIVE_NAME: ${{ steps.metadata.outputs.archive }}
+          DESKTOP_VERSION: ${{ steps.metadata.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $archive = Get-ChildItem desktop/app/build/dist/*.zip | Select-Object -First 1
-          $destination = Join-Path $env:RUNNER_TEMP '测试 目录'
-          Expand-Archive -LiteralPath $archive.FullName -DestinationPath $destination
+          $archive = Join-Path 'desktop/app/build/dist' $env:ARCHIVE_NAME
+          $expected = ((Get-Content -LiteralPath "$archive.sha256" -Raw).Trim() -split '\s+')[0]
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $expected) { throw 'Candidate checksum mismatch' }
+          $destination = Join-Path $env:RUNNER_TEMP '桌面验证 目录'
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
           $launcher = Join-Path $destination 'LimingjieAssistant/LimingjieAssistant.exe'
           $report = Join-Path $destination 'self-test.json'
-          $testData = Join-Path $destination 'data'
+          $testData = Join-Path $destination '独立 自检数据'
           $arguments = @('--self-test', '--report', ('"' + $report + '"'), '--data-dir', ('"' + $testData + '"'))
-          $process = Start-Process -FilePath $launcher -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
-          if (Test-Path -LiteralPath $report) { Get-Content -LiteralPath $report }
+          $process = Start-Process -FilePath $launcher -ArgumentList $arguments -PassThru -WindowStyle Hidden
+          if (-not $process.WaitForExit(120000)) { $process.Kill($true); throw 'Portable self-test timed out' }
           if ($process.ExitCode -ne 0) { throw "Portable self-test failed: $($process.ExitCode)" }
-      - name: Confirm upstream fixtures remain unchanged
-        if: always()
-        shell: pwsh
+          $result = Get-Content -LiteralPath $report -Raw -Encoding UTF8 | ConvertFrom-Json
+          if (-not $result.passed -or $result.version -ne $env:DESKTOP_VERSION) { throw 'Portable self-test failed or desktop version differs' }
+      - name: Confirm upstream source and fixtures remain unchanged
+        if: ${{ !cancelled() }}
         run: |
           $changes = git status --porcelain --untracked-files=all -- android/
-          if ($changes) { Write-Output $changes; throw 'Upstream fixtures changed' }
-      - uses: actions/upload-artifact@v4
-        if: always()
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect upstream working tree' }
+          if ($changes) { Write-Output $changes; throw 'Desktop checks modified upstream source or fixtures' }
+      - name: Summarize desktop results
+        if: ${{ !cancelled() }}
+        env:
+          DESKTOP_VERSION: ${{ steps.metadata.outputs.version }}
+        run: python .github/scripts/ci-summary.py --client 'Windows desktop x64' --version "$env:DESKTOP_VERSION" --root desktop --self-test "$env:RUNNER_TEMP/桌面验证 目录/self-test.json"
+      - name: Upload desktop reports on request
+        if: ${{ !cancelled() && inputs.upload_reports == true }}
+        uses: actions/upload-artifact@v4
         with:
-          name: LimingjieAssistant-windows
+          name: desktop-reports-${{ steps.metadata.outputs.version }}-${{ github.run_attempt }}
+          retention-days: 7
+          compression-level: 9
           path: |
-            desktop/app/build/dist/
-            ${{ runner.temp }}/测试 目录/self-test.json
             desktop/**/build/reports/
             desktop/**/build/test-results/
+            ${{ runner.temp }}/桌面验证 目录/self-test.json
+      - name: Upload Windows candidate
+        if: success() && (inputs.package_candidate == true || startsWith(github.ref, 'refs/tags/desktop-v'))
+        uses: actions/upload-artifact@v4
+        with:
+          name: LimingjieAssistant-desktop-${{ steps.metadata.outputs.version }}-win-x64
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+          path: |
+            desktop/app/build/dist/${{ steps.metadata.outputs.archive }}
+            desktop/app/build/dist/${{ steps.metadata.outputs.archive }}.sha256

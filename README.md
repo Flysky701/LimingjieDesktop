@@ -28,6 +28,7 @@ OCR 最近入库评估仍为 **14/15（93.33%）**，低于总准确率 95% 的�
 ## 文档入口
 
 - [D7 交付与验收修正](docs/desktop/reports/SHARED-RUN-TABS-D7.md)：当前共享数据架构、打包与定向验证的版本依据。
+- [本仓库 CI](desktop/README.md#本仓库的-ci)：Windows 客户端验证与桌面版本候选包；Android 仅作独立的上游兼容性检查。
 - [历次交付报告](docs/desktop/FINAL_REPORT.md)：desktop.1–6 的结果与限制；报告中的单实例描述和旧产物路径需结合 D7 报告阅读。
 - [用户实机清单](docs/desktop/USER_CHECKLIST.md)：历史 L1–L3 和 D6 多开检查。D7 的共享关系与账号绑定以当前用户说明为准，D6 的独立策略和首次手动身份确认要求已被替代。
 - [实施进度](docs/desktop/registers/PROGRESS.md)、[上游最小补丁](docs/desktop/registers/UPSTREAM_PATCHES.md)、[功能对照](docs/desktop/registers/UI_PARITY.md)。

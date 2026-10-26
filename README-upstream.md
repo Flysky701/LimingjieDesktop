@@ -149,7 +149,7 @@ cd android
 
 Debug APK 输出：`android/app/build/outputs/apk/debug/app-debug.apk`。
 
-CI 配置位于 [.github/workflows/android-ci.yml](.github/workflows/android-ci.yml)，执行静态检查、单元测试和 Debug 构建，并上传 APK 构建产物；这不等于自动发布正式版本。
+本仓库的 [Upstream Android Compatibility](.github/workflows/android-ci.yml) 仅保留 Android 上游兼容性检查：相关代码/构建改动或手动运行时执行静态检查、单元测试和 Debug 编译，不上传或发布 APK。Windows 客户端使用独立的 [Windows Desktop CI](.github/workflows/desktop-ci.yml)、JDK 21 和 `desktop.*` 版本，详见[桌面 CI 说明](desktop/README.md#本仓库的-ci)。
 
 ## 测试与诊断
 
