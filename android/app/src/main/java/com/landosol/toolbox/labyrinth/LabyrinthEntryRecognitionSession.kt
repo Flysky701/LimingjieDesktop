@@ -57,6 +57,7 @@ import com.landosol.toolbox.labyrinth.node.NodeDebugLogger
 import com.landosol.toolbox.labyrinth.node.NodeSessionState
 import com.landosol.toolbox.labyrinth.node.NodeTemplateSet
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -188,98 +189,6 @@ private enum class LabyrinthEffectiveCharacterScanStage {
     RETURN_TO_ALL,
     COMPLETE,
 }
-
-internal fun labyrinthBattleRetryLimit(kind: LabyrinthCombatKind): Int = when (kind) {
-    LabyrinthCombatKind.BOSS -> 1
-    LabyrinthCombatKind.NORMAL,
-    LabyrinthCombatKind.EX,
-    -> 2
-}
-
-/**
- * Whether the retry-context stop conditions apply to a recognised battle-failure page.
- *
- * The blue "重新挑战" button of the three-button layout consumes the run's retry budget, so the
- * reroll-after-three-failures stop and the retry-limit / batch-limit stops belong to it. The
- * two-button layout's lower-right button reads "下一步": it advances the relic-revive chain, and
- * rerolling or ending the run there would throw away the run that was just revived. See
- * `android/docs/relic-revive-battle-failure-audit.md`, section 「3. 实现级设计」.
- */
-internal fun labyrinthBattleFailureUsesRetryBudget(layout: LabyrinthBattleFailureLayout): Boolean =
-    layout != LabyrinthBattleFailureLayout.TWO_BUTTON
-
-/**
- * The post-entry tap a recognised battle-failure page offers.
- *
- * Both layouts expose the same lower-right blue button and therefore the same rect; only the kind
- * differs, and with it the accounting in `dispatchPostEntryTap`. Extracted so both layouts stay
- * pinned by tests instead of by reading the plan branch.
- */
-internal fun labyrinthBattleFailureTapPlan(
-    failure: LabyrinthBattleFailureObservation,
-    pendingSingleBossFallbackToMulti: Boolean,
-): LabyrinthPostEntryTapPlan = when (failure.layout) {
-    LabyrinthBattleFailureLayout.TWO_BUTTON -> LabyrinthPostEntryTapPlan(
-        LabyrinthPostEntryActionKind.BATTLE_FAILURE_NEXT,
-        "战斗失败页(遗物复活)：下一步",
-        failure.retryButtonRect,
-    )
-    LabyrinthBattleFailureLayout.THREE_BUTTON -> if (pendingSingleBossFallbackToMulti) {
-        LabyrinthPostEntryTapPlan(
-            LabyrinthPostEntryActionKind.BATTLE_RETRY_SWITCH_MULTI,
-            "Boss单队达到设定重试次数：切换多队重新挑战",
-            failure.retryButtonRect,
-        )
-    } else {
-        LabyrinthPostEntryTapPlan(
-            LabyrinthPostEntryActionKind.BATTLE_RETRY,
-            "战斗失败：重新挑战",
-            failure.retryButtonRect,
-        )
-    }
-}
-
-/** Number of automatic retry taps allowed before the current failed page becomes terminal. */
-internal fun labyrinthEffectiveBattleRetryLimit(
-    kind: LabyrinthCombatKind,
-    rerollAfterThreeFailures: Boolean,
-    singleBossFallbackRetryCount: Int? = null,
-): Int = maxOf(
-    labyrinthBattleRetryLimit(kind),
-    if (rerollAfterThreeFailures) 2 else 0,
-    if (kind == LabyrinthCombatKind.BOSS) singleBossFallbackRetryCount ?: 0 else 0,
-)
-
-/** battleRetryCount counts successful "重新挑战" taps; retryCount=2 means the third attempt failed. */
-internal fun labyrinthShouldSwitchSingleBossToMulti(
-    enabled: Boolean,
-    kind: LabyrinthCombatKind,
-    mode: LabyrinthBossTeamMode,
-    battleRetryCount: Int,
-    retryCountBeforeMulti: Int = 2,
-): Boolean = enabled &&
-    kind == LabyrinthCombatKind.BOSS &&
-    mode == LabyrinthBossTeamMode.SINGLE_TEAM &&
-    battleRetryCount >= retryCountBeforeMulti
-
-internal fun labyrinthShouldRerollAfterBattleFailure(
-    rerollAfterThreeFailures: Boolean,
-    battleRetryCount: Int,
-): Boolean = rerollAfterThreeFailures && battleRetryCount >= 2
-
-/**
- * A batch-owned run that exhausts its retries is a formal FAILED_MAX_RETRY, never a stop on the
- * failure page. 2026-09-17 live (batch 20260917-031313 run001): 「刷开局」 was off in the
- * strategy, so the EX retry limit fell into the interactive "保留在失败页" stop, the batch
- * received FatalUnknown and halted FAILED with the game parked on 战斗失败. The batch owns
- * the reroll and the failure-page invalidation, so the run only has to end with the right
- * outcome; the strategy toggle governs interactive runs alone.
- */
-internal fun labyrinthBatchOwnedRunEndsAtRetryLimit(
-    batchOwnsRun: Boolean,
-    battleRetryCount: Int,
-    retryLimit: Int,
-): Boolean = batchOwnsRun && battleRetryCount >= retryLimit
 
 /**
  * Pages of the final settlement chain. When the entry planner reports one of them as "complete"
@@ -485,456 +394,6 @@ internal const val EVENT_FREE_ROLE_SETTLE_MILLIS = 3_000L
 /** A free-role page that still cannot act after this long stops rather than hanging. */
 internal const val EVENT_FREE_ROLE_GIVE_UP_MILLIS = 45_000L
 
-private const val MAP_SCROLL_DURATION_MILLIS = 450L
-
-/** Drag one viewport-sized segment while staying clear of the persistent bottom controls. */
-internal fun labyrinthMapSwipe(
-    frameWidth: Int,
-    frameHeight: Int,
-    direction: LabyrinthMapScanDirection,
-    avoidRects: List<EntryPixelRect> = emptyList(),
-): AutomationAction.Swipe? {
-    if (frameWidth <= 0 || frameHeight <= 0) return null
-    // Travel is measured in node columns, not in screen widths. The old gesture dragged 40% of
-    // the frame (768 px at 1920) while one column is ~540 px, so a single swipe jumped 1.4
-    // columns and could carry a node straight through the viewport; the scanner then could not
-    // attribute what had moved (geometryReliable=false, uncertainSwipes) and the search burned
-    // its budget. Staying under one pitch makes every column pass in front of at least one scan.
-    val pitch = labyrinthReferenceColumnPitch(frameHeight)
-    val travel = (pitch * MAP_SCROLL_PITCH_RATIO)
-        .coerceAtMost(frameWidth * MAP_SCROLL_MAX_FRAME_RATIO.toDouble())
-        .toFloat()
-    val centerPx = frameWidth * 0.56f
-    val (startPx, endPx) = when (direction) {
-        LabyrinthMapScanDirection.FORWARD -> (centerPx + travel / 2f) to (centerPx - travel / 2f)
-        LabyrinthMapScanDirection.BACKWARD -> (centerPx - travel / 2f) to (centerPx + travel / 2f)
-    }
-    val yRatios = listOf(0.58f, 0.46f, 0.34f, 0.70f, 0.24f)
-    val y = yRatios
-        .map { ratio -> frameHeight * ratio }
-        .minByOrNull { candidateY ->
-            avoidRects.sumOf { rect ->
-                fun pointPenalty(x: Float): Int {
-                    val margin = maxOf(24, minOf(rect.width, rect.height) / 12)
-                    val insideX = x >= rect.left - margin && x <= rect.left + rect.width + margin
-                    val insideY = candidateY >= rect.top - margin && candidateY <= rect.top + rect.height + margin
-                    return if (insideX && insideY) 1 else 0
-                }
-                pointPenalty(startPx) + pointPenalty(endPx)
-            }
-        }
-        ?: frameHeight * 0.58f
-    return AutomationAction.Swipe(
-        start = ScreenPoint(startPx, y),
-        end = ScreenPoint(endPx, y),
-        durationMillis = MAP_SCROLL_DURATION_MILLIS,
-        holdMillis = MAP_GESTURE_HOLD_MILLIS,
-    )
-}
-
-/** One scan step stays below a single column pitch so no column can slip past unscanned. */
-private const val MAP_SCROLL_PITCH_RATIO = 0.80
-/** Never exceed this share of the frame on unusually tall/narrow captures. */
-private const val MAP_SCROLL_MAX_FRAME_RATIO = 0.34f
-/** Hold still before lifting so the game reads ~0 velocity and does not fling the map. */
-internal const val MAP_GESTURE_HOLD_MILLIS = 220L
-
-private const val MAP_NUDGE_DURATION_MILLIS = 220L
-
-/**
- * Small side-lane camera perturbation used when the route target should already be nearby but the
- * current background makes classification unstable. Unlike the segmented map scan this gesture
- * deliberately stays near one side and moves only a small fraction of the viewport.
- */
-internal fun labyrinthMapNudge(
-    frameWidth: Int,
-    frameHeight: Int,
-    direction: LabyrinthMapScanDirection,
-    avoidRects: List<EntryPixelRect> = emptyList(),
-): AutomationAction.Swipe? {
-    if (frameWidth <= 0 || frameHeight <= 0) return null
-    val (startX, endX) = when (direction) {
-        LabyrinthMapScanDirection.FORWARD -> 0.82f to 0.70f
-        LabyrinthMapScanDirection.BACKWARD -> 0.18f to 0.30f
-    }
-    val startPx = frameWidth * startX
-    val endPx = frameWidth * endX
-    val minX = minOf(startPx, endPx)
-    val maxX = maxOf(startPx, endPx)
-    val y = listOf(0.58f, 0.46f, 0.34f, 0.70f, 0.24f)
-        .map { frameHeight * it }
-        .minByOrNull { candidateY ->
-            avoidRects.count { rect ->
-                val margin = maxOf(24, minOf(rect.width, rect.height) / 12)
-                val crossesX = maxX >= rect.left - margin && minX <= rect.left + rect.width + margin
-                val crossesY = candidateY >= rect.top - margin && candidateY <= rect.top + rect.height + margin
-                crossesX && crossesY
-            }
-        } ?: frameHeight * 0.58f
-    return AutomationAction.Swipe(
-        start = ScreenPoint(startPx, y),
-        end = ScreenPoint(endPx, y),
-        durationMillis = MAP_NUDGE_DURATION_MILLIS,
-        holdMillis = MAP_GESTURE_HOLD_MILLIS,
-    )
-}
-
-/** center -> left -> center -> right -> center, then repeat. */
-/**
- * The nudge cycle is BACKWARD, FORWARD, FORWARD, BACKWARD: it returns the camera to where it
- * started, so a further cycle cannot expose anything the previous one failed to classify.
- * 2026-09-15/18 bundles show it repeating 90 and 170 times on one node. Stop after a whole
- * number of cycles and re-arm the segmented scan, which does move the camera somewhere new.
- */
-internal fun labyrinthNodeRecoveryNudgeExhausted(
-    completedNudges: Int,
-    maximumNudges: Int = MAX_NODE_RECOVERY_NUDGES,
-): Boolean = completedNudges >= maximumNudges
-
-/** Whole nudge cycles (multiple of 4) before the search falls back to scrolling again. */
-internal const val MAX_NODE_RECOVERY_NUDGES = 8
-
-internal fun labyrinthNodeRecoveryNudgeDirection(completedNudges: Int): LabyrinthMapScanDirection {
-    require(completedNudges >= 0)
-    return when (completedNudges % 4) {
-        0, 3 -> LabyrinthMapScanDirection.BACKWARD
-        else -> LabyrinthMapScanDirection.FORWARD
-    }
-}
-
-/** Compatibility helper retained for policy tests and callers that explicitly need later columns. */
-internal fun labyrinthForwardMapSwipe(frameWidth: Int, frameHeight: Int): AutomationAction.Swipe? =
-    labyrinthMapSwipe(frameWidth, frameHeight, LabyrinthMapScanDirection.FORWARD)
-
-/**
- * Bounded fallback when no visual node survives classification and therefore no viewport
- * signature exists. Follow the protocol column first, then reverse for the second half of the
- * retry budget so an unknown camera position cannot leave execution waiting forever.
- */
-internal fun labyrinthBlindMapScanPlan(
-    currentNodeId: Long,
-    targetLogicalColumn: Int,
-    completedAttempts: Int,
-    reverseAfterAttempts: Int,
-): LabyrinthNodeScanPlan {
-    require(completedAttempts >= 0)
-    require(reverseAfterAttempts > 0)
-    val currentLogicalColumn = (currentNodeId / 100L % 100L).toInt()
-    val preferred = when {
-        targetLogicalColumn > currentLogicalColumn -> LabyrinthMapScanDirection.FORWARD
-        targetLogicalColumn < currentLogicalColumn -> LabyrinthMapScanDirection.BACKWARD
-        else -> LabyrinthMapScanDirection.FORWARD
-    }
-    val direction = if (completedAttempts < reverseAfterAttempts) {
-        preferred
-    } else {
-        when (preferred) {
-            LabyrinthMapScanDirection.FORWARD -> LabyrinthMapScanDirection.BACKWARD
-            LabyrinthMapScanDirection.BACKWARD -> LabyrinthMapScanDirection.FORWARD
-        }
-    }
-
-    return LabyrinthNodeScanPlan(
-        direction = direction,
-        reason = "blind-empty-classifications currentColumn=$currentLogicalColumn " +
-            "targetColumn=$targetLogicalColumn completed=$completedAttempts",
-    )
-}
-
-/** Only a recognized destination page proves that the game accepted a map-node tap. */
-internal fun labyrinthConfirmsNodeEntry(state: LabyrinthEntryPageState): Boolean = when (state) {
-    LabyrinthEntryPageState.CHARACTER_JOINED,
-    LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION,
-    LabyrinthEntryPageState.LINK_CHOICE,
-    LabyrinthEntryPageState.RELIC_CHOICE,
-    LabyrinthEntryPageState.EVENT_CHOICE,
-    LabyrinthEntryPageState.EVENT_ANIMATION,
-    LabyrinthEntryPageState.ITEM_REWARD,
-    LabyrinthEntryPageState.SHOP,
-    LabyrinthEntryPageState.SHOP_PURCHASE_CONFIRMATION,
-    LabyrinthEntryPageState.SHOP_PURCHASE_COMPLETE,
-    LabyrinthEntryPageState.SHOP_EXIT_CONFIRMATION,
-    LabyrinthEntryPageState.BATTLE_CHALLENGE,
-    LabyrinthEntryPageState.BATTLE_TEAM_SELECTION,
-    LabyrinthEntryPageState.BATTLE_IN_PROGRESS,
-    LabyrinthEntryPageState.BATTLE_RESULT,
-    LabyrinthEntryPageState.RUN_CLEAR_RESULT,
-    LabyrinthEntryPageState.RUN_CLEAR_CONGRATULATIONS,
-    LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY,
-    LabyrinthEntryPageState.RUN_CLEAR_REWARD_ANIMATION,
-    LabyrinthEntryPageState.RUN_CLEAR_CHEST_ANIMATION,
-    LabyrinthEntryPageState.RUN_CLEAR_CHEST_RESULT,
-    -> true
-
-    else -> false
-}
-
-/**
- * A generic recognized page is not enough to advance the route: the destination must also be
- * compatible with the node that was clicked. This protects the route cursor from stale popups
- * and from a map false positive that happens to be followed by another page.
- */
-internal fun labyrinthNodeEntryMatchesExpectedType(
-    blockType: Int,
-    pageState: LabyrinthEntryPageState,
-): Boolean = when (blockType) {
-    LabyrinthNodeTypes.NORMAL_BATTLE,
-    LabyrinthNodeTypes.EX_BATTLE,
-    LabyrinthNodeTypes.BOSS,
-    -> pageState in setOf(
-        LabyrinthEntryPageState.BATTLE_CHALLENGE,
-        LabyrinthEntryPageState.BATTLE_TEAM_SELECTION,
-        LabyrinthEntryPageState.BATTLE_IN_PROGRESS,
-        LabyrinthEntryPageState.BATTLE_FAILED,
-        LabyrinthEntryPageState.BATTLE_RESULT,
-    )
-
-    // A link node opens LINK_CHOICE, but that page can be gone before the next sampled frame:
-    // the imprint pick is followed by the three-character ITEM_REWARD popup and then the role
-    // reward selection. Those pages are already accepted by labyrinthConfirmsNodeEntry; refusing
-    // them here left the route cursor one node behind while the reward chain kept running
-    // (2026-09-16 11:29 bundle: link#20601 cleared, role picked, cursor still at 20501).
-    LabyrinthNodeTypes.LINK -> pageState in setOf(
-        LabyrinthEntryPageState.LINK_CHOICE,
-        LabyrinthEntryPageState.ITEM_REWARD,
-        LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION,
-        LabyrinthEntryPageState.CHARACTER_JOINED,
-    )
-    LabyrinthNodeTypes.RELIC -> pageState == LabyrinthEntryPageState.RELIC_CHOICE
-    LabyrinthNodeTypes.EVENT -> pageState in setOf(
-        LabyrinthEntryPageState.EVENT_CHOICE,
-        LabyrinthEntryPageState.EVENT_ANIMATION,
-        LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION,
-        LabyrinthEntryPageState.CHARACTER_JOINED,
-        LabyrinthEntryPageState.ITEM_REWARD,
-    )
-    LabyrinthNodeTypes.SHOP -> pageState in setOf(
-        LabyrinthEntryPageState.SHOP,
-        LabyrinthEntryPageState.SHOP_PURCHASE_CONFIRMATION,
-        LabyrinthEntryPageState.SHOP_PURCHASE_COMPLETE,
-        LabyrinthEntryPageState.SHOP_EXIT_CONFIRMATION,
-    )
-    else -> false
-}
-
-/** Only a stable, actionable destination may override stale route node metadata. */
-internal fun labyrinthObservedDestinationType(
-    state: LabyrinthEntryPageState,
-    expectedType: Int? = null,
-): Int? = when (state) {
-    LabyrinthEntryPageState.SHOP,
-    LabyrinthEntryPageState.SHOP_PURCHASE_CONFIRMATION,
-    LabyrinthEntryPageState.SHOP_PURCHASE_COMPLETE,
-    LabyrinthEntryPageState.SHOP_EXIT_CONFIRMATION -> LabyrinthNodeTypes.SHOP
-    LabyrinthEntryPageState.EVENT_CHOICE,
-    LabyrinthEntryPageState.EVENT_ANIMATION -> LabyrinthNodeTypes.EVENT
-    LabyrinthEntryPageState.LINK_CHOICE -> LabyrinthNodeTypes.LINK
-    LabyrinthEntryPageState.RELIC_CHOICE -> LabyrinthNodeTypes.RELIC
-    LabyrinthEntryPageState.BATTLE_CHALLENGE,
-    LabyrinthEntryPageState.BATTLE_TEAM_SELECTION,
-    LabyrinthEntryPageState.BATTLE_IN_PROGRESS ->
-        expectedType.takeIf { it in setOf(LabyrinthNodeTypes.BOSS, LabyrinthNodeTypes.EX_BATTLE) }
-            ?: LabyrinthNodeTypes.NORMAL_BATTLE
-    // Generic reward/transition screens do not identify the node that produced them.
-    else -> null
-}
-
-/** Coarse signature used to detect that a map swipe produced no viewport movement. */
-internal fun labyrinthNodeViewportSignature(classifications: List<NodeClassification>): String =
-    classifications
-        .mapNotNull { node ->
-            node.screenRect?.let { rect ->
-                listOf(
-                    node.blockType,
-                    if (node.isClickable) 1 else 0,
-                    (rect.left + rect.width / 2) / NODE_VIEWPORT_SIGNATURE_BUCKET_PX,
-                    (rect.top + rect.height / 2) / NODE_VIEWPORT_SIGNATURE_BUCKET_PX,
-                ).joinToString(":")
-            }
-        }
-        .sorted()
-        .joinToString("|")
-
-/** Only read-only diagnostics may draw the normal target box into frames captured by MediaProjection. */
-internal fun labyrinthShowsNextNodeOverlayBox(dryRun: Boolean): Boolean = dryRun
-
-/**
- * Node diagnostics are drawn only while the session is paused. While running, MediaProjection
- * can capture the annotation layer and feed its colored boxes back into node recognition.
- */
-internal fun labyrinthShowsPausedNodeDiagnostics(paused: Boolean): Boolean = paused
-
-private const val MIN_NODE_SELECTION_FRAMES_BEFORE_TRANSITION_RETRY = 2
-
-/**
- * Node recognition can take roughly as long as the transition timeout on a dense map. One stale
- * map frame captured around the tap must not erase the pending transition before the next frame
- * can observe the movement dialog.
- */
-internal fun labyrinthKeepsPendingNodeTransition(
-    elapsedMillis: Long,
-    timeoutMillis: Long,
-    nodeSelectionFramesSinceAction: Int,
-): Boolean =
-    elapsedMillis < timeoutMillis ||
-        nodeSelectionFramesSinceAction < MIN_NODE_SELECTION_FRAMES_BEFORE_TRANSITION_RETRY
-
-/**
- * Whether the completed "有效效果" roster sweep of the node being left is still the answer for the
- * node being entered. The sweep is a property of the encounter, which an EX fight and its Boss
- * share; any other transition is a different encounter or no encounter at all.
- */
-internal fun labyrinthKeepsEffectiveScanAcrossNodes(previousNodeType: Int?, nextNodeType: Int): Boolean =
-    previousNodeType == LabyrinthNodeTypes.EX_BATTLE && nextNodeType == LabyrinthNodeTypes.BOSS
-
-/**
- * Order-independent fingerprint of the owned roster. The filtered list only shows owned roles, so
- * a sweep taken before a role joined can be stale even though the encounter is unchanged.
- */
-internal fun labyrinthEffectiveScanRosterStamp(characterIds: Collection<String>): Long =
-    characterIds.map(::canonicalLabyrinthRoleId).sorted().fold(characterIds.size.toLong()) { acc, id ->
-        acc * 1_000_003L + id.hashCode()
-    }
-
-/**
- * Whether a node-page frame captured now would actually be read by [handleNodeSelectionFrame].
- *
- * The frame is thrown away in two situations: the map is still settling after a popup was closed
- * (`settleRemainingMillis > 0`), and the session is still waiting for the game to react to a node
- * tap (`pendingTransitionHeld`). The typed/full node scan costs 3-8 s per frame on a dense map;
- * 2026-09-20 bundle 225220 spent 75 s of its 130 s node-stage budget scanning 42 frames that ended
- * in one of those two early returns. Skipping the scan there changes no decision: the frame that
- * would have been read next is the first one that passes both gates, and the tracker still sees it.
- */
-internal fun labyrinthNodeScanConsumable(
-    settleRemainingMillis: Long,
-    pendingTransitionHeld: Boolean,
-): Boolean = settleRemainingMillis <= 0L && !pendingTransitionHeld
-
-/**
- * Milliseconds a post-entry tap's cooldown still has to run when a frame captured at
- * [frameTimestampMillis] is being decided; `<= 0` means the frame may act.
- *
- * The cooldown used to count from the capture time of the frame that *decided* the previous tap.
- * The tap itself lands asynchronously, 0.3-1.1 s later on the 2026-09-20 bundle 225220 device,
- * and a joined-character popup needs a further ~0.3-0.8 s to fade. So a frame captured before
- * the tap had even reached the screen — or 292 ms after it — still showed the popup, passed a
- * 650 ms cooldown measured from the older stamp, and closed it a second time. Three of the eight
- * popups in that run were double-closed; one second tap went through the fading popup onto the
- * map node behind it and raised a movement dialog that then had to be cancelled.
- *
- * Counting from the moment the gesture actually landed ([landedAtMillis]) when that is later
- * than the deciding frame makes the cooldown mean what it says: time the game has had to react.
- */
-internal fun labyrinthPostEntryCooldownRemaining(
-    frameTimestampMillis: Long,
-    dispatchedAtMillis: Long,
-    landedAtMillis: Long,
-    intervalMillis: Long,
-): Long {
-    if (dispatchedAtMillis == Long.MIN_VALUE) return 0L
-    val reference = maxOf(dispatchedAtMillis, landedAtMillis)
-    return intervalMillis - (frameTimestampMillis - reference)
-}
-
-/**
- * After a node or its movement-confirmation button was tapped, the game can render one or more
- * transitional frames before its semantic page becomes recognizable. Those frames must not erase
- * the pending route transition; otherwise the game can enter/finish a node while the local route
- * cursor remains one step behind.
- *
- * This does not authorize any click. It only keeps the already-dispatched semantic transition
- * alive until a real destination page confirms it or the bounded entry timeout expires.
- */
-internal fun labyrinthPreservesPendingNodeTransitionAcrossPage(
-    pageState: LabyrinthEntryPageState,
-    confirmationDispatchedAtMillis: Long?,
-    nowMillis: Long,
-    timeoutMillis: Long,
-    dispatchedAtMillis: Long? = null,
-): Boolean {
-    val startedAt = confirmationDispatchedAtMillis ?: dispatchedAtMillis ?: return false
-    val elapsed = (nowMillis - startedAt).coerceAtLeast(0L)
-    if (elapsed >= timeoutMillis) return false
-    return pageState in setOf(
-        LabyrinthEntryPageState.UNKNOWN,
-        LabyrinthEntryPageState.NODE_MAP_VIEW,
-        LabyrinthEntryPageState.GAME_LOADING_PROGRESS,
-        LabyrinthEntryPageState.PRE_HOME_DATA_LOADING,
-    )
-}
-
-/**
- * While a destination-type mismatch is still being tolerated (see NODE_ENTRY_MISMATCH_STABLE_FRAMES),
- * the pending transition must survive the page change that carried the mismatched frame.
- * Otherwise the tolerance never gets a second frame to look at: the semantic page invalidates the
- * proposal immediately, and receipt recovery is refused whenever the source node has more than one
- * reachable successor (2026-09-16 17:40 bundle: link#10503 read as RELIC_CHOICE for one frame,
- * then LINK_CHOICE with no pending transition; reachable=[10501,10502,10503]).
- */
-internal fun labyrinthPreservesPendingNodeTransitionForEntryMismatch(
-    mismatchFrames: Int,
-    stableFrames: Int,
-    confirmationDispatchedAtMillis: Long?,
-    nowMillis: Long,
-    timeoutMillis: Long,
-    dispatchedAtMillis: Long? = null,
-): Boolean {
-    if (mismatchFrames <= 0 || mismatchFrames >= stableFrames) return false
-    val startedAt = confirmationDispatchedAtMillis ?: dispatchedAtMillis ?: return false
-    return (nowMillis - startedAt).coerceAtLeast(0L) < timeoutMillis
-}
-
-/** Same physical node across frames: centre drift within 18% of the crop (at least 16 px). */
-internal fun labyrinthNodeClickRectsAreStable(
-    previous: EntryPixelRect?,
-    current: EntryPixelRect?,
-): Boolean {
-    if (previous == null || current == null) return previous == current
-    val previousCenterX = previous.left + previous.width / 2
-    val previousCenterY = previous.top + previous.height / 2
-    val currentCenterX = current.left + current.width / 2
-    val currentCenterY = current.top + current.height / 2
-    val xTolerance = maxOf(16, minOf(previous.width, current.width) * 18 / 100)
-    val yTolerance = maxOf(16, minOf(previous.height, current.height) * 18 / 100)
-    return kotlin.math.abs(previousCenterX - currentCenterX) <= xTolerance &&
-        kotlin.math.abs(previousCenterY - currentCenterY) <= yTolerance
-}
-
-/** A complete, ordered column binding is the strongest slot evidence the mapper produces. */
-internal fun labyrinthNodeMappingHasStrongOrderedTopology(
-    mapping: NodePositionMapping,
-    minimumConfidence: Double = 0.90,
-): Boolean = !mapping.routeSemanticRepair &&
-    mapping.topologyBindingKind == NodeTopologyBindingKind.FULL_COLUMN &&
-    (mapping.topologyConfidence ?: 0.0) >= minimumConfidence
-
-/**
- * A route target located by a strong FULL_COLUMN binding moments ago must not be re-bound to a
- * different screen rect by weaker evidence while the camera has not moved.
- *
- * 2026-09-16 19:17 bundle: link#30402 was bound at (802,350) inside a fully detected three-node
- * column (topology 0.99). Two seconds later the map's glow animation left a single "link" crop
- * straddling rows 1 and 2 at (820,220); route-semantic-repair adopted it as 30402, three such
- * frames satisfied the stability gate, and the tap at y=332 landed on the event node above.
- * Without a map gesture in between, one lone crop carries no row-order evidence and cannot
- * outrank the complete column that was just seen.
- */
-internal fun labyrinthNodeClickContradictsRecentStrongBinding(
-    rememberedRect: EntryPixelRect?,
-    rememberedAtMillis: Long,
-    nowMillis: Long,
-    memoryMillis: Long,
-    candidateRect: EntryPixelRect?,
-    candidateHasStrongOrderedTopology: Boolean,
-): Boolean {
-    if (rememberedRect == null || candidateRect == null) return false
-    if (candidateHasStrongOrderedTopology) return false
-    if (rememberedAtMillis == Long.MIN_VALUE) return false
-    if ((nowMillis - rememberedAtMillis).coerceAtLeast(0L) >= memoryMillis) return false
-    return !labyrinthNodeClickRectsAreStable(rememberedRect, candidateRect)
-}
-
 private enum class LabyrinthRunTerminalOutcome { CLEARED, FAILED_MAX_RETRY }
 
 private data class PendingNodeTransition(
@@ -990,75 +449,6 @@ internal fun labyrinthPostBossStageOnFinalResult(current: LabyrinthPostBossStage
  * for the character summary's 下一步 misses it entirely.
  */
 internal fun labyrinthChestResultFallbackTap(): LabyrinthFallbackTap = LabyrinthFallbackTap.BOTTOM_CENTER
-
-/** A session popup always takes priority over the normal page classifier and route actions. */
-internal data class LabyrinthSessionBlockObservation(
-    val kind: SessionBlockKind,
-    val returnTitleRect: EntryPixelRect?,
-    val actionLabel: String = "返回标题",
-) {
-    val blocksNormalActions: Boolean get() = kind != SessionBlockKind.NONE
-}
-
-internal fun labyrinthSessionBlockObservation(
-    result: LabyrinthEntryFrameResult,
-    classifier: SessionBlockClassifier = SessionBlockClassifier(),
-): LabyrinthSessionBlockObservation {
-    // 「特别装备」的两个弹窗是本特性的新 chrome，却与这里「故意做宽」的蓝标题模板同壳：
-    // 一旦某帧把它读成会话失效，自动化会去点「返回标题」并把整局丢掉。
-    // 窄排除：只在观测确实给出弹窗 stage（≥0.70 的模板证据）时生效；stage 为 null 时——包括
-    // 真实的过期/掉线弹窗——本函数逐字不变（反向断言见 LabyrinthSpecialEquipmentSessionFlowTest）。
-    if (result.specialEquipment?.stage != null) {
-        return LabyrinthSessionBlockObservation(SessionBlockKind.NONE, returnTitleRect = null)
-    }
-    // The reconnect detector uses a deliberately broad blue-title template. A normal labyrinth
-    // movement dialog shares that chrome, so its more specific two-button detector must win.
-    if (result.nodeMoveConfirmation != null) {
-        return LabyrinthSessionBlockObservation(SessionBlockKind.NONE, returnTitleRect = null)
-    }
-    // A plain one-button 确认 dialog (无法获得报酬) shares the title chrome too. 2026-09-18 live:
-    // it read as a session block and the run waited 255 actions for a 返回标题 that never came.
-    if (labyrinthGenericConfirmDialogRect(result) != null) {
-        return LabyrinthSessionBlockObservation(SessionBlockKind.NONE, returnTitleRect = null)
-    }
-    val dateChangeTitleScore =
-        result.observation.anchorScores[EntryAnchorId.SESSION_DATE_CHANGE_TITLE]
-    if (dateChangeTitleScore >= SESSION_DATE_CHANGE_TITLE_MIN_SCORE) {
-        val confirmRect = result.anchorMatches[EntryAnchorId.SESSION_DATE_CHANGE_CONFIRM]
-            ?.takeIf { it.score >= SESSION_DATE_CHANGE_CONFIRM_MIN_SCORE }
-            ?.rect
-        return LabyrinthSessionBlockObservation(
-            kind = SessionBlockKind.RELOGIN_REQUIRED,
-            returnTitleRect = confirmRect,
-            actionLabel = "确认",
-        )
-    }
-    // The shop's own dialogs (purchase confirmation / purchase complete / exit confirmation)
-    // reuse the blue title bar the broad reconnect template was cut from, and a transition frame
-    // between them classifies UNKNOWN while the shop chrome stays on screen. 2026-09-18 live:
-    // every purchase produced "检测到账号会话失效". Without a recognised 返回标题 button there is
-    // nothing to act on anyway; a genuine expiry inside the shop still shows that button.
-    if (
-        labyrinthShopBackgroundVisible(result) &&
-        result.observation.anchorScores[EntryAnchorId.SESSION_RETURN_TITLE] < SESSION_RETURN_TITLE_MIN_SCORE
-    ) {
-        return LabyrinthSessionBlockObservation(SessionBlockKind.NONE, returnTitleRect = null)
-    }
-    val kind = classifier.classify(
-        scores = result.observation.anchorScores.toSessionBlockScores(),
-        pageTitleScore = result.observation.stateScores[LabyrinthEntryPageState.TITLE_WAITING_TAP] ?: 0.0,
-    )
-    val returnTitleRect = if (
-        kind == SessionBlockKind.RECONNECT_PROMPTED || kind == SessionBlockKind.RELOGIN_REQUIRED
-    ) {
-        result.anchorMatches[EntryAnchorId.SESSION_RETURN_TITLE]
-            ?.takeIf { it.score >= SESSION_RETURN_TITLE_MIN_SCORE }
-            ?.rect
-    } else {
-        null
-    }
-    return LabyrinthSessionBlockObservation(kind, returnTitleRect)
-}
 
 data class LabyrinthEntryRecognitionSessionState(
     val status: LabyrinthEntryRecognitionStatus = LabyrinthEntryRecognitionStatus.IDLE,
@@ -1319,6 +709,7 @@ class LabyrinthEntryRecognitionSession(
      */
     @Volatile
     private var battleTeamPageStallSince = Long.MIN_VALUE
+    private val battleTeamDispatchSequence = AtomicLong()
     /**
      * 「特别装备」自动穿戴的本轮状态（纯状态机见 [labyrinthSpecialEquipmentDecision]）。
      *
@@ -1384,6 +775,45 @@ class LabyrinthEntryRecognitionSession(
      */
     @Volatile
     private var specialEquipmentRoundBossTeamIndex: Int? = null
+    private val specialEquipmentState = object : LabyrinthSpecialEquipmentState {
+        override var specialEquipmentFlowStage: LabyrinthSpecialEquipmentFlowStage
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentFlowStage
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentFlowStage = value }
+        override var specialEquipmentStepAttempts: Int
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentStepAttempts
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentStepAttempts = value }
+        override var specialEquipmentStepStartedAt: Long
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentStepStartedAt
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentStepStartedAt = value }
+        override var specialEquipmentDialogObserved: Boolean
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentDialogObserved
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentDialogObserved = value }
+        override var specialEquipmentModalCloseSettlePending: Boolean
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentModalCloseSettlePending
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentModalCloseSettlePending = value }
+        override var specialEquipmentAwayFrames: Int
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentAwayFrames
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentAwayFrames = value }
+        override var specialEquipmentPendingEscape: LabyrinthSpecialEquipmentTap?
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentPendingEscape
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentPendingEscape = value }
+        override var specialEquipmentEscapeDeadline: Long
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentEscapeDeadline
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentEscapeDeadline = value }
+        override var specialEquipmentDiagnostic: String?
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentDiagnostic
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentDiagnostic = value }
+        override var specialEquipmentEquipEvidence: LabyrinthSpecialEquipmentEquipEvidenceStreak
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentEquipEvidence
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentEquipEvidence = value }
+        override var specialEquipmentAbandoned: Boolean
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentAbandoned
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentAbandoned = value }
+        override var specialEquipmentRoundBossTeamIndex: Int?
+            get() = this@LabyrinthEntryRecognitionSession.specialEquipmentRoundBossTeamIndex
+            set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentRoundBossTeamIndex = value }
+    }
+    private val specialEquipmentFlow = LabyrinthSpecialEquipmentFlow(specialEquipmentState)
     private val committedBattleCharacterIds = linkedSetOf<String>()
     /** Teams actually committed during the current combat attempt, grouped by team signature. */
     private val currentBattleTeamSignatures = linkedSetOf<String>()
@@ -2540,7 +1970,7 @@ class LabyrinthEntryRecognitionSession(
         val specialEquipmentOwnsFrame = !current.dryRun &&
             (
                 result.specialEquipment?.stage != null ||
-                    specialEquipmentFlowStage != LabyrinthSpecialEquipmentFlowStage.INACTIVE
+                    specialEquipmentFlow.active
                 )
         if (
             specialEquipmentOwnsFrame &&
@@ -5915,8 +5345,8 @@ class LabyrinthEntryRecognitionSession(
      * 编组页帧的入口：先看一眼特别装备流程是否在等着让帧，再交给编组/开战规划，最后给本页记账。
      *
      * 这个页面在 [handlePostEntryPage] 里直接 return，通用的 120 秒停滞看门狗对它永远不可达
-     * （见 [LabyrinthPostEntryTapPlan] 里 BATTLE_TEAM_SELECTION 的显式 null），所以「同一句消息、
-     * 一帧都没有派发动作」的停滞必须在这里自己收尾，否则就是静默无限等待。
+     * （见 [LabyrinthPostEntryTapPlan] 里 BATTLE_TEAM_SELECTION 的显式 null），所以业务状态和动作
+     * 都不再推进时必须在这里收尾。诊断文字的刷新不能延长停滞期限。
      */
     private fun handleBattleTeamSelectionExecution(
         sessionId: AutomationSessionId,
@@ -5925,10 +5355,9 @@ class LabyrinthEntryRecognitionSession(
         frameHeight: Int,
         timestampMillis: Long,
     ) {
-        val messageBefore = _state.value.message
+        val progressBefore = battleTeamProgress()
         planBattleTeamSelectionFrame(sessionId, result, frameWidth, frameHeight, timestampMillis)
-        val progressed = _state.value.frameTrace.actionLabel != null ||
-            _state.value.message != messageBefore
+        val progressed = battleTeamProgress() != progressBefore
         if (!progressed && battleTeamPageStallSince != Long.MIN_VALUE &&
             timestampMillis - battleTeamPageStallSince >= POST_ENTRY_STALL_TIMEOUT_MILLIS
         ) {
@@ -5942,6 +5371,32 @@ class LabyrinthEntryRecognitionSession(
         if (progressed || battleTeamPageStallSince == Long.MIN_VALUE) {
             battleTeamPageStallSince = timestampMillis
         }
+    }
+
+    private fun battleTeamProgress(): LabyrinthBattleTeamProgress {
+        val current = _state.value
+        return LabyrinthBattleTeamProgress(
+            dispatchedActions = battleTeamDispatchSequence.get(),
+            bossPreparation = bossEditorPreparationStage,
+            bossTeamIndex = bossEditorTeamIndex,
+            bossBlocked = bossEditorBlocked,
+            bossTargetCount = bossMultiTeamTargetCount,
+            pendingBossAdvance = pendingBossTeamAdvance,
+            selectionPlan = current.battleTeamSelectionPlan?.let { plan ->
+                LabyrinthBattleTeamPlanProgress(
+                    recommendedIds = plan.recommendedIds.toList(),
+                    selectedIds = plan.currentlySelectedIds.toList(),
+                    needSelectIds = plan.needSelectIds.toList(),
+                    needDeselectIds = plan.needDeselectIds.toList(),
+                    scrollRequired = plan.scrollRequired,
+                    readyToExecute = plan.readyToExecute,
+                    teamReady = plan.teamReady,
+                )
+            },
+            rosterIds = current.joinedCharacters.map { it.characterId },
+            exhaustedFilters = exhaustedBattleRosterFilters.toSet(),
+            specialEquipment = specialEquipmentFlow.progress(),
+        )
     }
 
     private fun planBattleTeamSelectionFrame(
@@ -6029,10 +5484,9 @@ class LabyrinthEntryRecognitionSession(
         // 之前。本轮没结束时这一帧由特别装备流程接管并 return，于是下面三个调用点都无法产出动作；
         // 本轮结束（成功 / 未变更 / 超限放弃）或不适用时返回 false，原有编组/开战路径逐字继续。
         if (handleSpecialEquipmentFlowFrame(sessionId, result, timestampMillis)) return
-        if (specialEquipmentModalCloseSettlePending) {
+        if (specialEquipmentFlow.consumeModalCloseSettle()) {
             // 特别装备弹窗刚关闭：这一帧只让给关闭动画，不派发任何编组/开战点击。紧跟在闸门之后、
             // 在产出任何执行步之前消费，且只让一帧。
-            specialEquipmentModalCloseSettlePending = false
             return
         }
         val step = (preparationStep ?: if (
@@ -6230,368 +5684,38 @@ class LabyrinthEntryRecognitionSession(
     private fun battleTeamEditorSignature(result: LabyrinthEntryFrameResult): String =
         result.observation.state.name + ":" + (result.battleTeamSelection?.bossTeamIndex ?: -1)
 
-    /**
-     * 本次战斗的关卡类型是否需要自动穿戴特别装备。
-     *
-     * 判定只读启动时抓取的设置快照（[specialEquipmentSettings]），并且直接调用设置层自己的
-     * [LabyrinthStrategySettings.autoEquipsSpecialEquipment]——「自动穿戴 + 空集合」在那一层就已经
-     * 是「不执行」，这里不再另写一套规则。`combatContext` 为空＝不知道类型 ⇒ 不执行。
-     */
-    private fun specialEquipmentAppliesToCurrentBattle(): Boolean {
-        val kind = combatContext?.kind ?: return false
-        return specialEquipmentSettings?.autoEquipsSpecialEquipment(kind) == true
-    }
+    private fun resetSpecialEquipmentRound() = specialEquipmentFlow.reset()
 
-    /** 清掉本轮标记（离开编组页、页签更换、或本轮不适用时调用）。 */
-    private fun resetSpecialEquipmentRound() {
-        specialEquipmentFlowStage = LabyrinthSpecialEquipmentFlowStage.INACTIVE
-        specialEquipmentStepAttempts = 0
-        specialEquipmentStepStartedAt = Long.MIN_VALUE
-        specialEquipmentAwayFrames = 0
-        specialEquipmentPendingEscape = null
-        specialEquipmentEscapeDeadline = Long.MIN_VALUE
-        specialEquipmentDiagnostic = null
-        specialEquipmentAbandoned = false
-        specialEquipmentDialogObserved = false
-        specialEquipmentModalCloseSettlePending = false
-        specialEquipmentEquipEvidence = LabyrinthSpecialEquipmentEquipEvidenceStreak()
-        specialEquipmentRoundBossTeamIndex = null
-    }
-
-    /** 当前页签的队伍成员：每个槽位一个 `characterId`，未识别的槽位是 null。 */
-    private fun currentTeamCharacterIds(result: LabyrinthEntryFrameResult): List<String?> =
-        result.battleTeamSelection?.selectedCharacters.orEmpty().map { match -> match.characterId }
-
-    /**
-     * 这一帧是不是「Boss 多队模式编组页的一个队伍页签」。
-     *
-     * 只有这种页面上页签才代表一支独立的队伍：单队模式整段只跑一轮，普通/EX 的队伍页没有页签身份，
-     * 两者都不受「页签更换即重新武装」的影响。
-     */
-    private fun onMultiTeamBossTab(result: LabyrinthEntryFrameResult): Boolean =
-        combatContext?.kind == LabyrinthCombatKind.BOSS &&
-            bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM &&
-            result.battleTeamSelection?.bossTeamIndex != null
-
-    /**
-     * 本场普通关卡是否与上一场普通战斗的编组完全相同。
-     *
-     * 判据见 [labyrinthSpecialEquipmentTeamIsUnchanged]：数量相同、逐槽都识别出角色、角色集合相同。
-     * EX / Boss 永不跳过；本次战斗类型不在勾选集合内时流程本来就不介入。
-     */
-    private fun specialEquipmentTeamIsUnchanged(result: LabyrinthEntryFrameResult): Boolean {
-        if (combatContext?.kind != LabyrinthCombatKind.NORMAL) return false
-        return labyrinthSpecialEquipmentTeamIsUnchanged(
-            characterIds = currentTeamCharacterIds(result),
-            previousSignature = lastNormalBattleTeamSignature,
-        )
-    }
-
-    /** 只更新消息，避免每帧重建整个 state；消息本身也是停滞看门狗眼里的「进度」。 */
-    private fun publishSpecialEquipmentMessage(message: String) {
-        if (_state.value.message == message) return
-        _state.value = _state.value.copy(message = message)
-    }
-
-    private fun specialEquipmentTapLabel(tap: LabyrinthSpecialEquipmentTap): String = when (tap) {
-        LabyrinthSpecialEquipmentTap.ENTRY -> "特别装备：点击入口「特别装备」"
-        LabyrinthSpecialEquipmentTap.AUTO_BUTTON -> "特别装备：点击「自动装备」"
-        LabyrinthSpecialEquipmentTap.AUTO_CONFIRM -> "特别装备：点击弹窗2「确认」"
-        LabyrinthSpecialEquipmentTap.EQUIP_CONFIRM -> "特别装备：点击「装备确定」"
-        LabyrinthSpecialEquipmentTap.CANCEL -> "特别装备：点击「取消」"
-    }
-
-    /** 决策里的一次点击按按钮称呼（不含动作前缀，用来拼「等待后补发…」这类诊断消息）。 */
-    private fun specialEquipmentTapName(tap: LabyrinthSpecialEquipmentTap): String = when (tap) {
-        LabyrinthSpecialEquipmentTap.ENTRY -> "入口「特别装备」"
-        LabyrinthSpecialEquipmentTap.AUTO_BUTTON -> "「自动装备」"
-        LabyrinthSpecialEquipmentTap.AUTO_CONFIRM -> "弹窗2「确认」"
-        LabyrinthSpecialEquipmentTap.EQUIP_CONFIRM -> "「装备确定」"
-        LabyrinthSpecialEquipmentTap.CANCEL -> "「取消」"
-    }
-
-    /**
-     * 「特别装备」本轮的执行钩子。返回 true 表示这一帧由本流程接管（已派发点击或正在等待），调用处
-     * 必须立刻 return，**不得**再产出任何编组执行步——三条开始战斗路径都由这一点统一切断。
-     *
-     * 返回 false 的三种情况都保持既有行为不变：
-     * 1. 本轮不适用（设置为「关闭」/ 本次战斗类型未勾选 / 不知道类型）；
-     * 2. 已经稳定地离开编组页（顺带清掉本轮标记，下次进入编组页是新的一轮）；
-     * 3. 本轮已经结束，而且编组页没有被弹窗挡住（放行开战）。
-     */
+    /** Keep the session gate and action execution here; the flow owns its round state. */
     private fun handleSpecialEquipmentFlowFrame(
         sessionId: AutomationSessionId,
         result: LabyrinthEntryFrameResult,
         timestampMillis: Long,
     ): Boolean {
         if (activeSessionId != sessionId) return false
-        val observation = result.specialEquipment
-        val pageState = result.observation.state
-        val dialogOpen = observation?.stage != null
-        val onTeamPage = pageState == LabyrinthEntryPageState.BATTLE_TEAM_SELECTION
+        val kind = combatContext?.kind
+        return specialEquipmentFlow.onFrame(
+            result = result,
+            timestampMillis = timestampMillis,
+            context = LabyrinthSpecialEquipmentContext(
+                appliesToBattle = kind != null && specialEquipmentSettings?.autoEquipsSpecialEquipment(kind) == true,
+                multiTeamBoss = kind == LabyrinthCombatKind.BOSS && bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM,
+                normalBattle = kind == LabyrinthCombatKind.NORMAL,
+                teamReady = _state.value.battleTeamSelectionPlan?.teamReady == true,
+                previousNormalTeamSignature = lastNormalBattleTeamSignature,
+                actionIntervalElapsed = sessionActionIntervalElapsed(timestampMillis),
+            ),
+            effects = object : LabyrinthSpecialEquipmentEffects {
+                override fun tryDispatch(rect: EntryPixelRect, label: String): Boolean =
+                    dispatchSpecialEquipmentAction(sessionId, rect, label, timestampMillis)
 
-        // 弹窗1/弹窗2 与 UNKNOWN 都不算离开编组页；只有**连续**若干帧落在别的页面才算「稳定
-        // 地离开」。单帧即清标记是错的：弹窗关合动画、Boss 切队、结算过渡都会插进来一两帧误分类，
-        // 那样会重新武装并在同一轮里再跑一遍。
-        //
-        // 这一支一律不吃帧（返回 false），UNKNOWN 也不例外。
-        // 它位于下面决策调用的前面，吃帧就等于把这一帧从两个上限体系里摘出去——本流程自己的 8s/3 次
-        // 上限根本走不到，而 2403-2408 的早返回又让 handlePostEntryPage（120s 停滞看门狗唯一推进的
-        // 地方）看不到它 ⇒ 又变回无界等待。交还帧就够：**标记保留**本身已经满足
-        // （UNKNOWN 不算离开、单帧不算离开），下一次看到真实页面再决定是否继续本轮。
-        if (!onTeamPage && !dialogOpen) {
-            specialEquipmentAwayFrames =
-                if (pageState == LabyrinthEntryPageState.UNKNOWN) 0 else specialEquipmentAwayFrames + 1
-            if (
-                specialEquipmentAwayFrames >= SPECIAL_EQUIPMENT_LEAVE_STABLE_FRAMES &&
-                specialEquipmentFlowStage != LabyrinthSpecialEquipmentFlowStage.INACTIVE
-            ) {
-                resetSpecialEquipmentRound()
-            }
-            return false
-        }
-        specialEquipmentAwayFrames = 0
-
-        // 设置关闭、或本次战斗类型未勾选时完全不介入——零点击、不新增等待、不新增中间态。
-        if (!specialEquipmentAppliesToCurrentBattle()) {
-            if (specialEquipmentFlowStage != LabyrinthSpecialEquipmentFlowStage.INACTIVE) {
-                resetSpecialEquipmentRound()
-            }
-            return false
-        }
-
-        // Boss 多队编组页的队伍标签切换**不是**同一轮：每个页签是一支独立的队伍，页签一变上一轮就
-        // 作废——让当前页签走完自己的一整轮（入口 → 自动装备 → 弹窗2 确认 → 装备确定/取消），上一个
-        // 页签的结束标记不再替它挡住穿戴。单队模式整段只跑一轮，页签不参与身份，行为不变。
-        //
-        // 只在上一轮**已经结束**（DONE）时才按页签重开：本轮还在走的时候被一帧误分类的页签打断，
-        // 就会回到「重新武装并在同一轮里再跑一遍」的老问题；在走的轮次本来也有 8s/3 次上限兜底。
-        val bossMultiTeamTab = onMultiTeamBossTab(result)
-        val bossTeamIndex = result.battleTeamSelection?.bossTeamIndex
-        if (
-            bossMultiTeamTab &&
-            specialEquipmentFlowStage == LabyrinthSpecialEquipmentFlowStage.DONE &&
-            specialEquipmentRoundBossTeamIndex != null &&
-            bossTeamIndex != specialEquipmentRoundBossTeamIndex
-        ) {
-            resetSpecialEquipmentRound()
-        }
-
-        // 武装：只在编组页且队伍页已稳定识别时武装一次。
-        if (specialEquipmentFlowStage == LabyrinthSpecialEquipmentFlowStage.INACTIVE) {
-            if (!onTeamPage) {
-                // 没有在编组页武装过就不启动（例如用户手动打开了这个弹窗）：只留一条诊断消息。
-                publishSpecialEquipmentMessage("特别装备：识别到弹窗，但本轮尚未在编组页武装，不自动点击")
-                return false
-            }
-            if (
-                result.battleTeamSelection?.recognitionState !=
-                LabyrinthBattleTeamRecognitionState.STABLE
-            ) {
-                return false
-            }
-// **推荐阵容就位之前不武装、更不得点入口**：成员槽还空着、总战力 0、画面中央是
-// 「请选择角色。」时点入口，游戏会弹「请选择角色。」，特别装备弹窗不会出现。
-//
-// 判据是编组计划的 teamReady（推荐阵容已全部就位），用法与 buildOverlayPresentation 一致，
-// 刻意**不**要求 5 人齐全：「保持当前队伍」的场景在 teamReady 变成 true 之后照常进入。
-// 未就绪就返回 false 把这一帧交还既有编组路径——它才负责把角色选上、把计划推到 ready。
-//
-// 入口 ROI 在实机帧上命中正确：圆形按钮位置与标定一致，还带点击反馈圈。
-//
-            if (_state.value.battleTeamSelectionPlan?.teamReady != true) return false
-            // Boss 多队模式下没有成员的页签没有可穿戴的对象：不武装、零点击，把帧交还给既有
-            // 「其余留空，开始挑战」路径。
-            if (bossMultiTeamTab && labyrinthSpecialEquipmentTeamIsEmpty(currentTeamCharacterIds(result))) {
-                return false
-            }
-            // 普通关卡与上一场普通战斗的编组完全相同 ⇒ 装备没变，跳过本轮：不武装、不点入口，
-            // 把帧交还给既有编组/开战路径，只留一条可诊断消息。
-            if (specialEquipmentTeamIsUnchanged(result)) {
-                publishSpecialEquipmentMessage("特别装备：本场编组与上一场普通战斗完全相同，跳过本次穿戴")
-                return false
-            }
-            specialEquipmentFlowStage = LabyrinthSpecialEquipmentFlowStage.AWAIT_ENTRY
-            specialEquipmentStepAttempts = 0
-            specialEquipmentStepStartedAt = timestampMillis
-            specialEquipmentRoundBossTeamIndex = bossTeamIndex.takeIf { bossMultiTeamTab }
-        }
-
-// 两态判定必须先**跨帧稳定**：这一帧的原始证据只用来推进连续
-        // 计数：只有连续 SPECIAL_EQUIPMENT_EQUIP_EVIDENCE_STABLE_FRAMES 帧同类证据、且自本步开始已观察满
-        // SPECIAL_EQUIPMENT_EQUIP_EVIDENCE_STABLE_MILLIS 才把结论交给决策（帧数挡过渡帧，时长把帧率变化隔离掉），
-        // 首帧/过渡帧拿到的是 null ⇒ 决策只等一帧，既不点「装备确定」也不点「取消」。
-        val stepElapsedMillis = if (specialEquipmentStepStartedAt == Long.MIN_VALUE) {
-            0L
-        } else {
-            (timestampMillis - specialEquipmentStepStartedAt).coerceAtLeast(0L)
-        }
-        val equipEvidence = labyrinthSpecialEquipmentEquipEvidenceStreak(
-            previous = specialEquipmentEquipEvidence,
-            observation = observation,
-            elapsedMillis = stepElapsedMillis,
-        )
-        specialEquipmentEquipEvidence = equipEvidence
-
-        val decision = labyrinthSpecialEquipmentDecision(
-            stage = specialEquipmentFlowStage,
-            observation = observation,
-            stepAttempts = specialEquipmentStepAttempts,
-            stepElapsedMillis = stepElapsedMillis,
-            equipConfirmEnabled = equipEvidence.confirmedEnabled,
-        )
-        // 只在本轮真正（武装后）看到过弹窗的帧上记账：用户手动打开的弹窗不引入任何新等待。
-        if (dialogOpen) specialEquipmentDialogObserved = true
-
-        // 结束但**带点击**的决策只有一种：超限逃生（点弹窗1 左下白色「取消」退回编组页）。
-        // 结束判定必须先落下（stage=DONE），否则下一帧的 DONE 决策不会再带上这次点击；点击本身记成
-        // 待办，等动作间隔到期补发——这是「记成待办再补发」的那一支，与下面「派发成功再提交」互补。
-        if (decision.finished) {
-            if (decision.abandoned) {
-                // 超限/放弃的**诊断原文**：后续帧不得用「本轮已结束，继续编组与开战」把它覆盖，
-                // 它同时决定停机文案该说「已放弃」还是「已正常结束」。
-                if (specialEquipmentDiagnostic == null) specialEquipmentDiagnostic = decision.message
-                specialEquipmentAbandoned = true
-            }
-            if (decision.tap != null) {
-                specialEquipmentPendingEscape = decision.tap
-                // 待办本身也有窗口：窗口内始终派发不出去（例如单动作锁一直被占）就放弃这次点击，
-                // 交给下面「本轮已结束但弹窗仍开着」的分支停机并保留诊断，不引入无界等待。
-                specialEquipmentEscapeDeadline =
-                    timestampMillis + SPECIAL_EQUIPMENT_ESCAPE_TIMEOUT_MILLIS
-            }
-        }
-        if (
-            specialEquipmentPendingEscape != null &&
-            specialEquipmentEscapeDeadline != Long.MIN_VALUE &&
-            timestampMillis >= specialEquipmentEscapeDeadline
-        ) {
-            specialEquipmentPendingEscape = null
-        }
-
-        val tap = decision.tap ?: specialEquipmentPendingEscape
-        val rect = tap?.let { current -> observation?.let { labyrinthSpecialEquipmentTapRect(current, it) } }
-        val tapReady = rect != null && sessionActionIntervalElapsed(timestampMillis)
-        // **「决定要点击」不等于「点击已经派发」**：会话动作间隔（[BATTLE_TEAM_ACTION_INTERVAL_MILLIS]）
-        // 与单动作锁都可能把这一下挡在派发之前。此时若把 stage 推进到下一状态，就等于宣布「已经点过
-        // 了」——下一帧的决策会从下一状态继续等一个永远不会出现的画面，入口与「装备确定」都是这样丢的。
-        // 所以 stage 只在「本帧没有待派发的点击」或「待派发的点击确实派发成功」之后才提交；被挡下的
-        // 这一帧保持原 stage、步进次数与步进起点不变，间隔到期后同一决策会重新算出来补发**一次**。
-        // 补发同样受 [MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS] 与 [SPECIAL_EQUIPMENT_STEP_TIMEOUT_MILLIS]
-        // 约束（次数只在真的派发时增加，超时按原来的步进起点计时），因此不会变成新的无界等待。
-        if (tap == null || decision.finished) {
-            commitSpecialEquipmentStage(decision, timestampMillis)
-        }
-        // 1) 有待派发的点击，但这一帧派不出去（动作间隔未到 / 矩形不可信）⇒ 只等，stage 不动
-        //    （结束决策的 DONE 与逃生待办已经落下了）。间隔到期后同一决策会再算出来补发。
-        if (tap != null && !tapReady) {
-            publishSpecialEquipmentMessage(
-                when {
-                    // 矩形可信 ⇒ 唯一的拦路者就是会话动作间隔。
-                    rect != null -> "特别装备：动作间隔未到，等待后补发点击${specialEquipmentTapName(tap)}"
-                    // 结束决策的待办在等矩形：诊断原文优先，别用「本轮已结束，继续编组与开战」盖掉超限原因。
-                    decision.finished -> specialEquipmentDiagnostic ?: decision.message
-                    else -> decision.message
-                },
-            )
-            return true
-        }
-
-        // 2) 没有待派发的点击。
-        if (tap == null) {
-            if (!decision.finished) {
-                // 3) 本轮还没结束：没有可信矩形就只等（不点候选位置）；
-                //    次数与时间上限都在决策函数里兜底。
-                publishSpecialEquipmentMessage(decision.message)
-                return true
-            }
-            if (!dialogOpen) {
-                // 编组页干净：把这一帧交还既有编组/开战路径（放行开战）。
-                // 交还帧时把逃生窗口一并收掉，否则 pendingEscape/escapeDeadline 会跨轮残留，
-                // 8s 窗口内若再出现弹窗就会多打一次「取消」。
-                specialEquipmentPendingEscape = null
-                specialEquipmentEscapeDeadline = Long.MIN_VALUE
-                publishSpecialEquipmentMessage(decision.message)
-                if (specialEquipmentDialogObserved) {
-                    // 本轮刚关掉过弹窗：把「关闭后的第一帧」让给关闭动画——这一刻点在「战斗开始」上
-                    // 会被动画吃掉。只让一帧，由 handleBattleTeamSelectionExecution 消费。
-                    specialEquipmentDialogObserved = false
-                    specialEquipmentModalCloseSettlePending = true
+                override fun publishMessage(message: String) {
+                    if (_state.value.message != message) _state.value = _state.value.copy(message = message)
                 }
-                return false
-            }
-            // 本轮已结束、弹窗却仍开着，而且没有可以派发的逃生点击（待办已清或矩形不可信）。再吃帧就
-            // 变成「安静地永久停在编组页」：既逃不出弹窗也不停机、也没有「卡在哪一步」的诊断。
-            // 停机时必须保留超限诊断原文，不得用「本轮已结束，继续编组与开战」把它盖掉。
-            val diagnostic = specialEquipmentDiagnostic ?: decision.message
-            publishSpecialEquipmentMessage(diagnostic)
-            if (
-                specialEquipmentEscapeDeadline != Long.MIN_VALUE &&
-                timestampMillis < specialEquipmentEscapeDeadline
-            ) {
-                // 逃生点击已经派发出去，给它一个等弹窗关闭的窗口；窗口内不重复点击、也不停机。
-                return true
-            }
-            finishFromPlanner(
-                sessionId,
-                if (specialEquipmentAbandoned) {
-                    "特别装备：已放弃本轮且弹窗仍未关闭（无可用逃生矩形）；已停止并保留诊断状态；$diagnostic"
-                } else {
-                    // 本轮是**正常结束**（没有放弃诊断），不得把它误报成「超限放弃」。
-                    "特别装备：本轮已结束但弹窗仍开着且没有可用逃生矩形；已停止并保留诊断状态；$diagnostic"
-                },
-            )
-            return true
-        }
 
-        // 4) 有待派发的点击，而且这一帧满足派发条件 ⇒ **真的派发出去之后再提交 stage**。
-        publishSpecialEquipmentMessage(
-            if (decision.finished) specialEquipmentDiagnostic ?: decision.message else decision.message,
-        )
-        if (
-            !dispatchSpecialEquipmentAction(
-                sessionId = sessionId,
-                rect = requireNotNull(rect),
-                label = specialEquipmentTapLabel(tap),
-                timestampMillis = timestampMillis,
-            )
-        ) {
-            // 单动作锁被占：这一下没有落到画面上，与「动作间隔未到」同等处理——stage 不前进（结束决策
-            // 除外，它的 DONE 与逃生待办在前面的结束判定里已经落下），待办保留，下一次间隔到期后补发。
-            return true
-        }
-        if (!decision.finished) {
-            commitSpecialEquipmentStage(decision, timestampMillis)
-        }
-        if (decision.tap != null) {
-            specialEquipmentStepAttempts++
-        }
-        if (decision.finished) {
-            // 逃生点击**只点一次**——派发成功后立刻清待办，否则下一个动作间隔（≥1.2s）到来时残留的
-            // pendingEscape 会再点一次「取消」，与本段的语义和注释都不符。
-            specialEquipmentPendingEscape = null
-            specialEquipmentEscapeDeadline =
-                timestampMillis + SPECIAL_EQUIPMENT_ESCAPE_TIMEOUT_MILLIS
-        }
-        return true
-    }
-
-    /**
-     * 提交决策给出的 stage（stage 变化时同时把步进次数与步进起点重置到本帧）。
-     *
-     * 只允许在「本帧没有待派发的点击」或「待派发的点击确实派发成功」之后调用：stage 的推进本身就
-     * 声明了「这一步的动作已经派发过」，在点击被会话节流或单动作锁挡下时提交它，会让下一帧的决策
-     * 从一个没人执行过的状态继续等下去。
-     */
-    private fun commitSpecialEquipmentStage(
-        decision: LabyrinthSpecialEquipmentDecision,
-        timestampMillis: Long,
-    ) {
-        if (decision.stage != specialEquipmentFlowStage) {
-            specialEquipmentStepAttempts = 0
-            specialEquipmentStepStartedAt = timestampMillis
-        }
-        specialEquipmentFlowStage = decision.stage
+                override fun stop(reason: String) = finishFromPlanner(sessionId, reason)
+            },
+        ).ownsFrame
     }
 
     /**
@@ -6615,6 +5739,7 @@ class LabyrinthEntryRecognitionSession(
         timestampMillis: Long,
     ): Boolean {
         if (!beginGuardedAction()) return false
+        battleTeamDispatchSequence.incrementAndGet()
         traceAction(label)
         lastSessionActionAt = timestampMillis
         launchGuardedAction {
@@ -6661,6 +5786,7 @@ class LabyrinthEntryRecognitionSession(
         timestampMillis: Long,
     ) {
         if (!beginGuardedAction()) return
+        battleTeamDispatchSequence.incrementAndGet()
         traceAction(step.label)
         battleTeamExecutionAttempts++
         if (step.kind == LabyrinthBattleTeamExecutionKind.SCROLL_CHARACTERS) {
@@ -9702,19 +8828,3 @@ class LabyrinthEntryRecognitionSession(
         const val DEBUG_CLICK_MARKER_SIZE_PX = 56
     }
 }
-
-private const val SESSION_RETURN_TITLE_MIN_SCORE = 0.45
-private const val SESSION_DATE_CHANGE_TITLE_MIN_SCORE = 0.72
-private const val SESSION_DATE_CHANGE_CONFIRM_MIN_SCORE = 0.55
-private const val NODE_VIEWPORT_SIGNATURE_BUCKET_PX = 32
-
-/**
- * 连续多少帧落在非编组页才算「稳定地离开编组页」。
- *
- * 取 2 与 `POST_ENTRY_STABLE_FRAMES` / `SESSION_BLOCK_STABLE_FRAMES` 同量级：弹窗关合动画、Boss 切队、
- * 战斗结算过渡都会插进来一两帧误分类，而 UNKNOWN 根本不累计。
- */
-internal const val SPECIAL_EQUIPMENT_LEAVE_STABLE_FRAMES = 2
-
-/** 超限逃生点击（点弹窗1「取消」）之后等弹窗关闭的上限；超期仍未关就停机并保留诊断。 */
-internal const val SPECIAL_EQUIPMENT_ESCAPE_TIMEOUT_MILLIS = 8_000L
