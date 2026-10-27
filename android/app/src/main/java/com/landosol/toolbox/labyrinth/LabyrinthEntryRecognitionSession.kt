@@ -624,18 +624,6 @@ class LabyrinthEntryRecognitionSession(
     internal var nodeEntryMismatchPage: LabyrinthEntryPageState? = null
 
     @Volatile
-    internal var orphanMoveConfirmationStableFrames = 0
-
-    @Volatile
-    internal var orphanMoveConfirmationDismissAttempts = 0
-
-    /** Consecutive frames with no movement dialog; proof a cancel worked, which refills the budget. */
-    internal var orphanMoveConfirmationClearFrames = 0
-
-    @Volatile
-    internal var lastOrphanMoveConfirmationDismissAt = Long.MIN_VALUE
-
-    @Volatile
     internal var lastNodeScrollSourceSignature: String? = null
 
     @Volatile
@@ -674,10 +662,6 @@ class LabyrinthEntryRecognitionSession(
     /** First frame of an uninterrupted relic-detail popup; that popup is a human's to close. */
     @Volatile
     internal var relicDetailHoldSince = Long.MIN_VALUE
-
-    /** First frame after the stray-dialog cancel budget ran out. */
-    @Volatile
-    internal var orphanMoveConfirmationExhaustedSince = Long.MIN_VALUE
 
     @Volatile
     internal var postEntryStallMessage: String? = null
@@ -1715,7 +1699,7 @@ class LabyrinthEntryRecognitionSession(
         cancelRect: EntryPixelRect,
         timestampMillis: Long,
     ): Unit =
-        mapTransitionWorkflow.dismissOrphanNodeMoveConfirmation(sessionId = sessionId, cancelRect = cancelRect, timestampMillis = timestampMillis)
+        orphanMoveRecoveryWorkflow.dismissOrphanNodeMoveConfirmation(sessionId = sessionId, cancelRect = cancelRect, timestampMillis = timestampMillis)
 
     private fun publishNodeMoveConfirmationMessage(sessionId: AutomationSessionId, message: String): Unit =
         mapTransitionWorkflow.publishNodeMoveConfirmationMessage(sessionId = sessionId, message = message)
@@ -1724,7 +1708,7 @@ class LabyrinthEntryRecognitionSession(
         mapTransitionWorkflow.resetNodeMoveConfirmationTracking()
 
     private fun resetOrphanMoveConfirmationTracking(): Unit =
-        mapTransitionWorkflow.resetOrphanMoveConfirmationTracking()
+        orphanMoveRecoveryWorkflow.resetOrphanMoveConfirmationTracking()
 
     private fun publishWaitingForGameForeground(sessionId: AutomationSessionId) {
         if (activeSessionId != sessionId) return
@@ -1929,7 +1913,7 @@ class LabyrinthEntryRecognitionSession(
         mapTransitionWorkflow.prepareMapTransitionFrame(sessionId = sessionId, pageState = pageState, result = result, timestampMillis = timestampMillis, dryRun = dryRun)
 
     private fun handleOrphanMoveConfirmation(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, timestampMillis: Long, dryRun: Boolean): Boolean =
-        mapTransitionWorkflow.handleOrphanMoveConfirmation(sessionId = sessionId, result = result, timestampMillis = timestampMillis, dryRun = dryRun)
+        orphanMoveRecoveryWorkflow.handleOrphanMoveConfirmation(sessionId = sessionId, result = result, timestampMillis = timestampMillis, dryRun = dryRun)
 
     private fun handleEventFreeRoleFrame(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, timestampMillis: Long, dryRun: Boolean, routeHasPassedOpening: Boolean): Boolean =
         eventWorkflow.handleEventFreeRoleFrame(sessionId = sessionId, result = result, timestampMillis = timestampMillis, dryRun = dryRun, routeHasPassedOpening = routeHasPassedOpening)
@@ -2101,6 +2085,7 @@ class LabyrinthEntryRecognitionSession(
     internal val settlementWorkflow by lazy { createSettlementWorkflow() }
     internal val mapNavigationWorkflow by lazy { createMapNavigationWorkflow() }
     internal val mapTransitionWorkflow by lazy { createMapTransitionWorkflow() }
+    internal val orphanMoveRecoveryWorkflow by lazy { createOrphanMoveRecoveryWorkflow() }
     internal val mapViewportWorkflow by lazy { createMapViewportWorkflow() }
     internal val runBoundaryWorkflow by lazy { createRunBoundaryWorkflow() }
     internal val entryWorkflow by lazy { createEntryWorkflow() }

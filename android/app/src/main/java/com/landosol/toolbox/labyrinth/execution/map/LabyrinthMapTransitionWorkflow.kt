@@ -36,21 +36,15 @@ internal interface LabyrinthMapTransitionPort {
     val clock: () -> Long
     var combatContext: LabyrinthCombatContext?
     var confirmedNodeEntryReceipt: ConfirmedNodeEntryReceipt?
-    val entryPhaseComplete: Boolean
     var finalBossLocalizationStartedAt: Long
     var lastNodeMoveConfirmationRect: EntryPixelRect?
     var lastNodeScrollSourceSignature: String?
-    var lastOrphanMoveConfirmationDismissAt: Long
     var nodeEntryMismatchFrames: Int
     var nodeEntryMismatchPage: LabyrinthEntryPageState?
     var nodeMoveConfirmationStableFrames: Int
     var nodeScrollAttempts: Int
     val nodeSession: LabyrinthNodeSession?
     var nodeTapAttempts: Int
-    var orphanMoveConfirmationClearFrames: Int
-    var orphanMoveConfirmationDismissAttempts: Int
-    var orphanMoveConfirmationExhaustedSince: Long
-    var orphanMoveConfirmationStableFrames: Int
     var pendingNodeTransition: PendingNodeTransition?
     val persistenceMutex: Mutex
     var postBossStage: LabyrinthPostBossStage
@@ -235,64 +229,6 @@ internal class LabyrinthMapTransitionWorkflow(private val port: LabyrinthMapTran
         }
     }
 
-    fun dismissOrphanNodeMoveConfirmation(
-        sessionId: AutomationSessionId,
-        cancelRect: EntryPixelRect,
-        timestampMillis: Long,
-    ) {
-        if (!beginGuardedAction()) return
-        val attempt = orphanMoveConfirmationDismissAttempts + 1
-        lastOrphanMoveConfirmationDismissAt = timestampMillis
-        traceAction("取消误触的移动确认")
-        nodeLog(
-            "node-move-confirm-dismiss rect=$cancelRect attempt=$attempt/$MAX_ORPHAN_MOVE_CONFIRMATION_DISMISS_ATTEMPTS",
-            warning = true,
-        )
-        launchGuardedAction {
-            val tap = AutomationAction.Tap(
-                ScreenPoint(
-                    x = cancelRect.left + cancelRect.width / 2f,
-                    y = cancelRect.top + cancelRect.height / 2f,
-                ),
-            )
-            val executor = actionExecutor
-            val result = if (executor == null) {
-                AutomationActionResult.Rejected(tap, "动作执行器不可用")
-            } else {
-                executor.execute(sessionId, tap)
-            }
-            when (result) {
-                is AutomationActionResult.Executed -> {
-                    orphanMoveConfirmationDismissAttempts = attempt
-                    orphanMoveConfirmationStableFrames = 0
-                    // The map behind the dialog is untouched, but the recovery counters that
-                    // accumulated while it was open describe a blocked screen, not the map.
-                    resetNodeScrollSearchGate()
-                    resetNodeRecoveryNudgeTracking()
-                    if (activeSessionId == sessionId) {
-                        val current = _state.value
-                        _state.value = current.copy(
-                            actionCount = current.actionCount + 1,
-                            lastActionLabel = "取消误触的移动确认",
-                            message = "已取消非自动触发的移动确认弹窗，继续寻找路线节点",
-                        )
-                        publishOverlay(sessionId)
-                    }
-                }
-                is AutomationActionResult.Rejected -> {
-                    if (result.reason == GAME_NOT_FOREGROUND_REASON) {
-                        publishWaitingForGameForeground(sessionId)
-                    } else {
-                        stopFromRunLogic("取消移动确认被拒绝：${result.reason}")
-                    }
-                }
-                AutomationActionResult.StaleSession -> Unit
-                AutomationActionResult.Paused -> Unit
-                is AutomationActionResult.DryRun -> Unit
-            }
-        }
-    }
-
     fun publishNodeMoveConfirmationMessage(sessionId: AutomationSessionId, message: String) {
         if (activeSessionId != sessionId || _state.value.message == message) return
         _state.value = _state.value.copy(message = message)
@@ -302,13 +238,6 @@ internal class LabyrinthMapTransitionWorkflow(private val port: LabyrinthMapTran
     fun resetNodeMoveConfirmationTracking() {
         nodeMoveConfirmationStableFrames = 0
         lastNodeMoveConfirmationRect = null
-    }
-
-    fun resetOrphanMoveConfirmationTracking() {
-        orphanMoveConfirmationStableFrames = 0
-        orphanMoveConfirmationDismissAttempts = 0
-        orphanMoveConfirmationClearFrames = 0
-        lastOrphanMoveConfirmationDismissAt = Long.MIN_VALUE
     }
 
     fun confirmPendingNodeTransition(
@@ -545,101 +474,6 @@ internal class LabyrinthMapTransitionWorkflow(private val port: LabyrinthMapTran
             }
         }
         return preservePendingNodeMoveConfirmation || preservePendingNodeTransitionAcrossPage || preservePendingNodeTransitionForMismatch
-    }
-
-    fun handleOrphanMoveConfirmation(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, timestampMillis: Long, dryRun: Boolean): Boolean {
-        val pageState = result.observation.state
-        if (!dryRun && result.nodeMoveConfirmation != null && pendingNodeTransition == null) {
-            // Read persistent chrome before considering the generic modal recovery. A shop exit
-            // confirmation can briefly classify as UNKNOWN but still has the shop behind it; it
-            // must never manufacture a pending route transition to the next Boss/node.
-            val shopBackground = labyrinthShopBackgroundVisible(result)
-            val recoverableTarget = port.nodeSession?.uniqueReachableRouteTarget()
-            val canRecover = recoverableTarget != null &&
-                labyrinthCanRecoverOrphanNodeMoveConfirmation(
-                    pageState = pageState,
-                    confirmationConfidence = result.nodeMoveConfirmation.confidence,
-                    hasUniqueReachableRouteTarget = true,
-                    shopBackgroundVisible = shopBackground,
-                )
-            if (canRecover && recoverableTarget != null) {
-                recoverPendingNodeTransitionFromMoveConfirmation(
-                    sessionId = sessionId,
-                    session = requireNotNull(port.nodeSession),
-                    blockId = recoverableTarget.blockId,
-                    blockType = recoverableTarget.blockType,
-                    area = recoverableTarget.area,
-                    timestampMillis = timestampMillis,
-                    confidence = result.nodeMoveConfirmation.confidence,
-                )
-            } else if (port.nodeSession != null && entryPhaseComplete) {
-                // A modal nobody asked for and nobody can adopt (a stray tap while the route has
-                // several reachable successors). Every map gesture would land on the dialog, so
-                // the node search below must not run; press the dialog's cancel button instead.
-                // The shop exit dialog shares this chrome; while shop controls are visible the
-                // dialog is the shop handler's and must be left alone.
-                val shopBackground = labyrinthShopBackgroundVisible(result)
-                orphanMoveConfirmationClearFrames = 0
-                if (shopBackground) {
-                    orphanMoveConfirmationStableFrames = 0
-                } else {
-                    orphanMoveConfirmationStableFrames++
-                }
-                if (!shopBackground && labyrinthShouldDismissOrphanNodeMoveConfirmation(
-                        pageState = pageState,
-                        hasPendingNodeTransition = false,
-                        canRecover = false,
-                        stableFrames = orphanMoveConfirmationStableFrames,
-                        dismissAttempts = orphanMoveConfirmationDismissAttempts,
-                        lastDismissAt = lastOrphanMoveConfirmationDismissAt,
-                        now = timestampMillis,
-                        shopBackgroundVisible = false,
-                    )
-                ) {
-                    dismissOrphanNodeMoveConfirmation(
-                        sessionId = sessionId,
-                        cancelRect = result.nodeMoveConfirmation.cancelButtonRect,
-                        timestampMillis = timestampMillis,
-                    )
-                } else if (shopBackground) {
-                    // Fall through: the shop / shop-exit handlers own this frame.
-                } else if (orphanMoveConfirmationDismissAttempts >= MAX_ORPHAN_MOVE_CONFIRMATION_DISMISS_ATTEMPTS) {
-                    // The cancel button was pressed its full budget and the dialog is still up.
-                    // Asking for a human and then waiting for one indefinitely is the one thing
-                    // an unattended run must not do: every map gesture lands on this dialog, so
-                    // nothing else can make progress either.
-                    if (orphanMoveConfirmationExhaustedSince == Long.MIN_VALUE) {
-                        orphanMoveConfirmationExhaustedSince = timestampMillis
-                    }
-                    val heldFor = timestampMillis - orphanMoveConfirmationExhaustedSince
-                    if (heldFor >= ORPHAN_MOVE_CONFIRMATION_MANUAL_GRACE_MILLIS) {
-                        finishFromPlanner(
-                            sessionId,
-                            "移动确认弹窗取消${orphanMoveConfirmationDismissAttempts}次无效，" +
-                                "等待手动关闭${heldFor / 1000}秒后仍未消失；已停止并保留诊断状态",
-                        )
-                        return true.also { traceWorkflow("map", "orphan-confirmation") }
-                    }
-                    publishNodeMoveConfirmationMessage(sessionId, "移动确认弹窗多次取消无效，请手动关闭后继续")
-                    return true.also { traceWorkflow("map", "orphan-confirmation") }
-                } else {
-                    publishNodeMoveConfirmationMessage(sessionId, "检测到非自动触发的移动确认弹窗，准备点击取消")
-                    return true.also { traceWorkflow("map", "orphan-confirmation") }
-                }
-                if (!shopBackground) return true.also { traceWorkflow("map", "orphan-confirmation") }
-            }
-        } else if (result.nodeMoveConfirmation == null) {
-            orphanMoveConfirmationStableFrames = 0
-            orphanMoveConfirmationExhaustedSince = Long.MIN_VALUE
-            // The screen cleared, so the previous cancel worked. Give the budget back: it is there
-            // to stop tapping at a dialog that will not close, not to cap how many separate stray
-            // dialogs one run may recover from.
-            orphanMoveConfirmationClearFrames++
-            if (labyrinthOrphanMoveConfirmationBudgetRestored(orphanMoveConfirmationClearFrames)) {
-                resetOrphanMoveConfirmationTracking()
-            }
-        }
-        return false
     }
 
     fun onMapPageChanged(pageState: LabyrinthEntryPageState, preservePendingNodeMoveConfirmation: Boolean) {

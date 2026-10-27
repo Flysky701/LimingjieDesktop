@@ -20,6 +20,8 @@ import com.landosol.toolbox.labyrinth.execution.map.LabyrinthMapNavigationWorkfl
 import com.landosol.toolbox.labyrinth.execution.map.LabyrinthMapNavigationPort
 import com.landosol.toolbox.labyrinth.execution.map.LabyrinthMapTransitionWorkflow
 import com.landosol.toolbox.labyrinth.execution.map.LabyrinthMapTransitionPort
+import com.landosol.toolbox.labyrinth.execution.map.LabyrinthOrphanMoveRecoveryPort
+import com.landosol.toolbox.labyrinth.execution.map.LabyrinthOrphanMoveRecoveryWorkflow
 import com.landosol.toolbox.labyrinth.execution.map.LabyrinthMapViewportWorkflow
 import com.landosol.toolbox.labyrinth.execution.map.LabyrinthMapViewportPort
 import com.landosol.toolbox.labyrinth.execution.event.LabyrinthEventWorkflow
@@ -58,6 +60,7 @@ import com.landosol.toolbox.labyrinth.node.LabyrinthNodeViewportScanner
 import com.landosol.toolbox.labyrinth.batch.LabyrinthRunTerminalEvent
 import com.landosol.toolbox.labyrinth.node.NodeClassification
 import com.landosol.toolbox.labyrinth.node.NodeTemplateSet
+import com.landosol.toolbox.protocol.labyrinth.LabyrinthMapNode
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
@@ -67,7 +70,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 
 /** Composition only: binds scoped workflow ports to the compatibility facade.
- * Backing fields and private entry points are retained so existing consumers do not need changes.
+ * Legacy backing fields and private entry points preserve existing consumers; workflow-owned
+ * recovery state stays private and is connected only through queries and lifecycle/effect calls.
  * Business workflows never receive the facade itself. Only these adapters may cross that boundary.
  */
 internal fun LabyrinthEntryRecognitionSession.createBattleRecommendationWorkflow(): LabyrinthBattleRecommendationWorkflow =
@@ -1128,8 +1132,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapTransitionWorkflow(): Lab
         override var confirmedNodeEntryReceipt: ConfirmedNodeEntryReceipt?
             get() = this@createMapTransitionWorkflow.confirmedNodeEntryReceipt
             set(value) { this@createMapTransitionWorkflow.confirmedNodeEntryReceipt = value }
-        override val entryPhaseComplete: Boolean
-            get() = this@createMapTransitionWorkflow.entryPhaseComplete
         override var finalBossLocalizationStartedAt: Long
             get() = this@createMapTransitionWorkflow.finalBossLocalizationStartedAt
             set(value) { this@createMapTransitionWorkflow.finalBossLocalizationStartedAt = value }
@@ -1139,9 +1141,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapTransitionWorkflow(): Lab
         override var lastNodeScrollSourceSignature: String?
             get() = this@createMapTransitionWorkflow.lastNodeScrollSourceSignature
             set(value) { this@createMapTransitionWorkflow.lastNodeScrollSourceSignature = value }
-        override var lastOrphanMoveConfirmationDismissAt: Long
-            get() = this@createMapTransitionWorkflow.lastOrphanMoveConfirmationDismissAt
-            set(value) { this@createMapTransitionWorkflow.lastOrphanMoveConfirmationDismissAt = value }
         override var nodeEntryMismatchFrames: Int
             get() = this@createMapTransitionWorkflow.nodeEntryMismatchFrames
             set(value) { this@createMapTransitionWorkflow.nodeEntryMismatchFrames = value }
@@ -1159,18 +1158,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapTransitionWorkflow(): Lab
         override var nodeTapAttempts: Int
             get() = this@createMapTransitionWorkflow.nodeTapAttempts
             set(value) { this@createMapTransitionWorkflow.nodeTapAttempts = value }
-        override var orphanMoveConfirmationClearFrames: Int
-            get() = this@createMapTransitionWorkflow.orphanMoveConfirmationClearFrames
-            set(value) { this@createMapTransitionWorkflow.orphanMoveConfirmationClearFrames = value }
-        override var orphanMoveConfirmationDismissAttempts: Int
-            get() = this@createMapTransitionWorkflow.orphanMoveConfirmationDismissAttempts
-            set(value) { this@createMapTransitionWorkflow.orphanMoveConfirmationDismissAttempts = value }
-        override var orphanMoveConfirmationExhaustedSince: Long
-            get() = this@createMapTransitionWorkflow.orphanMoveConfirmationExhaustedSince
-            set(value) { this@createMapTransitionWorkflow.orphanMoveConfirmationExhaustedSince = value }
-        override var orphanMoveConfirmationStableFrames: Int
-            get() = this@createMapTransitionWorkflow.orphanMoveConfirmationStableFrames
-            set(value) { this@createMapTransitionWorkflow.orphanMoveConfirmationStableFrames = value }
         override var pendingNodeTransition: PendingNodeTransition?
             get() = this@createMapTransitionWorkflow.pendingNodeTransition
             set(value) { this@createMapTransitionWorkflow.pendingNodeTransition = value }
@@ -1226,6 +1213,61 @@ internal fun LabyrinthEntryRecognitionSession.createMapTransitionWorkflow(): Lab
             this@createMapTransitionWorkflow.runtimeTraceAction(label = label)
         override fun traceWorkflow(owner: String, phase: String): Unit =
             this@createMapTransitionWorkflow.runtimeTraceWorkflow(owner = owner, phase = phase)
+    })
+
+internal fun LabyrinthEntryRecognitionSession.createOrphanMoveRecoveryWorkflow(): LabyrinthOrphanMoveRecoveryWorkflow =
+    LabyrinthOrphanMoveRecoveryWorkflow(object : LabyrinthOrphanMoveRecoveryPort {
+        override val actionExecutor: SessionBoundActionExecutor?
+            get() = this@createOrphanMoveRecoveryWorkflow.actionExecutor
+        override val entryPhaseComplete: Boolean
+            get() = this@createOrphanMoveRecoveryWorkflow.entryPhaseComplete
+        override val hasNodeSession: Boolean
+            get() = nodeSession != null
+        override val hasPendingNodeTransition: Boolean
+            get() = pendingNodeTransition != null
+        override fun uniqueReachableRouteTarget(): LabyrinthMapNode? =
+            nodeSession?.uniqueReachableRouteTarget()
+        override fun recoverNodeTransition(
+            sessionId: AutomationSessionId,
+            target: LabyrinthMapNode,
+            timestampMillis: Long,
+            confidence: Double,
+        ) = mapTransitionWorkflow.recoverPendingNodeTransitionFromMoveConfirmation(
+            sessionId = sessionId,
+            session = requireNotNull(nodeSession),
+            blockId = target.blockId,
+            blockType = target.blockType,
+            area = target.area,
+            timestampMillis = timestampMillis,
+            confidence = confidence,
+        )
+        override fun beginGuardedAction(): Boolean = runtimeBeginGuardedAction()
+        override fun launchGuardedAction(block: suspend () -> Unit) = runtimeLaunchGuardedAction(block)
+        override fun onDismissExecuted(sessionId: AutomationSessionId) {
+            // The map behind the dialog is untouched, but the recovery counters that
+            // accumulated while it was open describe a blocked screen, not the map.
+            mapViewportWorkflow.resetNodeScrollSearchGate()
+            mapViewportWorkflow.resetNodeRecoveryNudgeTracking()
+            if (activeSessionId == sessionId) {
+                val current = _state.value
+                _state.value = current.copy(
+                    actionCount = current.actionCount + 1,
+                    lastActionLabel = "取消误触的移动确认",
+                    message = "已取消非自动触发的移动确认弹窗，继续寻找路线节点",
+                )
+                runtimePublishOverlay(sessionId)
+            }
+        }
+        override fun publishNodeMoveConfirmationMessage(sessionId: AutomationSessionId, message: String) =
+            mapTransitionWorkflow.publishNodeMoveConfirmationMessage(sessionId, message)
+        override fun publishWaitingForGameForeground(sessionId: AutomationSessionId) =
+            runtimePublishWaitingForGameForeground(sessionId)
+        override fun finishFromPlanner(sessionId: AutomationSessionId, reason: String) =
+            runtimeFinishFromPlanner(sessionId, reason)
+        override suspend fun stopFromRunLogic(reason: String): Boolean = runtimeStopFromRunLogic(reason)
+        override fun nodeLog(message: String, warning: Boolean) = runtimeNodeLog(message, warning)
+        override fun traceAction(label: String) = runtimeTraceAction(label)
+        override fun traceWorkflow(owner: String, phase: String) = runtimeTraceWorkflow(owner, phase)
     })
 
 internal fun LabyrinthEntryRecognitionSession.createMapViewportWorkflow(): LabyrinthMapViewportWorkflow =
@@ -1664,7 +1706,7 @@ internal fun LabyrinthEntryRecognitionSession.createRecoveryWorkflow(): Labyrint
         override fun resetNodeScrollSearchGate(): Unit =
             this@createRecoveryWorkflow.mapViewportWorkflow.resetNodeScrollSearchGate()
         override fun resetOrphanMoveConfirmationTracking(): Unit =
-            this@createRecoveryWorkflow.mapTransitionWorkflow.resetOrphanMoveConfirmationTracking()
+            this@createRecoveryWorkflow.orphanMoveRecoveryWorkflow.resetOrphanMoveConfirmationTracking()
         override fun resetPendingNodeClickStability(): Unit =
             this@createRecoveryWorkflow.mapViewportWorkflow.resetPendingNodeClickStability()
         override fun resetPostEntryStall(): Unit =
@@ -1926,7 +1968,7 @@ internal fun LabyrinthEntryRecognitionSession.createPageRouterWorkflow(): Labyri
             ): Unit =
             this@createPageRouterWorkflow.mapNavigationWorkflow.handleNodeSelectionFrame(sessionId = sessionId, result = result, frameWidth = frameWidth, frameHeight = frameHeight, timestampMillis = timestampMillis)
         override fun handleOrphanMoveConfirmation(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, timestampMillis: Long, dryRun: Boolean): Boolean =
-            this@createPageRouterWorkflow.mapTransitionWorkflow.handleOrphanMoveConfirmation(sessionId = sessionId, result = result, timestampMillis = timestampMillis, dryRun = dryRun)
+            this@createPageRouterWorkflow.orphanMoveRecoveryWorkflow.handleOrphanMoveConfirmation(sessionId = sessionId, result = result, timestampMillis = timestampMillis, dryRun = dryRun)
         override fun handleSessionBlockFrame(
                 sessionId: AutomationSessionId,
                 result: LabyrinthEntryFrameResult,
