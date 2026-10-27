@@ -24,23 +24,16 @@ internal interface LabyrinthMapViewportPort {
     var lastNodeActionAt: Long
     var lastNodeScrollSourceSignature: String?
     val nodeConflictRecovery: com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecovery
-    var nodeErrorStreak: Int
     var nodeRecoveryNudgeBlockId: Long
     var nodeRecoveryNudgeCount: Int
     var nodeScrollAttempts: Int
     var nodeSearchRearmCount: Int
     val nodeSession: LabyrinthNodeSession?
     val nodeViewportScanner: LabyrinthNodeViewportScanner
-    var pendingNodeClickBlockId: Long
-    var pendingNodeClickRect: EntryPixelRect?
-    var pendingNodeClickStableFrames: Int
-    var pendingNodeScrollBlockId: Long
-    var pendingNodeScrollStableFrames: Int
-    var pendingNodeScrollStartedAt: Long
-    var pendingNodeScrollViewportSignature: String?
-    var strongRouteTargetBindingAtMillis: Long
-    var strongRouteTargetBindingBlockId: Long
-    var strongRouteTargetBindingRect: EntryPixelRect?
+    fun resetPendingNodeClickStability()
+    fun resetStrongRouteTargetBinding()
+    fun resetNodeScrollSearchGate()
+    fun resetNodeErrorTracking()
     fun beginGuardedAction(): Boolean
     fun finishFromPlanner(sessionId: AutomationSessionId, reason: String): Unit
     fun launchGuardedAction(block: suspend () -> Unit): Unit
@@ -52,26 +45,6 @@ internal interface LabyrinthMapViewportPort {
 
 /** 管理地图视口、滚动扫描、微调及目标位置稳定性。 */
 internal class LabyrinthMapViewportWorkflow(private val port: LabyrinthMapViewportPort) : LabyrinthMapViewportPort by port {
-    fun resetPendingNodeClickStability() {
-        pendingNodeClickBlockId = Long.MIN_VALUE
-        pendingNodeClickRect = null
-        pendingNodeClickStableFrames = 0
-    }
-
-    /** Any map gesture or page change may move the camera; strong-column memory is then stale. */
-    fun resetStrongRouteTargetBinding() {
-        strongRouteTargetBindingBlockId = Long.MIN_VALUE
-        strongRouteTargetBindingRect = null
-        strongRouteTargetBindingAtMillis = Long.MIN_VALUE
-    }
-
-    fun resetNodeScrollSearchGate() {
-        pendingNodeScrollBlockId = Long.MIN_VALUE
-        pendingNodeScrollViewportSignature = null
-        pendingNodeScrollStableFrames = 0
-        pendingNodeScrollStartedAt = Long.MIN_VALUE
-    }
-
     fun resetNodeRecoveryNudgeTracking() {
         nodeRecoveryNudgeBlockId = Long.MIN_VALUE
         nodeRecoveryNudgeCount = 0
@@ -157,7 +130,7 @@ internal class LabyrinthMapViewportWorkflow(private val port: LabyrinthMapViewpo
             when (result) {
                 is AutomationActionResult.Executed -> {
                     nodeRecoveryNudgeCount = attempt
-                    nodeErrorStreak = 0
+                    resetNodeErrorTracking()
                     if (activeSessionId == sessionId) {
                         val directionLabel = when (direction) {
                             LabyrinthMapScanDirection.FORWARD -> "向右轻移"

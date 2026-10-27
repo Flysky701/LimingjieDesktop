@@ -548,28 +548,7 @@ class LabyrinthEntryRecognitionSession(
     internal var nodeInitFailedReason: String? = null
 
     @Volatile
-    internal var finalBossLocalizationStartedAt = Long.MIN_VALUE
-
-    @Volatile
     internal var entryPhaseComplete = false
-
-    @Volatile
-    internal var pendingNodeClickBlockId: Long = Long.MIN_VALUE
-
-    @Volatile
-    internal var pendingNodeClickRect: EntryPixelRect? = null
-
-    @Volatile
-    internal var pendingNodeClickStableFrames = 0
-
-    @Volatile
-    internal var strongRouteTargetBindingBlockId: Long = Long.MIN_VALUE
-
-    @Volatile
-    internal var strongRouteTargetBindingRect: EntryPixelRect? = null
-
-    @Volatile
-    internal var strongRouteTargetBindingAtMillis: Long = Long.MIN_VALUE
 
     @Volatile
     internal var nodeScrollAttempts = 0
@@ -587,18 +566,6 @@ class LabyrinthEntryRecognitionSession(
     internal var lastNodeSwipeAvoidRects: List<EntryPixelRect> = emptyList()
 
     @Volatile
-    internal var pendingNodeScrollBlockId = Long.MIN_VALUE
-
-    @Volatile
-    internal var pendingNodeScrollViewportSignature: String? = null
-
-    @Volatile
-    internal var pendingNodeScrollStableFrames = 0
-
-    @Volatile
-    internal var pendingNodeScrollStartedAt = Long.MIN_VALUE
-
-    @Volatile
     internal var lastNodeActionAt = Long.MIN_VALUE
 
     @Volatile
@@ -606,9 +573,6 @@ class LabyrinthEntryRecognitionSession(
 
     @Volatile
     internal var lastNodeScrollSourceSignature: String? = null
-
-    @Volatile
-    internal var nodeErrorStreak = 0
 
     @Volatile
     internal var routeNodeCount = 0
@@ -988,7 +952,7 @@ class LabyrinthEntryRecognitionSession(
     suspend fun setPaused(paused: Boolean): Boolean = mutex.withLock {
         val sessionId = activeSessionId ?: return false
         if (!sessionManager.setPaused(sessionId, paused)) return false
-        finalBossLocalizationStartedAt = Long.MIN_VALUE
+        mapNavigationWorkflow.resetFinalBossLocalization()
         resetPendingNodeClickStability()
         if (paused) clearQueuedFrame()
         _state.value = _state.value.copy(
@@ -1713,13 +1677,13 @@ class LabyrinthEntryRecognitionSession(
         battleCombatWorkflow.combatContextFor(blockType = blockType)
 
     private fun resetPendingNodeClickStability(): Unit =
-        mapViewportWorkflow.resetPendingNodeClickStability()
+        mapNavigationWorkflow.resetPendingNodeClickStability()
 
     private fun resetStrongRouteTargetBinding(): Unit =
-        mapViewportWorkflow.resetStrongRouteTargetBinding()
+        mapNavigationWorkflow.resetStrongRouteTargetBinding()
 
     private fun resetNodeScrollSearchGate(): Unit =
-        mapViewportWorkflow.resetNodeScrollSearchGate()
+        mapNavigationWorkflow.resetNodeScrollSearchGate()
 
     private fun resetNodeRecoveryNudgeTracking(): Unit =
         mapViewportWorkflow.resetNodeRecoveryNudgeTracking()

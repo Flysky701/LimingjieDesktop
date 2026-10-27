@@ -943,9 +943,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
         override var entryPhaseComplete: Boolean
             get() = this@createMapNavigationWorkflow.entryPhaseComplete
             set(value) { this@createMapNavigationWorkflow.entryPhaseComplete = value }
-        override var finalBossLocalizationStartedAt: Long
-            get() = this@createMapNavigationWorkflow.finalBossLocalizationStartedAt
-            set(value) { this@createMapNavigationWorkflow.finalBossLocalizationStartedAt = value }
         override var lastNodeActionAt: Long
             get() = this@createMapNavigationWorkflow.lastNodeActionAt
             set(value) { this@createMapNavigationWorkflow.lastNodeActionAt = value }
@@ -961,9 +958,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
             get() = this@createMapNavigationWorkflow.nodeActionPlanner
         override val nodeConflictRecovery: com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecovery
             get() = this@createMapNavigationWorkflow.nodeConflictRecovery
-        override var nodeErrorStreak: Int
-            get() = this@createMapNavigationWorkflow.nodeErrorStreak
-            set(value) { this@createMapNavigationWorkflow.nodeErrorStreak = value }
         override var nodeInitFailedReason: String?
             get() = this@createMapNavigationWorkflow.nodeInitFailedReason
             set(value) { this@createMapNavigationWorkflow.nodeInitFailedReason = value }
@@ -984,27 +978,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
             get() = this@createMapNavigationWorkflow.nodeTemplateLoader
         override val nodeViewportScanner: LabyrinthNodeViewportScanner
             get() = this@createMapNavigationWorkflow.nodeViewportScanner
-        override var pendingNodeClickBlockId: Long
-            get() = this@createMapNavigationWorkflow.pendingNodeClickBlockId
-            set(value) { this@createMapNavigationWorkflow.pendingNodeClickBlockId = value }
-        override var pendingNodeClickRect: EntryPixelRect?
-            get() = this@createMapNavigationWorkflow.pendingNodeClickRect
-            set(value) { this@createMapNavigationWorkflow.pendingNodeClickRect = value }
-        override var pendingNodeClickStableFrames: Int
-            get() = this@createMapNavigationWorkflow.pendingNodeClickStableFrames
-            set(value) { this@createMapNavigationWorkflow.pendingNodeClickStableFrames = value }
-        override var pendingNodeScrollBlockId: Long
-            get() = this@createMapNavigationWorkflow.pendingNodeScrollBlockId
-            set(value) { this@createMapNavigationWorkflow.pendingNodeScrollBlockId = value }
-        override var pendingNodeScrollStableFrames: Int
-            get() = this@createMapNavigationWorkflow.pendingNodeScrollStableFrames
-            set(value) { this@createMapNavigationWorkflow.pendingNodeScrollStableFrames = value }
-        override var pendingNodeScrollStartedAt: Long
-            get() = this@createMapNavigationWorkflow.pendingNodeScrollStartedAt
-            set(value) { this@createMapNavigationWorkflow.pendingNodeScrollStartedAt = value }
-        override var pendingNodeScrollViewportSignature: String?
-            get() = this@createMapNavigationWorkflow.pendingNodeScrollViewportSignature
-            set(value) { this@createMapNavigationWorkflow.pendingNodeScrollViewportSignature = value }
         override var postBossStage: LabyrinthPostBossStage
             get() = this@createMapNavigationWorkflow.postBossStage
             set(value) { this@createMapNavigationWorkflow.postBossStage = value }
@@ -1019,15 +992,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
         override var routeNodeCount: Int
             get() = this@createMapNavigationWorkflow.routeNodeCount
             set(value) { this@createMapNavigationWorkflow.routeNodeCount = value }
-        override var strongRouteTargetBindingAtMillis: Long
-            get() = this@createMapNavigationWorkflow.strongRouteTargetBindingAtMillis
-            set(value) { this@createMapNavigationWorkflow.strongRouteTargetBindingAtMillis = value }
-        override var strongRouteTargetBindingBlockId: Long
-            get() = this@createMapNavigationWorkflow.strongRouteTargetBindingBlockId
-            set(value) { this@createMapNavigationWorkflow.strongRouteTargetBindingBlockId = value }
-        override var strongRouteTargetBindingRect: EntryPixelRect?
-            get() = this@createMapNavigationWorkflow.strongRouteTargetBindingRect
-            set(value) { this@createMapNavigationWorkflow.strongRouteTargetBindingRect = value }
         override var validatedRoute: LabyrinthRouteJson?
             get() = this@createMapNavigationWorkflow.validatedRoute
             set(value) { this@createMapNavigationWorkflow.validatedRoute = value }
@@ -1094,12 +1058,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
             this@createMapNavigationWorkflow.mapTransitionWorkflow.resetNodeMoveConfirmationTracking()
         override fun resetNodeRecoveryNudgeTracking(): Unit =
             this@createMapNavigationWorkflow.mapViewportWorkflow.resetNodeRecoveryNudgeTracking()
-        override fun resetNodeScrollSearchGate(): Unit =
-            this@createMapNavigationWorkflow.mapViewportWorkflow.resetNodeScrollSearchGate()
-        override fun resetPendingNodeClickStability(): Unit =
-            this@createMapNavigationWorkflow.mapViewportWorkflow.resetPendingNodeClickStability()
-        override fun resetStrongRouteTargetBinding(): Unit =
-            this@createMapNavigationWorkflow.mapViewportWorkflow.resetStrongRouteTargetBinding()
         override suspend fun stopFromRunLogic(reason: String): Boolean =
             this@createMapNavigationWorkflow.runtimeStopFromRunLogic(reason = reason)
         override fun traceAction(label: String): Unit =
@@ -1131,9 +1089,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapTransitionWorkflow(): Lab
         override var combatContext: LabyrinthCombatContext?
             get() = this@createMapTransitionWorkflow.combatContext
             set(value) { this@createMapTransitionWorkflow.combatContext = value }
-        override var finalBossLocalizationStartedAt: Long
-            get() = this@createMapTransitionWorkflow.finalBossLocalizationStartedAt
-            set(value) { this@createMapTransitionWorkflow.finalBossLocalizationStartedAt = value }
         override var lastNodeScrollSourceSignature: String?
             get() = this@createMapTransitionWorkflow.lastNodeScrollSourceSignature
             set(value) { this@createMapTransitionWorkflow.lastNodeScrollSourceSignature = value }
@@ -1163,6 +1118,8 @@ internal fun LabyrinthEntryRecognitionSession.createMapTransitionWorkflow(): Lab
         override var validatedRoute: LabyrinthRouteJson?
             get() = this@createMapTransitionWorkflow.validatedRoute
             set(value) { this@createMapTransitionWorkflow.validatedRoute = value }
+        override fun resetFinalBossLocalization() =
+            this@createMapTransitionWorkflow.mapNavigationWorkflow.resetFinalBossLocalization()
         override fun beginGuardedAction(): Boolean =
             this@createMapTransitionWorkflow.runtimeBeginGuardedAction()
         override fun finishFromPlanner(sessionId: AutomationSessionId, reason: String): Unit =
@@ -1200,11 +1157,11 @@ internal fun LabyrinthEntryRecognitionSession.createMapTransitionWorkflow(): Lab
         override fun resetNodeRecoveryNudgeTracking(): Unit =
             this@createMapTransitionWorkflow.mapViewportWorkflow.resetNodeRecoveryNudgeTracking()
         override fun resetNodeScrollSearchGate(): Unit =
-            this@createMapTransitionWorkflow.mapViewportWorkflow.resetNodeScrollSearchGate()
+            this@createMapTransitionWorkflow.mapNavigationWorkflow.resetNodeScrollSearchGate()
         override fun resetPendingNodeClickStability(): Unit =
-            this@createMapTransitionWorkflow.mapViewportWorkflow.resetPendingNodeClickStability()
+            this@createMapTransitionWorkflow.mapNavigationWorkflow.resetPendingNodeClickStability()
         override fun resetStrongRouteTargetBinding(): Unit =
-            this@createMapTransitionWorkflow.mapViewportWorkflow.resetStrongRouteTargetBinding()
+            this@createMapTransitionWorkflow.mapNavigationWorkflow.resetStrongRouteTargetBinding()
         override suspend fun stopFromRunLogic(reason: String): Boolean =
             this@createMapTransitionWorkflow.runtimeStopFromRunLogic(reason = reason)
         override fun traceAction(label: String): Unit =
@@ -1244,7 +1201,7 @@ internal fun LabyrinthEntryRecognitionSession.createOrphanMoveRecoveryWorkflow()
         override fun onDismissExecuted(sessionId: AutomationSessionId) {
             // The map behind the dialog is untouched, but the recovery counters that
             // accumulated while it was open describe a blocked screen, not the map.
-            mapViewportWorkflow.resetNodeScrollSearchGate()
+            mapNavigationWorkflow.resetNodeScrollSearchGate()
             mapViewportWorkflow.resetNodeRecoveryNudgeTracking()
             if (activeSessionId == sessionId) {
                 val current = _state.value
@@ -1284,9 +1241,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapViewportWorkflow(): Labyr
             set(value) { this@createMapViewportWorkflow.lastNodeScrollSourceSignature = value }
         override val nodeConflictRecovery: com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecovery
             get() = this@createMapViewportWorkflow.nodeConflictRecovery
-        override var nodeErrorStreak: Int
-            get() = this@createMapViewportWorkflow.nodeErrorStreak
-            set(value) { this@createMapViewportWorkflow.nodeErrorStreak = value }
         override var nodeRecoveryNudgeBlockId: Long
             get() = this@createMapViewportWorkflow.nodeRecoveryNudgeBlockId
             set(value) { this@createMapViewportWorkflow.nodeRecoveryNudgeBlockId = value }
@@ -1303,36 +1257,14 @@ internal fun LabyrinthEntryRecognitionSession.createMapViewportWorkflow(): Labyr
             get() = this@createMapViewportWorkflow.nodeSession
         override val nodeViewportScanner: LabyrinthNodeViewportScanner
             get() = this@createMapViewportWorkflow.nodeViewportScanner
-        override var pendingNodeClickBlockId: Long
-            get() = this@createMapViewportWorkflow.pendingNodeClickBlockId
-            set(value) { this@createMapViewportWorkflow.pendingNodeClickBlockId = value }
-        override var pendingNodeClickRect: EntryPixelRect?
-            get() = this@createMapViewportWorkflow.pendingNodeClickRect
-            set(value) { this@createMapViewportWorkflow.pendingNodeClickRect = value }
-        override var pendingNodeClickStableFrames: Int
-            get() = this@createMapViewportWorkflow.pendingNodeClickStableFrames
-            set(value) { this@createMapViewportWorkflow.pendingNodeClickStableFrames = value }
-        override var pendingNodeScrollBlockId: Long
-            get() = this@createMapViewportWorkflow.pendingNodeScrollBlockId
-            set(value) { this@createMapViewportWorkflow.pendingNodeScrollBlockId = value }
-        override var pendingNodeScrollStableFrames: Int
-            get() = this@createMapViewportWorkflow.pendingNodeScrollStableFrames
-            set(value) { this@createMapViewportWorkflow.pendingNodeScrollStableFrames = value }
-        override var pendingNodeScrollStartedAt: Long
-            get() = this@createMapViewportWorkflow.pendingNodeScrollStartedAt
-            set(value) { this@createMapViewportWorkflow.pendingNodeScrollStartedAt = value }
-        override var pendingNodeScrollViewportSignature: String?
-            get() = this@createMapViewportWorkflow.pendingNodeScrollViewportSignature
-            set(value) { this@createMapViewportWorkflow.pendingNodeScrollViewportSignature = value }
-        override var strongRouteTargetBindingAtMillis: Long
-            get() = this@createMapViewportWorkflow.strongRouteTargetBindingAtMillis
-            set(value) { this@createMapViewportWorkflow.strongRouteTargetBindingAtMillis = value }
-        override var strongRouteTargetBindingBlockId: Long
-            get() = this@createMapViewportWorkflow.strongRouteTargetBindingBlockId
-            set(value) { this@createMapViewportWorkflow.strongRouteTargetBindingBlockId = value }
-        override var strongRouteTargetBindingRect: EntryPixelRect?
-            get() = this@createMapViewportWorkflow.strongRouteTargetBindingRect
-            set(value) { this@createMapViewportWorkflow.strongRouteTargetBindingRect = value }
+        override fun resetPendingNodeClickStability() =
+            this@createMapViewportWorkflow.mapNavigationWorkflow.resetPendingNodeClickStability()
+        override fun resetStrongRouteTargetBinding() =
+            this@createMapViewportWorkflow.mapNavigationWorkflow.resetStrongRouteTargetBinding()
+        override fun resetNodeScrollSearchGate() =
+            this@createMapViewportWorkflow.mapNavigationWorkflow.resetNodeScrollSearchGate()
+        override fun resetNodeErrorTracking() =
+            this@createMapViewportWorkflow.mapNavigationWorkflow.resetNodeErrorTracking()
         override fun beginGuardedAction(): Boolean =
             this@createMapViewportWorkflow.runtimeBeginGuardedAction()
         override fun finishFromPlanner(sessionId: AutomationSessionId, reason: String): Unit =
@@ -1641,9 +1573,6 @@ internal fun LabyrinthEntryRecognitionSession.createRecoveryWorkflow(): Labyrint
         override var lastSessionReturnTitleActionAt: Long
             get() = this@createRecoveryWorkflow.lastSessionReturnTitleActionAt
             set(value) { this@createRecoveryWorkflow.lastSessionReturnTitleActionAt = value }
-        override var nodeErrorStreak: Int
-            get() = this@createRecoveryWorkflow.nodeErrorStreak
-            set(value) { this@createRecoveryWorkflow.nodeErrorStreak = value }
         override var nodeScrollAttempts: Int
             get() = this@createRecoveryWorkflow.nodeScrollAttempts
             set(value) { this@createRecoveryWorkflow.nodeScrollAttempts = value }
@@ -1672,6 +1601,8 @@ internal fun LabyrinthEntryRecognitionSession.createRecoveryWorkflow(): Labyrint
         override var sessionReturnTitleStableFrames: Int
             get() = this@createRecoveryWorkflow.sessionReturnTitleStableFrames
             set(value) { this@createRecoveryWorkflow.sessionReturnTitleStableFrames = value }
+        override fun resetNodeErrorTracking() =
+            this@createRecoveryWorkflow.mapNavigationWorkflow.resetNodeErrorTracking()
         override fun beginGuardedAction(): Boolean =
             this@createRecoveryWorkflow.runtimeBeginGuardedAction()
         override fun clearCharacterAcquisitionContext(): Unit =
@@ -1697,15 +1628,15 @@ internal fun LabyrinthEntryRecognitionSession.createRecoveryWorkflow(): Labyrint
         override fun resetNodeRecoveryNudgeTracking(): Unit =
             this@createRecoveryWorkflow.mapViewportWorkflow.resetNodeRecoveryNudgeTracking()
         override fun resetNodeScrollSearchGate(): Unit =
-            this@createRecoveryWorkflow.mapViewportWorkflow.resetNodeScrollSearchGate()
+            this@createRecoveryWorkflow.mapNavigationWorkflow.resetNodeScrollSearchGate()
         override fun resetOrphanMoveConfirmationTracking(): Unit =
             this@createRecoveryWorkflow.orphanMoveRecoveryWorkflow.resetOrphanMoveConfirmationTracking()
         override fun resetPendingNodeClickStability(): Unit =
-            this@createRecoveryWorkflow.mapViewportWorkflow.resetPendingNodeClickStability()
+            this@createRecoveryWorkflow.mapNavigationWorkflow.resetPendingNodeClickStability()
         override fun resetPostEntryStall(): Unit =
             this@createRecoveryWorkflow.pageRouterWorkflow.resetPostEntryStall()
         override fun resetStrongRouteTargetBinding(): Unit =
-            this@createRecoveryWorkflow.mapViewportWorkflow.resetStrongRouteTargetBinding()
+            this@createRecoveryWorkflow.mapNavigationWorkflow.resetStrongRouteTargetBinding()
         override suspend fun stopFromRunLogic(reason: String): Boolean =
             this@createRecoveryWorkflow.runtimeStopFromRunLogic(reason = reason)
         override fun traceAction(label: String): Unit =

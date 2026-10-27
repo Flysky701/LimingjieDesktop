@@ -37,7 +37,6 @@ internal interface LabyrinthMapTransitionPort {
     val activeSessionId: AutomationSessionId?
     val clock: () -> Long
     var combatContext: LabyrinthCombatContext?
-    var finalBossLocalizationStartedAt: Long
     var lastNodeScrollSourceSignature: String?
     val lastNodeSwipeAvoidRects: List<EntryPixelRect>
     var nodeScrollAttempts: Int
@@ -49,6 +48,7 @@ internal interface LabyrinthMapTransitionPort {
     var postBossUnknownAttempts: Int
     val routeProgressSaver: (suspend (Long, Long, Long) -> Boolean)?
     var validatedRoute: LabyrinthRouteJson?
+    fun resetFinalBossLocalization()
     fun beginGuardedAction(): Boolean
     fun finishFromPlanner(sessionId: AutomationSessionId, reason: String): Unit
     fun launchGuardedAction(block: suspend () -> Unit): Unit
@@ -640,7 +640,7 @@ internal class LabyrinthMapTransitionWorkflow(private val port: LabyrinthMapTran
 
     fun onMapPageChanged(pageState: LabyrinthEntryPageState, preservePendingNodeMoveConfirmation: Boolean) {
         if (pageState != LabyrinthEntryPageState.NODE_SELECTION) {
-            finalBossLocalizationStartedAt = Long.MIN_VALUE
+            resetFinalBossLocalization()
             resetPendingNodeClickStability()
             resetStrongRouteTargetBinding()
             resetNodeScrollSearchGate()

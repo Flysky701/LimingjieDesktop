@@ -56,7 +56,6 @@ internal interface LabyrinthRecoveryPort {
     var lastPostEntryState: LabyrinthEntryPageState?
     var lastSessionBlockKind: SessionBlockKind
     var lastSessionReturnTitleActionAt: Long
-    var nodeErrorStreak: Int
     var nodeScrollAttempts: Int
     var nodeTapAttempts: Int
     val nodeViewportScanner: LabyrinthNodeViewportScanner
@@ -67,6 +66,7 @@ internal interface LabyrinthRecoveryPort {
     var sessionBlockStableFrames: Int
     var sessionReturnTitleAttempts: Int
     var sessionReturnTitleStableFrames: Int
+    fun resetNodeErrorTracking()
     fun beginGuardedAction(): Boolean
     fun clearCharacterAcquisitionContext(): Unit
     fun clearRoleRewardBatchTracking(): Unit
@@ -239,7 +239,7 @@ internal class LabyrinthRecoveryWorkflow(private val port: LabyrinthRecoveryPort
         lastNodeScrollSourceSignature = null
         nodeViewportScanner.reset()
         lastNodeActionAt = Long.MIN_VALUE
-        nodeErrorStreak = 0
+        resetNodeErrorTracking()
         lastPostEntryState = null
         postEntryStableFrames = 0
         postEntryAttempts = 0

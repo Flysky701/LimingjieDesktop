@@ -48,14 +48,12 @@ internal interface LabyrinthMapNavigationPort {
     val clock: () -> Long
     var combatContext: LabyrinthCombatContext?
     var entryPhaseComplete: Boolean
-    var finalBossLocalizationStartedAt: Long
     var lastNodeActionAt: Long
     var lastNodeScrollSourceSignature: String?
     var lastNodeSwipeAvoidRects: List<EntryPixelRect>
     val lastPostEntryActionAt: Long
     val nodeActionPlanner: LabyrinthNodeActionPlanner
     val nodeConflictRecovery: com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecovery
-    var nodeErrorStreak: Int
     var nodeInitFailedReason: String?
     val nodeInitStarted: AtomicBoolean
     var nodeScrollAttempts: Int
@@ -64,21 +62,11 @@ internal interface LabyrinthMapNavigationPort {
     var nodeTapAttempts: Int
     val nodeTemplateLoader: (() -> NodeTemplateSet)?
     val nodeViewportScanner: LabyrinthNodeViewportScanner
-    var pendingNodeClickBlockId: Long
-    var pendingNodeClickRect: EntryPixelRect?
-    var pendingNodeClickStableFrames: Int
-    var pendingNodeScrollBlockId: Long
-    var pendingNodeScrollStableFrames: Int
-    var pendingNodeScrollStartedAt: Long
-    var pendingNodeScrollViewportSignature: String?
     var postBossStage: LabyrinthPostBossStage
     var postBossStartedAt: Long
     var postBossUnknownAttempts: Int
     val routeLoader: (suspend (Long?) -> LabyrinthRouteJson?)?
     var routeNodeCount: Int
-    var strongRouteTargetBindingAtMillis: Long
-    var strongRouteTargetBindingBlockId: Long
-    var strongRouteTargetBindingRect: EntryPixelRect?
     var validatedRoute: LabyrinthRouteJson?
     fun beginGuardedAction(): Boolean
     fun clearCharacterAcquisitionContext(): Unit
@@ -125,9 +113,6 @@ internal interface LabyrinthMapNavigationPort {
         viewportSignature: String,
     ): Boolean
     fun resetNodeRecoveryNudgeTracking(): Unit
-    fun resetNodeScrollSearchGate(): Unit
-    fun resetPendingNodeClickStability(): Unit
-    fun resetStrongRouteTargetBinding(): Unit
     suspend fun stopFromRunLogic(reason: String): Boolean
     fun traceAction(label: String): Unit
     fun traceReject(reason: String): Unit
@@ -136,6 +121,70 @@ internal interface LabyrinthMapNavigationPort {
 
 /** 初始化路线、定位目标节点并提出节点点击。 */
 internal class LabyrinthMapNavigationWorkflow(private val port: LabyrinthMapNavigationPort) : LabyrinthMapNavigationPort by port {
+    @Volatile
+    private var pendingNodeClickBlockId: Long = Long.MIN_VALUE
+
+    @Volatile
+    private var pendingNodeClickRect: EntryPixelRect? = null
+
+    @Volatile
+    private var pendingNodeClickStableFrames = 0
+
+    @Volatile
+    private var strongRouteTargetBindingBlockId: Long = Long.MIN_VALUE
+
+    @Volatile
+    private var strongRouteTargetBindingRect: EntryPixelRect? = null
+
+    @Volatile
+    private var strongRouteTargetBindingAtMillis: Long = Long.MIN_VALUE
+
+    @Volatile
+    private var pendingNodeScrollBlockId = Long.MIN_VALUE
+
+    @Volatile
+    private var pendingNodeScrollViewportSignature: String? = null
+
+    @Volatile
+    private var pendingNodeScrollStableFrames = 0
+
+    @Volatile
+    private var pendingNodeScrollStartedAt = Long.MIN_VALUE
+
+    @Volatile
+    private var finalBossLocalizationStartedAt = Long.MIN_VALUE
+
+    @Volatile
+    private var nodeErrorStreak = 0
+
+    fun resetPendingNodeClickStability() {
+        pendingNodeClickBlockId = Long.MIN_VALUE
+        pendingNodeClickRect = null
+        pendingNodeClickStableFrames = 0
+    }
+
+    /** Any map gesture or page change may move the camera; strong-column memory is then stale. */
+    fun resetStrongRouteTargetBinding() {
+        strongRouteTargetBindingBlockId = Long.MIN_VALUE
+        strongRouteTargetBindingRect = null
+        strongRouteTargetBindingAtMillis = Long.MIN_VALUE
+    }
+
+    fun resetNodeScrollSearchGate() {
+        pendingNodeScrollBlockId = Long.MIN_VALUE
+        pendingNodeScrollViewportSignature = null
+        pendingNodeScrollStableFrames = 0
+        pendingNodeScrollStartedAt = Long.MIN_VALUE
+    }
+
+    fun resetFinalBossLocalization() {
+        finalBossLocalizationStartedAt = Long.MIN_VALUE
+    }
+
+    fun resetNodeErrorTracking() {
+        nodeErrorStreak = 0
+    }
+
     /**
      * Supplies the frame processor with route-aware search bounds without letting the vision layer
      * read mutable session internals directly. A missing viewport fit deliberately keeps the full
