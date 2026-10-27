@@ -297,6 +297,7 @@ class LabyrinthEntryRecognitionSession(
     @Volatile
     private var specialEquipmentRoundBossTeamIndex: Int? = null
 
+    // Preserve reflection-backed storage and visibility; only Equipment receives this capability.
     private val specialEquipmentState = object : LabyrinthSpecialEquipmentState {
         override var specialEquipmentFlowStage: LabyrinthSpecialEquipmentFlowStage
             get() = this@LabyrinthEntryRecognitionSession.specialEquipmentFlowStage
@@ -335,8 +336,6 @@ class LabyrinthEntryRecognitionSession(
             get() = this@LabyrinthEntryRecognitionSession.specialEquipmentRoundBossTeamIndex
             set(value) { this@LabyrinthEntryRecognitionSession.specialEquipmentRoundBossTeamIndex = value }
     }
-
-    internal val specialEquipmentFlow = LabyrinthSpecialEquipmentFlow(specialEquipmentState)
 
     internal val committedBattleCharacterIds = linkedSetOf<String>()
 
@@ -1927,7 +1926,7 @@ class LabyrinthEntryRecognitionSession(
     internal val battleTeamWorkflow by lazy { createBattleTeamWorkflow() }
     internal val battleCombatWorkflow by lazy { createBattleCombatWorkflow() }
     internal val encounterWorkflow by lazy { createEncounterWorkflow() }
-    internal val equipmentWorkflow by lazy { createEquipmentWorkflow() }
+    internal val equipmentWorkflow by lazy { createEquipmentWorkflow(specialEquipmentState) }
     internal val rewardWorkflow by lazy { createRewardWorkflow() }
     internal val eventWorkflow by lazy { createEventWorkflow() }
     internal val shopWorkflow by lazy { createShopWorkflow() }

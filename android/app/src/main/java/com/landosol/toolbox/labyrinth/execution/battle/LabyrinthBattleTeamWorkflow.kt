@@ -46,7 +46,8 @@ internal interface LabyrinthBattleTeamPort {
     var pendingBattleTeamAction: PendingBattleTeamAction?
     var pendingBossTeamAdvance: Pair<Int, List<String>>?
     var preparedBossFirstTeamIds: List<String>
-    val specialEquipmentFlow: LabyrinthSpecialEquipmentFlow
+    fun specialEquipmentProgress(): LabyrinthSpecialEquipmentProgress
+    fun consumeSpecialEquipmentModalCloseSettle(): Boolean
     fun anchorRect(result: LabyrinthEntryFrameResult, anchorId: String): EntryPixelRect?
     fun beginGuardedAction(): Boolean
     fun excludeUnfindableBattleCharacters(
@@ -169,7 +170,7 @@ internal class LabyrinthBattleTeamWorkflow(private val port: LabyrinthBattleTeam
             },
             rosterIds = current.joinedCharacters.map { it.characterId },
             exhaustedFilters = exhaustedBattleRosterFilters.toSet(),
-            specialEquipment = specialEquipmentFlow.progress(),
+            specialEquipment = specialEquipmentProgress(),
         )
     }
 
@@ -258,7 +259,7 @@ internal class LabyrinthBattleTeamWorkflow(private val port: LabyrinthBattleTeam
         // 之前。本轮没结束时这一帧由特别装备流程接管并 return，于是下面三个调用点都无法产出动作；
         // 本轮结束（成功 / 未变更 / 超限放弃）或不适用时返回 false，原有编组/开战路径逐字继续。
         if (handleSpecialEquipmentFlowFrame(sessionId, result, timestampMillis)) return
-        if (specialEquipmentFlow.consumeModalCloseSettle()) {
+        if (consumeSpecialEquipmentModalCloseSettle()) {
             // 特别装备弹窗刚关闭：这一帧只让给关闭动画，不派发任何编组/开战点击。紧跟在闸门之后、
             // 在产出任何执行步之前消费，且只让一帧。
             return

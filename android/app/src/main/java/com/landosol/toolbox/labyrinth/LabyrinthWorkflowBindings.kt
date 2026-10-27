@@ -268,8 +268,10 @@ internal fun LabyrinthEntryRecognitionSession.createBattleTeamWorkflow(): Labyri
         override var preparedBossFirstTeamIds: List<String>
             get() = this@createBattleTeamWorkflow.preparedBossFirstTeamIds
             set(value) { this@createBattleTeamWorkflow.preparedBossFirstTeamIds = value }
-        override val specialEquipmentFlow: LabyrinthSpecialEquipmentFlow
-            get() = this@createBattleTeamWorkflow.specialEquipmentFlow
+        override fun specialEquipmentProgress(): LabyrinthSpecialEquipmentProgress =
+            this@createBattleTeamWorkflow.equipmentWorkflow.specialEquipmentProgress()
+        override fun consumeSpecialEquipmentModalCloseSettle(): Boolean =
+            this@createBattleTeamWorkflow.equipmentWorkflow.consumeSpecialEquipmentModalCloseSettle()
         override fun anchorRect(result: LabyrinthEntryFrameResult, anchorId: String): EntryPixelRect? =
             this@createBattleTeamWorkflow.pageActionWorkflow.anchorRect(result = result, anchorId = anchorId)
         override fun beginGuardedAction(): Boolean =
@@ -504,7 +506,9 @@ internal fun LabyrinthEntryRecognitionSession.createEncounterWorkflow(): Labyrin
             this@createEncounterWorkflow.battleRecommendationWorkflow.invalidateBattleTeamRecommendation()
     })
 
-internal fun LabyrinthEntryRecognitionSession.createEquipmentWorkflow(): LabyrinthEquipmentWorkflow =
+internal fun LabyrinthEntryRecognitionSession.createEquipmentWorkflow(
+    state: LabyrinthSpecialEquipmentState,
+): LabyrinthEquipmentWorkflow =
     LabyrinthEquipmentWorkflow(object : LabyrinthEquipmentPort {
         override val _state: MutableStateFlow<LabyrinthEntryRecognitionSessionState>
             get() = this@createEquipmentWorkflow._state
@@ -523,8 +527,6 @@ internal fun LabyrinthEntryRecognitionSession.createEquipmentWorkflow(): Labyrin
         override var lastSessionActionAt: Long
             get() = this@createEquipmentWorkflow.lastSessionActionAt
             set(value) { this@createEquipmentWorkflow.lastSessionActionAt = value }
-        override val specialEquipmentFlow: LabyrinthSpecialEquipmentFlow
-            get() = this@createEquipmentWorkflow.specialEquipmentFlow
         override val specialEquipmentSettings: LabyrinthStrategySettings?
             get() = this@createEquipmentWorkflow.specialEquipmentSettings
         override fun beginGuardedAction(): Boolean =
@@ -545,7 +547,7 @@ internal fun LabyrinthEntryRecognitionSession.createEquipmentWorkflow(): Labyrin
             this@createEquipmentWorkflow.runtimeTraceAction(label = label)
         override fun traceWorkflow(owner: String, phase: String): Unit =
             this@createEquipmentWorkflow.runtimeTraceWorkflow(owner = owner, phase = phase)
-    })
+    }, state)
 
 internal fun LabyrinthEntryRecognitionSession.createRewardWorkflow(): LabyrinthRewardWorkflow =
     LabyrinthRewardWorkflow(object : LabyrinthRewardPort {
@@ -1664,8 +1666,8 @@ internal fun LabyrinthEntryRecognitionSession.createPageRouterWorkflow(): Labyri
             get() = this@createPageRouterWorkflow.shopImprintRewardConfirmedAt
         override val skipRoleRewardJoinedRecognition: Boolean
             get() = this@createPageRouterWorkflow.skipRoleRewardJoinedRecognition
-        override val specialEquipmentFlow: LabyrinthSpecialEquipmentFlow
-            get() = this@createPageRouterWorkflow.specialEquipmentFlow
+        override fun specialEquipmentActive(): Boolean =
+            this@createPageRouterWorkflow.equipmentWorkflow.specialEquipmentActive()
         override fun advanceBossTeamOnResultPage(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, previousPostEntryState: LabyrinthEntryPageState?): Unit =
             this@createPageRouterWorkflow.battleCombatWorkflow.advanceBossTeamOnResultPage(sessionId = sessionId, result = result, previousPostEntryState = previousPostEntryState)
         override fun clearCharacterAcquisitionContext(): Unit =

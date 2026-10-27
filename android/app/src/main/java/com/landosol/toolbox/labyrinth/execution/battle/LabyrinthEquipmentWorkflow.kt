@@ -21,7 +21,6 @@ internal interface LabyrinthEquipmentPort {
     val combatContext: LabyrinthCombatContext?
     val lastNormalBattleTeamSignature: String?
     var lastSessionActionAt: Long
-    val specialEquipmentFlow: LabyrinthSpecialEquipmentFlow
     val specialEquipmentSettings: LabyrinthStrategySettings?
     fun beginGuardedAction(): Boolean
     fun finishFromPlanner(sessionId: AutomationSessionId, reason: String): Unit
@@ -34,8 +33,24 @@ internal interface LabyrinthEquipmentPort {
     fun traceWorkflow(owner: String, phase: String): Unit
 }
 
-/** 连接特别装备状态机与会话动作准入；派发与画面确认仍分开。 */
-internal class LabyrinthEquipmentWorkflow(private val port: LabyrinthEquipmentPort) : LabyrinthEquipmentPort by port {
+/**
+ * Owns the equipment state machine and its write capability. The legacy store is supplied once;
+ * other workflows can only observe progress or request the existing lifecycle handoffs.
+ * Shared action admission and game confirmation remain separate.
+ */
+internal class LabyrinthEquipmentWorkflow(
+    private val port: LabyrinthEquipmentPort,
+    state: LabyrinthSpecialEquipmentState,
+) : LabyrinthEquipmentPort by port {
+    private val specialEquipmentFlow = LabyrinthSpecialEquipmentFlow(state)
+
+    fun specialEquipmentActive(): Boolean = specialEquipmentFlow.active
+
+    fun specialEquipmentProgress(): LabyrinthSpecialEquipmentProgress = specialEquipmentFlow.progress()
+
+    /** Called immediately after frame handling, before the team planner may dispatch an action. */
+    fun consumeSpecialEquipmentModalCloseSettle(): Boolean = specialEquipmentFlow.consumeModalCloseSettle()
+
     fun resetSpecialEquipmentRound() = specialEquipmentFlow.reset()
 
     /** Keep the session gate and action execution here; the flow owns its round state. */

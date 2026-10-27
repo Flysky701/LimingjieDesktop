@@ -56,7 +56,7 @@ internal interface LabyrinthPageRouterPort {
     val roleRewardChoiceUnavailableReason: String?
     val shopImprintRewardConfirmedAt: Long
     val skipRoleRewardJoinedRecognition: Boolean
-    val specialEquipmentFlow: LabyrinthSpecialEquipmentFlow
+    fun specialEquipmentActive(): Boolean
     fun advanceBossTeamOnResultPage(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, previousPostEntryState: LabyrinthEntryPageState?): Unit
     fun clearCharacterAcquisitionContext(): Unit
     fun clearRoleRewardBatchTracking(): Unit
@@ -388,7 +388,7 @@ internal class LabyrinthPageRouterWorkflow(private val port: LabyrinthPageRouter
         val specialEquipmentOwnsFrame = !current.dryRun &&
             (
                 result.specialEquipment?.stage != null ||
-                    specialEquipmentFlow.active
+                    specialEquipmentActive()
                 )
         if (
             specialEquipmentOwnsFrame &&
