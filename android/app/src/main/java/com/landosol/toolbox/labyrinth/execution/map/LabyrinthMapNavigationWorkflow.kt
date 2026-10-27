@@ -30,9 +30,7 @@ import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.MAX_NODE_TAP_ATTE
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_CLICK_INTERVAL_MILLIS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_CLICK_STABLE_FRAMES
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_CONFLICT_NUDGE_STREAK
-import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_ENTRY_CONFIRMATION_TIMEOUT_MILLIS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_MAP_SETTLE_AFTER_POST_ACTION_MILLIS
-import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_MOVE_CONFIRMATION_APPEAR_TIMEOUT_MILLIS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_SCROLL_CURRENT_VIEW_MIN_WAIT_MILLIS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_SCROLL_CURRENT_VIEW_STABLE_FRAMES
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_STRONG_BINDING_MEMORY_MILLIS
@@ -49,7 +47,6 @@ internal interface LabyrinthMapNavigationPort {
     val characterAcquisitionActive: Boolean
     val clock: () -> Long
     var combatContext: LabyrinthCombatContext?
-    var confirmedNodeEntryReceipt: ConfirmedNodeEntryReceipt?
     var entryPhaseComplete: Boolean
     var finalBossLocalizationStartedAt: Long
     var lastNodeActionAt: Long
@@ -58,8 +55,6 @@ internal interface LabyrinthMapNavigationPort {
     val lastPostEntryActionAt: Long
     val nodeActionPlanner: LabyrinthNodeActionPlanner
     val nodeConflictRecovery: com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecovery
-    var nodeEntryMismatchFrames: Int
-    var nodeEntryMismatchPage: LabyrinthEntryPageState?
     var nodeErrorStreak: Int
     var nodeInitFailedReason: String?
     val nodeInitStarted: AtomicBoolean
@@ -76,7 +71,6 @@ internal interface LabyrinthMapNavigationPort {
     var pendingNodeScrollStableFrames: Int
     var pendingNodeScrollStartedAt: Long
     var pendingNodeScrollViewportSignature: String?
-    var pendingNodeTransition: PendingNodeTransition?
     var postBossStage: LabyrinthPostBossStage
     var postBossStartedAt: Long
     var postBossUnknownAttempts: Int
@@ -96,7 +90,6 @@ internal interface LabyrinthMapNavigationPort {
             current: EntryPixelRect?,
         ): Boolean
     fun nodeLog(message: String, warning: Boolean = false): Unit
-    fun prepareNodeTransitionContext(blockType: Int, area: Int?): Unit
     fun publishOverlay(sessionId: AutomationSessionId): Unit
     fun publishWaitingForGameForeground(sessionId: AutomationSessionId): Unit
     fun requestNodeMapNudge(
@@ -120,6 +113,17 @@ internal interface LabyrinthMapNavigationPort {
             avoidRects: List<EntryPixelRect>,
         ): Unit
     fun resetNodeMoveConfirmationTracking(): Unit
+    fun resetMapTransitionRuntimeState()
+    fun onNodeTapExecuted(blockId: Long, blockType: Int, label: String, area: Int?)
+    fun pendingTransitionHoldsNextMapFrame(timestampMillis: Long): Boolean
+    fun handlePendingNodeTransitionOnMapFrame(
+        sessionId: AutomationSessionId,
+        pageState: LabyrinthEntryPageState,
+        frameWidth: Int,
+        frameHeight: Int,
+        timestampMillis: Long,
+        viewportSignature: String,
+    ): Boolean
     fun resetNodeRecoveryNudgeTracking(): Unit
     fun resetNodeScrollSearchGate(): Unit
     fun resetPendingNodeClickStability(): Unit
@@ -160,16 +164,7 @@ internal class LabyrinthMapNavigationWorkflow(private val port: LabyrinthMapNavi
         } else {
             NODE_MAP_SETTLE_AFTER_POST_ACTION_MILLIS - (now - lastAction)
         }
-        val pending = pendingNodeTransition
-        val pendingHeld = pending != null && labyrinthKeepsPendingNodeTransition(
-            elapsedMillis = now - (pending.confirmationDispatchedAtMillis ?: pending.dispatchedAtMillis),
-            timeoutMillis = if (pending.confirmationDispatchedAtMillis == null) {
-                NODE_MOVE_CONFIRMATION_APPEAR_TIMEOUT_MILLIS
-            } else {
-                NODE_ENTRY_CONFIRMATION_TIMEOUT_MILLIS
-            },
-            nodeSelectionFramesSinceAction = pending.nodeSelectionFramesSinceAction + 1,
-        )
+        val pendingHeld = pendingTransitionHoldsNextMapFrame(now)
         return labyrinthNodeScanConsumable(
             settleRemainingMillis = settleRemaining,
             pendingTransitionHeld = pendingHeld,
@@ -236,69 +231,10 @@ internal class LabyrinthMapNavigationWorkflow(private val port: LabyrinthMapNavi
                 "visited=${nodeState.visitedNodes.size} " +
                 "classes=${describeNodeClassifications(result.nodeClassifications)}",
         )
-        pendingNodeTransition?.let { pending ->
-            val observedPending = pending.copy(
-                nodeSelectionFramesSinceAction = pending.nodeSelectionFramesSinceAction + 1,
+        if (handlePendingNodeTransitionOnMapFrame(
+                sessionId, result.observation.state, frameWidth, frameHeight, timestampMillis, viewportSignature,
             )
-            pendingNodeTransition = observedPending
-            val waitStartedAt = pending.confirmationDispatchedAtMillis ?: pending.dispatchedAtMillis
-            val timeout = if (pending.confirmationDispatchedAtMillis == null) {
-                NODE_MOVE_CONFIRMATION_APPEAR_TIMEOUT_MILLIS
-            } else {
-                NODE_ENTRY_CONFIRMATION_TIMEOUT_MILLIS
-            }
-            val elapsedMillis = timestampMillis - waitStartedAt
-            if (
-                labyrinthKeepsPendingNodeTransition(
-                    elapsedMillis = elapsedMillis,
-                    timeoutMillis = timeout,
-                    nodeSelectionFramesSinceAction = observedPending.nodeSelectionFramesSinceAction,
-                )
-            ) {
-                val message = if (pending.confirmationDispatchedAtMillis == null) {
-                    "已点击${pending.label}，等待移动确认弹窗"
-                } else {
-                    "已确认移动到${pending.label}，等待游戏进入节点"
-                }
-                if (_state.value.message != message) {
-                    _state.value = _state.value.copy(message = message)
-                }
-                return
-            }
-            pendingNodeTransition = null
-            resetNodeMoveConfirmationTracking()
-            resetPendingNodeClickStability()
-            if (nodeTapAttempts >= MAX_NODE_TAP_ATTEMPTS) {
-                nodeTapAttempts = 0
-                requestNodeMapNudge(
-                    sessionId = sessionId,
-                    label = pending.label,
-                    targetBlockId = pending.blockId,
-                    frameWidth = frameWidth,
-                    frameHeight = frameHeight,
-                    timestampMillis = timestampMillis,
-                    viewportSignature = viewportSignature,
-                    avoidRects = lastNodeSwipeAvoidRects,
-                    reason = "node-tap-not-confirmed",
-                )
-                if (activeSessionId == sessionId) {
-                    _state.value = _state.value.copy(message = "节点多次点击未被确认；已切换为轻微移动地图后重新定位并重试：${pending.label}")
-                }
-                return
-            }
-            nodeLog(
-                "node-transition-timeout target=${pending.label} " +
-                    "elapsed=${elapsedMillis}ms " +
-                    "nodeFrames=${observedPending.nodeSelectionFramesSinceAction} " +
-                    "confirmationSent=${pending.confirmationDispatchedAtMillis != null} " +
-                    "confirmationAttempts=${pending.confirmationAttempts} " +
-                    "tapAttempts=$nodeTapAttempts/$MAX_NODE_TAP_ATTEMPTS " +
-                    "page=${result.observation.state.name}",
-                warning = true,
-            )
-            _state.value = _state.value.copy(message = "游戏未进入${pending.label}，准备重试同一节点")
-            return
-        }
+        ) return
         // The processor skipped this frame's map scan because, when it looked, one of the two
         // gates above was still closed (see nodeScanConsumable). Both gates only open with time,
         // so this frame is normally caught above; the exception is a pending transition cleared
@@ -760,15 +696,7 @@ internal class LabyrinthMapNavigationWorkflow(private val port: LabyrinthMapNavi
                         ?.takeIf { it.blockId == action.blockId }
                         ?.area
                         ?: _state.value.routeProgress?.currentArea
-                    prepareNodeTransitionContext(action.blockType, targetArea)
-                    pendingNodeTransition = PendingNodeTransition(
-                        blockId = action.blockId,
-                        blockType = action.blockType,
-                        label = label,
-                        // Dense-map recognition can consume most of the timeout before the tap.
-                        dispatchedAtMillis = clock(),
-                    )
-                    resetPendingNodeClickStability()
+                    onNodeTapExecuted(action.blockId, action.blockType, label, targetArea)
                     if (activeSessionId == sessionId) {
                         val current = _state.value
                         _state.value = current.copy(
@@ -825,10 +753,7 @@ internal class LabyrinthMapNavigationWorkflow(private val port: LabyrinthMapNavi
         entryPhaseComplete = false
         resetPendingNodeClickStability()
         resetStrongRouteTargetBinding()
-        pendingNodeTransition = null
-        nodeEntryMismatchFrames = 0
-        nodeEntryMismatchPage = null
-        confirmedNodeEntryReceipt = null
+        resetMapTransitionRuntimeState()
         nodeTapAttempts = 0
         resetNodeMoveConfirmationTracking()
         nodeScrollAttempts = 0

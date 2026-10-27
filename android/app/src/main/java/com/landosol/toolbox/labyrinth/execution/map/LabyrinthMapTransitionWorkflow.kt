@@ -20,8 +20,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.MAX_NODE_MOVE_CONFIRMATION_ATTEMPTS
+import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.MAX_NODE_TAP_ATTEMPTS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_ENTRY_CONFIRMATION_TIMEOUT_MILLIS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_ENTRY_MISMATCH_STABLE_FRAMES
+import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_MOVE_CONFIRMATION_APPEAR_TIMEOUT_MILLIS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_MOVE_CONFIRMATION_RETRY_INTERVAL_MILLIS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.NODE_MOVE_CONFIRMATION_STABLE_FRAMES
 
@@ -35,17 +37,12 @@ internal interface LabyrinthMapTransitionPort {
     val activeSessionId: AutomationSessionId?
     val clock: () -> Long
     var combatContext: LabyrinthCombatContext?
-    var confirmedNodeEntryReceipt: ConfirmedNodeEntryReceipt?
     var finalBossLocalizationStartedAt: Long
-    var lastNodeMoveConfirmationRect: EntryPixelRect?
     var lastNodeScrollSourceSignature: String?
-    var nodeEntryMismatchFrames: Int
-    var nodeEntryMismatchPage: LabyrinthEntryPageState?
-    var nodeMoveConfirmationStableFrames: Int
+    val lastNodeSwipeAvoidRects: List<EntryPixelRect>
     var nodeScrollAttempts: Int
     val nodeSession: LabyrinthNodeSession?
     var nodeTapAttempts: Int
-    var pendingNodeTransition: PendingNodeTransition?
     val persistenceMutex: Mutex
     var postBossStage: LabyrinthPostBossStage
     var postBossStartedAt: Long
@@ -66,6 +63,17 @@ internal interface LabyrinthMapTransitionPort {
             complete: Boolean = false,
         ): Unit
     fun publishWaitingForGameForeground(sessionId: AutomationSessionId): Unit
+    fun requestNodeMapNudge(
+            sessionId: AutomationSessionId,
+            label: String,
+            targetBlockId: Long,
+            frameWidth: Int,
+            frameHeight: Int,
+            timestampMillis: Long,
+            viewportSignature: String,
+            avoidRects: List<EntryPixelRect>,
+            reason: String,
+        ): Unit
     fun resetNodeRecoveryNudgeTracking(): Unit
     fun resetNodeScrollSearchGate(): Unit
     fun resetPendingNodeClickStability(): Unit
@@ -75,8 +83,162 @@ internal interface LabyrinthMapTransitionPort {
     fun traceWorkflow(owner: String, phase: String): Unit
 }
 
-/** 管理移动确认、目标页面核对、超时及路线进度保存。 */
+/**
+ * Owns the complete pending-node lifecycle: accepted tap, confirmation receipt, destination
+ * evidence and timeout. Navigation and recovery send events instead of changing these fields.
+ * Confirmed receipts survive page/entry invalidation, and are cleared only at the original
+ * destination-confirmed, new-run or full-map-reset boundaries.
+ */
 internal class LabyrinthMapTransitionWorkflow(private val port: LabyrinthMapTransitionPort) : LabyrinthMapTransitionPort by port {
+    @Volatile
+    private var pendingNodeTransition: PendingNodeTransition? = null
+
+    // Semantic receipt survives page-local invalidation during title/loading re-entry.
+    // Keep transition + source atomic so frame processing can never observe a mismatched pair.
+    @Volatile
+    private var confirmedNodeEntryReceipt: ConfirmedNodeEntryReceipt? = null
+
+    @Volatile
+    private var nodeMoveConfirmationStableFrames = 0
+
+    @Volatile
+    private var lastNodeMoveConfirmationRect: EntryPixelRect? = null
+
+    @Volatile
+    private var nodeEntryMismatchFrames = 0
+
+    private var nodeEntryMismatchPage: LabyrinthEntryPageState? = null
+
+    fun hasPendingNodeTransition(): Boolean = pendingNodeTransition != null
+
+    /** Probe capture admission without consuming a frame or changing transition state. */
+    fun pendingTransitionHoldsNextMapFrame(timestampMillis: Long): Boolean {
+        val pending = pendingNodeTransition
+        return pending != null && labyrinthKeepsPendingNodeTransition(
+            elapsedMillis = timestampMillis - (pending.confirmationDispatchedAtMillis ?: pending.dispatchedAtMillis),
+            timeoutMillis = if (pending.confirmationDispatchedAtMillis == null) {
+                NODE_MOVE_CONFIRMATION_APPEAR_TIMEOUT_MILLIS
+            } else {
+                NODE_ENTRY_CONFIRMATION_TIMEOUT_MILLIS
+            },
+            nodeSelectionFramesSinceAction = pending.nodeSelectionFramesSinceAction + 1,
+        )
+    }
+
+    /** Return true while this map frame belongs to transition waiting or bounded tap recovery. */
+    fun handlePendingNodeTransitionOnMapFrame(
+        sessionId: AutomationSessionId,
+        pageState: LabyrinthEntryPageState,
+        frameWidth: Int,
+        frameHeight: Int,
+        timestampMillis: Long,
+        viewportSignature: String,
+    ): Boolean {
+        pendingNodeTransition?.let { pending ->
+            val observedPending = pending.copy(
+                nodeSelectionFramesSinceAction = pending.nodeSelectionFramesSinceAction + 1,
+            )
+            pendingNodeTransition = observedPending
+            val waitStartedAt = pending.confirmationDispatchedAtMillis ?: pending.dispatchedAtMillis
+            val timeout = if (pending.confirmationDispatchedAtMillis == null) {
+                NODE_MOVE_CONFIRMATION_APPEAR_TIMEOUT_MILLIS
+            } else {
+                NODE_ENTRY_CONFIRMATION_TIMEOUT_MILLIS
+            }
+            val elapsedMillis = timestampMillis - waitStartedAt
+            if (
+                labyrinthKeepsPendingNodeTransition(
+                    elapsedMillis = elapsedMillis,
+                    timeoutMillis = timeout,
+                    nodeSelectionFramesSinceAction = observedPending.nodeSelectionFramesSinceAction,
+                )
+            ) {
+                val message = if (pending.confirmationDispatchedAtMillis == null) {
+                    "已点击${pending.label}，等待移动确认弹窗"
+                } else {
+                    "已确认移动到${pending.label}，等待游戏进入节点"
+                }
+                if (_state.value.message != message) {
+                    _state.value = _state.value.copy(message = message)
+                }
+                return true
+            }
+            pendingNodeTransition = null
+            resetNodeMoveConfirmationTracking()
+            resetPendingNodeClickStability()
+            if (nodeTapAttempts >= MAX_NODE_TAP_ATTEMPTS) {
+                nodeTapAttempts = 0
+                requestNodeMapNudge(
+                    sessionId = sessionId,
+                    label = pending.label,
+                    targetBlockId = pending.blockId,
+                    frameWidth = frameWidth,
+                    frameHeight = frameHeight,
+                    timestampMillis = timestampMillis,
+                    viewportSignature = viewportSignature,
+                    avoidRects = lastNodeSwipeAvoidRects,
+                    reason = "node-tap-not-confirmed",
+                )
+                if (activeSessionId == sessionId) {
+                    _state.value = _state.value.copy(message = "节点多次点击未被确认；已切换为轻微移动地图后重新定位并重试：${pending.label}")
+                }
+                return true
+            }
+            nodeLog(
+                "node-transition-timeout target=${pending.label} " +
+                    "elapsed=${elapsedMillis}ms " +
+                    "nodeFrames=${observedPending.nodeSelectionFramesSinceAction} " +
+                    "confirmationSent=${pending.confirmationDispatchedAtMillis != null} " +
+                    "confirmationAttempts=${pending.confirmationAttempts} " +
+                    "tapAttempts=$nodeTapAttempts/$MAX_NODE_TAP_ATTEMPTS " +
+                    "page=${pageState.name}",
+                warning = true,
+            )
+            _state.value = _state.value.copy(message = "游戏未进入${pending.label}，准备重试同一节点")
+            return true
+        }
+        return false
+    }
+
+    /** Called only after a node tap was reported executed, not when it was merely planned. */
+    fun onNodeTapExecuted(blockId: Long, blockType: Int, label: String, area: Int?) {
+        prepareNodeTransitionContext(blockType, area)
+        pendingNodeTransition = PendingNodeTransition(
+            blockId = blockId,
+            blockType = blockType,
+            label = label,
+            // Dense-map recognition can consume most of the timeout before the tap.
+            dispatchedAtMillis = clock(),
+        )
+        resetPendingNodeClickStability()
+    }
+
+    /** Entry recovery drops the pending tap but retains a confirmed receipt for re-entry. */
+    fun clearPendingNodeTransition() {
+        pendingNodeTransition = null
+    }
+
+    fun resetNodeEntryMismatchTracking() {
+        nodeEntryMismatchFrames = 0
+        nodeEntryMismatchPage = null
+    }
+
+    /** The new-run boundary clears the old receipt before the rest of run initialization. */
+    fun resetConfirmedNodeEntryReceiptOnStart() {
+        confirmedNodeEntryReceipt = null
+    }
+
+    /**
+     * Full map reset also clears the semantic receipt; confirmation counters reset at their
+     * existing later boundary, after the caller has cleared node tap attempts.
+     */
+    fun resetMapTransitionRuntimeState() {
+        pendingNodeTransition = null
+        nodeEntryMismatchFrames = 0
+        nodeEntryMismatchPage = null
+        confirmedNodeEntryReceipt = null
+    }
+
     fun recoverPendingNodeTransitionFromMoveConfirmation(
         sessionId: AutomationSessionId,
         session: LabyrinthNodeSession,

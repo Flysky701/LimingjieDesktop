@@ -940,9 +940,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
         override var combatContext: LabyrinthCombatContext?
             get() = this@createMapNavigationWorkflow.combatContext
             set(value) { this@createMapNavigationWorkflow.combatContext = value }
-        override var confirmedNodeEntryReceipt: ConfirmedNodeEntryReceipt?
-            get() = this@createMapNavigationWorkflow.confirmedNodeEntryReceipt
-            set(value) { this@createMapNavigationWorkflow.confirmedNodeEntryReceipt = value }
         override var entryPhaseComplete: Boolean
             get() = this@createMapNavigationWorkflow.entryPhaseComplete
             set(value) { this@createMapNavigationWorkflow.entryPhaseComplete = value }
@@ -964,12 +961,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
             get() = this@createMapNavigationWorkflow.nodeActionPlanner
         override val nodeConflictRecovery: com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecovery
             get() = this@createMapNavigationWorkflow.nodeConflictRecovery
-        override var nodeEntryMismatchFrames: Int
-            get() = this@createMapNavigationWorkflow.nodeEntryMismatchFrames
-            set(value) { this@createMapNavigationWorkflow.nodeEntryMismatchFrames = value }
-        override var nodeEntryMismatchPage: LabyrinthEntryPageState?
-            get() = this@createMapNavigationWorkflow.nodeEntryMismatchPage
-            set(value) { this@createMapNavigationWorkflow.nodeEntryMismatchPage = value }
         override var nodeErrorStreak: Int
             get() = this@createMapNavigationWorkflow.nodeErrorStreak
             set(value) { this@createMapNavigationWorkflow.nodeErrorStreak = value }
@@ -1014,9 +1005,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
         override var pendingNodeScrollViewportSignature: String?
             get() = this@createMapNavigationWorkflow.pendingNodeScrollViewportSignature
             set(value) { this@createMapNavigationWorkflow.pendingNodeScrollViewportSignature = value }
-        override var pendingNodeTransition: PendingNodeTransition?
-            get() = this@createMapNavigationWorkflow.pendingNodeTransition
-            set(value) { this@createMapNavigationWorkflow.pendingNodeTransition = value }
         override var postBossStage: LabyrinthPostBossStage
             get() = this@createMapNavigationWorkflow.postBossStage
             set(value) { this@createMapNavigationWorkflow.postBossStage = value }
@@ -1060,8 +1048,22 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
             this@createMapNavigationWorkflow.mapViewportWorkflow.nodeClickRectsAreStable(previous = previous, current = current)
         override fun nodeLog(message: String, warning: Boolean): Unit =
             this@createMapNavigationWorkflow.runtimeNodeLog(message = message, warning = warning)
-        override fun prepareNodeTransitionContext(blockType: Int, area: Int?): Unit =
-            this@createMapNavigationWorkflow.runBoundaryWorkflow.prepareNodeTransitionContext(blockType = blockType, area = area)
+        override fun resetMapTransitionRuntimeState() =
+            this@createMapNavigationWorkflow.mapTransitionWorkflow.resetMapTransitionRuntimeState()
+        override fun onNodeTapExecuted(blockId: Long, blockType: Int, label: String, area: Int?) =
+            this@createMapNavigationWorkflow.mapTransitionWorkflow.onNodeTapExecuted(blockId, blockType, label, area)
+        override fun pendingTransitionHoldsNextMapFrame(timestampMillis: Long): Boolean =
+            this@createMapNavigationWorkflow.mapTransitionWorkflow.pendingTransitionHoldsNextMapFrame(timestampMillis)
+        override fun handlePendingNodeTransitionOnMapFrame(
+            sessionId: AutomationSessionId,
+            pageState: LabyrinthEntryPageState,
+            frameWidth: Int,
+            frameHeight: Int,
+            timestampMillis: Long,
+            viewportSignature: String,
+        ): Boolean = this@createMapNavigationWorkflow.mapTransitionWorkflow.handlePendingNodeTransitionOnMapFrame(
+            sessionId, pageState, frameWidth, frameHeight, timestampMillis, viewportSignature,
+        )
         override fun publishOverlay(sessionId: AutomationSessionId): Unit =
             this@createMapNavigationWorkflow.runtimePublishOverlay(sessionId = sessionId)
         override fun publishWaitingForGameForeground(sessionId: AutomationSessionId): Unit =
@@ -1129,38 +1131,22 @@ internal fun LabyrinthEntryRecognitionSession.createMapTransitionWorkflow(): Lab
         override var combatContext: LabyrinthCombatContext?
             get() = this@createMapTransitionWorkflow.combatContext
             set(value) { this@createMapTransitionWorkflow.combatContext = value }
-        override var confirmedNodeEntryReceipt: ConfirmedNodeEntryReceipt?
-            get() = this@createMapTransitionWorkflow.confirmedNodeEntryReceipt
-            set(value) { this@createMapTransitionWorkflow.confirmedNodeEntryReceipt = value }
         override var finalBossLocalizationStartedAt: Long
             get() = this@createMapTransitionWorkflow.finalBossLocalizationStartedAt
             set(value) { this@createMapTransitionWorkflow.finalBossLocalizationStartedAt = value }
-        override var lastNodeMoveConfirmationRect: EntryPixelRect?
-            get() = this@createMapTransitionWorkflow.lastNodeMoveConfirmationRect
-            set(value) { this@createMapTransitionWorkflow.lastNodeMoveConfirmationRect = value }
         override var lastNodeScrollSourceSignature: String?
             get() = this@createMapTransitionWorkflow.lastNodeScrollSourceSignature
             set(value) { this@createMapTransitionWorkflow.lastNodeScrollSourceSignature = value }
-        override var nodeEntryMismatchFrames: Int
-            get() = this@createMapTransitionWorkflow.nodeEntryMismatchFrames
-            set(value) { this@createMapTransitionWorkflow.nodeEntryMismatchFrames = value }
-        override var nodeEntryMismatchPage: LabyrinthEntryPageState?
-            get() = this@createMapTransitionWorkflow.nodeEntryMismatchPage
-            set(value) { this@createMapTransitionWorkflow.nodeEntryMismatchPage = value }
-        override var nodeMoveConfirmationStableFrames: Int
-            get() = this@createMapTransitionWorkflow.nodeMoveConfirmationStableFrames
-            set(value) { this@createMapTransitionWorkflow.nodeMoveConfirmationStableFrames = value }
         override var nodeScrollAttempts: Int
             get() = this@createMapTransitionWorkflow.nodeScrollAttempts
             set(value) { this@createMapTransitionWorkflow.nodeScrollAttempts = value }
         override val nodeSession: LabyrinthNodeSession?
             get() = this@createMapTransitionWorkflow.nodeSession
+        override val lastNodeSwipeAvoidRects: List<EntryPixelRect>
+            get() = this@createMapTransitionWorkflow.lastNodeSwipeAvoidRects
         override var nodeTapAttempts: Int
             get() = this@createMapTransitionWorkflow.nodeTapAttempts
             set(value) { this@createMapTransitionWorkflow.nodeTapAttempts = value }
-        override var pendingNodeTransition: PendingNodeTransition?
-            get() = this@createMapTransitionWorkflow.pendingNodeTransition
-            set(value) { this@createMapTransitionWorkflow.pendingNodeTransition = value }
         override val persistenceMutex: Mutex
             get() = this@createMapTransitionWorkflow.persistenceMutex
         override var postBossStage: LabyrinthPostBossStage
@@ -1199,6 +1185,18 @@ internal fun LabyrinthEntryRecognitionSession.createMapTransitionWorkflow(): Lab
             this@createMapTransitionWorkflow.mapNavigationWorkflow.publishRouteProgress(sessionId = sessionId, session = session, nextLabel = nextLabel, nextRect = nextRect, complete = complete)
         override fun publishWaitingForGameForeground(sessionId: AutomationSessionId): Unit =
             this@createMapTransitionWorkflow.runtimePublishWaitingForGameForeground(sessionId = sessionId)
+        override fun requestNodeMapNudge(
+                sessionId: AutomationSessionId,
+                label: String,
+                targetBlockId: Long,
+                frameWidth: Int,
+                frameHeight: Int,
+                timestampMillis: Long,
+                viewportSignature: String,
+                avoidRects: List<EntryPixelRect>,
+                reason: String,
+            ): Unit =
+            this@createMapTransitionWorkflow.mapViewportWorkflow.requestNodeMapNudge(sessionId = sessionId, label = label, targetBlockId = targetBlockId, frameWidth = frameWidth, frameHeight = frameHeight, timestampMillis = timestampMillis, viewportSignature = viewportSignature, avoidRects = avoidRects, reason = reason)
         override fun resetNodeRecoveryNudgeTracking(): Unit =
             this@createMapTransitionWorkflow.mapViewportWorkflow.resetNodeRecoveryNudgeTracking()
         override fun resetNodeScrollSearchGate(): Unit =
@@ -1224,7 +1222,7 @@ internal fun LabyrinthEntryRecognitionSession.createOrphanMoveRecoveryWorkflow()
         override val hasNodeSession: Boolean
             get() = nodeSession != null
         override val hasPendingNodeTransition: Boolean
-            get() = pendingNodeTransition != null
+            get() = mapTransitionWorkflow.hasPendingNodeTransition()
         override fun uniqueReachableRouteTarget(): LabyrinthMapNode? =
             nodeSession?.uniqueReachableRouteTarget()
         override fun recoverNodeTransition(
@@ -1643,12 +1641,6 @@ internal fun LabyrinthEntryRecognitionSession.createRecoveryWorkflow(): Labyrint
         override var lastSessionReturnTitleActionAt: Long
             get() = this@createRecoveryWorkflow.lastSessionReturnTitleActionAt
             set(value) { this@createRecoveryWorkflow.lastSessionReturnTitleActionAt = value }
-        override var nodeEntryMismatchFrames: Int
-            get() = this@createRecoveryWorkflow.nodeEntryMismatchFrames
-            set(value) { this@createRecoveryWorkflow.nodeEntryMismatchFrames = value }
-        override var nodeEntryMismatchPage: LabyrinthEntryPageState?
-            get() = this@createRecoveryWorkflow.nodeEntryMismatchPage
-            set(value) { this@createRecoveryWorkflow.nodeEntryMismatchPage = value }
         override var nodeErrorStreak: Int
             get() = this@createRecoveryWorkflow.nodeErrorStreak
             set(value) { this@createRecoveryWorkflow.nodeErrorStreak = value }
@@ -1660,9 +1652,6 @@ internal fun LabyrinthEntryRecognitionSession.createRecoveryWorkflow(): Labyrint
             set(value) { this@createRecoveryWorkflow.nodeTapAttempts = value }
         override val nodeViewportScanner: LabyrinthNodeViewportScanner
             get() = this@createRecoveryWorkflow.nodeViewportScanner
-        override var pendingNodeTransition: PendingNodeTransition?
-            get() = this@createRecoveryWorkflow.pendingNodeTransition
-            set(value) { this@createRecoveryWorkflow.pendingNodeTransition = value }
         override var postEntryAttempts: Int
             get() = this@createRecoveryWorkflow.postEntryAttempts
             set(value) { this@createRecoveryWorkflow.postEntryAttempts = value }
@@ -1699,6 +1688,10 @@ internal fun LabyrinthEntryRecognitionSession.createRecoveryWorkflow(): Labyrint
             this@createRecoveryWorkflow.runtimePublishOverlay(sessionId = sessionId)
         override fun publishWaitingForGameForeground(sessionId: AutomationSessionId): Unit =
             this@createRecoveryWorkflow.runtimePublishWaitingForGameForeground(sessionId = sessionId)
+        override fun clearPendingNodeTransition() =
+            this@createRecoveryWorkflow.mapTransitionWorkflow.clearPendingNodeTransition()
+        override fun resetNodeEntryMismatchTracking() =
+            this@createRecoveryWorkflow.mapTransitionWorkflow.resetNodeEntryMismatchTracking()
         override fun resetNodeMoveConfirmationTracking(): Unit =
             this@createRecoveryWorkflow.mapTransitionWorkflow.resetNodeMoveConfirmationTracking()
         override fun resetNodeRecoveryNudgeTracking(): Unit =
@@ -1834,8 +1827,8 @@ internal fun LabyrinthEntryRecognitionSession.createPageRouterWorkflow(): Labyri
             set(value) { this@createPageRouterWorkflow.lastPostEntryState = value }
         override val nodeSession: LabyrinthNodeSession?
             get() = this@createPageRouterWorkflow.nodeSession
-        override val pendingNodeTransition: PendingNodeTransition?
-            get() = this@createPageRouterWorkflow.pendingNodeTransition
+        override fun hasPendingNodeTransition(): Boolean =
+            this@createPageRouterWorkflow.mapTransitionWorkflow.hasPendingNodeTransition()
         override var pendingRelicSelection: LabyrinthRelicMatch?
             get() = this@createPageRouterWorkflow.pendingRelicSelection
             set(value) { this@createPageRouterWorkflow.pendingRelicSelection = value }

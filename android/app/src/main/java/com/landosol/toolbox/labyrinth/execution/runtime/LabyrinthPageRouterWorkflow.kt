@@ -49,7 +49,6 @@ internal interface LabyrinthPageRouterPort {
     var lastPostEntryActionLandedAt: Long
     var lastPostEntryState: LabyrinthEntryPageState?
     val nodeSession: LabyrinthNodeSession?
-    val pendingNodeTransition: PendingNodeTransition?
     var pendingRelicSelection: LabyrinthRelicMatch?
     val plannedShopPurchaseRelicId: String?
     val plannedShopRoleImprintLabel: String?
@@ -132,6 +131,7 @@ internal interface LabyrinthPageRouterPort {
             frameHeight: Int,
             timestampMillis: Long,
         ): Unit
+    fun hasPendingNodeTransition(): Boolean
     fun handleOrphanMoveConfirmation(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, timestampMillis: Long, dryRun: Boolean): Boolean
     fun handleSessionBlockFrame(
             sessionId: AutomationSessionId,
@@ -306,7 +306,7 @@ internal class LabyrinthPageRouterWorkflow(private val port: LabyrinthPageRouter
         }
         val routeHasPassedOpening = labyrinthRouteHasPassedOpening(
             nodeSession?.getState(),
-            hasNodeTransition = pendingNodeTransition != null || activeNodeType != null,
+            hasNodeTransition = hasPendingNodeTransition() || activeNodeType != null,
         )
         if (!current.dryRun && labyrinthShouldResumeOpeningSelection(
                 entryPhaseComplete = entryPhaseComplete,
@@ -376,7 +376,7 @@ internal class LabyrinthPageRouterWorkflow(private val port: LabyrinthPageRouter
         if (handleOrphanMoveConfirmation(sessionId, result, timestampMillis, current.dryRun)) return
         if (!current.dryRun && labyrinthNodeMoveConfirmationOwnsFrame(
                 pageState = pageState,
-                hasPendingNodeTransition = pendingNodeTransition != null,
+                hasPendingNodeTransition = hasPendingNodeTransition(),
             )
         ) {
             if (handleNodeMoveConfirmationFrame(sessionId, result, timestampMillis)) {

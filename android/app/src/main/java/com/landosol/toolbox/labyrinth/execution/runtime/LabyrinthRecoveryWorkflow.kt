@@ -56,13 +56,10 @@ internal interface LabyrinthRecoveryPort {
     var lastPostEntryState: LabyrinthEntryPageState?
     var lastSessionBlockKind: SessionBlockKind
     var lastSessionReturnTitleActionAt: Long
-    var nodeEntryMismatchFrames: Int
-    var nodeEntryMismatchPage: LabyrinthEntryPageState?
     var nodeErrorStreak: Int
     var nodeScrollAttempts: Int
     var nodeTapAttempts: Int
     val nodeViewportScanner: LabyrinthNodeViewportScanner
-    var pendingNodeTransition: PendingNodeTransition?
     var postEntryAttempts: Int
     var postEntryStableFrames: Int
     var postEntryUnknownSince: Long
@@ -78,6 +75,8 @@ internal interface LabyrinthRecoveryPort {
     fun launchGuardedAction(block: suspend () -> Unit): Unit
     fun publishOverlay(sessionId: AutomationSessionId): Unit
     fun publishWaitingForGameForeground(sessionId: AutomationSessionId): Unit
+    fun clearPendingNodeTransition()
+    fun resetNodeEntryMismatchTracking()
     fun resetNodeMoveConfirmationTracking(): Unit
     fun resetNodeRecoveryNudgeTracking(): Unit
     fun resetNodeScrollSearchGate(): Unit
@@ -228,10 +227,9 @@ internal class LabyrinthRecoveryWorkflow(private val port: LabyrinthRecoveryPort
         entryPhaseComplete = false
         resetPendingNodeClickStability()
         resetStrongRouteTargetBinding()
-        pendingNodeTransition = null
+        clearPendingNodeTransition()
         nodeTapAttempts = 0
-        nodeEntryMismatchFrames = 0
-        nodeEntryMismatchPage = null
+        resetNodeEntryMismatchTracking()
         resetNodeMoveConfirmationTracking()
         resetOrphanMoveConfirmationTracking()
         nodeScrollAttempts = 0

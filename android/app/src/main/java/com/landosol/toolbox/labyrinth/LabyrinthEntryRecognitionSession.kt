@@ -602,26 +602,7 @@ class LabyrinthEntryRecognitionSession(
     internal var lastNodeActionAt = Long.MIN_VALUE
 
     @Volatile
-    internal var pendingNodeTransition: PendingNodeTransition? = null
-
-    // Semantic receipt survives page-local invalidation during title/loading re-entry.
-    // Keep transition + source atomic so frame processing can never observe a mismatched pair.
-    @Volatile
-    internal var confirmedNodeEntryReceipt: ConfirmedNodeEntryReceipt? = null
-
-    @Volatile
     internal var nodeTapAttempts = 0
-
-    @Volatile
-    internal var nodeMoveConfirmationStableFrames = 0
-
-    @Volatile
-    internal var lastNodeMoveConfirmationRect: EntryPixelRect? = null
-
-    @Volatile
-    internal var nodeEntryMismatchFrames = 0
-
-    internal var nodeEntryMismatchPage: LabyrinthEntryPageState? = null
 
     @Volatile
     internal var lastNodeScrollSourceSignature: String? = null
@@ -919,7 +900,7 @@ class LabyrinthEntryRecognitionSession(
         activeSessionId = session.id
         activeRunAccountId = accountId
         shopImprintRewardConfirmedAt = Long.MIN_VALUE
-        confirmedNodeEntryReceipt = null
+        mapTransitionWorkflow.resetConfirmedNodeEntryReceiptOnStart()
         validatedRoute = executionRoute
         lastProcessedAt = Long.MIN_VALUE
         endGuardedAction()
