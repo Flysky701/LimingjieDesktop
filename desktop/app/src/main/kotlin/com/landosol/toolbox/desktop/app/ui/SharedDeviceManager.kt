@@ -15,7 +15,15 @@ import com.landosol.toolbox.desktop.device.AdbLocation
 ) {
     val accounts by global.accounts.uiState.collectAsState()
     val settings by global.settings.state.collectAsState()
+    val connectionMessage by global.deviceConnection.message.collectAsState()
     val actions=rememberActions(global)
+    var discovering by remember{mutableStateOf(false)}
+    fun detect()=actions.run{
+        discovering=true
+        try{callbacks.discover(true)}finally{discovering=false}
+    }
+    val visible=LocalControlVisible.current
+    LaunchedEffect(visible){if(visible)detect()}
     var address by remember{mutableStateOf("")}
     var binding by remember{mutableStateOf<String?>(null)}
     var details by remember{mutableStateOf<String?>(null)}
@@ -35,13 +43,15 @@ import com.landosol.toolbox.desktop.device.AdbLocation
     }
     PageBody("设备管理","集中连接模拟器并绑定账号。运行中的设备锁定绑定；切换运行页不会改变连接和任务。"){
         Message(actions.message)
+        if(!discovering)Message(connectionMessage)
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)){
-            Button(onClick={callbacks.discover(true)},shape=MaterialTheme.shapes.small){Text("重新检测")}
+            Button(onClick={detect()},enabled=!actions.working,shape=MaterialTheme.shapes.small){Text(if(discovering)"正在检测…" else "重新检测")}
             OutlinedTextField(address,{address=it},label={Text("手动 ADB 地址")},placeholder={Text("127.0.0.1:16384")},singleLine=true,modifier=Modifier.weight(1f))
-            OutlinedButton(onClick={callbacks.connect(address.trim())},enabled=address.isNotBlank(),shape=MaterialTheme.shapes.small){Text("添加并连接")}
+            OutlinedButton(onClick={callbacks.connect(address.trim())},enabled=address.isNotBlank()&&!actions.working,shape=MaterialTheme.shapes.small){Text("添加并连接")}
         }
-        if(devices.isEmpty())Panel("尚未发现设备"){
-            Text("启动模拟器并打开 ADB 调试，然后重新检测；也可以填写它的 ADB 地址。",color=Muted)
+        if(discovering)LinearProgressIndicator(Modifier.fillMaxWidth())
+        if(devices.isEmpty()&&!discovering)Panel("尚未发现设备"){
+            Text("启动模拟器并打开 ADB 调试后重新检测。MuMu 会自动识别端口；也可以手动填写其他设备的 ADB 地址。",color=Muted)
             Text("可以先在账号和策略页完成全局配置。",color=Muted)
         }
         devices.forEach{device->key(device.id){
@@ -81,8 +91,8 @@ import com.landosol.toolbox.desktop.device.AdbLocation
             OutlinedTextField(adbPath,{adbPath=it},label={Text("adb.exe 路径（留空自动查找）")},singleLine=true,enabled=canChange,modifier=Modifier.fillMaxWidth())
             Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){
                 OutlinedButton(onClick={chooseFile(false,"选择 adb.exe","exe")?.let{adbPath=it.absolutePath}},enabled=canChange){Text("选择文件")}
-                Button(onClick={actions.run{location=global.configureAdb(adbPath.trim())}},enabled=canChange){Text("保存并检查")}
-                OutlinedButton(onClick={actions.run{val found=global.downloadAdb();location=found;adbPath=found.path}},enabled=canChange){Text("下载 Platform Tools")}
+                Button(onClick={actions.run{location=global.configureAdb(adbPath.trim());callbacks.discover(true)}},enabled=canChange){Text("保存并检查")}
+                OutlinedButton(onClick={actions.run{val found=global.downloadAdb();location=found;adbPath=found.path;callbacks.discover(true)}},enabled=canChange){Text("下载 Platform Tools")}
             }
             location?.let{Detail("来源",it.source);Detail("版本",it.version)}
             Text("更换 ADB 前请先断开设备。下载使用 Android 官方 Platform Tools。",color=Muted,style=MaterialTheme.typography.bodySmall)

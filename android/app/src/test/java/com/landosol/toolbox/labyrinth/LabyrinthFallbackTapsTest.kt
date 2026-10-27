@@ -17,7 +17,11 @@ class LabyrinthFallbackTapsTest {
      */
     @Test
     fun `anchored fallback taps land inside their declared anchor geometry`() {
-        for ((frameWidth, frameHeight) in listOf(1920 to 1080, 2400 to 1080, 1600 to 720)) {
+        for ((frameWidth, frameHeight) in listOf(
+            1920 to 1080, 1280 to 720, 2560 to 1440,
+            2400 to 1080, 2560 to 1080, 1600 to 720,
+            1920 to 1200, 1440 to 1080, 1280 to 800,
+        )) {
             LABYRINTH_FALLBACK_TAP_POLICIES.filter { it.anchorIds.isNotEmpty() }.forEach { policy ->
                 val tap = policy.tap.rect(frameWidth, frameHeight)
                 val tapX = tap.left + tap.width / 2
@@ -40,6 +44,33 @@ class LabyrinthFallbackTapsTest {
                     "${policy.page} ${policy.tap} at ${frameWidth}x$frameHeight is outside ${policy.anchorIds}",
                     covered,
                 )
+            }
+        }
+    }
+
+    @Test
+    fun `reference resolution keeps every original fallback point`() {
+        LabyrinthFallbackTap.entries.forEach { point ->
+            val rect = point.rect(1920, 1080)
+            assertEquals(point.x, rect.left + rect.width / 2)
+            assertEquals(point.y, rect.top + rect.height / 2)
+        }
+    }
+
+    @Test
+    fun `fallback taps use the same centered viewport as planned actions`() {
+        val mapper = com.landosol.toolbox.automation.CoordinateMapper()
+        for ((width, height) in listOf(1280 to 720, 2560 to 1080, 1440 to 1080)) {
+            val mapping = mapper.createMapping(
+                com.landosol.toolbox.automation.PixelRect(0f, 0f, width.toFloat(), height.toFloat()),
+            )
+            LabyrinthFallbackTap.entries.forEach { point ->
+                val expected = requireNotNull(mapping.toScreen(
+                    com.landosol.toolbox.automation.ScreenPoint(point.x.toFloat(), point.y.toFloat()),
+                ))
+                val actual = point.rect(width, height)
+                assertEquals(expected.x.toInt(), actual.left + actual.width / 2)
+                assertEquals(expected.y.toInt(), actual.top + actual.height / 2)
             }
         }
     }

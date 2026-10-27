@@ -27,6 +27,12 @@
 
 总指挥已统一执行阶段 1 的 16 项定向用例（真实 Graph 离线集成、GraphService、单设备 Supervisor、原 UI）及阶段 2 的 17 项定向用例（共享数据、运行页 UI、并发 Supervisor、worker 生命周期、设备身份），均通过。之后收尾补充的同步 busy 状态及权威账号配置保存顺序，由总指挥再重跑受影响的 GraphService、SharedDataIntegration 和真实 Graph 离线集成；本提交未自行运行 Gradle、Android 全量或实机验证。测试只使用临时目录、示例凭据和假设备，不接触 D5 稳定包、运行中的 D6 工作区或原账号数据。
 
+## 2026-10-27 兼容路线坐标修正
+
+`labyrinth/LabyrinthFallbackTaps.kt` 的备用点改为复用 `CoordinateMapper` 的居中 FIT 映射，修正非 16:9 画面下独立缩放 X/Y 造成的偏移。1920×1080 七个参考点、页面规则、策略和触发条件不变。该项属于明确的坐标行为修正，不归类为纯搬移或默认无变化的注入缝。
+
+既有定向验证 11 项通过，包含原尺寸点位、宽高比、居中留边和已有按钮样本；记录见 [分辨率与 Android 版本兼容调查](../reports/COMPATIBILITY-RESOLUTION-ANDROID.md)。本次整理将原有未提交修复纳入 desktop.8 兼容基础版，没有重跑 Android 全量构建，也不宣称所有分辨率的游戏流程已验证。桌面自动视觉执行的 1920×1080 前置检查继续保留。
+
 ## 检查清单（每条补丁）
 
 - [ ] 只移动了声明及其 KDoc；名称、签名、可见性、注解没有变化

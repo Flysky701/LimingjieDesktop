@@ -28,6 +28,7 @@ class SharedSupervisorModel(
     private val workers: RuntimeWorkerFactory = RuntimeWorkerFactory { launcher.startRuntime(it, endpoint) },
 ) : RunSessionSupervisor {
     private val mutex = Mutex()
+    private val discoveryMutex = Mutex()
     private val deviceLocks = ConcurrentHashMap<String, Mutex>()
     private val known = linkedMapOf<String, RuntimeDeviceTarget>()
     private val configurations = mutableMapOf<String, RememberedRunConfiguration>()
@@ -73,16 +74,26 @@ class SharedSupervisorModel(
         }
     }
 
-    override suspend fun refreshDevices(force: Boolean) {
+    override suspend fun refreshDevices(force: Boolean): Unit = discoveryMutex.withLock {
+        val checked = mutex.withLock { known.keys.toSet() }
         val discovered = inventory.discover(force)
+        val missing = mutex.withLock {
+            known.filter { (id, previous) -> id in checked && discovered.none { target ->
+                target.deviceId == id || (target.aliases + target.serial).any { it in previous.aliases || it == previous.serial }
+            } }.keys.toSet()
+        }
         retireReplacedSessions(discovered)
+        retireMissingSessions(missing)
         mutex.withLock {
             check(!closing) { "总控正在退出" }
+            val active = sessions.value.map { it.deviceId }.toSet()
+            known.keys.removeAll(missing - active)
             known.replaceAll { _, value -> value.copy(connectionState = "offline") }
             discovered.forEach(::rememberDevice)
             publishDevices()
             saveMetadata()
         }
+        Unit
     }
 
     override suspend fun connectDevice(serial: String): String {
@@ -238,6 +249,36 @@ class SharedSupervisorModel(
     override fun reportError(message: String) { errors.value = message }
     override fun dismissError() { errors.value = null }
 
+    private suspend fun retireMissingSessions(missing: Set<String>) {
+        val candidates = mutex.withLock { sessions.value.filter { it.deviceId in missing } }
+        candidates.forEach { item ->
+            val deviceLock = deviceLocks.computeIfAbsent(item.deviceId) { Mutex() }
+            // Do not wait behind a connection and then discard the session it just established.
+            if (!deviceLock.tryLock()) {
+                reportError("${item.name} 正在处理设备操作，记录暂时保留，请稍后重新检测。")
+                return@forEach
+            }
+            try {
+                val current = mutex.withLock {
+                    check(!closing) { "总控正在退出" }
+                    sessions.value.firstOrNull { it.link.workerRunId == item.link.workerRunId }
+                } ?: return@forEach
+                val snapshot = ControlSnapshot(current.link.snapshots.value)
+                val phase = (snapshot.section("console")["device"] as? JsonObject)?.wireString("_type")
+                if (current.id in dirty.value || snapshot.busy || current.link.connection.value == WorkerConnectionStatus.STARTING ||
+                    phase in setOf("Connecting", "Verifying", "Reconnecting")) {
+                    reportError("${current.name} 本次未检测到；请先结束运行或连接、保存或取消修改，再重新检测以移除记录。")
+                    return@forEach
+                }
+                // The worker checks task admission again before disconnecting, including a concurrent start.
+                if (current.link.connection.value == WorkerConnectionStatus.CONNECTED) current.link.request(ControlOps.DEVICE_DISCONNECT)
+                remove(current)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { reportError("${item.name} 的记录暂未移除：${failure.message}") }
+            finally { deviceLock.unlock() }
+        }
+    }
+
     /** A fresh boot at a worker's own transport invalidates that runtime, not its saved data.
      * Retire it before adding the replacement; never transfer an old boot's account binding.
      */
@@ -316,7 +357,7 @@ class SharedSupervisorModel(
 internal class SharedDeviceInventory(private val global: ControlSessionPort) : RuntimeDeviceInventory {
     override suspend fun discover(force: Boolean): List<RuntimeDeviceTarget> {
         val result = global.request(ControlOps.DEVICE_DISCOVER, buildJsonObject { put("force", force) })
-        val rows = result["devices"] ?: global.snapshots.value["devices"] ?: JsonArray(emptyList())
+        val rows = checkNotNull(result["devices"]) { "设备检测未返回完整结果，原有记录已保留" }
         return ControlModelCodec.decode<List<DeviceDescriptor>>(rows).map(::target)
     }
 

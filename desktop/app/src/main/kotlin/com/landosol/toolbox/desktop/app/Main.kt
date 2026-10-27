@@ -106,7 +106,7 @@ fun main(args: Array<String>) {
         fun closeRequested() { if (busy || dirty.isNotEmpty()) confirmExit = true else quit() }
         val callbacks = SharedRunShellCallbacks(
             selectSession = { action { model.selectSession(it) } },
-            discover = { action { model.refreshDevices(it) } },
+            discover = { model.refreshDevices(it) },
             connect = { action { model.connectDevice(it) } },
             bindAccount = { id, account -> action { model.bindAccount(id, account) } },
             disconnect = { action { model.disconnectDevice(it) } },

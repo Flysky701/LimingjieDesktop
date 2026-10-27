@@ -18,6 +18,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.imageio.ImageIO
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -43,6 +44,35 @@ class SharedRunTabsUiTest {
         compose.onNodeWithText("设备").performClick()
         compose.onNodeWithText("尚未发现设备").assertIsDisplayed()
         compose.runOnIdle{assertTrue(global.commands.isEmpty())}
+    }
+
+    @Test fun devicePageDetectsOnEntryShowsProgressAndAllowsRetryAfterFailure(){
+        val global=FakePort("global")
+        val first=CompletableDeferred<Unit>()
+        val attempts=CopyOnWriteArrayList<Boolean>()
+        compose.setContent{SharedRunTabsApp(global,emptyList(),null,callbacks(discover={force->
+            attempts+=force
+            if(attempts.size==1){first.await();error("模拟检测失败，请重试")}
+        }))}
+        compose.onNodeWithText("设备").performClick()
+        compose.waitUntil(5_000){attempts.size==1}
+        compose.onNodeWithText("正在检测…").assertIsNotEnabled()
+        compose.onNodeWithText("尚未发现设备").assertDoesNotExist()
+        first.complete(Unit)
+        compose.waitForIdle()
+        compose.onNodeWithText("模拟检测失败，请重试").assertIsDisplayed()
+        compose.onNodeWithText("重新检测").performClick()
+        compose.waitUntil(5_000){attempts.size==2}
+        compose.onNodeWithText("模拟检测失败，请重试").assertDoesNotExist()
+        compose.onNodeWithText("账号").performClick()
+        compose.onNodeWithText("设备").performClick()
+        compose.waitUntil(5_000){attempts.size==3}
+        compose.runOnIdle{
+            assertTrue(attempts.all{it})
+            global.snapshots.value=JsonObject(global.snapshots.value+("connectionMessage" to JsonPrimitive("请开启 ADB 调试")))
+        }
+        compose.waitUntil(5_000){compose.onAllNodesWithText("请开启 ADB 调试",useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("请开启 ADB 调试",useUnmergedTree=true).assertIsDisplayed()
     }
 
     @Test fun selectingRunTabsChangesOnlyTheViewportAndHotkeysTargetTheSelectedSession(){
@@ -125,8 +155,8 @@ class SharedRunTabsUiTest {
     }
 
     private fun tab(port:FakePort,account:AccountListItem)=DeviceRunTab(port.instanceId,"设备 ${port.instanceId}",port,"device-${port.instanceId}","serial-${port.instanceId}",account.id)
-    private fun callbacks(select:(String)->Unit={},stopAll:()->Unit={},reconnect:(String)->Unit={})=SharedRunShellCallbacks(
-        selectSession=select,discover={},connect={},bindAccount={_,_->},disconnect={},closeSession={},reconnectSession=reconnect,stopAll=stopAll,
+    private fun callbacks(select:(String)->Unit={},stopAll:()->Unit={},reconnect:(String)->Unit={},discover:suspend(Boolean)->Unit={})=SharedRunShellCallbacks(
+        selectSession=select,discover=discover,connect={},bindAccount={_,_->},disconnect={},closeSession={},reconnectSession=reconnect,stopAll=stopAll,
     )
 
     private class FakePort(

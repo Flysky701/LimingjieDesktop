@@ -38,6 +38,21 @@ import java.net.ServerSocket
 class GraphControlServiceTest {
     @get:Rule val directory = TemporaryFolder()
 
+    @Test fun discoveryFailureCannotBeReturnedAsAValidEmptyInventory() = runBlocking {
+        val fake = com.landosol.toolbox.desktop.app.adapters.device.ConnectionFixture()
+        val graph = DesktopAppGraph(directory.root.toPath(), suppliedDevice = fake, startupUpdates = false, dataOnly = true)
+        val service = GraphControlService(graph, "discovery", "检测")
+        try {
+            assertEquals(1, service.execute(ControlOps.DEVICE_DISCOVER, emptyArgs()).getValue("devices").jsonArray.size)
+            fake.onDiscover = { error("ADB 检测失败") }
+            assertEquals("ADB 检测失败", runCatching { service.execute(ControlOps.DEVICE_DISCOVER, emptyArgs()) }.exceptionOrNull()?.message)
+            assertTrue(runCatching { service.execute(ControlOps.DEVICE_DISCOVER, buildJsonObject { put("force", false) }) }.isFailure)
+            fake.onDiscover = {}
+            fake.descriptors = emptyList()
+            assertTrue(service.execute(ControlOps.DEVICE_DISCOVER, emptyArgs()).getValue("devices").jsonArray.isEmpty())
+        } finally { service.shutdown() }
+    }
+
     @Test fun formsUseOriginalValidationAndSnapshotsNeverPublishEditorPasswords() = runBlocking {
         val fake = NoIoDevice()
         val graph = DesktopAppGraph(directory.root.toPath().resolve("data"), suppliedDevice = fake, startupUpdates = false)

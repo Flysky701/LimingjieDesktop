@@ -26,21 +26,30 @@ class DeviceConnectionActions(
     private val messageState = MutableStateFlow<String?>(null)
     val message = messageState.asStateFlow()
     @Volatile private var discoveryPath: String? = null
+    @Volatile private var discoverySucceeded = false
     @Volatile private var connectedKey: Triple<String, String, TouchMode>? = null
 
-    suspend fun discover(force: Boolean = true) {
-        if (!force && (discoveryPath == configuredPath().trim() || device.state.value is DeviceConnectionState.Ready)) return
+    suspend fun discover(force: Boolean = true): Boolean {
+        if (!force && (discoveryPath == configuredPath().trim() || device.state.value is DeviceConnectionState.Ready)) return discoverySucceeded
+        var succeeded = false
         perform("正在检测模拟器") {
             val path = configuredPath().trim()
-            if (!force && (discoveryPath == path || device.state.value is DeviceConnectionState.Ready)) return@perform
+            if (!force && (discoveryPath == path || device.state.value is DeviceConnectionState.Ready)) {
+                succeeded = discoverySucceeded
+                return@perform
+            }
+            discoverySucceeded = false
             check(!device.state.value.inProgress) { "请等待连接完成，或先取消连接" }
             // Remember failed/empty automatic attempts too. Re-entering a page must not retry indefinitely.
             if (discoveryPath != path) devicesState.value = emptyList()
             discoveryPath = path
             messageState.value = null
             devicesState.value = device.discover()
+            discoverySucceeded = true
+            succeeded = true
             if (devicesState.value.isEmpty()) messageState.value = "ADB 暂无已在线且授权的设备。请在模拟器中开启并允许 ADB 调试；若仍未列出，请在“手动填写地址”连接模拟器显示的端口。离线历史记录已隐藏。"
         }
+        return succeeded
     }
 
     suspend fun connect(serial: String, mode: TouchMode, reconnect: Boolean = false,
@@ -77,7 +86,7 @@ class DeviceConnectionActions(
     suspend fun configure(block: suspend () -> Unit) = perform("正在检查 ADB 配置") {
         check(device.state.value !is DeviceConnectionState.Ready && !device.state.value.inProgress) { "请先断开设备，再更换 ADB" }
         messageState.value = null
-        discoveryPath = null; connectedKey = null; devicesState.value = emptyList()
+        discoveryPath = null; discoverySucceeded = false; connectedKey = null; devicesState.value = emptyList()
         block()
     }
 

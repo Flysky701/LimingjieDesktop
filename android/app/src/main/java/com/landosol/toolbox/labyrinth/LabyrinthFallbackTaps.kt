@@ -1,5 +1,8 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.automation.CoordinateMapper
+import com.landosol.toolbox.automation.PixelRect
+import com.landosol.toolbox.automation.ScreenPoint
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorId
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
@@ -31,9 +34,20 @@ internal enum class LabyrinthFallbackTap(val x: Int, val y: Int) {
     ;
 
     fun rect(frameWidth: Int, frameHeight: Int): EntryPixelRect {
-        val px = (x / 1920f * frameWidth).toInt().coerceIn(1, frameWidth - 2)
-        val py = (y / 1080f * frameHeight).toInt().coerceIn(1, frameHeight - 2)
+        require(frameWidth >= 3 && frameHeight >= 3)
+        // Match the centered FIT viewport used by standard anchors and the entry action planner.
+        // Scaling the axes independently moves fallback taps away from their buttons on non-16:9 frames.
+        val mapping = coordinateMapper.createMapping(
+            PixelRect(0f, 0f, frameWidth.toFloat(), frameHeight.toFloat()),
+        )
+        val point = requireNotNull(mapping.toScreen(ScreenPoint(x.toFloat(), y.toFloat())))
+        val px = point.x.toInt().coerceIn(1, frameWidth - 2)
+        val py = point.y.toInt().coerceIn(1, frameHeight - 2)
         return EntryPixelRect(left = px - 1, top = py - 1, width = 2, height = 2)
+    }
+
+    private companion object {
+        val coordinateMapper = CoordinateMapper()
     }
 }
 

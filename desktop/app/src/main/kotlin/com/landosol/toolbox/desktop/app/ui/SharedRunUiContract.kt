@@ -27,7 +27,7 @@ data class ManagedDeviceUi(
 
 data class SharedRunShellCallbacks(
     val selectSession:(String)->Unit,
-    val discover:(Boolean)->Unit,
+    val discover:suspend (Boolean)->Unit,
     val connect:(String)->Unit,
     val bindAccount:(String,Long?)->Unit,
     val disconnect:(String)->Unit,

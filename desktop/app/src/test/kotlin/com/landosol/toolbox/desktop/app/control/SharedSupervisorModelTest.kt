@@ -71,10 +71,14 @@ class SharedSupervisorModelTest {
         val workers = CopyOnWriteArrayList<FakeWorker>()
         val runtimeDirectories = CopyOnWriteArrayList<Path>()
         var gate: CompletableDeferred<Unit>? = null
+        var discoveryFailure: String? = null
         val model = SharedSupervisorModel(global, SharedDataEndpoint(12345, "x".repeat(32), "a".repeat(64)),
             WorkerLauncher(scope, { AutoCloseable {} }, listOf("unused")), root, scope,
             object : RuntimeDeviceInventory {
-                override suspend fun discover(force: Boolean) = targets.toList()
+                override suspend fun discover(force: Boolean): List<RuntimeDeviceTarget> {
+                    discoveryFailure?.let { error(it) }
+                    return targets.toList()
+                }
                 override suspend fun resolve(serial: String) = targets.first { serial in it.aliases }
             }, RuntimeWorkerFactory { spec ->
                 assertTrue(spec.runtimeDirectory.startsWith(root))
@@ -242,6 +246,107 @@ class SharedSupervisorModelTest {
             assertFalse(f.model.devices.value.single().connecting)
             assertEquals("已连接", f.model.devices.value.single().status)
             assertEquals(1, f.workers.size)
+        } finally { f.close() }
+    }
+
+    @Test fun successfulRefreshRemovesMissingRecordsFromMemoryAndSavedInventory() = runBlocking {
+        val f = Fixture()
+        try {
+            f.targets += RuntimeDeviceTarget("device-b", "127.0.0.1:5557", "模拟器 B",
+                setOf("127.0.0.1:5557"), "00000000-0000-4000-8000-000000000003")
+            f.model.refreshDevices(true)
+            f.targets.removeAt(0)
+            f.model.refreshDevices(true)
+            assertEquals(listOf("device-b"), f.model.devices.value.map { it.id })
+            val restored = Fixture(f.root)
+            try {
+                restored.model.restore()
+                assertEquals(listOf("device-b"), restored.model.devices.value.map { it.id })
+            } finally { restored.close() }
+            f.targets.clear()
+            f.model.refreshDevices(true)
+            assertTrue(f.model.devices.value.isEmpty())
+            val saved = Json.parseToJsonElement(Files.readString(f.root.resolve("device-sessions.json"))).jsonObject
+            assertTrue(saved.getValue("devices").jsonArray.isEmpty())
+            assertTrue(f.workers.isEmpty())
+        } finally { f.close() }
+    }
+
+    @Test fun missingIdleSessionClosesOnlyItsWorkerAndKeepsSavedTaskOptions() = runBlocking {
+        val f = Fixture()
+        try {
+            f.targets += RuntimeDeviceTarget("device-b", "127.0.0.1:5557", "模拟器 B",
+                setOf("127.0.0.1:5557"), "00000000-0000-4000-8000-000000000003")
+            val old = f.model.connectDevice("127.0.0.1:5555")
+            f.model.bindAccount(old, 42)
+            val options = f.runtimeDirectories.first().resolve("saved-options.fixture")
+            Files.createDirectories(options.parent)
+            Files.writeString(options, "saved batch goal")
+            val online = f.model.connectDevice("127.0.0.1:5557")
+            f.targets.removeAt(0)
+            f.model.refreshDevices(true)
+            assertEquals(WorkerConnectionStatus.CLOSED, f.workers.first().connection.value)
+            assertEquals(WorkerConnectionStatus.CONNECTED, f.workers.last().connection.value)
+            assertEquals(online, f.model.sessions.value.single().id)
+            assertEquals("device-b", f.model.devices.value.single().id)
+            assertEquals("saved batch goal", Files.readString(options))
+            assertTrue(f.global.operations.isEmpty())
+        } finally { f.close() }
+    }
+
+    @Test fun failedDiscoveryNeverPrunesRecordsOrClosesSessions() = runBlocking {
+        val f = Fixture()
+        try {
+            val id = f.model.connectDevice("127.0.0.1:5555")
+            val saved = Files.readString(f.root.resolve("device-sessions.json"))
+            f.targets.clear()
+            f.discoveryFailure = "ADB 不可用"
+            assertTrue(runCatching { f.model.refreshDevices(true) }.isFailure)
+            assertEquals("device-a", f.model.devices.value.single().id)
+            assertEquals(id, f.model.sessions.value.single().id)
+            assertEquals(WorkerConnectionStatus.CONNECTED, f.workers.single().connection.value)
+            assertEquals(saved, Files.readString(f.root.resolve("device-sessions.json")))
+        } finally { f.close() }
+    }
+
+    @Test fun missingDeviceKeepsDirtyBusyAndConnectingSessionsUntilAnIdleRefresh() = runBlocking {
+        val f = Fixture()
+        try {
+            val id = f.model.connectDevice("127.0.0.1:5555")
+            f.targets.clear()
+            f.model.markDirty(id, true)
+            f.model.refreshDevices(true)
+            assertEquals(id, f.model.sessions.value.single().id)
+            f.model.markDirty(id, false)
+            f.workers.single().snapshots.value = buildJsonObject { put("console", buildJsonObject { put("busy", true) }) }
+            f.model.refreshDevices(true)
+            assertEquals(id, f.model.sessions.value.single().id)
+            f.workers.single().snapshots.value = buildJsonObject {
+                put("console", buildJsonObject { put("device", buildJsonObject { put("_type", "Verifying") }) })
+            }
+            f.model.refreshDevices(true)
+            assertEquals("device-a", f.model.devices.value.single().id)
+            assertFalse(ControlOps.DEVICE_DISCONNECT in f.workers.single().operations)
+            f.workers.single().snapshots.value = JsonObject(emptyMap())
+            f.model.refreshDevices(true)
+            assertTrue(f.model.sessions.value.isEmpty())
+            assertTrue(f.model.devices.value.isEmpty())
+        } finally { f.close() }
+    }
+
+    @Test fun missingDeviceDuringConnectDoesNotWaitAndThenCloseTheNewConnection() = runBlocking {
+        val f = Fixture()
+        try {
+            f.gate = CompletableDeferred()
+            val connecting = async { f.model.connectDevice("127.0.0.1:5555") }
+            withTimeout(5_000) { while (f.workers.isEmpty()) yield() }
+            f.targets.clear()
+            withTimeout(1_000) { f.model.refreshDevices(true) }
+            assertEquals(1, f.model.devices.value.size)
+            assertEquals(WorkerConnectionStatus.CONNECTED, f.workers.single().connection.value)
+            f.gate!!.complete(Unit)
+            assertEquals(connecting.await(), f.model.sessions.value.single().id)
+            assertFalse(ControlOps.DEVICE_DISCONNECT in f.workers.single().operations)
         } finally { f.close() }
     }
 

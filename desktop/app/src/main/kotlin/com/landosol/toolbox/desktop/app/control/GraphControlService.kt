@@ -226,7 +226,10 @@ class GraphControlService(
             ControlOps.STRATEGY_SAVE -> graph.labyrinthStrategySettings.save(decode(args.required("value")))
             ControlOps.CATALOG -> return buildJsonObject { put("items", model(graph.loadLabyrinthRoleRatings())) }
             ControlOps.DEVICE_DISCOVER -> {
-                requireIdle(); graph.deviceConnection.discover(args.boolean("force", true))
+                requireIdle()
+                check(graph.deviceConnection.discover(args.boolean("force", true))) {
+                    graph.deviceConnection.message.value ?: "设备检测未完成，请稍后重试"
+                }
                 return buildJsonObject { put("devices", model(graph.deviceConnection.devices.value)) }
             }
             SharedSupervisorOps.DEVICE_RESOLVE -> {
