@@ -37,9 +37,7 @@ internal interface LabyrinthMapTransitionPort {
     val activeSessionId: AutomationSessionId?
     val clock: () -> Long
     var combatContext: LabyrinthCombatContext?
-    var lastNodeScrollSourceSignature: String?
     val lastNodeSwipeAvoidRects: List<EntryPixelRect>
-    var nodeScrollAttempts: Int
     val nodeSession: LabyrinthNodeSession?
     var nodeTapAttempts: Int
     val persistenceMutex: Mutex
@@ -49,6 +47,8 @@ internal interface LabyrinthMapTransitionPort {
     val routeProgressSaver: (suspend (Long, Long, Long) -> Boolean)?
     var validatedRoute: LabyrinthRouteJson?
     fun resetFinalBossLocalization()
+    fun resetNodeScrollBudget()
+    fun clearNodeScrollSourceTracking()
     fun beginGuardedAction(): Boolean
     fun finishFromPlanner(sessionId: AutomationSessionId, reason: String): Unit
     fun launchGuardedAction(block: suspend () -> Unit): Unit
@@ -259,9 +259,9 @@ internal class LabyrinthMapTransitionWorkflow(private val port: LabyrinthMapTran
         nodeTapAttempts = 0
         resetPendingNodeClickStability()
         resetNodeScrollSearchGate()
-        nodeScrollAttempts = 0
+        resetNodeScrollBudget()
         resetNodeRecoveryNudgeTracking()
-        lastNodeScrollSourceSignature = null
+        clearNodeScrollSourceTracking()
         nodeLog(
             "node-move-confirm-recover target=$label confidence=${"%.3f".format(confidence)} " +
                 "reason=unique-reachable-route-target",
@@ -500,10 +500,10 @@ internal class LabyrinthMapTransitionWorkflow(private val port: LabyrinthMapTran
         resetPendingNodeClickStability()
         nodeTapAttempts = 0
         resetNodeMoveConfirmationTracking()
-        nodeScrollAttempts = 0
+        resetNodeScrollBudget()
         resetNodeRecoveryNudgeTracking()
         resetNodeScrollSearchGate()
-        lastNodeScrollSourceSignature = null
+        clearNodeScrollSourceTracking()
         if (activeSessionId == sessionId) {
             val combatMessage = combatContext?.let { context ->
                 when (context.kind) {

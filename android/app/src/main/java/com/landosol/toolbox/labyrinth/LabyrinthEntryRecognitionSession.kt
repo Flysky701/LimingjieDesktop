@@ -551,18 +551,6 @@ class LabyrinthEntryRecognitionSession(
     internal var entryPhaseComplete = false
 
     @Volatile
-    internal var nodeScrollAttempts = 0
-
-    /** Completed scan -> nudge -> scan cycles for the current target; bounds an unwinnable search. */
-    internal var nodeSearchRearmCount = 0
-
-    @Volatile
-    internal var nodeRecoveryNudgeBlockId = Long.MIN_VALUE
-
-    @Volatile
-    internal var nodeRecoveryNudgeCount = 0
-
-    @Volatile
     internal var lastNodeSwipeAvoidRects: List<EntryPixelRect> = emptyList()
 
     @Volatile
@@ -570,9 +558,6 @@ class LabyrinthEntryRecognitionSession(
 
     @Volatile
     internal var nodeTapAttempts = 0
-
-    @Volatile
-    internal var lastNodeScrollSourceSignature: String? = null
 
     @Volatile
     internal var routeNodeCount = 0

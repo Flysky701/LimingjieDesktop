@@ -22,12 +22,7 @@ internal interface LabyrinthMapViewportPort {
     val actionExecutor: SessionBoundActionExecutor?
     val activeSessionId: AutomationSessionId?
     var lastNodeActionAt: Long
-    var lastNodeScrollSourceSignature: String?
     val nodeConflictRecovery: com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecovery
-    var nodeRecoveryNudgeBlockId: Long
-    var nodeRecoveryNudgeCount: Int
-    var nodeScrollAttempts: Int
-    var nodeSearchRearmCount: Int
     val nodeSession: LabyrinthNodeSession?
     val nodeViewportScanner: LabyrinthNodeViewportScanner
     fun resetPendingNodeClickStability()
@@ -45,6 +40,29 @@ internal interface LabyrinthMapViewportPort {
 
 /** 管理地图视口、滚动扫描、微调及目标位置稳定性。 */
 internal class LabyrinthMapViewportWorkflow(private val port: LabyrinthMapViewportPort) : LabyrinthMapViewportPort by port {
+    @Volatile
+    private var nodeScrollAttempts = 0
+
+    /** Completed scan -> nudge -> scan cycles for the current target; bounds an unwinnable search. */
+    private var nodeSearchRearmCount = 0
+
+    @Volatile
+    private var nodeRecoveryNudgeBlockId = Long.MIN_VALUE
+
+    @Volatile
+    private var nodeRecoveryNudgeCount = 0
+
+    @Volatile
+    private var lastNodeScrollSourceSignature: String? = null
+
+    fun resetNodeScrollBudget() {
+        nodeScrollAttempts = 0
+    }
+
+    fun clearNodeScrollSourceTracking() {
+        lastNodeScrollSourceSignature = null
+    }
+
     fun resetNodeRecoveryNudgeTracking() {
         nodeRecoveryNudgeBlockId = Long.MIN_VALUE
         nodeRecoveryNudgeCount = 0

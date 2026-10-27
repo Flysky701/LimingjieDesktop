@@ -48,7 +48,6 @@ internal interface LabyrinthRecoveryPort {
     var lastBattleTeamRecommendationKey: String?
     var lastBattleTeamSelectionPlanLog: String?
     var lastNodeActionAt: Long
-    var lastNodeScrollSourceSignature: String?
     var lastNodeSwipeAvoidRects: List<EntryPixelRect>
     val lastObservedPageState: LabyrinthEntryPageState?
     var lastPostEntryActionAt: Long
@@ -56,7 +55,6 @@ internal interface LabyrinthRecoveryPort {
     var lastPostEntryState: LabyrinthEntryPageState?
     var lastSessionBlockKind: SessionBlockKind
     var lastSessionReturnTitleActionAt: Long
-    var nodeScrollAttempts: Int
     var nodeTapAttempts: Int
     val nodeViewportScanner: LabyrinthNodeViewportScanner
     var postEntryAttempts: Int
@@ -67,6 +65,8 @@ internal interface LabyrinthRecoveryPort {
     var sessionReturnTitleAttempts: Int
     var sessionReturnTitleStableFrames: Int
     fun resetNodeErrorTracking()
+    fun resetNodeScrollBudget()
+    fun clearNodeScrollSourceTracking()
     fun beginGuardedAction(): Boolean
     fun clearCharacterAcquisitionContext(): Unit
     fun clearRoleRewardBatchTracking(): Unit
@@ -232,11 +232,11 @@ internal class LabyrinthRecoveryWorkflow(private val port: LabyrinthRecoveryPort
         resetNodeEntryMismatchTracking()
         resetNodeMoveConfirmationTracking()
         resetOrphanMoveConfirmationTracking()
-        nodeScrollAttempts = 0
+        resetNodeScrollBudget()
         resetNodeRecoveryNudgeTracking()
         lastNodeSwipeAvoidRects = emptyList()
         resetNodeScrollSearchGate()
-        lastNodeScrollSourceSignature = null
+        clearNodeScrollSourceTracking()
         nodeViewportScanner.reset()
         lastNodeActionAt = Long.MIN_VALUE
         resetNodeErrorTracking()

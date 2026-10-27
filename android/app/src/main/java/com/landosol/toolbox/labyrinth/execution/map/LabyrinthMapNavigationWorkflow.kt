@@ -49,14 +49,12 @@ internal interface LabyrinthMapNavigationPort {
     var combatContext: LabyrinthCombatContext?
     var entryPhaseComplete: Boolean
     var lastNodeActionAt: Long
-    var lastNodeScrollSourceSignature: String?
     var lastNodeSwipeAvoidRects: List<EntryPixelRect>
     val lastPostEntryActionAt: Long
     val nodeActionPlanner: LabyrinthNodeActionPlanner
     val nodeConflictRecovery: com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecovery
     var nodeInitFailedReason: String?
     val nodeInitStarted: AtomicBoolean
-    var nodeScrollAttempts: Int
     var nodeSession: LabyrinthNodeSession?
     val nodeSessionFactory: () -> LabyrinthNodeSession
     var nodeTapAttempts: Int
@@ -68,6 +66,8 @@ internal interface LabyrinthMapNavigationPort {
     val routeLoader: (suspend (Long?) -> LabyrinthRouteJson?)?
     var routeNodeCount: Int
     var validatedRoute: LabyrinthRouteJson?
+    fun resetNodeScrollBudget()
+    fun clearNodeScrollSourceTracking()
     fun beginGuardedAction(): Boolean
     fun clearCharacterAcquisitionContext(): Unit
     fun describeNodeClassifications(classifications: List<NodeClassification>): String
@@ -805,10 +805,10 @@ internal class LabyrinthMapNavigationWorkflow(private val port: LabyrinthMapNavi
         resetMapTransitionRuntimeState()
         nodeTapAttempts = 0
         resetNodeMoveConfirmationTracking()
-        nodeScrollAttempts = 0
+        resetNodeScrollBudget()
         resetNodeRecoveryNudgeTracking()
         resetNodeScrollSearchGate()
-        lastNodeScrollSourceSignature = null
+        clearNodeScrollSourceTracking()
         nodeViewportScanner.reset()
         lastNodeActionAt = Long.MIN_VALUE
         nodeErrorStreak = 0
