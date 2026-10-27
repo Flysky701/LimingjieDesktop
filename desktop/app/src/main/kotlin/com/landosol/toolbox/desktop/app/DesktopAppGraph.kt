@@ -455,7 +455,11 @@ class DesktopAppGraph(
                     labyrinthController.startAfterBattleFailureReroll(accountId)
                 }
             },
-            runTerminalListener = { event -> labyrinthBatchController.onRunTerminal(event) },
+            runTerminalListener = { event ->
+                (event as? com.landosol.toolbox.labyrinth.batch.LabyrinthRunTerminalEvent.Cleared)?.summary
+                    ?.let { log.add(it.description(), kind = UserLogKind.KEY) }
+                labyrinthBatchController.onRunTerminal(event)
+            },
             channelPrompts = channelLoginPromptAssistant("LabyrinthEntry"),
             sessionManager = automationSessionManager,
             processorFactory = { finalBossOnly ->

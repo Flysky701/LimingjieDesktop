@@ -1,0 +1,25 @@
+结果页结束单局与分数统计修复（2026-10-27）
+
+本轮以用户的新完成条件为准：到最终RESULT页即完成当局，读取统计后停止单局，无需继续关闭结果、领取奖励并返回主页。替代此前只在最终道具关闭且回到主页后才计通关的行为。
+
+修改
+1. LabyrinthNodeSession.afterClick补齐第五区路线末Boss缺少isAreaLastPoint时的完成判断。只认可最终区域的路线末Boss，普通节点和较早区域的截断路线不判完成。
+2. LabyrinthEntryRecognitionSession在普通动作分派前接管RESULT；连续两个结果帧确认，等待总分稳定，最多6秒。确认后即使画面短暂分类为地图也不再执行节点寻找，不派发结果页关闭等点击。分数读取失败不改变通关结论。单局结束时间记录首次结果帧时间，不把读取统计的等待计入耗时。
+3. 复用现有本地OCR与ROI调度器，读取1920x1080参考布局(730,195,460,105)处大号总分。要求两次相同像素OCR一致，并在会话端等待数值稳定；数字严格解析，不把奖励数量、模板置信度或空值作为分数。
+4. 新增LabyrinthRunSummary(startedAt,endedAt,score)，随Cleared事件及批量检查点传递，保存最近结果，避免下一轮启动清除当前结果后丢失上一局信息。旧检查点字段缺失默认兼容。
+5. 历史保存可空score与结果时刻；运行记录显示分数，近14天增加有效分数样本数、平均、最高分，缺失分数不当0统计。运行日志报告单局耗时与分数。非批量自动执行同样作为单局参与通关统计；只读识别不计入。
+
+涉及共享上游修改均位于android/app/src/main/java/com/landosol/toolbox/labyrinth/，由desktop/shared沿既有同步机制编译，未另造业务实现。桌面层仅增加历史字段、展示与报告。
+
+定向验证
+- shared: LabyrinthResultCompletionTest 4项；LabyrinthEntryRecognitionSessionTest 11项；LabyrinthNodeSessionFinalBossTest 7项；LabyrinthBatchControllerTest 21项。
+- app: RunHistoryStoreTest 4项；RunConsolePresenterTest 5项。
+- ocr: OnnxOcrEngineTest中“reads total score from recorded result page”1项，使用随项目保存的t0.5.jpg，真实本地模型读到46,000。该分数仅属既有测试样例，并非用户两局分数。
+- 合计53项通过；编译通过。未运行全量回归，未操作游戏或执行真实付费调用。
+- 会话集成测试使用真实会话管理和动作执行器的模拟后端，验证RESULT→地图→RESULT后单次Cleared、无点击、帧所有权释放、批量捕获保留；纯状态测试验证无分数6秒上限和单帧误识别不计通关。
+
+历史兼容
+旧记录没有分数字段时仍可读取，缺失分数不计入均分和最高分。已有历史的人工更正及原始备份仅保存在用户本机；发行包不包含账号、配置、历史记录或本机审计数据，也不会自动改写其他用户的历史。
+
+交付状态
+源码与定向验证完成，纳入1.0.18+desktop.11便携包。安装后的10项运行环境自检通过，程序更新前后现有数据保持一致。用户确认当前版本基本实机测试通过并授权发布；本轮未重新运行全量回归，远端CI状态另见Release与Actions。

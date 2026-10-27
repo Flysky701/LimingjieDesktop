@@ -241,6 +241,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
     private val relicDetailResolver: AndroidLabyrinthRelicDetailResolver,
     private val skipJoinedCharacters: () -> Boolean,
 ) {
+    private val resultScoreResolver = AndroidLabyrinthResultScoreResolver()
     fun process(frame: CapturedFrame): LabyrinthEntryFrameResult {
         val started = System.nanoTime()
         val result = processor.process(
@@ -259,7 +260,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
         val nodeStarted = System.nanoTime()
         val nodeResolved = nodeRelicStackResolver.resolve(frame.bitmap, relicResolved)
         val detailStarted = System.nanoTime()
-        val resolved = relicDetailResolver.resolve(frame.bitmap, nodeResolved)
+        val resolved = resultScoreResolver.resolve(frame.bitmap, relicDetailResolver.resolve(frame.bitmap, nodeResolved))
         val finished = System.nanoTime()
         return resolved.copy(
             elapsedMillis = (finished - started) / 1_000_000,

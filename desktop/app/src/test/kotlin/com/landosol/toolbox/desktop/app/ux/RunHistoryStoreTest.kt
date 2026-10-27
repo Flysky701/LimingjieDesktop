@@ -10,6 +10,16 @@ import java.nio.file.Files
 import java.util.concurrent.Executors
 
 class RunHistoryStoreTest {
+    @Test fun scoreAndResultTimeSurviveReloadAndDuplicateFinish() {
+        val root=directory.root.toPath();val now=System.currentTimeMillis();val store=RunHistoryStore(root,{})
+        store.put(DesktopRunRecord("result",now-60_000,"样例","单局","通关",singleRun=true))
+        store.finish("result","通关","结果页",1,46_000,now-2_000)
+        store.finish("result","未通关","重复结束")
+        val loaded=RunHistoryStore(root,{}).records.value.single()
+        assertEquals(46_000L,loaded.score)
+        assertEquals(58_000L,loaded.durationMillis)
+        assertEquals(1,loaded.cleared)
+    }
     @get:Rule val directory=TemporaryFolder()
     private val day=86_400_000L
     @Test fun appendIsCompleteUnderConcurrentWritersAndPersistsTerminalUpdates() {

@@ -401,6 +401,7 @@ data class LabyrinthEntryFrameResult(
     val nodeViewportPixels: com.landosol.toolbox.labyrinth.node.NodeViewportPixels? = null,
     val finalBossPlatforms: List<FinalBossPlatformMatch> = emptyList(),
     val finalBossPlatformCandidates: List<FinalBossPlatformMatch> = emptyList(),
+    val runResultScore: Long? = null,
 )
 
 data class EntryAnchorMatch(

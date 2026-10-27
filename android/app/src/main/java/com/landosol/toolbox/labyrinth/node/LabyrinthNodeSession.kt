@@ -319,7 +319,13 @@ class LabyrinthNodeSession(
         val nextAreaFromRoute = nextRouteNode
             ?.takeIf { node -> node.area > state.currentArea }
             ?.area
-        if (currentNode?.isAreaLastPoint == true || nextAreaFromRoute != null) {
+        // The validated route can omit the protocol end marker even on the final area Boss.
+        // Ordinary truncated routes must not be promoted to a completed run.
+        val finalRouteBoss = clickedRouteIndex == routeNodes.lastIndex && clickedRouteIndex >= 0 &&
+            currentNode?.area == 5 && currentNode.blockType == LabyrinthNodeTypes.BOSS
+        if (finalRouteBoss) {
+            state = state.copy(isComplete = true)
+        } else if (currentNode?.isAreaLastPoint == true || nextAreaFromRoute != null) {
             // 检查是否还有下一个区域；路线顺序优先于可能缺失的协议标记。
             val nextArea = nextAreaFromRoute ?: state.currentArea + 1
             val hasNextArea = allMapNodes.any { it.area == nextArea }

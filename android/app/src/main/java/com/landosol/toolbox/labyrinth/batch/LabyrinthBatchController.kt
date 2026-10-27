@@ -193,7 +193,9 @@ class LabyrinthBatchController(
         if (current.currentRunId != event.runId) return@withLock
         if (current.lastRecordedRunId == event.runId) return@withLock
 
-        val recorded = current.recordOutcome(event.runId, event.outcome, clock())
+        val recorded = current.recordOutcome(event.runId, event.outcome, clock()).copy(
+            lastRunSummary = (event as? LabyrinthRunTerminalEvent.Cleared)?.summary,
+        )
         persist(recorded)
 
         when (event) {

@@ -124,6 +124,7 @@ tasks.register<Zip>("packagePortableZip") {
     from(rootProject.file("../docs/desktop/reports/BASELINE-DESKTOP8.md")) { into("LimingjieAssistant"); rename { "基础版说明.md" } }
     from(rootProject.file("../docs/desktop/reports/ADB-DAEMON-DESKTOP9.md")) { into("LimingjieAssistant"); rename { "ADB修复说明.md" } }
     from(rootProject.file("../docs/desktop/reports/PREVIEW-DEMAND-DESKTOP10.md")) { into("LimingjieAssistant"); rename { "预览优化说明.md" } }
+    from(rootProject.file("../docs/desktop/reports/ROUND-END-RESULT.txt")) { into("LimingjieAssistant"); rename { "当局结束修复说明.txt" } }
     from(rootProject.file("licenses")) { into("LimingjieAssistant/licenses") }
     from(rootProject.file("device/licenses")) { into("LimingjieAssistant/licenses/MaaTouch") }
     from(rootProject.file("ocr/licenses")) { into("LimingjieAssistant/licenses/OCR") }

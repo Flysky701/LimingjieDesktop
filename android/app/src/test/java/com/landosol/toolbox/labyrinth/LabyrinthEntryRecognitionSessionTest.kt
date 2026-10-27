@@ -11,11 +11,55 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LabyrinthEntryRecognitionSessionTest {
+    @Test
+    fun `result ends real session once without reward taps and reports summary`() = runTest {
+        val manager = AutomationSessionManager()
+        val events = mutableListOf<LabyrinthRunTerminalEvent>()
+        var now = 1_000L
+        var taps = 0
+        var captureStops = 0
+        val session = LabyrinthEntryRecognitionSession(
+            sessionManager = manager, captureActive = { true }, captureStop = { captureStops++ },
+            processorFactory = { { error("no capture needed") } }, clock = { now },
+            actionExecutor = SessionBoundActionExecutor(manager) { taps++; AutomationBackendResult.Completed },
+            actionsAvailable = { true }, runTerminalListener = { events += it }, actionScope = this,
+        )
+        assertTrue(session.startAutomation(accountId = 1L, runId = "result-run") is LabyrinthEntryRecognitionStartResult.Started)
+        val sessionId = session.state.value.sessionId!!
+        val method = session.javaClass.declaredMethods.single { it.name.startsWith("processFrameResult") }.apply { isAccessible = true }
+        fun feed(page: com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState, time: Long, score: Long? = null) {
+            now = time
+            val result = com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult(
+                observation = com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageObservation(
+                    page, 1.0, mapOf(page to 1.0), com.landosol.toolbox.labyrinth.vision.LabyrinthAnchorScores(emptyMap())),
+                matchedFeatures = emptyList(), elapsedMillis = 0, frameWidth = 1920, frameHeight = 1080, runResultScore = score,
+            )
+            method.invoke(session, sessionId.value, result, 1920, 1080, time)
+        }
+        val resultPage = com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState.RUN_CLEAR_RESULT
+        feed(resultPage, 61_000)
+        feed(resultPage, 61_500)
+        // A map transition belongs to result collection even with a stale node-error streak.
+        session.javaClass.getDeclaredField("nodeErrorStreak").apply { isAccessible = true; setInt(session, 19) }
+        feed(com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState.NODE_SELECTION, 62_000)
+        feed(resultPage, 62_500, 46_000)
+        feed(resultPage, 63_500, 46_000)
+        runCurrent()
+        feed(resultPage, 64_000, 46_000)
+        runCurrent()
+        org.junit.Assert.assertEquals(LabyrinthRunTerminalEvent.Cleared("result-run", LabyrinthRunSummary(1_000, 61_000, 46_000)), events.single())
+        assertFalse(session.state.value.running)
+        assertTrue(manager.current() == null)
+        assertTrue(CaptureFrameBus.currentOwner() == null)
+        org.junit.Assert.assertEquals(0, taps)
+        org.junit.Assert.assertEquals(0, captureStops)
+    }
     @Test
     fun `starts dry run and releases the shared automation session`() = runTest {
         val manager = AutomationSessionManager()

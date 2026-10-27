@@ -2,9 +2,9 @@
 
 在 Windows 中管理《公主连结 Re:Dive》黎明界任务、账号与策略。模拟器负责运行游戏，助手负责配置、执行和查看结果。
 
-**当前源码：1.0.18+desktop.10 测试候选版 · Windows 10/11 x64 · Kotlin / Compose Desktop**
+**当前版本：1.0.18+desktop.11 · Windows 10/11 x64 · Kotlin / Compose Desktop**
 
-本次在 desktop.9 上增加预览按需生成，减少看日志、切换页面和窗口隐藏时的图片开销，待用户实机测试后发布。原有范围见[基础版说明](docs/desktop/reports/BASELINE-DESKTOP8.md)和[ADB 修复记录](docs/desktop/reports/ADB-DAEMON-DESKTOP9.md)，本次变更见[预览优化记录](docs/desktop/reports/PREVIEW-DEMAND-DESKTOP10.md)；Release 下载入口仍以已发布版本为准。
+本版修复最终结果页的结束处理：稳定识别结果后确认通关，读取分数并报告单局耗时；历史记录增加分数统计。同时包含 ADB 冷启动修复、按需预览和托盘恢复。用户已完成基本实机测试，修复范围与定向验证见[当局结束修复记录](docs/desktop/reports/ROUND-END-RESULT.txt)。
 
 [下载 Release](https://github.com/Flysky701/LimingjieDesktop/releases/latest) · [使用指南](README-desktop.md) · [开发与构建](desktop/README.md)
 

@@ -57,6 +57,7 @@ import java.time.ZoneId
                         Column(Modifier.fillMaxWidth().padding(14.dp),verticalArrangement=Arrangement.spacedBy(7.dp)) {
                             Row(verticalAlignment=Alignment.CenterVertically){Text("${record.type} · ${record.alias}",Modifier.weight(1f),style=MaterialTheme.typography.titleSmall);StatusBadge(record.result)}
                             Text("${formatTime(record.startedAt)} · ${record.durationMillis?.let(::formatDuration) ?: "运行中"} · ${record.goal}",fontFamily=FontFamily.Monospace,style=MaterialTheme.typography.bodySmall,color=Muted)
+                            if(record.cleared>0 && record.singleRun) Text("分数：${record.score?.toString() ?: "未识别"}",style=MaterialTheme.typography.bodySmall,color=Muted)
                             record.deviceName?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=Muted)}
                             if(expanded){SelectionContainer {Text(record.reason.ifBlank{"暂无停止原因"},style=MaterialTheme.typography.bodySmall)};TextButton(onClick={copyText("${record.type} · ${record.result}\n${record.reason}")}){Text("复制详情")}}
                         }
@@ -95,6 +96,8 @@ import java.time.ZoneId
             }
             Row(Modifier.fillMaxWidth()){days.forEachIndexed{i,d->Text(if(i%2==0||i==13)"${d.monthValue}/${d.dayOfMonth}" else "",Modifier.weight(1f),style=MaterialTheme.typography.labelSmall,color=Muted)}}
             Text("合计 ${counts.sum()} 次通关 · 总平均 ${formatDuration(records.filter{it.singleRun&&it.cleared>0}.mapNotNull{it.durationMillis}.takeIf{it.isNotEmpty()}?.average()?.toLong() ?: 0)}",style=MaterialTheme.typography.bodySmall)
+            val scores=groups.filterKeys{it in days}.values.flatten().mapNotNull{it.score}
+            Text(if(scores.isEmpty()) "暂无可用分数" else "已记录 ${scores.size} 局分数 · 平均 ${scores.average().toLong()} · 最高 ${scores.maxOrNull()}",style=MaterialTheme.typography.bodySmall)
         }
     }
 }

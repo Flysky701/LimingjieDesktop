@@ -7,6 +7,26 @@ import org.junit.Test
 
 class LabyrinthNodeSessionFinalBossTest {
     @Test
+    fun `accepted area five final boss completes without protocol end marker`() {
+        val session = LabyrinthNodeSession()
+        val route = listOf(node(50701, 5, 7, LabyrinthNodeTypes.RELIC), node(50801, 5, 8, LabyrinthNodeTypes.BOSS))
+        session.initialize(route, route, NodeTemplateSet(emptyMap()), currentNodeId = 50701)
+        session.afterClick(50801)
+        org.junit.Assert.assertTrue(session.getState().isComplete)
+        assertNull(session.currentRouteTarget())
+    }
+
+    @Test
+    fun `truncated earlier boss or ordinary node never becomes final completion`() {
+        for ((area, type) in listOf(3 to LabyrinthNodeTypes.BOSS, 5 to LabyrinthNodeTypes.SHOP)) {
+            val session = LabyrinthNodeSession()
+            val route = listOf(node(1, area, 1, LabyrinthNodeTypes.START), node(2, area, 2, type))
+            session.initialize(route, route, NodeTemplateSet(emptyMap()), currentNodeId = 1)
+            session.afterClick(2)
+            org.junit.Assert.assertFalse(session.getState().isComplete)
+        }
+    }
+    @Test
     fun `area three final boss is route authoritative even without visual classification`() {
         val session = LabyrinthNodeSession()
         val route = listOf(

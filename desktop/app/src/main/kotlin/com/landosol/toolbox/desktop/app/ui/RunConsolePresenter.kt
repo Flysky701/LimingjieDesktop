@@ -127,8 +127,9 @@ class DesktopUxController(private val graph:DesktopAppGraph) {
             val id="batch:${batch.batchId}"
             if(batch.stage in activeStages) begin(id,"批量自动执行",batch.goals.joinToString { "${it.guildId}: ${it.targetCount} ${if(it.mode==LabyrinthBatchGoalMode.CLEARS) "次通关" else "次执行"}" },s)
             batch.currentRunId?.let { begin("run:$it","批量执行 · 单次","公会 ${batch.currentGuildId ?: batch.activeGoal?.guildId ?: "—"}",s,true) }
-            batch.lastRecordedRunId?.let { runId -> batch.currentRunOutcome?.let { outcome ->
-                history.finish("run:$runId",when(outcome){LabyrinthRunOutcome.CLEARED->"通关";LabyrinthRunOutcome.USER_STOPPED->"手动停止";else->"未通关"},outcome.name,if(outcome==LabyrinthRunOutcome.CLEARED)1 else 0)
+            batch.lastRecordedRunId?.let { runId -> (batch.lastRecordedOutcome ?: batch.currentRunOutcome)?.let { outcome ->
+                val summary = batch.lastRunSummary
+                history.finish("run:$runId",when(outcome){LabyrinthRunOutcome.CLEARED->"通关";LabyrinthRunOutcome.USER_STOPPED->"手动停止";LabyrinthRunOutcome.ABORTED_UNKNOWN->"结果未确认";else->"未通关"},summary?.description() ?: outcome.name,if(outcome==LabyrinthRunOutcome.CLEARED)1 else 0,summary?.score,summary?.endedAt)
             } }
             if(batch.stage in setOf(LabyrinthBatchStage.COMPLETED,LabyrinthBatchStage.FAILED,LabyrinthBatchStage.PAUSED)) {
                 val result=if(batch.stage==LabyrinthBatchStage.COMPLETED) "已完成" else if(s.halt==LabyrinthBatchHaltReason.USER_STOPPED) "手动停止" else "已停止"
@@ -139,8 +140,8 @@ class DesktopUxController(private val graph:DesktopAppGraph) {
         val inBatch=batch?.stage in activeStages
         if(s.task.isWorking && !inBatch && networkId==null) { networkId="network:${s.task.startedAtMillis ?: System.currentTimeMillis()}";begin(networkId!!,expectedType,s.task.guildOptions.firstOrNull { it.guildId==s.task.selectedGuildId }?.name ?: "当前账号",s) }
         if(!s.task.isWorking && s.task.captcha==null) networkId?.let { history.finish(it,"已结束",s.task.message ?: s.task.progress ?: "网络操作已结束");networkId=null }
-        if(s.entry.running && !inBatch && recognitionId==null) { recognitionId="recognition:${s.entry.sessionId}";begin(recognitionId!!,if(s.entry.dryRun) "只读识别" else "执行入口流程","当前游戏画面",s) }
-        if(!s.entry.running) recognitionId?.let { history.finish(it,if(s.entry.status==LabyrinthEntryRecognitionStatus.ERROR) "异常停止" else "已停止",s.entry.message.orEmpty());recognitionId=null }
+        if(s.entry.running && !inBatch && recognitionId==null) { recognitionId="recognition:${s.entry.sessionId}";begin(recognitionId!!,if(s.entry.dryRun) "只读识别" else "执行入口流程","当前游戏画面",s,single=!s.entry.dryRun) }
+        if(!s.entry.running) recognitionId?.let { val summary=s.entry.runSummary;history.finish(it,if(summary!=null) "通关" else if(s.entry.status==LabyrinthEntryRecognitionStatus.ERROR) "异常停止" else "已停止",summary?.description() ?: s.entry.message.orEmpty(),if(summary!=null)1 else 0,summary?.score,summary?.endedAt);recognitionId=null }
     }
     suspend fun closeAndJoin() { scope.coroutineContext[Job]?.cancelAndJoin();withContext(Dispatchers.IO){ history.records.value.filter { it.endedAt==null }.forEach { history.finish(it.id,"应用退出","应用退出，当前任务已停止") } } }
     companion object { val activeStages=setOf(LabyrinthBatchStage.REROLLING,LabyrinthBatchStage.INVALIDATING_OLD_CLIENT_SESSION,LabyrinthBatchStage.RUNNING_LABYRINTH,LabyrinthBatchStage.RECORDING_RESULT) }

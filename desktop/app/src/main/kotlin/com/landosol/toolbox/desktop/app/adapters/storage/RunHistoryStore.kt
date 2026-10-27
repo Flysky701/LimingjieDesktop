@@ -13,7 +13,8 @@ import java.nio.file.StandardOpenOption.*
 
 data class DesktopRunRecord(val id: String, val startedAt: Long, val alias: String, val type: String, val goal: String,
     val endedAt: Long? = null, val result: String = "运行中", val reason: String = "", val cleared: Int = 0, val singleRun: Boolean = false,
-    val deviceId: String? = null, val deviceName: String? = null, val accountId: Long? = null) {
+    val deviceId: String? = null, val deviceName: String? = null, val accountId: Long? = null,
+    val score: Long? = null) {
     val durationMillis get() = endedAt?.let { (it-startedAt).coerceAtLeast(0) }
 }
 
@@ -31,12 +32,12 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
         .put("type",r.type).put("goal",r.goal).put("endedAt",r.endedAt ?: JSONObject.NULL).put("result",r.result)
         .put("reason",DesktopLog.redact(r.reason)).put("cleared",r.cleared).put("singleRun",r.singleRun)
         .put("deviceId",r.deviceId ?: JSONObject.NULL).put("deviceName",r.deviceName ?: JSONObject.NULL)
-        .put("accountId",r.accountId ?: JSONObject.NULL).toString()
+        .put("accountId",r.accountId ?: JSONObject.NULL).put("score",r.score ?: JSONObject.NULL).toString()
     private fun decode(line: String): DesktopRunRecord = JSONObject(line).let { j ->
         DesktopRunRecord(j.getString("id"),j.getLong("startedAt"),j.getString("alias"),j.getString("type"),j.getString("goal"),
             if(j.isNull("endedAt")) null else j.getLong("endedAt"),j.getString("result"),j.optString("reason"),j.optInt("cleared"),j.optBoolean("singleRun"),
             if(j.isNull("deviceId")) null else j.getString("deviceId"), if(j.isNull("deviceName")) null else j.getString("deviceName"),
-            if(j.isNull("accountId")) null else j.getLong("accountId"))
+            if(j.isNull("accountId")) null else j.getLong("accountId"), if(j.isNull("score")) null else j.getLong("score"))
     }
     private fun retained(rows: Collection<DesktopRunRecord>): List<DesktopRunRecord> = rows.filter { it.startedAt >= now()-180L*86_400_000 }
         .sortedBy { it.startedAt }.takeLast(limit)
@@ -72,5 +73,5 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
     }
     @Synchronized fun recoverInterrupted() { if(needsCompaction){compact();needsCompaction=false};mutable.value.filter { it.endedAt==null }.forEach { put(it.copy(endedAt=now(),result="未正常结束",reason="上次进程退出前未记录终态，请检查游戏当前状态。")) } }
     @Synchronized fun compact() { AtomicFiles.write(file,mutable.value.joinToString("\n",postfix=if(mutable.value.isEmpty()) "" else "\n",transform=::encode).toByteArray(Charsets.UTF_8)) }
-    @Synchronized fun finish(id:String,result:String,reason:String,cleared:Int=0) { mutable.value.firstOrNull { it.id==id && it.endedAt==null }?.let { put(it.copy(endedAt=now(),result=result,reason=reason,cleared=cleared)) } }
+    @Synchronized fun finish(id:String,result:String,reason:String,cleared:Int=0,score:Long?=null,endedAt:Long?=null) { mutable.value.firstOrNull { it.id==id && it.endedAt==null }?.let { put(it.copy(endedAt=endedAt ?: now(),result=result,reason=reason,cleared=cleared,score=score)) } }
 }

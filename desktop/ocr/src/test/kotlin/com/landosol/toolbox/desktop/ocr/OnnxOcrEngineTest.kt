@@ -12,6 +12,15 @@ import java.io.File
 import javax.imageio.ImageIO
 
 class OnnxOcrEngineTest {
+    @Test fun `reads total score from recorded result page`() {
+        val screenshot=ImageIO.read(File("../../android/app/src/test/resources/labyrinth/run-clear-20260917/t0.5.jpg"))
+        val crop=screenshot.getSubimage(730,195,460,105)
+        OnnxOcrEngine().use { engine ->
+            val answer=CompletableFuture<String?>()
+            engine.submit(crop.width,crop.height,crop.getRGB(0,0,crop.width,crop.height,null,0,crop.width)) { answer.complete(it) }
+            assertEquals("46000",answer.get(45,TimeUnit.SECONDS)?.replace(",", "")?.replace("，", ""))
+        }
+    }
     @Test fun `loading queues up to 64 requests and rejects only excess request`() {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
