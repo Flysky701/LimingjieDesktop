@@ -22,7 +22,6 @@ internal interface LabyrinthPersistencePort {
     val activeSessionId: AutomationSessionId?
     var lastPersistedObservationSignature: String?
     val openingStateReset: AtomicBoolean
-    var pendingAcquiredCharacterId: String?
     val persistenceMutex: Mutex
     val runStateStore: LabyrinthRunStateStore?
     val validatedRoute: LabyrinthRouteJson?
@@ -41,6 +40,8 @@ internal interface LabyrinthPersistencePort {
             observation: com.landosol.toolbox.labyrinth.vision.LabyrinthBattleTeamObservation?,
         ): Unit
     fun resetObservedOpeningRewards(): Unit
+    val pendingAcquiredCharacterId: String?
+    fun onPendingCharacterPublished(characterId: String?)
 }
 
 /** 保存已核对的阵容与遗物观察，并发布持久化后的运行快照。 */
@@ -143,7 +144,7 @@ internal class LabyrinthPersistenceWorkflow(private val port: LabyrinthPersisten
                             ?: purchasedRelic?.displayName?.let { "购买遗物已入库：$it" }
                             ?: "页面识别已更新",
                     )
-                    pendingAcquiredCharacterId = _state.value.pendingAcquiredCharacterId
+                    onPendingCharacterPublished(_state.value.pendingAcquiredCharacterId)
                     refreshBattleTeamRecommendation(
                         sessionId,
                         _state.value.lastResult?.observation?.state ?: LabyrinthEntryPageState.UNKNOWN,

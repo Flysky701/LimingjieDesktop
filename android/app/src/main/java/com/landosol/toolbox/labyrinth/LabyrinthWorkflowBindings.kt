@@ -71,7 +71,7 @@ import kotlinx.coroutines.sync.Mutex
 
 /** Composition only: binds scoped workflow ports to the compatibility facade.
  * Legacy backing fields and private entry points preserve existing consumers; workflow-owned
- * recovery state stays private and is connected only through queries and lifecycle/effect calls.
+ * state stays private and is connected only through queries and lifecycle/effect calls.
  * Business workflows never receive the facade itself. Only these adapters may cross that boundary.
  */
 internal fun LabyrinthEntryRecognitionSession.createBattleRecommendationWorkflow(): LabyrinthBattleRecommendationWorkflow =
@@ -394,9 +394,6 @@ internal fun LabyrinthEntryRecognitionSession.createBattleCombatWorkflow(): Laby
             get() = this@createBattleCombatWorkflow.singleBossRetryCountBeforeMulti
         override val validatedRoute: LabyrinthRouteJson?
             get() = this@createBattleCombatWorkflow.validatedRoute
-        override var waitingForManualRoleSelection: Boolean
-            get() = this@createBattleCombatWorkflow.waitingForManualRoleSelection
-            set(value) { this@createBattleCombatWorkflow.waitingForManualRoleSelection = value }
         override fun acknowledgeBattleTeamActionProgress(result: LabyrinthEntryFrameResult): Unit =
             this@createBattleCombatWorkflow.battleTeamWorkflow.acknowledgeBattleTeamActionProgress(result = result)
         override fun anchorRect(result: LabyrinthEntryFrameResult, anchorId: String): EntryPixelRect? =
@@ -434,6 +431,8 @@ internal fun LabyrinthEntryRecognitionSession.createBattleCombatWorkflow(): Laby
             this@createBattleCombatWorkflow.battleRecommendationWorkflow.invalidateBattleTeamRecommendation()
         override fun clearBattleTeamSelectionPlanLog() =
             this@createBattleCombatWorkflow.battleRecommendationWorkflow.clearBattleTeamSelectionPlanLog()
+        override fun clearManualRoleSelectionWait() =
+            this@createBattleCombatWorkflow.rewardWorkflow.clearManualRoleSelectionWait()
     })
 
 internal fun LabyrinthEntryRecognitionSession.createEncounterWorkflow(): LabyrinthEncounterWorkflow =
@@ -559,34 +558,8 @@ internal fun LabyrinthEntryRecognitionSession.createRewardWorkflow(): LabyrinthR
             get() = this@createRewardWorkflow.activeRunAccountId
         override val activeSessionId: AutomationSessionId?
             get() = this@createRewardWorkflow.activeSessionId
-        override var characterAcquisitionActive: Boolean
-            get() = this@createRewardWorkflow.characterAcquisitionActive
-            set(value) { this@createRewardWorkflow.characterAcquisitionActive = value }
-        override var characterAcquisitionClicks: Int
-            get() = this@createRewardWorkflow.characterAcquisitionClicks
-            set(value) { this@createRewardWorkflow.characterAcquisitionClicks = value }
-        override var characterAcquisitionStartedAt: Long
-            get() = this@createRewardWorkflow.characterAcquisitionStartedAt
-            set(value) { this@createRewardWorkflow.characterAcquisitionStartedAt = value }
         override val clock: () -> Long
             get() = this@createRewardWorkflow.clock
-        override var committedRoleRewardSelectionSignature: String?
-            get() = this@createRewardWorkflow.committedRoleRewardSelectionSignature
-            set(value) { this@createRewardWorkflow.committedRoleRewardSelectionSignature = value }
-        override var lastCharacterAcquisitionActionAt: Long
-            get() = this@createRewardWorkflow.lastCharacterAcquisitionActionAt
-            set(value) { this@createRewardWorkflow.lastCharacterAcquisitionActionAt = value }
-        override var lastObservedRoleRewardSelectionSignature: String?
-            get() = this@createRewardWorkflow.lastObservedRoleRewardSelectionSignature
-            set(value) { this@createRewardWorkflow.lastObservedRoleRewardSelectionSignature = value }
-        override var pendingAcquiredCharacterId: String?
-            get() = this@createRewardWorkflow.pendingAcquiredCharacterId
-            set(value) { this@createRewardWorkflow.pendingAcquiredCharacterId = value }
-        override val pendingAcquiredCharacterIds: MutableSet<String>
-            get() = this@createRewardWorkflow.pendingAcquiredCharacterIds
-        override var pendingRelicSelection: LabyrinthRelicMatch?
-            get() = this@createRewardWorkflow.pendingRelicSelection
-            set(value) { this@createRewardWorkflow.pendingRelicSelection = value }
         override val persistenceMutex: Mutex
             get() = this@createRewardWorkflow.persistenceMutex
         override val postBossStage: LabyrinthPostBossStage
@@ -596,17 +569,6 @@ internal fun LabyrinthEntryRecognitionSession.createRewardWorkflow(): LabyrinthR
             set(value) { this@createRewardWorkflow.postEntryAttempts = value }
         override val postEntryStableFrames: Int
             get() = this@createRewardWorkflow.postEntryStableFrames
-        override val relicAcquisitionGate: LabyrinthRelicAcquisitionGate
-            get() = this@createRewardWorkflow.relicAcquisitionGate
-        override var relicChoiceCommitAttempts: Int
-            get() = this@createRewardWorkflow.relicChoiceCommitAttempts
-            set(value) { this@createRewardWorkflow.relicChoiceCommitAttempts = value }
-        override var relicChoiceCommitted: Boolean
-            get() = this@createRewardWorkflow.relicChoiceCommitted
-            set(value) { this@createRewardWorkflow.relicChoiceCommitted = value }
-        override var relicChoiceCommittedAt: Long
-            get() = this@createRewardWorkflow.relicChoiceCommittedAt
-            set(value) { this@createRewardWorkflow.relicChoiceCommittedAt = value }
         override val relicChoicePolicy: LabyrinthRelicChoicePolicy
             get() = this@createRewardWorkflow.relicChoicePolicy
         override var relicFocusMark: LabyrinthRelicMark?
@@ -616,30 +578,15 @@ internal fun LabyrinthEntryRecognitionSession.createRewardWorkflow(): LabyrinthR
             get() = this@createRewardWorkflow.relicMarkStackCalibration
         override val relicStackLedger: LabyrinthRelicStackLedger
             get() = this@createRewardWorkflow.relicStackLedger
-        override var roleRewardBatchActive: Boolean
-            get() = this@createRewardWorkflow.roleRewardBatchActive
-            set(value) { this@createRewardWorkflow.roleRewardBatchActive = value }
-        override var roleRewardChoiceCommitted: Boolean
-            get() = this@createRewardWorkflow.roleRewardChoiceCommitted
-            set(value) { this@createRewardWorkflow.roleRewardChoiceCommitted = value }
         override val roleRewardChoicePlanner: LabyrinthRoleRewardChoicePlanner?
             get() = this@createRewardWorkflow.roleRewardChoicePlanner
         override val roleRewardChoiceUnavailableReason: String?
             get() = this@createRewardWorkflow.roleRewardChoiceUnavailableReason
-        override var roleRewardDecisionCacheKey: String?
-            get() = this@createRewardWorkflow.roleRewardDecisionCacheKey
-            set(value) { this@createRewardWorkflow.roleRewardDecisionCacheKey = value }
-        override var roleRewardJoinedSequenceStarted: Boolean
-            get() = this@createRewardWorkflow.roleRewardJoinedSequenceStarted
-            set(value) { this@createRewardWorkflow.roleRewardJoinedSequenceStarted = value }
         override val runStateStore: LabyrinthRunStateStore?
             get() = this@createRewardWorkflow.runStateStore
         override var skipRoleRewardJoinedRecognition: Boolean
             get() = this@createRewardWorkflow.skipRoleRewardJoinedRecognition
             set(value) { this@createRewardWorkflow.skipRoleRewardJoinedRecognition = value }
-        override var waitingForManualRoleSelection: Boolean
-            get() = this@createRewardWorkflow.waitingForManualRoleSelection
-            set(value) { this@createRewardWorkflow.waitingForManualRoleSelection = value }
         override fun anchorRect(result: LabyrinthEntryFrameResult, anchorId: String): EntryPixelRect? =
             this@createRewardWorkflow.pageActionWorkflow.anchorRect(result = result, anchorId = anchorId)
         override fun finishFromPlanner(sessionId: AutomationSessionId, reason: String): Unit =
@@ -662,8 +609,6 @@ internal fun LabyrinthEntryRecognitionSession.createEventWorkflow(): LabyrinthEv
             set(value) { this@createEventWorkflow.activeNodeType = value }
         override val activeSessionId: AutomationSessionId?
             get() = this@createEventWorkflow.activeSessionId
-        override val characterAcquisitionActive: Boolean
-            get() = this@createEventWorkflow.characterAcquisitionActive
         override val clock: () -> Long
             get() = this@createEventWorkflow.clock
         override val combatContext: LabyrinthCombatContext?
@@ -702,11 +647,6 @@ internal fun LabyrinthEntryRecognitionSession.createEventWorkflow(): LabyrinthEv
             get() = this@createEventWorkflow.lastPostEntryActionAt
         override val lastPostEntryActionLandedAt: Long
             get() = this@createEventWorkflow.lastPostEntryActionLandedAt
-        override var pendingAcquiredCharacterId: String?
-            get() = this@createEventWorkflow.pendingAcquiredCharacterId
-            set(value) { this@createEventWorkflow.pendingAcquiredCharacterId = value }
-        override val pendingAcquiredCharacterIds: MutableSet<String>
-            get() = this@createEventWorkflow.pendingAcquiredCharacterIds
         override val relicChoicePolicy: LabyrinthRelicChoicePolicy
             get() = this@createEventWorkflow.relicChoicePolicy
         override val relicMarkStackCalibration: Map<LabyrinthRelicMark, Int>
@@ -746,6 +686,10 @@ internal fun LabyrinthEntryRecognitionSession.createEventWorkflow(): LabyrinthEv
             this@createEventWorkflow.rewardWorkflow.postEntryIsRoleRewardPage(result = result)
         override fun traceWorkflow(owner: String, phase: String): Unit =
             this@createEventWorkflow.runtimeTraceWorkflow(owner = owner, phase = phase)
+        override fun pendingCharacterIds(): Set<String> =
+            this@createEventWorkflow.rewardWorkflow.pendingCharacterIds()
+        override fun recordEventCharacterConfirmation(confirmed: List<String>) =
+            this@createEventWorkflow.rewardWorkflow.recordEventCharacterConfirmation(confirmed)
     })
 
 internal fun LabyrinthEntryRecognitionSession.createShopWorkflow(): LabyrinthShopWorkflow =
@@ -900,8 +844,6 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
             get() = this@createMapNavigationWorkflow.activeRunAccountId
         override val activeSessionId: AutomationSessionId?
             get() = this@createMapNavigationWorkflow.activeSessionId
-        override val characterAcquisitionActive: Boolean
-            get() = this@createMapNavigationWorkflow.characterAcquisitionActive
         override val clock: () -> Long
             get() = this@createMapNavigationWorkflow.clock
         override var combatContext: LabyrinthCombatContext?
@@ -1031,6 +973,8 @@ internal fun LabyrinthEntryRecognitionSession.createMapNavigationWorkflow(): Lab
             this@createMapNavigationWorkflow.runtimeTraceReject(reason = reason)
         override fun traceWorkflow(owner: String, phase: String): Unit =
             this@createMapNavigationWorkflow.runtimeTraceWorkflow(owner = owner, phase = phase)
+        override val characterAcquisitionActive: Boolean
+            get() = this@createMapNavigationWorkflow.rewardWorkflow.isCharacterAcquisitionActive()
     })
 
 internal fun LabyrinthEntryRecognitionSession.createMapTransitionWorkflow(): LabyrinthMapTransitionWorkflow =
@@ -1600,9 +1544,6 @@ internal fun LabyrinthEntryRecognitionSession.createPersistenceWorkflow(): Labyr
             set(value) { this@createPersistenceWorkflow.lastPersistedObservationSignature = value }
         override val openingStateReset: AtomicBoolean
             get() = this@createPersistenceWorkflow.openingStateReset
-        override var pendingAcquiredCharacterId: String?
-            get() = this@createPersistenceWorkflow.pendingAcquiredCharacterId
-            set(value) { this@createPersistenceWorkflow.pendingAcquiredCharacterId = value }
         override val persistenceMutex: Mutex
             get() = this@createPersistenceWorkflow.persistenceMutex
         override val runStateStore: LabyrinthRunStateStore?
@@ -1632,6 +1573,10 @@ internal fun LabyrinthEntryRecognitionSession.createPersistenceWorkflow(): Labyr
             this@createPersistenceWorkflow.battleRecommendationWorkflow.refreshBattleTeamSelectionPlan(sessionId = sessionId, pageState = pageState, observation = observation)
         override fun resetObservedOpeningRewards(): Unit =
             this@createPersistenceWorkflow.rewardWorkflow.resetObservedOpeningRewards()
+        override val pendingAcquiredCharacterId: String?
+            get() = this@createPersistenceWorkflow.rewardWorkflow.pendingCharacterId()
+        override fun onPendingCharacterPublished(characterId: String?) =
+            this@createPersistenceWorkflow.rewardWorkflow.onPendingCharacterPublished(characterId)
     })
 
 internal fun LabyrinthEntryRecognitionSession.createPageRouterWorkflow(): LabyrinthPageRouterWorkflow =
@@ -1660,15 +1605,6 @@ internal fun LabyrinthEntryRecognitionSession.createPageRouterWorkflow(): Labyri
             get() = this@createPageRouterWorkflow.channelPromptMessage
         override val channelPromptVisibleUntil: Long
             get() = this@createPageRouterWorkflow.channelPromptVisibleUntil
-        override var characterAcquisitionActive: Boolean
-            get() = this@createPageRouterWorkflow.characterAcquisitionActive
-            set(value) { this@createPageRouterWorkflow.characterAcquisitionActive = value }
-        override var characterAcquisitionClicks: Int
-            get() = this@createPageRouterWorkflow.characterAcquisitionClicks
-            set(value) { this@createPageRouterWorkflow.characterAcquisitionClicks = value }
-        override var characterAcquisitionStartedAt: Long
-            get() = this@createPageRouterWorkflow.characterAcquisitionStartedAt
-            set(value) { this@createPageRouterWorkflow.characterAcquisitionStartedAt = value }
         override val clock: () -> Long
             get() = this@createPageRouterWorkflow.clock
         override var combatContext: LabyrinthCombatContext?
@@ -1683,12 +1619,6 @@ internal fun LabyrinthEntryRecognitionSession.createPageRouterWorkflow(): Labyri
         override var firstFrameWatchdog: Job?
             get() = this@createPageRouterWorkflow.firstFrameWatchdog
             set(value) { this@createPageRouterWorkflow.firstFrameWatchdog = value }
-        override var lastCharacterAcquisitionActionAt: Long
-            get() = this@createPageRouterWorkflow.lastCharacterAcquisitionActionAt
-            set(value) { this@createPageRouterWorkflow.lastCharacterAcquisitionActionAt = value }
-        override var lastObservedRoleRewardSelectionSignature: String?
-            get() = this@createPageRouterWorkflow.lastObservedRoleRewardSelectionSignature
-            set(value) { this@createPageRouterWorkflow.lastObservedRoleRewardSelectionSignature = value }
         override var lastPostEntryActionAt: Long
             get() = this@createPageRouterWorkflow.lastPostEntryActionAt
             set(value) { this@createPageRouterWorkflow.lastPostEntryActionAt = value }
@@ -1702,9 +1632,6 @@ internal fun LabyrinthEntryRecognitionSession.createPageRouterWorkflow(): Labyri
             get() = this@createPageRouterWorkflow.nodeSession
         override fun hasPendingNodeTransition(): Boolean =
             this@createPageRouterWorkflow.mapTransitionWorkflow.hasPendingNodeTransition()
-        override var pendingRelicSelection: LabyrinthRelicMatch?
-            get() = this@createPageRouterWorkflow.pendingRelicSelection
-            set(value) { this@createPageRouterWorkflow.pendingRelicSelection = value }
         override val plannedShopPurchaseRelicId: String?
             get() = this@createPageRouterWorkflow.plannedShopPurchaseRelicId
         override val plannedShopRoleImprintLabel: String?
@@ -1726,33 +1653,17 @@ internal fun LabyrinthEntryRecognitionSession.createPageRouterWorkflow(): Labyri
         override var postEntryUnknownSince: Long
             get() = this@createPageRouterWorkflow.postEntryUnknownSince
             set(value) { this@createPageRouterWorkflow.postEntryUnknownSince = value }
-        override var relicChoiceCommitAttempts: Int
-            get() = this@createPageRouterWorkflow.relicChoiceCommitAttempts
-            set(value) { this@createPageRouterWorkflow.relicChoiceCommitAttempts = value }
-        override var relicChoiceCommitted: Boolean
-            get() = this@createPageRouterWorkflow.relicChoiceCommitted
-            set(value) { this@createPageRouterWorkflow.relicChoiceCommitted = value }
-        override var relicChoiceCommittedAt: Long
-            get() = this@createPageRouterWorkflow.relicChoiceCommittedAt
-            set(value) { this@createPageRouterWorkflow.relicChoiceCommittedAt = value }
         override var relicDetailHoldSince: Long
             get() = this@createPageRouterWorkflow.relicDetailHoldSince
             set(value) { this@createPageRouterWorkflow.relicDetailHoldSince = value }
-        override var roleRewardBatchActive: Boolean
-            get() = this@createPageRouterWorkflow.roleRewardBatchActive
-            set(value) { this@createPageRouterWorkflow.roleRewardBatchActive = value }
         override val roleRewardChoicePlanner: LabyrinthRoleRewardChoicePlanner?
             get() = this@createPageRouterWorkflow.roleRewardChoicePlanner
         override val roleRewardChoiceUnavailableReason: String?
             get() = this@createPageRouterWorkflow.roleRewardChoiceUnavailableReason
-        override var roleRewardJoinedSequenceStarted: Boolean
-            get() = this@createPageRouterWorkflow.roleRewardJoinedSequenceStarted
-            set(value) { this@createPageRouterWorkflow.roleRewardJoinedSequenceStarted = value }
         override val shopImprintRewardConfirmedAt: Long
             get() = this@createPageRouterWorkflow.shopImprintRewardConfirmedAt
-        override var skipRoleRewardJoinedRecognition: Boolean
+        override val skipRoleRewardJoinedRecognition: Boolean
             get() = this@createPageRouterWorkflow.skipRoleRewardJoinedRecognition
-            set(value) { this@createPageRouterWorkflow.skipRoleRewardJoinedRecognition = value }
         override val specialEquipmentFlow: LabyrinthSpecialEquipmentFlow
             get() = this@createPageRouterWorkflow.specialEquipmentFlow
         override fun advanceBossTeamOnResultPage(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, previousPostEntryState: LabyrinthEntryPageState?): Unit =
@@ -1942,6 +1853,20 @@ internal fun LabyrinthEntryRecognitionSession.createPageRouterWorkflow(): Labyri
             this@createPageRouterWorkflow.rewardWorkflow.updateRewardAnimationProgress(sessionId = sessionId, result = result, timestampMillis = timestampMillis)
         override fun updateRewardPageProgress(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, previousPostEntryState: LabyrinthEntryPageState?, timestampMillis: Long): Unit =
             this@createPageRouterWorkflow.rewardWorkflow.updateRewardPageProgress(sessionId = sessionId, result = result, previousPostEntryState = previousPostEntryState, timestampMillis = timestampMillis)
+        override val characterAcquisitionActive: Boolean
+            get() = this@createPageRouterWorkflow.rewardWorkflow.isCharacterAcquisitionActive()
+        override fun updateRoleRewardJoinedRecognitionGate(result: LabyrinthEntryFrameResult) =
+            this@createPageRouterWorkflow.rewardWorkflow.updateRoleRewardJoinedRecognitionGate(result)
+        override fun resumeRoleRewardBatch(pageState: LabyrinthEntryPageState, timestampMillis: Long) =
+            this@createPageRouterWorkflow.rewardWorkflow.resumeRoleRewardBatch(pageState, timestampMillis)
+        override fun resetRelicSelectionOnPageEntry() =
+            this@createPageRouterWorkflow.rewardWorkflow.resetRelicSelectionOnPageEntry()
+        override fun observeRoleRewardSelectionSignature(signature: String): Boolean =
+            this@createPageRouterWorkflow.rewardWorkflow.observeRoleRewardSelectionSignature(signature)
+        override fun characterAcquisitionTimedOut(timestampMillis: Long): Boolean =
+            this@createPageRouterWorkflow.rewardWorkflow.characterAcquisitionTimedOut(timestampMillis)
+        override fun isRoleRewardBatchWaitingForJoin(): Boolean =
+            this@createPageRouterWorkflow.rewardWorkflow.isRoleRewardBatchWaitingForJoin()
     })
 
 internal fun LabyrinthEntryRecognitionSession.createPageActionWorkflow(): LabyrinthPageActionWorkflow =
@@ -1960,9 +1885,6 @@ internal fun LabyrinthEntryRecognitionSession.createPageActionWorkflow(): Labyri
         override var lastPostEntryActionLandedAt: Long
             get() = this@createPageActionWorkflow.lastPostEntryActionLandedAt
             set(value) { this@createPageActionWorkflow.lastPostEntryActionLandedAt = value }
-        override var pendingAcquiredCharacterId: String?
-            get() = this@createPageActionWorkflow.pendingAcquiredCharacterId
-            set(value) { this@createPageActionWorkflow.pendingAcquiredCharacterId = value }
         override var postEntryAttempts: Int
             get() = this@createPageActionWorkflow.postEntryAttempts
             set(value) { this@createPageActionWorkflow.postEntryAttempts = value }
@@ -2014,6 +1936,8 @@ internal fun LabyrinthEntryRecognitionSession.createPageActionWorkflow(): Labyri
             this@createPageActionWorkflow.runtimeStopFromRunLogic(reason = reason)
         override fun traceAction(label: String): Unit =
             this@createPageActionWorkflow.runtimeTraceAction(label = label)
+        override val pendingAcquiredCharacterId: String?
+            get() = this@createPageActionWorkflow.rewardWorkflow.pendingCharacterId()
     })
 
 internal fun LabyrinthEntryRecognitionSession.createPresentationWorkflow(): LabyrinthPresentationWorkflow =
@@ -2028,8 +1952,6 @@ internal fun LabyrinthEntryRecognitionSession.createPresentationWorkflow(): Laby
             get() = this@createPresentationWorkflow.nodeActionPlanner
         override val nodeSession: LabyrinthNodeSession?
             get() = this@createPresentationWorkflow.nodeSession
-        override val pendingAcquiredCharacterId: String?
-            get() = this@createPresentationWorkflow.pendingAcquiredCharacterId
         override val relicChoicePolicy: LabyrinthRelicChoicePolicy
             get() = this@createPresentationWorkflow.relicChoicePolicy
         override val relicFocusMark: LabyrinthRelicMark?

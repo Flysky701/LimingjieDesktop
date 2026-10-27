@@ -12,6 +12,7 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthRelicMatch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.CHARACTER_ACQUISITION_TIMEOUT_MILLIS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.MAX_SELECTION_COMMIT_ATTEMPTS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.POST_ENTRY_SELECTION_MIN_SCORE
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.POST_ENTRY_STABLE_FRAMES
@@ -21,37 +22,19 @@ internal interface LabyrinthRewardPort {
     var activeNodeType: Int?
     val activeRunAccountId: Long?
     val activeSessionId: AutomationSessionId?
-    var characterAcquisitionActive: Boolean
-    var characterAcquisitionClicks: Int
-    var characterAcquisitionStartedAt: Long
     val clock: () -> Long
-    var committedRoleRewardSelectionSignature: String?
-    var lastCharacterAcquisitionActionAt: Long
-    var lastObservedRoleRewardSelectionSignature: String?
-    var pendingAcquiredCharacterId: String?
-    val pendingAcquiredCharacterIds: MutableSet<String>
-    var pendingRelicSelection: LabyrinthRelicMatch?
     val persistenceMutex: Mutex
     val postBossStage: LabyrinthPostBossStage
     var postEntryAttempts: Int
     val postEntryStableFrames: Int
-    val relicAcquisitionGate: LabyrinthRelicAcquisitionGate
-    var relicChoiceCommitAttempts: Int
-    var relicChoiceCommitted: Boolean
-    var relicChoiceCommittedAt: Long
     val relicChoicePolicy: LabyrinthRelicChoicePolicy
     var relicFocusMark: LabyrinthRelicMark?
     val relicMarkStackCalibration: Map<LabyrinthRelicMark, Int>
     val relicStackLedger: LabyrinthRelicStackLedger
-    var roleRewardBatchActive: Boolean
-    var roleRewardChoiceCommitted: Boolean
     val roleRewardChoicePlanner: LabyrinthRoleRewardChoicePlanner?
     val roleRewardChoiceUnavailableReason: String?
-    var roleRewardDecisionCacheKey: String?
-    var roleRewardJoinedSequenceStarted: Boolean
     val runStateStore: LabyrinthRunStateStore?
     var skipRoleRewardJoinedRecognition: Boolean
-    var waitingForManualRoleSelection: Boolean
     fun anchorRect(result: LabyrinthEntryFrameResult, anchorId: String): EntryPixelRect?
     fun finishFromPlanner(sessionId: AutomationSessionId, reason: String): Unit
     fun nodeLog(message: String, warning: Boolean = false): Unit
@@ -59,6 +42,126 @@ internal interface LabyrinthRewardPort {
 
 /** 管理角色和遗物选择、连续奖励批次及获得确认。 */
 internal class LabyrinthRewardWorkflow(private val port: LabyrinthRewardPort) : LabyrinthRewardPort by port {
+    @Volatile
+    private var characterAcquisitionActive = false
+
+    @Volatile
+    private var characterAcquisitionClicks = 0
+
+    @Volatile
+    private var characterAcquisitionStartedAt = Long.MIN_VALUE
+
+    @Volatile
+    private var lastCharacterAcquisitionActionAt = Long.MIN_VALUE
+
+    @Volatile
+    private var committedRoleRewardSelectionSignature: String? = null
+
+    @Volatile
+    private var lastObservedRoleRewardSelectionSignature: String? = null
+
+    @Volatile
+    private var pendingAcquiredCharacterId: String? = null
+
+    /**
+     * Role rewards can be selected in a batch and only materialize as CHARACTER_JOINED popups
+     * after every selection has finished. Keep every selected id until its joined popup is
+     * positively observed; the public single id remains only a compact diagnostic head.
+     */
+    private val pendingAcquiredCharacterIds = linkedSetOf<String>()
+
+    @Volatile
+    private var pendingRelicSelection: LabyrinthRelicMatch? = null
+
+    private val relicAcquisitionGate = LabyrinthRelicAcquisitionGate()
+
+    /** How many times a lost relic tap has already been retried this round. */
+    private var relicChoiceCommitAttempts = 0
+
+    @Volatile
+    private var relicChoiceCommitted = false
+
+    /** When [relicChoiceCommitted] was last set, for the lost-tap retry (see [labyrinthSelectionCommitExpired]). */
+    private var relicChoiceCommittedAt = Long.MIN_VALUE
+
+    @Volatile
+    private var roleRewardBatchActive = false
+
+    @Volatile
+    private var roleRewardChoiceCommitted = false
+
+    private var roleRewardDecisionCacheKey: String? = null
+
+    @Volatile
+    private var roleRewardJoinedSequenceStarted = false
+
+    @Volatile
+    private var waitingForManualRoleSelection = false
+
+    fun isCharacterAcquisitionActive(): Boolean = characterAcquisitionActive
+
+    fun pendingCharacterId(): String? = pendingAcquiredCharacterId
+
+    /** Snapshot at the caller's observation point; never expose the acquisition queue itself. */
+    fun pendingCharacterIds(): Set<String> = synchronized(pendingAcquiredCharacterIds) {
+        pendingAcquiredCharacterIds.toSet()
+    }
+
+    fun recordEventCharacterConfirmation(confirmed: List<String>) {
+        synchronized(pendingAcquiredCharacterIds) {
+            pendingAcquiredCharacterIds += confirmed
+            pendingAcquiredCharacterId = pendingAcquiredCharacterIds.firstOrNull()
+        }
+    }
+
+    /** Keep the original post-publication read in persistence, rather than capturing it earlier. */
+    fun onPendingCharacterPublished(characterId: String?) {
+        pendingAcquiredCharacterId = characterId
+    }
+
+    fun clearManualRoleSelectionWait() {
+        waitingForManualRoleSelection = false
+    }
+
+    fun updateRoleRewardJoinedRecognitionGate(result: LabyrinthEntryFrameResult) {
+        val pageState = result.observation.state
+        if (skipRoleRewardJoinedRecognition &&
+            !labyrinthKeepsRoleRewardBatchOnPage(pageState, labyrinthIsRoleRewardPage(result))
+        ) skipRoleRewardJoinedRecognition = false
+    }
+
+    fun resumeRoleRewardBatch(pageState: LabyrinthEntryPageState, timestampMillis: Long) {
+        roleRewardBatchActive = true
+        if (pageState == LabyrinthEntryPageState.CHARACTER_JOINED) {
+            roleRewardJoinedSequenceStarted = true
+            characterAcquisitionActive = true
+            characterAcquisitionClicks = 0
+            characterAcquisitionStartedAt = timestampMillis
+            lastCharacterAcquisitionActionAt = Long.MIN_VALUE
+        }
+    }
+
+    fun resetRelicSelectionOnPageEntry() {
+        pendingRelicSelection = null
+        relicChoiceCommitted = false
+        relicChoiceCommittedAt = Long.MIN_VALUE
+        relicChoiceCommitAttempts = 0
+    }
+
+    /** A new candidate set starts a round even if the page enum and geometry did not change. */
+    fun observeRoleRewardSelectionSignature(signature: String): Boolean {
+        if (signature == lastObservedRoleRewardSelectionSignature) return false
+        lastObservedRoleRewardSelectionSignature = signature
+        return true
+    }
+
+    fun characterAcquisitionTimedOut(timestampMillis: Long): Boolean =
+        characterAcquisitionActive &&
+            characterAcquisitionStartedAt != Long.MIN_VALUE &&
+            timestampMillis - characterAcquisitionStartedAt > CHARACTER_ACQUISITION_TIMEOUT_MILLIS
+
+    fun isRoleRewardBatchWaitingForJoin(): Boolean = roleRewardBatchActive && !roleRewardJoinedSequenceStarted
+
     /**
      * Reconcile history-derived mark stacks with the value printed by the game itself.
      * Multiple cards with the same mark must agree before that mark is accepted as calibration.

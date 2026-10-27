@@ -19,7 +19,6 @@ internal interface LabyrinthEventPort {
     var activeNodeArea: Int?
     var activeNodeType: Int?
     val activeSessionId: AutomationSessionId?
-    val characterAcquisitionActive: Boolean
     val clock: () -> Long
     val combatContext: LabyrinthCombatContext?
     var eventActionAttempts: Int
@@ -35,8 +34,6 @@ internal interface LabyrinthEventPort {
     val eventFreeRoleSelectedCharacterIds: MutableSet<String>
     val lastPostEntryActionAt: Long
     val lastPostEntryActionLandedAt: Long
-    var pendingAcquiredCharacterId: String?
-    val pendingAcquiredCharacterIds: MutableSet<String>
     val relicChoicePolicy: LabyrinthRelicChoicePolicy
     val relicMarkStackCalibration: Map<LabyrinthRelicMark, Int>
     val roleRewardChoicePlanner: LabyrinthRoleRewardChoicePlanner?
@@ -63,6 +60,8 @@ internal interface LabyrinthEventPort {
     fun nodeLog(message: String, warning: Boolean = false): Unit
     fun postEntryIsRoleRewardPage(result: LabyrinthEntryFrameResult): Boolean
     fun traceWorkflow(owner: String, phase: String): Unit
+    fun pendingCharacterIds(): Set<String>
+    fun recordEventCharacterConfirmation(confirmed: List<String>)
 }
 
 /** 管理事件选项、拒绝记录、自由选角与事件动作回执。 */
@@ -247,9 +246,7 @@ internal class LabyrinthEventWorkflow(private val port: LabyrinthEventPort) : La
             _state.value.observedRelics,
             relicMarkStackCalibration,
         ).getValue(LabyrinthRelicMark.DEFENSE)
-        val pendingSelectedIds = synchronized(pendingAcquiredCharacterIds) {
-            pendingAcquiredCharacterIds.toSet()
-        }
+        val pendingSelectedIds = pendingCharacterIds()
         val acquiredIds = _state.value.joinedCharacters
             .map(LabyrinthJoinedCharacter::characterId)
             .plus(pendingSelectedIds)
@@ -433,10 +430,7 @@ if (
             clearShopChoiceImprintRolePending()
             val confirmed = eventFreeRoleConfirmIds.ifEmpty { listOfNotNull(eventFreeRoleCandidateId) }
             if (confirmed.isNotEmpty()) {
-                synchronized(pendingAcquiredCharacterIds) {
-                    pendingAcquiredCharacterIds += confirmed
-                    pendingAcquiredCharacterId = pendingAcquiredCharacterIds.firstOrNull()
-                }
+                recordEventCharacterConfirmation(confirmed)
             }
         }
         if (kind == LabyrinthPostEntryActionKind.SELECT_EVENT) {

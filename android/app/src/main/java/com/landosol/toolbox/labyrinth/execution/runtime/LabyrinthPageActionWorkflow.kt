@@ -19,7 +19,6 @@ internal interface LabyrinthPageActionPort {
     val clock: () -> Long
     var lastPostEntryActionAt: Long
     var lastPostEntryActionLandedAt: Long
-    var pendingAcquiredCharacterId: String?
     var postEntryAttempts: Int
     fun beginGuardedAction(): Boolean
     fun captureRoleRewardTap(roleRewardSelectedCharacterId: String?): LabyrinthRoleRewardTapContext
@@ -45,6 +44,7 @@ internal interface LabyrinthPageActionPort {
     fun resetPostEntryStall(): Unit
     suspend fun stopFromRunLogic(reason: String): Boolean
     fun traceAction(label: String): Unit
+    val pendingAcquiredCharacterId: String?
 }
 
 /** 统一派发页面点击，将执行器回执交回对应业务模块。 */

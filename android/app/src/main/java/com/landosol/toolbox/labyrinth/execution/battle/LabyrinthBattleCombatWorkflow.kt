@@ -43,7 +43,6 @@ internal interface LabyrinthBattleCombatPort {
     val singleBossFallbackToMultiAfterThreeFailures: Boolean
     val singleBossRetryCountBeforeMulti: Int
     val validatedRoute: LabyrinthRouteJson?
-    var waitingForManualRoleSelection: Boolean
     fun acknowledgeBattleTeamActionProgress(result: LabyrinthEntryFrameResult): Unit
     fun anchorRect(result: LabyrinthEntryFrameResult, anchorId: String): EntryPixelRect?
     fun clearCharacterAcquisitionContext(): Unit
@@ -66,6 +65,7 @@ internal interface LabyrinthBattleCombatPort {
     fun resetBattleTeamPageStall()
     fun invalidateBattleTeamRecommendation()
     fun clearBattleTeamSelectionPlanLog()
+    fun clearManualRoleSelectionWait()
 }
 
 /** 管理战斗等待、失败重试、Boss 模式切换和战斗边界重置。 */
@@ -129,7 +129,7 @@ internal class LabyrinthBattleCombatWorkflow(private val port: LabyrinthBattleCo
             LabyrinthBattleWaitDecision.WAIT -> {
                 acknowledgeBattleTeamActionProgress(result)
                 clearCharacterAcquisitionContext()
-                waitingForManualRoleSelection = false
+                clearManualRoleSelectionWait()
                 postEntryUnknownSince = Long.MIN_VALUE
                 resetPostEntryStall()
                 // Do not inherit reward animation evidence when battle ends on an unknown frame.

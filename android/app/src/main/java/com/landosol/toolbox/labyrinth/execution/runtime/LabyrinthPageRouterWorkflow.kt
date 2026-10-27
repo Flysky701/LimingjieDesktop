@@ -14,7 +14,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.CHARACTER_ACQUISITION_ACTION_INTERVAL_MILLIS
-import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.CHARACTER_ACQUISITION_TIMEOUT_MILLIS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.MAX_CHARACTER_ACQUISITION_CLICKS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.MAX_EVENT_ACTIONS
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.MAX_POST_BOSS_UNKNOWN_ATTEMPTS
@@ -35,21 +34,15 @@ internal interface LabyrinthPageRouterPort {
     val battleWait: LabyrinthBattleWaitPolicy
     val channelPromptMessage: String?
     val channelPromptVisibleUntil: Long
-    var characterAcquisitionActive: Boolean
-    var characterAcquisitionClicks: Int
-    var characterAcquisitionStartedAt: Long
     val clock: () -> Long
     var combatContext: LabyrinthCombatContext?
     var entryPhaseComplete: Boolean
     var existingRunResumeHandoffArmed: Boolean
     var firstFrameWatchdog: Job?
-    var lastCharacterAcquisitionActionAt: Long
-    var lastObservedRoleRewardSelectionSignature: String?
     var lastPostEntryActionAt: Long
     var lastPostEntryActionLandedAt: Long
     var lastPostEntryState: LabyrinthEntryPageState?
     val nodeSession: LabyrinthNodeSession?
-    var pendingRelicSelection: LabyrinthRelicMatch?
     val plannedShopPurchaseRelicId: String?
     val plannedShopRoleImprintLabel: String?
     val postBossStage: LabyrinthPostBossStage
@@ -58,16 +51,11 @@ internal interface LabyrinthPageRouterPort {
     var postEntryStallMessage: String?
     var postEntryStallSince: Long
     var postEntryUnknownSince: Long
-    var relicChoiceCommitAttempts: Int
-    var relicChoiceCommitted: Boolean
-    var relicChoiceCommittedAt: Long
     var relicDetailHoldSince: Long
-    var roleRewardBatchActive: Boolean
     val roleRewardChoicePlanner: LabyrinthRoleRewardChoicePlanner?
     val roleRewardChoiceUnavailableReason: String?
-    var roleRewardJoinedSequenceStarted: Boolean
     val shopImprintRewardConfirmedAt: Long
-    var skipRoleRewardJoinedRecognition: Boolean
+    val skipRoleRewardJoinedRecognition: Boolean
     val specialEquipmentFlow: LabyrinthSpecialEquipmentFlow
     fun advanceBossTeamOnResultPage(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, previousPostEntryState: LabyrinthEntryPageState?): Unit
     fun clearCharacterAcquisitionContext(): Unit
@@ -208,6 +196,13 @@ internal interface LabyrinthPageRouterPort {
     fun traceWorkflow(owner: String, phase: String): Unit
     fun updateRewardAnimationProgress(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, timestampMillis: Long): Unit
     fun updateRewardPageProgress(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, previousPostEntryState: LabyrinthEntryPageState?, timestampMillis: Long): Unit
+    val characterAcquisitionActive: Boolean
+    fun updateRoleRewardJoinedRecognitionGate(result: LabyrinthEntryFrameResult)
+    fun resumeRoleRewardBatch(pageState: LabyrinthEntryPageState, timestampMillis: Long)
+    fun resetRelicSelectionOnPageEntry()
+    fun observeRoleRewardSelectionSignature(signature: String): Boolean
+    fun characterAcquisitionTimedOut(timestampMillis: Long): Boolean
+    fun isRoleRewardBatchWaitingForJoin(): Boolean
 }
 
 /** 保持原有页面优先级与动作预算，协调各业务对当前帧的处理。 */
@@ -274,9 +269,7 @@ internal class LabyrinthPageRouterWorkflow(private val port: LabyrinthPageRouter
             traceWorkflow("recovery", "session-block")
             return
         }
-        if (skipRoleRewardJoinedRecognition &&
-            !labyrinthKeepsRoleRewardBatchOnPage(pageState, labyrinthIsRoleRewardPage(result))
-        ) skipRoleRewardJoinedRecognition = false
+        updateRoleRewardJoinedRecognitionGate(result)
         val shopJoinedReward = labyrinthShopJoinedRewardOwnsRoute(result, shopImprintRewardConfirmedAt, timestampMillis)
         if (!current.dryRun &&
             !entryPhaseComplete &&
@@ -286,14 +279,7 @@ internal class LabyrinthPageRouterWorkflow(private val port: LabyrinthPageRouter
             // Do not let the opening invitation planner interpret that CHARACTER_JOINED page.
             entryPhaseComplete = true
             existingRunResumeHandoffArmed = false
-            roleRewardBatchActive = true
-            if (pageState == LabyrinthEntryPageState.CHARACTER_JOINED) {
-                roleRewardJoinedSequenceStarted = true
-                characterAcquisitionActive = true
-                characterAcquisitionClicks = 0
-                characterAcquisitionStartedAt = timestampMillis
-                lastCharacterAcquisitionActionAt = Long.MIN_VALUE
-            }
+            resumeRoleRewardBatch(pageState, timestampMillis)
             _state.value = _state.value.copy(
                 message = if (pageState == LabyrinthEntryPageState.CHARACTER_JOINED) {
                     if (shopJoinedReward) "商店印记触发角色加入，已交接奖励流程"
@@ -455,10 +441,7 @@ internal class LabyrinthPageRouterWorkflow(private val port: LabyrinthPageRouter
             resetPostEntryStall()
             resetEventChoiceCommit()
             if (pageState == LabyrinthEntryPageState.RELIC_CHOICE) {
-                pendingRelicSelection = null
-                relicChoiceCommitted = false
-                relicChoiceCommittedAt = Long.MIN_VALUE
-                relicChoiceCommitAttempts = 0
+                resetRelicSelectionOnPageEntry()
             }
             if (pageState == LabyrinthEntryPageState.BATTLE_TEAM_SELECTION) {
                 resetBattleTeamExecutionTracking()
@@ -466,11 +449,10 @@ internal class LabyrinthPageRouterWorkflow(private val port: LabyrinthPageRouter
         }
         if (roleRewardPage &&
             roleRewardSelectionSignature != null &&
-            roleRewardSelectionSignature != lastObservedRoleRewardSelectionSignature
+            observeRoleRewardSelectionSignature(roleRewardSelectionSignature)
         ) {
             // A new choice round can reuse the exact same page enum and geometry. Treat the
             // candidate-set change as a page transition for stability/attempt accounting.
-            lastObservedRoleRewardSelectionSignature = roleRewardSelectionSignature
             postEntryStableFrames = 0
             postEntryAttempts = 0
         }
@@ -543,10 +525,7 @@ internal class LabyrinthPageRouterWorkflow(private val port: LabyrinthPageRouter
             activeNodeType == LabyrinthNodeTypes.EVENT -> MAX_EVENT_ACTIONS
             else -> MAX_POST_ENTRY_ATTEMPTS
         }
-        if (characterAcquisitionActive &&
-            characterAcquisitionStartedAt != Long.MIN_VALUE &&
-            timestampMillis - characterAcquisitionStartedAt > CHARACTER_ACQUISITION_TIMEOUT_MILLIS
-        ) {
+        if (characterAcquisitionTimedOut(timestampMillis)) {
             finishFromPlanner(sessionId, "角色获得流程超过限定时间，已停止并保留诊断状态")
             return
         }
@@ -668,7 +647,7 @@ internal class LabyrinthPageRouterWorkflow(private val port: LabyrinthPageRouter
                         }
                     LabyrinthEntryPageState.UNKNOWN ->
                         when {
-                            roleRewardBatchActive && !roleRewardJoinedSequenceStarted ->
+                            isRoleRewardBatchWaitingForJoin() ->
                                 "角色奖励批次选择过渡中；等待下一次三选一，不执行盲点"
                             finalAnimationActive -> "最终结算动画中，程序会在有限次数内推进"
                             else -> "未知页面，自动点击已暂停；等待页面识别恢复"

@@ -44,7 +44,6 @@ internal interface LabyrinthMapNavigationPort {
     val actionScope: CoroutineScope
     val activeRunAccountId: Long?
     val activeSessionId: AutomationSessionId?
-    val characterAcquisitionActive: Boolean
     val clock: () -> Long
     var combatContext: LabyrinthCombatContext?
     var entryPhaseComplete: Boolean
@@ -117,6 +116,7 @@ internal interface LabyrinthMapNavigationPort {
     fun traceAction(label: String): Unit
     fun traceReject(reason: String): Unit
     fun traceWorkflow(owner: String, phase: String): Unit
+    val characterAcquisitionActive: Boolean
 }
 
 /** 初始化路线、定位目标节点并提出节点点击。 */

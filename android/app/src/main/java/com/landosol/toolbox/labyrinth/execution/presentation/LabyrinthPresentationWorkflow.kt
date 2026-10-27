@@ -29,7 +29,6 @@ internal interface LabyrinthPresentationPort {
     val captureActive: () -> Boolean
     val nodeActionPlanner: LabyrinthNodeActionPlanner
     val nodeSession: LabyrinthNodeSession?
-    val pendingAcquiredCharacterId: String?
     val relicChoicePolicy: LabyrinthRelicChoicePolicy
     val relicFocusMark: LabyrinthRelicMark?
     val relicMarkStackCalibration: Map<LabyrinthRelicMark, Int>

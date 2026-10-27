@@ -425,21 +425,10 @@ class LabyrinthEntryRecognitionSession(
     @Volatile
     internal var lastObservedPageState: LabyrinthEntryPageState? = null
 
-    @Volatile
-    internal var pendingAcquiredCharacterId: String? = null
-
-    /**
-     * Role rewards can be selected in a batch and only materialize as CHARACTER_JOINED popups
-     * after every selection has finished. Keep every selected id until its joined popup is
-     * positively observed; the public single id remains only a compact diagnostic head.
-     */
-    internal val pendingAcquiredCharacterIds = linkedSetOf<String>()
-
+    // Published to the frame processor; reward workflow owns updates through its port.
     @Volatile
     var skipRoleRewardJoinedRecognition: Boolean = false
         internal set
-
-    internal var roleRewardDecisionCacheKey: String? = null
 
     @Volatile
     internal var pendingShopPurchase: LabyrinthRelicMatch? = null
@@ -471,20 +460,6 @@ class LabyrinthEntryRecognitionSession(
 
     @Volatile
     internal var shopRelicPurchasesThisCycle = 0
-
-    @Volatile
-    internal var pendingRelicSelection: LabyrinthRelicMatch? = null
-
-    @Volatile
-    internal var relicChoiceCommitted = false
-
-    /** When [relicChoiceCommitted] was last set, for the lost-tap retry (see [labyrinthSelectionCommitExpired]). */
-    internal var relicChoiceCommittedAt = Long.MIN_VALUE
-
-    /** How many times a lost relic tap has already been retried this round. */
-    internal var relicChoiceCommitAttempts = 0
-
-    internal val relicAcquisitionGate = LabyrinthRelicAcquisitionGate()
 
     @Volatile
     internal var eventChoiceCommitted = false
@@ -573,37 +548,7 @@ class LabyrinthEntryRecognitionSession(
     internal val battleWait = LabyrinthBattleWaitPolicy()
 
     @Volatile
-    internal var characterAcquisitionActive = false
-
-    @Volatile
-    internal var characterAcquisitionClicks = 0
-
-    @Volatile
-    internal var characterAcquisitionStartedAt = Long.MIN_VALUE
-
-    @Volatile
-    internal var lastCharacterAcquisitionActionAt = Long.MIN_VALUE
-
-    @Volatile
-    internal var waitingForManualRoleSelection = false
-
-    @Volatile
-    internal var roleRewardChoiceCommitted = false
-
-    @Volatile
     internal var existingRunResumeHandoffArmed = false
-
-    @Volatile
-    internal var roleRewardBatchActive = false
-
-    @Volatile
-    internal var committedRoleRewardSelectionSignature: String? = null
-
-    @Volatile
-    internal var roleRewardJoinedSequenceStarted = false
-
-    @Volatile
-    internal var lastObservedRoleRewardSelectionSignature: String? = null
 
     @Volatile
     internal var postBossStage = LabyrinthPostBossStage.NONE
