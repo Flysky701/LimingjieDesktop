@@ -122,6 +122,7 @@ tasks.register<Zip>("packagePortableZip") {
     from(listOf(rootProject.file("../README-desktop.md"), rootProject.file("../LICENSE"), rootProject.file("../THIRD_PARTY_NOTICES.md"))) { into("LimingjieAssistant") }
     from(rootProject.file("../docs/desktop/USER_CHECKLIST.md")) { into("LimingjieAssistant"); rename { "用户验收清单.md" } }
     from(rootProject.file("../docs/desktop/reports/BASELINE-DESKTOP8.md")) { into("LimingjieAssistant"); rename { "基础版说明.md" } }
+    from(rootProject.file("../docs/desktop/reports/ADB-DAEMON-DESKTOP9.md")) { into("LimingjieAssistant"); rename { "ADB修复说明.md" } }
     from(rootProject.file("licenses")) { into("LimingjieAssistant/licenses") }
     from(rootProject.file("device/licenses")) { into("LimingjieAssistant/licenses/MaaTouch") }
     from(rootProject.file("ocr/licenses")) { into("LimingjieAssistant/licenses/OCR") }

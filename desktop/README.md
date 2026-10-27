@@ -1,6 +1,6 @@
 # 桌面开发与构建
 
-**当前版本：1.0.18+desktop.8 测试候选版**。独立 Gradle 多模块工程，使用 x64 JDK 21，桌面构建无需 Android SDK。冻结范围见[基础版说明](../docs/desktop/reports/BASELINE-DESKTOP8.md)。
+**当前版本：1.0.18+desktop.9 测试候选版**。独立 Gradle 多模块工程，使用 x64 JDK 21，桌面构建无需 Android SDK。冻结范围见[基础版说明](../docs/desktop/reports/BASELINE-DESKTOP8.md)，本次修复见[ADB 修复记录](../docs/desktop/reports/ADB-DAEMON-DESKTOP9.md)。
 
 工具链：Gradle 8.12.1、Kotlin 2.1.20、Compose Desktop 1.8.2。配置位于 `gradle/wrapper/gradle-wrapper.properties` 和 `gradle/libs.versions.toml`。
 
@@ -80,4 +80,4 @@ desktop\gradlew.bat -p desktop :app:test --tests '*SharedPackagedRuntimeTest' '-
 | 详细报告 | 手动选择 `upload_reports`，保留 7 天 |
 | [Upstream Android Compatibility](../.github/workflows/android-ci.yml) | Android 代码/构建改动或手动触发；使用 JDK 17 执行 lint、单测和 APK 编译，仅作兼容性检查 |
 
-desktop.8 当前为本地测试候选，尚未创建或推送正式发布标签。测试完成后使用与源码版本一致的 `desktop-v1.0.18+desktop.8` 标签；已有 desktop.7 标签保留。普通说明文档变化跳过构建；同一分支或 PR 的旧运行自动取消。Gradle 使用构建缓存，`main` 写回，其他分支只读。默认将结果写入运行摘要，按需上传文件；标签构建与 GitHub Release 分别管理。
+desktop.9 当前为本地测试候选，尚未创建或推送正式发布标签。测试完成后使用与源码版本一致的 `desktop-v1.0.18+desktop.9` 标签；已有 desktop.7 标签保留。普通说明文档变化跳过构建；同一分支或 PR 的旧运行自动取消。Gradle 使用构建缓存，`main` 写回，其他分支只读。默认将结果写入运行摘要，按需上传文件；标签构建与 GitHub Release 分别管理。

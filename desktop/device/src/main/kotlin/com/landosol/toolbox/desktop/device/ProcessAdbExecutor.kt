@@ -91,8 +91,13 @@ class ProcessAdbExecutor(
     companion object {
         fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
         internal fun terminate(process: Process) {
-            process.descendants().use { children -> children.toList().asReversed().forEach { if (it.isAlive) it.destroyForcibly() } }
-            if (process.isAlive) process.destroyForcibly()
+            // Windows can still enumerate a completed client's descendants. The ADB daemon
+            // deliberately outlives start-server (and other CLI commands that start it).
+            // Only terminate a process tree while its owned command is still running.
+            if (process.isAlive) {
+                process.descendants().use { children -> children.toList().asReversed().forEach { if (it.isAlive) it.destroyForcibly() } }
+                process.destroyForcibly()
+            }
             try { process.outputStream.close() } catch (_: IOException) { }
             try { process.inputStream.close() } catch (_: IOException) { }
             try { process.errorStream.close() } catch (_: IOException) { }
