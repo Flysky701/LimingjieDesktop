@@ -140,18 +140,19 @@ fun main(args: Array<String>) {
                 }
             }
         } }
-        if (trayAvailable) Tray(icon, state = trayState, tooltip = "黎明界助手 · ${instances.size} 台设备", onAction = { visible = true; windowState.isMinimized = false }) {
-            Item("显示主窗口", onClick = { visible = true; windowState.isMinimized = false })
-            Separator()
-            Item(if (activeConsole.overlay?.paused == true) "继续当前标签" else "暂停当前标签", enabled = activeConsole.overlay != null && !exiting, onClick = { selected?.link?.let { action { it.request(ControlOps.PAUSE) } } })
-            Item("停止当前标签", enabled = selected != null && !exiting, onClick = { selected?.link?.let { action { it.request(ControlOps.STOP) } } })
-            Item("停止全部", enabled = instances.isNotEmpty() && !exiting, onClick = { action { model.stopAll() } })
-            Separator()
-            Item("退出", onClick = { visible = true; closeRequested() })
-        }
         Window(onCloseRequest = ::closeRequested, state = windowState, visible = visible, title = "黎明界助手 ${AppVersion.name}", icon = icon) {
             window.minimumSize = Dimension(1100, 700)
             DesktopTheme(preferences) {
+                // Keep the tray in the same resolved theme (including system changes) as the window.
+                if (trayAvailable) DesktopTray(icon, state = trayState, tooltip = "黎明界助手 · ${instances.size} 台设备", onAction = { visible = true; windowState.isMinimized = false }) {
+                    Item("显示主窗口", onClick = { visible = true; windowState.isMinimized = false })
+                    Separator()
+                    Item(if (activeConsole.overlay?.paused == true) "继续当前标签" else "暂停当前标签", enabled = activeConsole.overlay != null && !exiting, onClick = { selected?.link?.let { action { it.request(ControlOps.PAUSE) } } })
+                    Item("停止当前标签", enabled = selected != null && !exiting, onClick = { selected?.link?.let { action { it.request(ControlOps.STOP) } } })
+                    Item("停止全部", enabled = instances.isNotEmpty() && !exiting, onClick = { action { model.stopAll() } })
+                    Separator()
+                    Item("退出", onClick = { visible = true; closeRequested() })
+                }
                 SharedRunTabsApp(sharedHost.control, tabs, selectedId, callbacks,
                     devices.map { ManagedDeviceUi(it.id, it.serial, it.name, it.sessionId, it.boundAccountId, it.connected, it.busy, it.status, it.connecting) }, window, error,
                     windowVisible = visible && !windowState.isMinimized)
