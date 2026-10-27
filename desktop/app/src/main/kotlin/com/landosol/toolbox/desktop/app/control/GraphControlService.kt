@@ -70,6 +70,8 @@ class GraphControlService(
     }
 
     override suspend fun snapshot(includePreview: Boolean): JsonObject = withContext(Dispatchers.Main) {
+        graph.setPreviewRequested(includePreview)
+        if (!includePreview) { previewTimestamp = null; previewPng = null }
         releaseAccountIfIdle()
         refreshCaptcha()
         val accounts = graph.accounts.uiState.value

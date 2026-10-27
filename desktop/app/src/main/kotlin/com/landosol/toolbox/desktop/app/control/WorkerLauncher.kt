@@ -61,6 +61,7 @@ private class ProcessWorkerLink(
     private val closed = CompletableDeferred<Unit>()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
     private val selected = AtomicBoolean(true)
+    private val previewVisible = AtomicBoolean(false)
     @Volatile private var wire: WorkerWire? = null
     @Volatile private var server: ServerSocket? = null
     @Volatile private var process: Process? = null
@@ -101,6 +102,7 @@ private class ProcessWorkerLink(
             peer.socket.soTimeout = receiveTimeoutMillis
             peer.write(wireMessage("selected", instanceId, workerRunId) { put("value", selected.get()) })
             mutableConnection.value = WorkerConnectionStatus.CONNECTED
+            writePreviewVisibility()
             ready.complete(Unit)
             work.launch(Dispatchers.IO) {
                 while (isActive && !intentionalClose.get() && mutableConnection.value == WorkerConnectionStatus.CONNECTED) {
@@ -168,6 +170,19 @@ private class ProcessWorkerLink(
             runCatching { wire?.write(wireMessage("selected", instanceId, workerRunId) { put("value", selected) }) }
                 .onFailure { lose("预览连接已中断") }
         }
+    }
+
+    override fun setPreviewVisible(visible: Boolean) {
+        if (previewVisible.getAndSet(visible) == visible) return
+        if (!intentionalClose.get() && mutableConnection.value == WorkerConnectionStatus.CONNECTED) work.launch(Dispatchers.IO) {
+            // Read the latest value when writing so rapid tab/collapse changes cannot replay an old request.
+            runCatching { writePreviewVisibility() }
+                .onFailure { lose("预览连接已中断") }
+        }
+    }
+
+    private fun writePreviewVisibility() = synchronized(previewVisible) {
+        wire?.write(wireMessage("preview.visible", instanceId, workerRunId) { put("value", previewVisible.get()) })
     }
 
     override suspend fun shutdown(): Unit = withContext(NonCancellable + Dispatchers.IO) {

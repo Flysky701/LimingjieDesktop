@@ -65,6 +65,13 @@ class DesktopGraphIntegrationTest {
             assertTrue(recognized.running); assertTrue(recognized.dryRun)
             assertEquals(LabyrinthEntryPageState.SHOP, recognized.lastResult?.observation?.state)
             assertNotNull(graph.preview.value); assertNotNull(CaptureFrameBus.currentOwner())
+            val previewBeforeHide = graph.preview.value!!.timestampMillis
+            graph.setPreviewRequested(false)
+            assertNull(graph.preview.value)
+            withTimeout(5_000) { graph.labyrinthEntryRecognitionSession.state.first { it.frameCount > recognized.frameCount } }
+            assertNull("Recognition must not repopulate a hidden preview", graph.preview.value)
+            graph.setPreviewRequested(true)
+            withTimeout(3_000) { graph.preview.first { it != null && it.timestampMillis > previewBeforeHide } }
             withTimeout(3000) { while (powerMode(graph) != PowerMode.VISUAL) delay(10) }
             assertEquals(0, fake.acceptedActions.get())
             val sessionId = checkNotNull(recognized.sessionId)

@@ -28,12 +28,16 @@ class WorkerTransportTest {
         val a = launcher.start(UUID.randomUUID().toString(), "one", aDirectory)
         val b = launcher.start(UUID.randomUUID().toString(), "two", temporary.newFolder("two").toPath())
         try {
+            // Remember preview demand even if the child has not connected yet.
+            b.setPreviewVisible(true)
             withTimeout(30_000) {
                 a.connection.first { it != WorkerConnectionStatus.STARTING }
                 b.connection.first { it != WorkerConnectionStatus.STARTING }
             }
             assertEquals(a.error.value, WorkerConnectionStatus.CONNECTED, a.connection.value)
             assertEquals(b.error.value, WorkerConnectionStatus.CONNECTED, b.connection.value)
+            withTimeout(5_000) { a.snapshots.first { it["preview"]?.jsonPrimitive?.booleanOrNull == false } }
+            withTimeout(5_000) { b.snapshots.first { it["preview"]?.jsonPrimitive?.booleanOrNull == true } }
             val first = a.request("add", buildJsonObject { put("add", 3) })
             val second = b.request("add", buildJsonObject { put("add", 7) })
             assertEquals(a.instanceId, first["instance"]!!.jsonPrimitive.content)
@@ -42,9 +46,18 @@ class WorkerTransportTest {
             assertEquals(3, first["count"]!!.jsonPrimitive.int)
             assertEquals(7, second["count"]!!.jsonPrimitive.int)
             assertTrue(runCatching { a.request("reject") }.exceptionOrNull()?.message.orEmpty().contains("fixture rejection"))
+            a.setPreviewVisible(true)
+            withTimeout(5_000) { a.snapshots.first { it["preview"]?.jsonPrimitive?.booleanOrNull == true } }
             a.setSelected(false); b.setSelected(true)
             withTimeout(5_000) { a.snapshots.first { it["preview"]?.jsonPrimitive?.booleanOrNull == false } }
+            a.setPreviewVisible(false); a.setSelected(true)
+            // Commands and state continue when the active device is displaying logs.
             assertEquals(3, a.request("read")["count"]!!.jsonPrimitive.int)
+            a.setPreviewVisible(true)
+            withTimeout(5_000) { a.snapshots.first { it["preview"]?.jsonPrimitive?.booleanOrNull == true } }
+            repeat(10) { a.setPreviewVisible(false); a.setPreviewVisible(true) }
+            a.setPreviewVisible(false)
+            withTimeout(5_000) { a.snapshots.first { it["preview"]?.jsonPrimitive?.booleanOrNull == false } }
             a.shutdown()
             assertEquals(WorkerConnectionStatus.CLOSED, a.connection.value)
             assertEquals("revoked=true", Files.readString(aDirectory.resolve("shutdown.marker")))

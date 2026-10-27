@@ -1,8 +1,8 @@
 # Windows 桌面版使用指南
 
-适用版本：**1.0.18+desktop.9 测试候选版**。
+适用版本：**1.0.18+desktop.10 测试候选版**。
 
-本版本用于发布前测试，在 desktop.8 基础版上修复 ADB 冷启动问题，变更范围见随包的 `基础版说明.md` 和 `ADB修复说明.md`。建议解压到独立目录进行测试，旧程序和原数据保留在原处。
+本版本用于发布前测试，保留 ADB 冷启动修复，增加预览按需生成。变更范围见随包的 `基础版说明.md`、`ADB修复说明.md` 和 `预览优化说明.md`。建议解压到独立目录进行测试，旧程序和原数据保留在原处。
 
 助手在 Windows 中提供运行、账号、策略、设备、记录和设置六个页面。模拟器只需运行游戏。
 
@@ -13,7 +13,7 @@
 1. 下载 Windows ZIP 和同名 `.sha256` 文件，核对校验值：
 
    ```powershell
-   Get-FileHash .\LimingjieAssistant-desktop-1.0.18+desktop.9-win-x64.zip -Algorithm SHA256
+   Get-FileHash .\LimingjieAssistant-desktop-1.0.18+desktop.10-win-x64.zip -Algorithm SHA256
    ```
 
 2. 将整个 `LimingjieAssistant` 文件夹解压到可写目录，例如 `D:\Tools\LimingjieAssistant`。

@@ -240,15 +240,25 @@ class DesktopAppGraph(
     private val actionDevice: DeviceService = ResolutionGuardedDevice(device, resolutionGuard)
     val deviceConnection = DeviceConnectionActions(device, { settings.state.value.adbPath }, { log.add(it, true) })
     private val previewState = MutableStateFlow<CapturePixels?>(null)
+    private val previewLock = Any()
+    @Volatile private var previewRequested = true
+    @Volatile private var lastCapturedFrameMillis = 0L
     val preview = previewState.asStateFlow()
     val captureService = DesktopCaptureService(
         source = { device.capture().let {
             resolutionGuard.observe(it.width, it.height)
+            lastCapturedFrameMillis = it.timestampMillis
             CapturePixels(it.width, it.height, it.pixels, it.timestampMillis)
         } },
-        preview = { previewState.value = it }, onWarning = { log.add(it, true) }, onLost = { stopAll(it) },
+        preview = { synchronized(previewLock) { if (previewRequested) previewState.value = it } },
+        onWarning = { log.add(it, true) }, onLost = { stopAll(it) },
         deferFrame = { resolutionGuard.deferTransitionFrame(it.width, it.height) },
+        previewEnabled = { previewRequested },
     )
+    fun setPreviewRequested(requested: Boolean) = synchronized(previewLock) {
+        previewRequested = requested
+        if (!requested) previewState.value = null
+    }
     private val viewModels = androidx.lifecycle.ViewModelStore()
     val accounts by lazy { com.landosol.toolbox.account.AccountViewModel(accountRepository).also { viewModels.put("accounts", it) } }
     private val diagnostics by lazy { com.landosol.toolbox.labyrinth.debug.LabyrinthRuntimeDiagnostics(context).also { diagnostics ->
@@ -258,7 +268,7 @@ class DesktopAppGraph(
                 .put("model", ready?.identity?.model ?: "unknown").put("width", ready?.width ?: 0).put("height", ready?.height ?: 0)
                 .put("captureMode", ready?.selectedMode?.name ?: "none").put("captureRunning", CaptureStateRegistry.isActive())
                 .put("touchReady", ready?.touchReady ?: false).put("awake", ready?.awake ?: false)
-                .put("lastFrameMillis", previewState.value?.timestampMillis ?: 0)
+                .put("lastFrameMillis", lastCapturedFrameMillis)
                 .put("screenshotP95Millis", ready?.timing?.firstOrNull { it.mode == ready.selectedMode }?.p95Millis ?: 0)
         }
     } }
@@ -1005,7 +1015,7 @@ class DesktopAppGraph(
         }
     }
 
-    suspend fun disconnectDevice() { check(!busy) { "请先停止任务" }; resolutionGuard.disarm(clearStatus = true); deviceConnection.disconnect { captureService.stopAndJoin("断开设备") }; previewState.value = null }
+    suspend fun disconnectDevice() { check(!busy) { "请先停止任务" }; resolutionGuard.disarm(clearStatus = true); deviceConnection.disconnect { captureService.stopAndJoin("断开设备") }; previewState.value = null; lastCapturedFrameMillis = 0L }
     suspend fun recheckResolution(): VisualResolutionStatus {
         check(!busy) { "请先停止任务，再重新检查画面尺寸" }
         return resolutionGuard.recheck().also { log.add(it.message, !it.supported) }
@@ -1096,7 +1106,8 @@ class DesktopAppGraph(
                     { labyrinthDebugDashboard?.close(); Unit }, { diagnostics.close() }, { database.close() }, { power.close() }, { network.close() })
                     .forEach { release -> runCatching(release).onFailure { Log.e(APP_LOG_TAG, "释放桌面资源失败", it) } }
                 DesktopBindings.release(installedServices)
-                previewState.value = null
+                setPreviewRequested(false)
+                lastCapturedFrameMillis = 0L
             }
         }
     }

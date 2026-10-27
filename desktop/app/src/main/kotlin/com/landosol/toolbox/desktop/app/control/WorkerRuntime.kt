@@ -23,6 +23,7 @@ internal suspend fun runWorkerTransport(
     val finished = CompletableDeferred<Unit>()
     val closing = AtomicBoolean(false)
     val selected = AtomicBoolean(true)
+    val previewVisible = AtomicBoolean(false)
     val lastMessage = AtomicLong(System.nanoTime())
     val sequence = AtomicLong()
     val requests = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
@@ -50,6 +51,7 @@ internal suspend fun runWorkerTransport(
                     when (message.wireString("kind")) {
                         "ping" -> wire.write(wireMessage("pong", profileId, runId))
                         "selected" -> selected.set((message["value"] as? JsonPrimitive)?.booleanOrNull == true)
+                        "preview.visible" -> previewVisible.set((message["value"] as? JsonPrimitive)?.booleanOrNull == true)
                         "request" -> {
                             val requestId = message.wireString("requestId") ?: continue
                             val op = message.wireString("op") ?: continue
@@ -88,7 +90,7 @@ internal suspend fun runWorkerTransport(
         work.launch {
             while (isActive && !closing.get()) {
                 try {
-                    val state = domain.snapshot(selected.get())
+                    val state = domain.snapshot(selected.get() && previewVisible.get())
                     wire.write(wireMessage("state", profileId, runId) { put("sequence", sequence.incrementAndGet()); put("state", state) })
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { stop("状态连接已失效，任务已停止") }

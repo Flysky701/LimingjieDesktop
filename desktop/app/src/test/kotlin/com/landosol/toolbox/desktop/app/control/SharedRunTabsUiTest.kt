@@ -132,6 +132,33 @@ class SharedRunTabsUiTest {
         compose.runOnIdle{assertTrue(a.commands.isEmpty());assertTrue(b.commands.isEmpty());assertTrue(global.commands.isEmpty())}
     }
 
+    @Test fun previewsOnlySubscribeWhileExpandedOnTheVisibleRunPage(){
+        val global=FakePort("global",accounts=listOf(alice,bob))
+        val a=FakePort("a",alice,busy=true,rightTab="preview")
+        val b=FakePort("b",bob,busy=true,rightTab="preview")
+        var selected by mutableStateOf("a")
+        var windowVisible by mutableStateOf(true)
+        compose.setContent{SharedRunTabsApp(global,listOf(tab(a,alice),tab(b,bob)),selected,callbacks(select={selected=it}),windowVisible=windowVisible)}
+        compose.waitUntil(5_000){a.previewSubscribed&&!b.previewSubscribed}
+        compose.onNode(hasText("收起画面") and hasAnyAncestor(hasTestTag("run-a"))).performClick()
+        compose.waitUntil(5_000){!a.previewSubscribed}
+        compose.onNode(hasText("展开画面") and hasAnyAncestor(hasTestTag("run-a"))).performClick()
+        compose.waitUntil(5_000){a.previewSubscribed}
+        compose.runOnIdle{windowVisible=false}
+        compose.waitUntil(5_000){!a.previewSubscribed&&!b.previewSubscribed}
+        compose.runOnIdle{windowVisible=true}
+        compose.waitUntil(5_000){a.previewSubscribed}
+        compose.onNodeWithText("设备 b · 共享乙").performClick()
+        compose.waitUntil(5_000){!a.previewSubscribed&&b.previewSubscribed}
+        compose.onNodeWithText("账号").performClick()
+        compose.waitUntil(5_000){!a.previewSubscribed&&!b.previewSubscribed}
+        compose.onNodeWithText("运行").performClick()
+        compose.waitUntil(5_000){b.previewSubscribed}
+        compose.runOnIdle{b.snapshots.value=JsonObject(b.snapshots.value+("preferences" to ControlModelCodec.encode(DesktopPreferences(rightTab="logs"))))}
+        compose.waitUntil(5_000){!b.previewSubscribed}
+        compose.runOnIdle{assertFalse(a.commands.any{it==ControlOps.START||it==ControlOps.STOP});assertTrue(b.commands.isEmpty())}
+    }
+
     @Test fun preparingADeviceDisplaysItsPhaseAndDisablesRepeatedConnection(){
         val global=FakePort("global")
         val a=FakePort("a")
@@ -161,13 +188,13 @@ class SharedRunTabsUiTest {
 
     private class FakePort(
         override val instanceId:String,account:AccountListItem?=null,busy:Boolean=false,
-        accounts:List<AccountListItem> = emptyList(),weight:Int=70,
+        accounts:List<AccountListItem> = emptyList(),weight:Int=70,rightTab:String="logs",
     ):ControlSessionPort{
         override val workerRunId="worker-$instanceId"
         override val snapshots=MutableStateFlow(buildJsonObject{
             put("console",ControlModelCodec.encode(RunConsoleState(task=LabyrinthUiState(selectedAccount=account,settingsReady=true),busy=busy)))
             put("settings",ControlModelCodec.encode(DesktopSettings(wizardCompleted=true)))
-            put("preferences",ControlModelCodec.encode(DesktopPreferences()))
+            put("preferences",ControlModelCodec.encode(DesktopPreferences(rightTab=rightTab)))
             put("accounts",ControlModelCodec.encode(AccountUiState(accounts=accounts)))
             put("strategy",ControlModelCodec.encode(LabyrinthStrategySettings(playerWeight=weight)))
         })
@@ -175,8 +202,10 @@ class SharedRunTabsUiTest {
         override val error=MutableStateFlow<String?>(null)
         val commands=CopyOnWriteArrayList<String>()
         @Volatile var previewSelected=false
+        @Volatile var previewSubscribed=false
         override suspend fun request(op:String,args:JsonObject):JsonObject{commands+=op;return JsonObject(emptyMap())}
         override fun setSelected(selected:Boolean){previewSelected=selected}
+        override fun setPreviewVisible(visible:Boolean){previewSubscribed=visible}
         override suspend fun shutdown(){}
     }
 }

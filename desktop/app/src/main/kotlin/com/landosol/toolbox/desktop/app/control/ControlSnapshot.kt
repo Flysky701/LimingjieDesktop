@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap
  * database:String; foreground:String?; connectionActivity:String?; connectionMessage:String?
  * devices:[DeviceDescriptor]; history:[DesktopRunRecord]; logs:[UserLogLine]
  * dataDirectory:String; debugUrl:String?; crashes:[String] (filenames only)
- * preview:{png:String(base64),timestampMillis:Long}?; preview only for selected/subscribed worker
+ * preview:{png:String(base64),timestampMillis:Long}?; only for a selected worker with an expanded, visible preview
  * captcha:{ticketId:String,url:String,accountAlias:String,error:String?}?
  * notices:[String]; title:String optional binding display. Shell adds instance identity/connection status.
  *

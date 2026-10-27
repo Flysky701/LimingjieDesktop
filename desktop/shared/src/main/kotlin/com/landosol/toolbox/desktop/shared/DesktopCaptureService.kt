@@ -17,6 +17,8 @@ class DesktopCaptureService(
     private val onLost: (String) -> Unit = {},
     /** A controlled client restart may temporarily show the portrait launcher; never dispatch it. */
     private val deferFrame: (CapturePixels) -> Boolean = { false },
+    /** Controls only the UI copy; recognition must continue while the preview is hidden. */
+    private val previewEnabled: () -> Boolean = { true },
 ) : AutoCloseable {
     private val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "desktop-capture").apply { isDaemon = true } }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -59,7 +61,7 @@ class DesktopCaptureService(
                             android.os.SystemClock.elapsedRealtime(), CaptureRotationPolicy.toleratesTransientRotation())
                         if (decision is CaptureRotationDecision.Stop) throw IllegalStateException(decision.reason)
                         if (decision.deliversFrame) {
-                            if (lastPreview == Long.MIN_VALUE || frame.timestampMillis - lastPreview >= 500) {
+                            if (previewEnabled() && (lastPreview == Long.MIN_VALUE || frame.timestampMillis - lastPreview >= 500)) {
                                 preview(frame.copy(pixels = frame.pixels.copyOf()))
                                 lastPreview = frame.timestampMillis
                             }

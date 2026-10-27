@@ -35,6 +35,7 @@ private data class PendingSessionAction(val title:String,val message:String,val 
     devices:List<ManagedDeviceUi> = emptyList(),
     hostWindow:java.awt.Window?=null,
     error:String?=null,
+    windowVisible:Boolean=true,
 ) {
     val global=remember(globalSession){ControlSessionUi(globalSession)}
     DisposableEffect(global){onDispose{global.close()}}
@@ -163,7 +164,7 @@ private data class PendingSessionAction(val title:String,val message:String,val 
                                         Button(onClick={page=Page.Devices}){Text("前往设备管理")}
                                     }} else Box(Modifier.fillMaxSize()){
                                         sessions.forEach{tab->key(tab.id){
-                                            val visible=page==Page.Run&&selected?.id==tab.id
+                                            val visible=windowVisible&&page==Page.Run&&selected?.id==tab.id
                                             val view=checkNotNull(views[tab.id]).second
                                             val connection by tab.session.connection.collectAsState()
                                             LaunchedEffect(visible,tab.session){tab.session.setSelected(visible)}
