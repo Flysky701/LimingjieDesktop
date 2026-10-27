@@ -61,6 +61,25 @@ private suspend fun decodeControlPreview(image: JsonObject): CapturePixels? = tr
     null
 }
 
+/** Each UI field owns its last decoded list; compare JSON before converting any rows. */
+internal fun <T> StateFlow<ControlUiSnapshot>.decodedListField(
+    scope: CoroutineScope,
+    name: String,
+    read: (ControlUiSnapshot) -> List<T>,
+): StateFlow<List<T>> {
+    val initial = value
+    var lastSource = initial.document[name]
+    var lastList = read(initial)
+    return map { snapshot ->
+        val source = snapshot.document[name]
+        if (source != lastSource) {
+            lastList = read(snapshot)
+            lastSource = source
+        }
+        lastList
+    }.stateIn(scope, SharingStarted.Eagerly, lastList)
+}
+
 /** Local UI projection only. It contains no Graph, business controller, credential store or device I/O.
  * All commands below resolve to the closed ControlOps contract on the captured worker port.
  */
@@ -70,6 +89,8 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     val error=localError.asStateFlow()
     private val models:StateFlow<ControlUiSnapshot> = port.snapshots.filter{it["console"] is JsonObject}.map(::ControlUiSnapshot).stateIn(scope,SharingStarted.Eagerly,ControlUiSnapshot(previous?.models?.value?.document ?: port.snapshots.value))
     private fun <T> field(read:(ControlUiSnapshot)->T):StateFlow<T> = models.map(read).stateIn(scope,SharingStarted.Eagerly,read(models.value))
+    private inline fun <reified T> listField(name:String):StateFlow<List<T>> =
+        models.decodedListField(scope,name){it.model(name,emptyList<T>())}
     val context=object:Context() {
         override val assets=AssetManager()
         override val applicationContext:Context get()=this
@@ -191,13 +212,13 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         suspend fun refreshDatabase(){request(ControlOps.REFRESH,buildJsonObject{put("database",true)})}
         suspend fun refreshForeground(){request(ControlOps.REFRESH,buildJsonObject{put("foreground",true)})}
     }
-    inner class HistoryView {val records=field{it.model<List<DesktopRunRecord>>("history",emptyList())}}
+    inner class HistoryView {val records=listField<DesktopRunRecord>("history")}
     inner class PreferencesView {
         val state=field{it.model("preferences",DesktopPreferences())}
         suspend fun update(change:(DesktopPreferences)->DesktopPreferences){patch(ControlOps.PREFS_PATCH,state.value,change(state.value))}
     }
     inner class LogView {
-        val lines=field{it.model<List<UserLogLine>>("logs",emptyList())}
+        val lines=listField<UserLogLine>("logs")
         fun text()=lines.value.joinToString("\n"){"${it.time} [${it.kind.label}] ${it.text}${if(it.repeats>1)" ×${it.repeats}"else ""}"}
         fun add(text:String,error:Boolean=false,kind:UserLogKind=if(error)UserLogKind.ERROR else UserLogKind.NORMAL){fire(ControlOps.LOG_ADD,buildJsonObject{put("text",text);put("kind",kind.name)})}
         fun clear(){fire(ControlOps.LOG_CLEAR)}
