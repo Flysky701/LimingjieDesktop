@@ -59,6 +59,7 @@ class GraphControlService(
     private var captchaGeneration: Long? = null
     private var previewTimestamp: Long? = null
     private var previewPng: String? = null
+    private val catalogJson = RoleCatalogJson()
 
     init {
         graph.bindSharedRuntime(profileId, profileName)
@@ -89,7 +90,7 @@ class GraphControlService(
             put("preferences", model(graph.ux.preferences.state.value))
             put("accounts", model(accounts.copy(editor = accounts.editor?.copy(password = ""))))
             put("strategy", model(graph.labyrinthStrategySettings.state.value))
-            put("catalog", model(graph.ux.catalog.value))
+            put("catalog", catalogJson.encode(graph.ux.catalog.value))
             put("resolution", model(graph.resolutionGuard.status.value))
             put("ocr", model(graph.ocr.status.value))
             put("credentials", model(graph.ux.credentials.value))
