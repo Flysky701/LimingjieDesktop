@@ -18,7 +18,8 @@ internal interface LabyrinthBattleCombatPort {
     var battleRetryCount: Int
     val battleWait: LabyrinthBattleWaitPolicy
     var bossEditorBlocked: Boolean
-    var bossEditorPreparationStage: LabyrinthBossEditorPreparationStage
+    fun prepareBossEditorForBattle(isBossBattle: Boolean)
+    fun resetBossEditorPreparation()
     var bossEditorTeamIndex: Int?
     var bossFallbackMultiTeamActive: Boolean
     var bossMultiTeamTargetCount: Int?
@@ -31,7 +32,7 @@ internal interface LabyrinthBattleCombatPort {
     val currentRunId: String?
     val exEncounterFallbackApproved: Boolean
     val failedBattleTeamSignatures: MutableSet<String>
-    var lastNormalBattleTeamSignature: String?
+    fun clearNormalBattleTeamMemory()
     var lastPostEntryState: LabyrinthEntryPageState?
     var pendingBossTeamAdvance: Pair<Int, List<String>>?
     var pendingSingleBossFallbackToMulti: Boolean
@@ -279,11 +280,7 @@ internal class LabyrinthBattleCombatWorkflow(private val port: LabyrinthBattleCo
                             bossEditorTeamIndex = null
                             pendingBossTeamAdvance = null
                             bossEditorBlocked = false
-                            bossEditorPreparationStage = if (combatContext?.kind == LabyrinthCombatKind.BOSS) {
-                                LabyrinthBossEditorPreparationStage.TEAM_1
-                            } else {
-                                LabyrinthBossEditorPreparationStage.INACTIVE
-                            }
+                            prepareBossEditorForBattle(combatContext?.kind == LabyrinthCombatKind.BOSS)
                             preparedBossFirstTeamIds = emptyList()
                             bossMultiTeamTargetCount = null
                             combatContext = combatContext?.copy(teamIndex = 1)
@@ -314,7 +311,7 @@ internal class LabyrinthBattleCombatWorkflow(private val port: LabyrinthBattleCo
         // 第一场直接跳过穿戴）、旧轮次的超时起点、或上一场的普通编组记忆带过去。
         // 这条重置只在 start()/stop() 走这里，普通战斗之间不会触发，所以「编组未变则跳过」照常生效。
         resetSpecialEquipmentRound()
-        lastNormalBattleTeamSignature = null
+        clearNormalBattleTeamMemory()
         resetBattleTeamActionFeedback()
         resetBattleTeamPageStall()
         synchronized(committedBattleCharacterIds) { committedBattleCharacterIds.clear() }
@@ -322,7 +319,7 @@ internal class LabyrinthBattleCombatWorkflow(private val port: LabyrinthBattleCo
         bossEditorTeamIndex = null
         pendingBossTeamAdvance = null
         bossEditorBlocked = false
-        bossEditorPreparationStage = LabyrinthBossEditorPreparationStage.INACTIVE
+        resetBossEditorPreparation()
         preparedBossFirstTeamIds = emptyList()
         bossMultiTeamTargetCount = null
     }
@@ -340,11 +337,7 @@ internal class LabyrinthBattleCombatWorkflow(private val port: LabyrinthBattleCo
         bossEditorTeamIndex = null
         pendingBossTeamAdvance = null
         bossEditorBlocked = false
-        bossEditorPreparationStage = if (blockType == LabyrinthNodeTypes.BOSS) {
-            LabyrinthBossEditorPreparationStage.TEAM_1
-        } else {
-            LabyrinthBossEditorPreparationStage.INACTIVE
-        }
+        prepareBossEditorForBattle(blockType == LabyrinthNodeTypes.BOSS)
         preparedBossFirstTeamIds = emptyList()
         bossMultiTeamTargetCount = null
         combatContext = combatContextFor(blockType)    }

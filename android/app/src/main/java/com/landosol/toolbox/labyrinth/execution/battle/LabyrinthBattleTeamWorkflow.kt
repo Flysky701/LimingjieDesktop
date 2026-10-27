@@ -86,6 +86,28 @@ internal class LabyrinthBattleTeamWorkflow(private val port: LabyrinthBattleTeam
     @Volatile
     private var lastBattleTeamActionAt = Long.MIN_VALUE
 
+    // Keep the legacy fields in Session; preparation and normal-team memory are owned here.
+    fun bossPreparationStage(): LabyrinthBossEditorPreparationStage = bossEditorPreparationStage
+
+    fun previousNormalBattleTeamSignature(): String? = lastNormalBattleTeamSignature
+
+    fun prepareBossEditorForBattle(isBossBattle: Boolean) {
+        bossEditorPreparationStage = if (isBossBattle) {
+            LabyrinthBossEditorPreparationStage.TEAM_1
+        } else {
+            LabyrinthBossEditorPreparationStage.INACTIVE
+        }
+    }
+
+    fun resetBossEditorPreparation() {
+        bossEditorPreparationStage = LabyrinthBossEditorPreparationStage.INACTIVE
+    }
+
+    /** Only the run boundary clears this memory; ordinary battle retries keep it. */
+    fun clearNormalBattleTeamMemory() {
+        lastNormalBattleTeamSignature = null
+    }
+
     /** Retry/run boundaries keep their original reset order through this owner. */
     fun resetBattleTeamActionFeedback() {
         pendingBattleTeamAction = null

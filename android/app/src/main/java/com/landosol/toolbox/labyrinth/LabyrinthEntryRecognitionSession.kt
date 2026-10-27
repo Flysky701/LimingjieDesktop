@@ -348,6 +348,7 @@ class LabyrinthEntryRecognitionSession(
      * 只有普通关卡的 START_BATTLE 会把它更新为本场编组；EX / Boss 的战斗不会改变它（回收时写回的只是
      * 当次捕获的原值）。刻意不放进 [resetBattleTeamExecutionTracking] 与单场重置：它是跨战斗的记忆，
      * 本轮普通关卡若与它完全相同就跳过特别装备流程。
+     * 保留旧字段供反射入口使用；业务写入与只读查询统一经过编组模块。
      */
     @Volatile
     internal var lastNormalBattleTeamSignature: String? = null
@@ -364,6 +365,7 @@ class LabyrinthEntryRecognitionSession(
 
     internal var bossEditorBlocked = false
 
+    // Legacy storage for reflection; only BattleTeam owns preparation transitions and resets.
     internal var bossEditorPreparationStage = LabyrinthBossEditorPreparationStage.INACTIVE
 
     internal var preparedBossFirstTeamIds: List<String> = emptyList()

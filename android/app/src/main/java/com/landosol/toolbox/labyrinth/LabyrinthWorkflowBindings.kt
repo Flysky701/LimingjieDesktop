@@ -94,7 +94,7 @@ internal fun LabyrinthEntryRecognitionSession.createBattleRecommendationWorkflow
             get() = this@createBattleRecommendationWorkflow.bossEditorBlocked
             set(value) { this@createBattleRecommendationWorkflow.bossEditorBlocked = value }
         override val bossEditorPreparationStage: LabyrinthBossEditorPreparationStage
-            get() = this@createBattleRecommendationWorkflow.bossEditorPreparationStage
+            get() = this@createBattleRecommendationWorkflow.battleTeamWorkflow.bossPreparationStage()
         override var bossEditorTeamIndex: Int?
             get() = this@createBattleRecommendationWorkflow.bossEditorTeamIndex
             set(value) { this@createBattleRecommendationWorkflow.bossEditorTeamIndex = value }
@@ -159,7 +159,7 @@ internal fun LabyrinthEntryRecognitionSession.createBattleRosterWorkflow(): Laby
         override val battleTeamRecommendationUnavailableReason: String?
             get() = this@createBattleRosterWorkflow.battleTeamRecommendationUnavailableReason
         override val bossEditorPreparationStage: LabyrinthBossEditorPreparationStage
-            get() = this@createBattleRosterWorkflow.bossEditorPreparationStage
+            get() = this@createBattleRosterWorkflow.battleTeamWorkflow.bossPreparationStage()
         override val combatContext: LabyrinthCombatContext?
             get() = this@createBattleRosterWorkflow.combatContext
         override var effectiveCharacterScanRosterStamp: Long
@@ -332,9 +332,10 @@ internal fun LabyrinthEntryRecognitionSession.createBattleCombatWorkflow(): Laby
         override var bossEditorBlocked: Boolean
             get() = this@createBattleCombatWorkflow.bossEditorBlocked
             set(value) { this@createBattleCombatWorkflow.bossEditorBlocked = value }
-        override var bossEditorPreparationStage: LabyrinthBossEditorPreparationStage
-            get() = this@createBattleCombatWorkflow.bossEditorPreparationStage
-            set(value) { this@createBattleCombatWorkflow.bossEditorPreparationStage = value }
+        override fun prepareBossEditorForBattle(isBossBattle: Boolean): Unit =
+            this@createBattleCombatWorkflow.battleTeamWorkflow.prepareBossEditorForBattle(isBossBattle)
+        override fun resetBossEditorPreparation(): Unit =
+            this@createBattleCombatWorkflow.battleTeamWorkflow.resetBossEditorPreparation()
         override var bossEditorTeamIndex: Int?
             get() = this@createBattleCombatWorkflow.bossEditorTeamIndex
             set(value) { this@createBattleCombatWorkflow.bossEditorTeamIndex = value }
@@ -364,9 +365,8 @@ internal fun LabyrinthEntryRecognitionSession.createBattleCombatWorkflow(): Laby
             get() = this@createBattleCombatWorkflow.exEncounterFallbackApproved
         override val failedBattleTeamSignatures: MutableSet<String>
             get() = this@createBattleCombatWorkflow.failedBattleTeamSignatures
-        override var lastNormalBattleTeamSignature: String?
-            get() = this@createBattleCombatWorkflow.lastNormalBattleTeamSignature
-            set(value) { this@createBattleCombatWorkflow.lastNormalBattleTeamSignature = value }
+        override fun clearNormalBattleTeamMemory(): Unit =
+            this@createBattleCombatWorkflow.battleTeamWorkflow.clearNormalBattleTeamMemory()
         override var lastPostEntryState: LabyrinthEntryPageState?
             get() = this@createBattleCombatWorkflow.lastPostEntryState
             set(value) { this@createBattleCombatWorkflow.lastPostEntryState = value }
@@ -523,7 +523,7 @@ internal fun LabyrinthEntryRecognitionSession.createEquipmentWorkflow(
         override val combatContext: LabyrinthCombatContext?
             get() = this@createEquipmentWorkflow.combatContext
         override val lastNormalBattleTeamSignature: String?
-            get() = this@createEquipmentWorkflow.lastNormalBattleTeamSignature
+            get() = this@createEquipmentWorkflow.battleTeamWorkflow.previousNormalBattleTeamSignature()
         override var lastSessionActionAt: Long
             get() = this@createEquipmentWorkflow.lastSessionActionAt
             set(value) { this@createEquipmentWorkflow.lastSessionActionAt = value }
