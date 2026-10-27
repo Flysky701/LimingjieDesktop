@@ -35,6 +35,32 @@ class RemoteControlSession(private val link:WorkerLink):ControlSessionPort {
     override suspend fun shutdown()=link.shutdown()
 }
 
+/** Each port is one worker incarnation; never share decoded frames across ports. */
+@OptIn(ExperimentalCoroutinesApi::class)
+internal fun ControlSessionPort.previewFrames(
+    decode: suspend (JsonObject) -> CapturePixels? = ::decodeControlPreview,
+): Flow<CapturePixels?> = combine(snapshots, connection) { raw, status ->
+    if (status == WorkerConnectionStatus.CONNECTED) raw["preview"] as? JsonObject else null
+}.distinctUntilChanged().mapLatest { image ->
+    // Compare the whole preview (pixels AND timestamp), not unrelated console/log updates.
+    // A clear/disconnect also cancels a pending decode before it can publish an old frame.
+    image?.let { decode(it) }
+}.buffer(0)
+
+private suspend fun decodeControlPreview(image: JsonObject): CapturePixels? = try {
+    withContext(Dispatchers.Default) {
+        val png = image["png"]?.jsonPrimitive?.contentOrNull ?: return@withContext null
+        val bitmap = ImageIO.read(Base64.getDecoder().decode(png).inputStream()) ?: return@withContext null
+        CapturePixels(bitmap.width, bitmap.height,
+            bitmap.getRGB(0, 0, bitmap.width, bitmap.height, null, 0, bitmap.width),
+            image["timestampMillis"]?.jsonPrimitive?.longOrNull ?: 0L)
+    }
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (_: Exception) {
+    null
+}
+
 /** Local UI projection only. It contains no Graph, business controller, credential store or device I/O.
  * All commands below resolve to the closed ControlOps contract on the captured worker port.
  */
@@ -71,15 +97,7 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     val ocr=OcrView()
     val automationOverlayCoordinator=OverlayView()
     val taskStopping=field{it.console.stopping}
-    val preview:StateFlow<CapturePixels?> = port.snapshots.map { raw ->
-        (raw["preview"] as? JsonObject)?.let{image->
-            val png=image["png"]?.jsonPrimitive?.contentOrNull ?: return@let null
-            runCatching{withContext(Dispatchers.Default){
-                val bitmap=ImageIO.read(Base64.getDecoder().decode(png).inputStream()) ?: return@withContext null
-                CapturePixels(bitmap.width,bitmap.height,bitmap.getRGB(0,0,bitmap.width,bitmap.height,null,0,bitmap.width),image["timestampMillis"]?.jsonPrimitive?.longOrNull ?: 0L)
-            }}.getOrNull()
-        }
-    }.stateIn(scope,SharingStarted.Eagerly,null)
+    val preview:StateFlow<CapturePixels?> = port.previewFrames().stateIn(scope,SharingStarted.Eagerly,null)
     val captcha=field{it.document["captcha"] as? JsonObject}
     val accountVerified=field{it.document["accountVerified"]?.jsonPrimitive?.booleanOrNull ?: true}
     val accountReminder get()=models.value.text("accountReminder") ?: "助手账号不会切换模拟器中的游戏账号，请人工核对同一账号。"
