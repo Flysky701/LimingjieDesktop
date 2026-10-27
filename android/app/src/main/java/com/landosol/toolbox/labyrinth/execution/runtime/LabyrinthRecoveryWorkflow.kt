@@ -45,8 +45,6 @@ internal interface LabyrinthRecoveryPort {
     var entryPhaseComplete: Boolean
     var eventActionAttempts: Int
     var existingRunResumeHandoffArmed: Boolean
-    var lastBattleTeamRecommendationKey: String?
-    var lastBattleTeamSelectionPlanLog: String?
     var lastNodeActionAt: Long
     var lastNodeSwipeAvoidRects: List<EntryPixelRect>
     val lastObservedPageState: LabyrinthEntryPageState?
@@ -86,6 +84,8 @@ internal interface LabyrinthRecoveryPort {
     fun resetStrongRouteTargetBinding(): Unit
     suspend fun stopFromRunLogic(reason: String): Boolean
     fun traceAction(label: String): Unit
+    fun invalidateBattleTeamRecommendation()
+    fun clearBattleTeamSelectionPlanLog()
 }
 
 /** 管理会话阻断与渠道登录弹窗；恢复策略和预算保持独立。 */
@@ -256,8 +256,8 @@ internal class LabyrinthRecoveryWorkflow(private val port: LabyrinthRecoveryPort
         activeNodeArea = null
         eventActionAttempts = 0
         combatContext = null
-        lastBattleTeamRecommendationKey = null
-        lastBattleTeamSelectionPlanLog = null
+        invalidateBattleTeamRecommendation()
+        clearBattleTeamSelectionPlanLog()
         _state.value = _state.value.copy(
             combatContext = null,
             battleTeamRecommendation = null,

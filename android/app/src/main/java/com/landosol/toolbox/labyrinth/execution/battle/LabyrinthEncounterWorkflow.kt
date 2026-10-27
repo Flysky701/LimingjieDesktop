@@ -29,7 +29,6 @@ internal interface LabyrinthEncounterPort {
     var exLastKnownPage: LabyrinthEntryPageState?
     var exSlot3ProbeAttempts: Int
     var exSlot3ProbePending: Boolean
-    var lastBattleTeamRecommendationKey: String?
     val lastPostEntryActionAt: Long
     val postEntryStableFrames: Int
     val validatedRoute: LabyrinthRouteJson?
@@ -50,6 +49,7 @@ internal interface LabyrinthEncounterPort {
     fun finishFromPlanner(sessionId: AutomationSessionId, reason: String): Unit
     fun nodeLog(message: String, warning: Boolean = false): Unit
     fun traceWorkflow(owner: String, phase: String): Unit
+    fun invalidateBattleTeamRecommendation()
 }
 
 /** 识别 EX 遭遇、探查详情并管理身份确认的时限。 */
@@ -90,7 +90,7 @@ internal class LabyrinthEncounterWorkflow(private val port: LabyrinthEncounterPo
         // user opened manually. The existing EX team planner still runs, simply without a
         // encounter-specific guide.
         exEncounterFallbackApproved = true
-        lastBattleTeamRecommendationKey = null
+        invalidateBattleTeamRecommendation()
         nodeLog("ex-guide-fallback name=$displayName action=close-detail-and-continue", warning = true)
         dispatchPostEntryTap(
             sessionId = sessionId,
@@ -159,7 +159,7 @@ internal class LabyrinthEncounterWorkflow(private val port: LabyrinthEncounterPo
             exEncounterFallbackApproved = false
             exSlot3ProbePending = false
             exEncounterProbeStartedAt = Long.MIN_VALUE
-            lastBattleTeamRecommendationKey = null
+            invalidateBattleTeamRecommendation()
             if (activeSessionId == sessionId) {
                 _state.value = _state.value.copy(
                     combatContext = combatContext,
@@ -188,7 +188,7 @@ internal class LabyrinthEncounterWorkflow(private val port: LabyrinthEncounterPo
             exSlot3ProbeAttempts = 0
             exEncounterProbeStartedAt = timestampMillis
             synchronized(effectiveExCharacterIds) { effectiveExCharacterIds.clear() }
-            lastBattleTeamRecommendationKey = null
+            invalidateBattleTeamRecommendation()
             _state.value = _state.value.copy(
                 combatContext = combatContext,
                 message = "挑战页识别到极难，已按EX遭遇接管；正在识别具体攻略",
@@ -214,7 +214,7 @@ internal class LabyrinthEncounterWorkflow(private val port: LabyrinthEncounterPo
                 activeNodeArea = persistedCurrentNode?.area
             }
             combatContext = LabyrinthCombatContext(LabyrinthCombatKind.NORMAL)
-            lastBattleTeamRecommendationKey = null
+            invalidateBattleTeamRecommendation()
             if (activeSessionId == sessionId) {
                 _state.value = _state.value.copy(
                     combatContext = combatContext,
@@ -291,7 +291,7 @@ internal class LabyrinthEncounterWorkflow(private val port: LabyrinthEncounterPo
                 kind = LabyrinthCombatKind.EX,
                 targetCount = strategy.targetCount,
             )
-            lastBattleTeamRecommendationKey = null
+            invalidateBattleTeamRecommendation()
             val close = observation.closeButtonRect
             if (close == null) {
                 if (activeSessionId == sessionId) {
@@ -333,7 +333,7 @@ internal class LabyrinthEncounterWorkflow(private val port: LabyrinthEncounterPo
                     kind = LabyrinthCombatKind.EX,
                     targetCount = strategy.targetCount,
                 )
-                lastBattleTeamRecommendationKey = null
+                invalidateBattleTeamRecommendation()
                 if (activeSessionId == sessionId) {
                     _state.value = _state.value.copy(
                         combatContext = combatContext,

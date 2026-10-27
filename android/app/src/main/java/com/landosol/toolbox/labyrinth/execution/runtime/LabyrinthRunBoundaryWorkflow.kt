@@ -23,8 +23,6 @@ internal interface LabyrinthRunBoundaryPort {
     var eventActionAttempts: Int
     var eventChoicePlanner: LabyrinthEventChoicePlanner?
     var existingRunResumeHandoffArmed: Boolean
-    var lastBattleTeamRecommendationKey: String?
-    var lastBattleTeamSelectionPlanLog: String?
     var lastObservedPageState: LabyrinthEntryPageState?
     var lastPersistedObservationSignature: String?
     var lastShopDialogState: LabyrinthShopDialogState
@@ -69,6 +67,8 @@ internal interface LabyrinthRunBoundaryPort {
     fun resetSettlementRuntimeState(): Unit
     fun resetShopOnStart(): Unit
     fun resetShopOnStop(): Unit
+    fun invalidateBattleTeamRecommendation()
+    fun clearBattleTeamSelectionPlanLog()
 }
 
 /** 按原顺序协调启动、停止、换页和进入节点的业务交接。 */
@@ -171,8 +171,8 @@ internal class LabyrinthRunBoundaryWorkflow(private val port: LabyrinthRunBounda
     fun initializeRunBusinessState(dryRun: Boolean, initialRunSnapshot: LabyrinthRunSnapshot?): Unit {
         openingStateReset.set(false)
         lastPersistedObservationSignature = null
-        lastBattleTeamRecommendationKey = null
-        lastBattleTeamSelectionPlanLog = null
+        invalidateBattleTeamRecommendation()
+        clearBattleTeamSelectionPlanLog()
         resetBattleRetryTracking()
         lastObservedPageState = null
         resetRewardOnStart()
@@ -190,8 +190,8 @@ internal class LabyrinthRunBoundaryWorkflow(private val port: LabyrinthRunBounda
     fun clearStoppedRunBusinessState(): Unit {
         openingStateReset.set(false)
         lastPersistedObservationSignature = null
-        lastBattleTeamRecommendationKey = null
-        lastBattleTeamSelectionPlanLog = null
+        invalidateBattleTeamRecommendation()
+        clearBattleTeamSelectionPlanLog()
         lastObservedPageState = null
         resetRewardOnStop()
         existingRunResumeHandoffArmed = false

@@ -34,8 +34,6 @@ internal interface LabyrinthBattleRosterPort {
     var effectiveCharacterUnsafeStartedAt: Long
     val effectiveExCharacterIds: MutableSet<String>
     val effectiveRosterSearch: LabyrinthBattleRosterSearch
-    var lastBattleTeamRecommendationKey: String?
-    var lastBattleTeamSelectionPlanLog: String?
     var lastEffectiveCharacterScanActionAt: Long
     fun beginGuardedAction(): Boolean
     fun launchGuardedAction(block: suspend () -> Unit): Unit
@@ -44,6 +42,8 @@ internal interface LabyrinthBattleRosterPort {
     fun publishWaitingForGameForeground(sessionId: AutomationSessionId): Unit
     suspend fun stopFromRunLogic(reason: String): Boolean
     fun traceAction(label: String): Unit
+    fun invalidateBattleTeamRecommendation()
+    fun clearBattleTeamSelectionPlanLog()
 }
 
 /** 扫描有效角色、维护查找进度与不可见角色排除条件。 */
@@ -249,7 +249,7 @@ internal class LabyrinthBattleRosterWorkflow(private val port: LabyrinthBattleRo
                     effectiveCharacterScanStage = LabyrinthEffectiveCharacterScanStage.COMPLETE
                     effectiveCharacterScanRosterStamp = currentEffectiveScanRosterStamp()
                     effectiveRosterSearch.reset()
-                    lastBattleTeamRecommendationKey = null
+                    invalidateBattleTeamRecommendation()
                     _state.value = _state.value.copy(
                         message = "有效效果扫描完成：确认" +
                             synchronized(effectiveExCharacterIds) { effectiveExCharacterIds.size } +
@@ -350,7 +350,7 @@ internal class LabyrinthBattleRosterWorkflow(private val port: LabyrinthBattleRo
         effectiveCharacterUnsafeStartedAt = Long.MIN_VALUE
         effectiveCharacterScanSkippedUnsafe = false
         lastEffectiveCharacterScanActionAt = Long.MIN_VALUE
-        lastBattleTeamRecommendationKey = null
+        invalidateBattleTeamRecommendation()
     }
 
     /** Owned-roster fingerprint used to decide whether a saved sweep is still valid. */
@@ -380,8 +380,8 @@ internal class LabyrinthBattleRosterWorkflow(private val port: LabyrinthBattleRo
             )
             return
         }
-        lastBattleTeamRecommendationKey = null
-        lastBattleTeamSelectionPlanLog = null
+        invalidateBattleTeamRecommendation()
+        clearBattleTeamSelectionPlanLog()
         _state.value = current.copy(
             joinedCharacters = remaining,
             battleTeamRecommendation = null,

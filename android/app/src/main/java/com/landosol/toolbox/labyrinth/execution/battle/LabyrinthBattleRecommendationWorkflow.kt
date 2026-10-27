@@ -37,7 +37,6 @@ internal interface LabyrinthBattleRecommendationPort {
     var exhaustedBattleRosterFiltersKey: String?
     val failedBattleTeamSignatures: MutableSet<String>
     var lastBattleTeamRecommendationKey: String?
-    var lastBattleTeamSelectionPlanLog: String?
     var pendingBossTeamAdvance: Pair<Int, List<String>>?
     val preferPureBossDamageSystem: Boolean
     var preparedBossFirstTeamIds: List<String>
@@ -49,6 +48,17 @@ internal interface LabyrinthBattleRecommendationPort {
 
 /** 同步 Boss 队次并生成配队建议与编组计划。 */
 internal class LabyrinthBattleRecommendationWorkflow(private val port: LabyrinthBattleRecommendationPort) : LabyrinthBattleRecommendationPort by port {
+    fun clearBattleTeamSelectionPlanLog() {
+        lastBattleTeamSelectionPlanLog = null
+    }
+
+    fun invalidateBattleTeamRecommendation() {
+        lastBattleTeamRecommendationKey = null
+    }
+
+    @Volatile
+    private var lastBattleTeamSelectionPlanLog: String? = null
+
     /** A Boss tab change is a team boundary even though the page type stays the same. */
     fun synchronizeBossEditor(result: LabyrinthEntryFrameResult) {
         if (actionInFlight.get()) return

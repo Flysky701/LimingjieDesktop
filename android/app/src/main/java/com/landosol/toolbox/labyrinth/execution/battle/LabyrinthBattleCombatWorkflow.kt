@@ -16,9 +16,6 @@ internal interface LabyrinthBattleCombatPort {
     var activeNodeType: Int?
     val activeSessionId: AutomationSessionId?
     var battleRetryCount: Int
-    var battleTeamActionStopReason: String?
-    var battleTeamActionUnconfirmedAttempts: Int
-    var battleTeamPageStallSince: Long
     val battleWait: LabyrinthBattleWaitPolicy
     var bossEditorBlocked: Boolean
     var bossEditorPreparationStage: LabyrinthBossEditorPreparationStage
@@ -34,11 +31,8 @@ internal interface LabyrinthBattleCombatPort {
     val currentRunId: String?
     val exEncounterFallbackApproved: Boolean
     val failedBattleTeamSignatures: MutableSet<String>
-    var lastBattleTeamRecommendationKey: String?
-    var lastBattleTeamSelectionPlanLog: String?
     var lastNormalBattleTeamSignature: String?
     var lastPostEntryState: LabyrinthEntryPageState?
-    var pendingBattleTeamAction: PendingBattleTeamAction?
     var pendingBossTeamAdvance: Pair<Int, List<String>>?
     var pendingSingleBossFallbackToMulti: Boolean
     var postEntryAttempts: Int
@@ -68,6 +62,10 @@ internal interface LabyrinthBattleCombatPort {
     fun resetPostEntryStall(): Unit
     fun resetSpecialEquipmentRound(): Unit
     fun traceWorkflow(owner: String, phase: String): Unit
+    fun resetBattleTeamActionFeedback()
+    fun resetBattleTeamPageStall()
+    fun invalidateBattleTeamRecommendation()
+    fun clearBattleTeamSelectionPlanLog()
 }
 
 /** 管理战斗等待、失败重试、Boss 模式切换和战斗边界重置。 */
@@ -156,9 +154,7 @@ internal class LabyrinthBattleCombatWorkflow(private val port: LabyrinthBattleCo
         // 提交与签名是一体的：只清签名会把两者留在不一致的状态（提交还在、签名没了），下一次失败重试
         // 就再也对不上这一队的失败记录。
         synchronized(committedBattleCharacterIds) { committedBattleCharacterIds.clear() }
-        pendingBattleTeamAction = null
-        battleTeamActionUnconfirmedAttempts = 0
-        battleTeamActionStopReason = null
+        resetBattleTeamActionFeedback()
     }
 
     fun handleBattleFailureFrame(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult): Boolean {
@@ -291,8 +287,8 @@ internal class LabyrinthBattleCombatWorkflow(private val port: LabyrinthBattleCo
                             preparedBossFirstTeamIds = emptyList()
                             bossMultiTeamTargetCount = null
                             combatContext = combatContext?.copy(teamIndex = 1)
-                            lastBattleTeamRecommendationKey = null
-                            lastBattleTeamSelectionPlanLog = null
+                            invalidateBattleTeamRecommendation()
+                            clearBattleTeamSelectionPlanLog()
                             resetBattleTeamExecutionTracking()
                             postEntryStableFrames = 0
                             postEntryAttempts = 0
@@ -310,8 +306,8 @@ internal class LabyrinthBattleCombatWorkflow(private val port: LabyrinthBattleCo
 
     fun resetCombatRuntimeState() {
         combatContext = null
-        lastBattleTeamRecommendationKey = null
-        lastBattleTeamSelectionPlanLog = null
+        invalidateBattleTeamRecommendation()
+        clearBattleTeamSelectionPlanLog()
         resetBattleTeamExecutionTracking()
         // 会话/账号边界：特别装备轮次与「上一场普通战斗的编组记忆」都属于**这一次运行**的状态。
         // 应用复用同一个会话对象跑下一个账号，不能把上一轮的 stage（可能正停在 DONE，于是新账号的
@@ -319,10 +315,8 @@ internal class LabyrinthBattleCombatWorkflow(private val port: LabyrinthBattleCo
         // 这条重置只在 start()/stop() 走这里，普通战斗之间不会触发，所以「编组未变则跳过」照常生效。
         resetSpecialEquipmentRound()
         lastNormalBattleTeamSignature = null
-        pendingBattleTeamAction = null
-        battleTeamActionUnconfirmedAttempts = 0
-        battleTeamActionStopReason = null
-        battleTeamPageStallSince = Long.MIN_VALUE
+        resetBattleTeamActionFeedback()
+        resetBattleTeamPageStall()
         synchronized(committedBattleCharacterIds) { committedBattleCharacterIds.clear() }
         resetBattleRetryTracking()
         bossEditorTeamIndex = null

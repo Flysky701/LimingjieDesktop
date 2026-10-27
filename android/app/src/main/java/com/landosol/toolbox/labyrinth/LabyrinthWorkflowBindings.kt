@@ -128,9 +128,6 @@ internal fun LabyrinthEntryRecognitionSession.createBattleRecommendationWorkflow
         override var lastBattleTeamRecommendationKey: String?
             get() = this@createBattleRecommendationWorkflow.lastBattleTeamRecommendationKey
             set(value) { this@createBattleRecommendationWorkflow.lastBattleTeamRecommendationKey = value }
-        override var lastBattleTeamSelectionPlanLog: String?
-            get() = this@createBattleRecommendationWorkflow.lastBattleTeamSelectionPlanLog
-            set(value) { this@createBattleRecommendationWorkflow.lastBattleTeamSelectionPlanLog = value }
         override var pendingBossTeamAdvance: Pair<Int, List<String>>?
             get() = this@createBattleRecommendationWorkflow.pendingBossTeamAdvance
             set(value) { this@createBattleRecommendationWorkflow.pendingBossTeamAdvance = value }
@@ -184,12 +181,6 @@ internal fun LabyrinthEntryRecognitionSession.createBattleRosterWorkflow(): Laby
             get() = this@createBattleRosterWorkflow.effectiveExCharacterIds
         override val effectiveRosterSearch: LabyrinthBattleRosterSearch
             get() = this@createBattleRosterWorkflow.effectiveRosterSearch
-        override var lastBattleTeamRecommendationKey: String?
-            get() = this@createBattleRosterWorkflow.lastBattleTeamRecommendationKey
-            set(value) { this@createBattleRosterWorkflow.lastBattleTeamRecommendationKey = value }
-        override var lastBattleTeamSelectionPlanLog: String?
-            get() = this@createBattleRosterWorkflow.lastBattleTeamSelectionPlanLog
-            set(value) { this@createBattleRosterWorkflow.lastBattleTeamSelectionPlanLog = value }
         override var lastEffectiveCharacterScanActionAt: Long
             get() = this@createBattleRosterWorkflow.lastEffectiveCharacterScanActionAt
             set(value) { this@createBattleRosterWorkflow.lastEffectiveCharacterScanActionAt = value }
@@ -207,6 +198,10 @@ internal fun LabyrinthEntryRecognitionSession.createBattleRosterWorkflow(): Laby
             this@createBattleRosterWorkflow.runtimeStopFromRunLogic(reason = reason)
         override fun traceAction(label: String): Unit =
             this@createBattleRosterWorkflow.runtimeTraceAction(label = label)
+        override fun invalidateBattleTeamRecommendation() =
+            this@createBattleRosterWorkflow.battleRecommendationWorkflow.invalidateBattleTeamRecommendation()
+        override fun clearBattleTeamSelectionPlanLog() =
+            this@createBattleRosterWorkflow.battleRecommendationWorkflow.clearBattleTeamSelectionPlanLog()
     })
 
 internal fun LabyrinthEntryRecognitionSession.createBattleTeamWorkflow(): LabyrinthBattleTeamWorkflow =
@@ -221,25 +216,13 @@ internal fun LabyrinthEntryRecognitionSession.createBattleTeamWorkflow(): Labyri
             get() = this@createBattleTeamWorkflow.activeSessionId
         override val battleRosterSearch: LabyrinthBattleRosterSearch
             get() = this@createBattleTeamWorkflow.battleRosterSearch
-        override var battleTeamActionStopReason: String?
-            get() = this@createBattleTeamWorkflow.battleTeamActionStopReason
-            set(value) { this@createBattleTeamWorkflow.battleTeamActionStopReason = value }
         override var battleTeamActionUnconfirmedAttempts: Int
             get() = this@createBattleTeamWorkflow.battleTeamActionUnconfirmedAttempts
             set(value) { this@createBattleTeamWorkflow.battleTeamActionUnconfirmedAttempts = value }
         override val battleTeamDispatchSequence: AtomicLong
             get() = this@createBattleTeamWorkflow.battleTeamDispatchSequence
-        override var battleTeamExecutionAttempts: Int
-            get() = this@createBattleTeamWorkflow.battleTeamExecutionAttempts
-            set(value) { this@createBattleTeamWorkflow.battleTeamExecutionAttempts = value }
-        override var battleTeamPageStallSince: Long
-            get() = this@createBattleTeamWorkflow.battleTeamPageStallSince
-            set(value) { this@createBattleTeamWorkflow.battleTeamPageStallSince = value }
         override val battleTeamRecommendationUnavailableReason: String?
             get() = this@createBattleTeamWorkflow.battleTeamRecommendationUnavailableReason
-        override var battleTeamScrollActions: Int
-            get() = this@createBattleTeamWorkflow.battleTeamScrollActions
-            set(value) { this@createBattleTeamWorkflow.battleTeamScrollActions = value }
         override val battleWait: LabyrinthBattleWaitPolicy
             get() = this@createBattleTeamWorkflow.battleWait
         override var bossEditorBlocked: Boolean
@@ -267,18 +250,9 @@ internal fun LabyrinthEntryRecognitionSession.createBattleTeamWorkflow(): Labyri
             get() = this@createBattleTeamWorkflow.currentBattleTeamSignatures
         override val exhaustedBattleRosterFilters: MutableSet<com.landosol.toolbox.labyrinth.vision.LabyrinthBattleElementFilter>
             get() = this@createBattleTeamWorkflow.exhaustedBattleRosterFilters
-        override var lastBattleTeamActionAt: Long
-            get() = this@createBattleTeamWorkflow.lastBattleTeamActionAt
-            set(value) { this@createBattleTeamWorkflow.lastBattleTeamActionAt = value }
         override var lastBattleTeamExecutionKey: String?
             get() = this@createBattleTeamWorkflow.lastBattleTeamExecutionKey
             set(value) { this@createBattleTeamWorkflow.lastBattleTeamExecutionKey = value }
-        override var lastBattleTeamRecommendationKey: String?
-            get() = this@createBattleTeamWorkflow.lastBattleTeamRecommendationKey
-            set(value) { this@createBattleTeamWorkflow.lastBattleTeamRecommendationKey = value }
-        override var lastBattleTeamSelectionPlanLog: String?
-            get() = this@createBattleTeamWorkflow.lastBattleTeamSelectionPlanLog
-            set(value) { this@createBattleTeamWorkflow.lastBattleTeamSelectionPlanLog = value }
         override var lastNormalBattleTeamSignature: String?
             get() = this@createBattleTeamWorkflow.lastNormalBattleTeamSignature
             set(value) { this@createBattleTeamWorkflow.lastNormalBattleTeamSignature = value }
@@ -333,6 +307,10 @@ internal fun LabyrinthEntryRecognitionSession.createBattleTeamWorkflow(): Labyri
             this@createBattleTeamWorkflow.runtimeTraceReject(reason = reason)
         override fun traceWorkflow(owner: String, phase: String): Unit =
             this@createBattleTeamWorkflow.runtimeTraceWorkflow(owner = owner, phase = phase)
+        override fun invalidateBattleTeamRecommendation() =
+            this@createBattleTeamWorkflow.battleRecommendationWorkflow.invalidateBattleTeamRecommendation()
+        override fun clearBattleTeamSelectionPlanLog() =
+            this@createBattleTeamWorkflow.battleRecommendationWorkflow.clearBattleTeamSelectionPlanLog()
     })
 
 internal fun LabyrinthEntryRecognitionSession.createBattleCombatWorkflow(): LabyrinthBattleCombatWorkflow =
@@ -347,15 +325,6 @@ internal fun LabyrinthEntryRecognitionSession.createBattleCombatWorkflow(): Laby
         override var battleRetryCount: Int
             get() = this@createBattleCombatWorkflow.battleRetryCount
             set(value) { this@createBattleCombatWorkflow.battleRetryCount = value }
-        override var battleTeamActionStopReason: String?
-            get() = this@createBattleCombatWorkflow.battleTeamActionStopReason
-            set(value) { this@createBattleCombatWorkflow.battleTeamActionStopReason = value }
-        override var battleTeamActionUnconfirmedAttempts: Int
-            get() = this@createBattleCombatWorkflow.battleTeamActionUnconfirmedAttempts
-            set(value) { this@createBattleCombatWorkflow.battleTeamActionUnconfirmedAttempts = value }
-        override var battleTeamPageStallSince: Long
-            get() = this@createBattleCombatWorkflow.battleTeamPageStallSince
-            set(value) { this@createBattleCombatWorkflow.battleTeamPageStallSince = value }
         override val battleWait: LabyrinthBattleWaitPolicy
             get() = this@createBattleCombatWorkflow.battleWait
         override var bossEditorBlocked: Boolean
@@ -393,21 +362,12 @@ internal fun LabyrinthEntryRecognitionSession.createBattleCombatWorkflow(): Laby
             get() = this@createBattleCombatWorkflow.exEncounterFallbackApproved
         override val failedBattleTeamSignatures: MutableSet<String>
             get() = this@createBattleCombatWorkflow.failedBattleTeamSignatures
-        override var lastBattleTeamRecommendationKey: String?
-            get() = this@createBattleCombatWorkflow.lastBattleTeamRecommendationKey
-            set(value) { this@createBattleCombatWorkflow.lastBattleTeamRecommendationKey = value }
-        override var lastBattleTeamSelectionPlanLog: String?
-            get() = this@createBattleCombatWorkflow.lastBattleTeamSelectionPlanLog
-            set(value) { this@createBattleCombatWorkflow.lastBattleTeamSelectionPlanLog = value }
         override var lastNormalBattleTeamSignature: String?
             get() = this@createBattleCombatWorkflow.lastNormalBattleTeamSignature
             set(value) { this@createBattleCombatWorkflow.lastNormalBattleTeamSignature = value }
         override var lastPostEntryState: LabyrinthEntryPageState?
             get() = this@createBattleCombatWorkflow.lastPostEntryState
             set(value) { this@createBattleCombatWorkflow.lastPostEntryState = value }
-        override var pendingBattleTeamAction: PendingBattleTeamAction?
-            get() = this@createBattleCombatWorkflow.pendingBattleTeamAction
-            set(value) { this@createBattleCombatWorkflow.pendingBattleTeamAction = value }
         override var pendingBossTeamAdvance: Pair<Int, List<String>>?
             get() = this@createBattleCombatWorkflow.pendingBossTeamAdvance
             set(value) { this@createBattleCombatWorkflow.pendingBossTeamAdvance = value }
@@ -466,6 +426,14 @@ internal fun LabyrinthEntryRecognitionSession.createBattleCombatWorkflow(): Laby
             this@createBattleCombatWorkflow.equipmentWorkflow.resetSpecialEquipmentRound()
         override fun traceWorkflow(owner: String, phase: String): Unit =
             this@createBattleCombatWorkflow.runtimeTraceWorkflow(owner = owner, phase = phase)
+        override fun resetBattleTeamActionFeedback() =
+            this@createBattleCombatWorkflow.battleTeamWorkflow.resetBattleTeamActionFeedback()
+        override fun resetBattleTeamPageStall() =
+            this@createBattleCombatWorkflow.battleTeamWorkflow.resetBattleTeamPageStall()
+        override fun invalidateBattleTeamRecommendation() =
+            this@createBattleCombatWorkflow.battleRecommendationWorkflow.invalidateBattleTeamRecommendation()
+        override fun clearBattleTeamSelectionPlanLog() =
+            this@createBattleCombatWorkflow.battleRecommendationWorkflow.clearBattleTeamSelectionPlanLog()
     })
 
 internal fun LabyrinthEntryRecognitionSession.createEncounterWorkflow(): LabyrinthEncounterWorkflow =
@@ -506,9 +474,6 @@ internal fun LabyrinthEntryRecognitionSession.createEncounterWorkflow(): Labyrin
         override var exSlot3ProbePending: Boolean
             get() = this@createEncounterWorkflow.exSlot3ProbePending
             set(value) { this@createEncounterWorkflow.exSlot3ProbePending = value }
-        override var lastBattleTeamRecommendationKey: String?
-            get() = this@createEncounterWorkflow.lastBattleTeamRecommendationKey
-            set(value) { this@createEncounterWorkflow.lastBattleTeamRecommendationKey = value }
         override val lastPostEntryActionAt: Long
             get() = this@createEncounterWorkflow.lastPostEntryActionAt
         override val postEntryStableFrames: Int
@@ -536,6 +501,8 @@ internal fun LabyrinthEntryRecognitionSession.createEncounterWorkflow(): Labyrin
             this@createEncounterWorkflow.runtimeNodeLog(message = message, warning = warning)
         override fun traceWorkflow(owner: String, phase: String): Unit =
             this@createEncounterWorkflow.runtimeTraceWorkflow(owner = owner, phase = phase)
+        override fun invalidateBattleTeamRecommendation() =
+            this@createEncounterWorkflow.battleRecommendationWorkflow.invalidateBattleTeamRecommendation()
     })
 
 internal fun LabyrinthEntryRecognitionSession.createEquipmentWorkflow(): LabyrinthEquipmentWorkflow =
@@ -1309,12 +1276,6 @@ internal fun LabyrinthEntryRecognitionSession.createRunBoundaryWorkflow(): Labyr
         override var existingRunResumeHandoffArmed: Boolean
             get() = this@createRunBoundaryWorkflow.existingRunResumeHandoffArmed
             set(value) { this@createRunBoundaryWorkflow.existingRunResumeHandoffArmed = value }
-        override var lastBattleTeamRecommendationKey: String?
-            get() = this@createRunBoundaryWorkflow.lastBattleTeamRecommendationKey
-            set(value) { this@createRunBoundaryWorkflow.lastBattleTeamRecommendationKey = value }
-        override var lastBattleTeamSelectionPlanLog: String?
-            get() = this@createRunBoundaryWorkflow.lastBattleTeamSelectionPlanLog
-            set(value) { this@createRunBoundaryWorkflow.lastBattleTeamSelectionPlanLog = value }
         override var lastObservedPageState: LabyrinthEntryPageState?
             get() = this@createRunBoundaryWorkflow.lastObservedPageState
             set(value) { this@createRunBoundaryWorkflow.lastObservedPageState = value }
@@ -1417,6 +1378,10 @@ internal fun LabyrinthEntryRecognitionSession.createRunBoundaryWorkflow(): Labyr
             this@createRunBoundaryWorkflow.shopWorkflow.resetShopOnStart()
         override fun resetShopOnStop(): Unit =
             this@createRunBoundaryWorkflow.shopWorkflow.resetShopOnStop()
+        override fun invalidateBattleTeamRecommendation() =
+            this@createRunBoundaryWorkflow.battleRecommendationWorkflow.invalidateBattleTeamRecommendation()
+        override fun clearBattleTeamSelectionPlanLog() =
+            this@createRunBoundaryWorkflow.battleRecommendationWorkflow.clearBattleTeamSelectionPlanLog()
     })
 
 internal fun LabyrinthEntryRecognitionSession.createEntryWorkflow(): LabyrinthEntryWorkflow =
@@ -1522,12 +1487,6 @@ internal fun LabyrinthEntryRecognitionSession.createRecoveryWorkflow(): Labyrint
         override var existingRunResumeHandoffArmed: Boolean
             get() = this@createRecoveryWorkflow.existingRunResumeHandoffArmed
             set(value) { this@createRecoveryWorkflow.existingRunResumeHandoffArmed = value }
-        override var lastBattleTeamRecommendationKey: String?
-            get() = this@createRecoveryWorkflow.lastBattleTeamRecommendationKey
-            set(value) { this@createRecoveryWorkflow.lastBattleTeamRecommendationKey = value }
-        override var lastBattleTeamSelectionPlanLog: String?
-            get() = this@createRecoveryWorkflow.lastBattleTeamSelectionPlanLog
-            set(value) { this@createRecoveryWorkflow.lastBattleTeamSelectionPlanLog = value }
         override var lastNodeActionAt: Long
             get() = this@createRecoveryWorkflow.lastNodeActionAt
             set(value) { this@createRecoveryWorkflow.lastNodeActionAt = value }
@@ -1620,6 +1579,10 @@ internal fun LabyrinthEntryRecognitionSession.createRecoveryWorkflow(): Labyrint
             this@createRecoveryWorkflow.runtimeStopFromRunLogic(reason = reason)
         override fun traceAction(label: String): Unit =
             this@createRecoveryWorkflow.runtimeTraceAction(label = label)
+        override fun invalidateBattleTeamRecommendation() =
+            this@createRecoveryWorkflow.battleRecommendationWorkflow.invalidateBattleTeamRecommendation()
+        override fun clearBattleTeamSelectionPlanLog() =
+            this@createRecoveryWorkflow.battleRecommendationWorkflow.clearBattleTeamSelectionPlanLog()
     })
 
 internal fun LabyrinthEntryRecognitionSession.createPersistenceWorkflow(): LabyrinthPersistenceWorkflow =

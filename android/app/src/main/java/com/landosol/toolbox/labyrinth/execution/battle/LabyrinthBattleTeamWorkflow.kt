@@ -26,13 +26,9 @@ internal interface LabyrinthBattleTeamPort {
     val actionInFlight: AtomicBoolean
     val activeSessionId: AutomationSessionId?
     val battleRosterSearch: LabyrinthBattleRosterSearch
-    var battleTeamActionStopReason: String?
     var battleTeamActionUnconfirmedAttempts: Int
     val battleTeamDispatchSequence: AtomicLong
-    var battleTeamExecutionAttempts: Int
-    var battleTeamPageStallSince: Long
     val battleTeamRecommendationUnavailableReason: String?
-    var battleTeamScrollActions: Int
     val battleWait: LabyrinthBattleWaitPolicy
     var bossEditorBlocked: Boolean
     var bossEditorPreparationStage: LabyrinthBossEditorPreparationStage
@@ -44,10 +40,7 @@ internal interface LabyrinthBattleTeamPort {
     val committedBattleCharacterIds: MutableSet<String>
     val currentBattleTeamSignatures: MutableSet<String>
     val exhaustedBattleRosterFilters: MutableSet<com.landosol.toolbox.labyrinth.vision.LabyrinthBattleElementFilter>
-    var lastBattleTeamActionAt: Long
     var lastBattleTeamExecutionKey: String?
-    var lastBattleTeamRecommendationKey: String?
-    var lastBattleTeamSelectionPlanLog: String?
     var lastNormalBattleTeamSignature: String?
     var lastSessionActionAt: Long
     var pendingBattleTeamAction: PendingBattleTeamAction?
@@ -77,10 +70,50 @@ internal interface LabyrinthBattleTeamPort {
     fun traceAction(label: String): Unit
     fun traceReject(reason: String): Unit
     fun traceWorkflow(owner: String, phase: String): Unit
+    fun invalidateBattleTeamRecommendation()
+    fun clearBattleTeamSelectionPlanLog()
 }
 
 /** 执行编组计划，核对开战与切队反馈，并跟踪编组停滞。 */
 internal class LabyrinthBattleTeamWorkflow(private val port: LabyrinthBattleTeamPort) : LabyrinthBattleTeamPort by port {
+    @Volatile
+    private var battleTeamExecutionAttempts = 0
+
+    @Volatile
+    private var battleTeamScrollActions = 0
+
+    @Volatile
+    private var lastBattleTeamActionAt = Long.MIN_VALUE
+
+    /** Retry/run boundaries keep their original reset order through this owner. */
+    fun resetBattleTeamActionFeedback() {
+        pendingBattleTeamAction = null
+        battleTeamActionUnconfirmedAttempts = 0
+        battleTeamActionStopReason = null
+    }
+
+    fun resetBattleTeamPageStall() {
+        battleTeamPageStallSince = Long.MIN_VALUE
+    }
+
+    /**
+     * 超限停机已经申请、但还没落定的停机文案（非空即表示申请中）。
+     *
+     * 停机走动作协程（[finishFromPlanner] → `launchGuardedAction`），单动作锁被占的那一帧申请会被
+     * 静默丢掉；所以申请之后每帧都要再要一次，直到运行真的停住（与既有 5 分钟战斗等待超时的写法一致）。
+     */
+    @Volatile
+    private var battleTeamActionStopReason: String? = null
+
+    /**
+     * 编组页自己的停滞计时戳。
+     *
+     * [handlePostEntryPage] 走到编组页就 return，通用的 120 秒停滞看门狗对这个页面永远不可达
+     * （[LabyrinthPostEntryTapPlan] 里 BATTLE_TEAM_SELECTION 是显式 null），所以本页必须自己记账。
+     */
+    @Volatile
+    private var battleTeamPageStallSince = Long.MIN_VALUE
+
     /**
      * 编组页帧的入口：先看一眼特别装备流程是否在等着让帧，再交给编组/开战规划，最后给本页记账。
      *
@@ -174,8 +207,8 @@ internal class LabyrinthBattleTeamWorkflow(private val port: LabyrinthBattleTeam
                     synchronized(currentBattleTeamSignatures) { currentBattleTeamSignatures.clear() }
                     combatContext = (combatContext ?: LabyrinthCombatContext(LabyrinthCombatKind.BOSS))
                         .copy(kind = LabyrinthCombatKind.BOSS, teamIndex = 1)
-                    lastBattleTeamRecommendationKey = null
-                    lastBattleTeamSelectionPlanLog = null
+                    invalidateBattleTeamRecommendation()
+                    clearBattleTeamSelectionPlanLog()
                     resetBattleTeamExecutionTracking()
                     _state.value = _state.value.copy(
                         combatContext = combatContext,
@@ -209,8 +242,8 @@ internal class LabyrinthBattleTeamWorkflow(private val port: LabyrinthBattleTeam
             synchronized(currentBattleTeamSignatures) { currentBattleTeamSignatures.clear() }
             combatContext = (combatContext ?: LabyrinthCombatContext(LabyrinthCombatKind.BOSS))
                 .copy(kind = LabyrinthCombatKind.BOSS, teamIndex = observation.bossTeamIndex)
-            lastBattleTeamRecommendationKey = null
-            lastBattleTeamSelectionPlanLog = null
+            invalidateBattleTeamRecommendation()
+            clearBattleTeamSelectionPlanLog()
             resetBattleTeamExecutionTracking()
             _state.value = _state.value.copy(
                 combatContext = combatContext,
@@ -359,7 +392,7 @@ internal class LabyrinthBattleTeamWorkflow(private val port: LabyrinthBattleTeam
                 return
             }
             resetBattleTeamExecutionTracking()
-            lastBattleTeamSelectionPlanLog = null
+            clearBattleTeamSelectionPlanLog()
             _state.value = _state.value.copy(
                 battleTeamSelectionPlan = null,
                 message = "自动编组动作反馈未确认：${step.label}；保持编组页并重新识别后规划",
@@ -594,8 +627,8 @@ internal class LabyrinthBattleTeamWorkflow(private val port: LabyrinthBattleTeam
         battleWait.reset()
         resetBattleTeamExecutionTracking()
         battleTeamPageStallSince = Long.MIN_VALUE
-        lastBattleTeamRecommendationKey = null
-        lastBattleTeamSelectionPlanLog = null
+        invalidateBattleTeamRecommendation()
+        clearBattleTeamSelectionPlanLog()
         if (activeSessionId == sessionId) {
             _state.value = _state.value.copy(
                 battleTeamRecommendation = null,
@@ -615,8 +648,8 @@ internal class LabyrinthBattleTeamWorkflow(private val port: LabyrinthBattleTeam
 
     fun onBattlePageChanged(pageState: LabyrinthEntryPageState) {
         if (pageState != LabyrinthEntryPageState.BATTLE_TEAM_SELECTION) {
-            lastBattleTeamRecommendationKey = null
-            lastBattleTeamSelectionPlanLog = null
+            invalidateBattleTeamRecommendation()
+            clearBattleTeamSelectionPlanLog()
             battleTeamPageStallSince = Long.MIN_VALUE
             _state.value = _state.value.copy(
                 battleTeamRecommendation = null,

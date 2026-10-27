@@ -184,20 +184,13 @@ class LabyrinthEntryRecognitionSession(
     @Volatile
     internal var lastPersistedObservationSignature: String? = null
 
+    // Compatibility backing field for existing reflection callers; recommendation owns mutations.
     @Volatile
     internal var lastBattleTeamRecommendationKey: String? = null
 
-    @Volatile
-    internal var lastBattleTeamSelectionPlanLog: String? = null
-
+    // Compatibility backing field for existing reflection callers; team execution owns mutations.
     @Volatile
     internal var lastBattleTeamExecutionKey: String? = null
-
-    @Volatile
-    internal var battleTeamExecutionAttempts = 0
-
-    @Volatile
-    internal var battleTeamScrollActions = 0
 
     internal val battleRosterSearch = LabyrinthBattleRosterSearch()
 
@@ -205,9 +198,6 @@ class LabyrinthEntryRecognitionSession(
     internal val exhaustedBattleRosterFilters = linkedSetOf<com.landosol.toolbox.labyrinth.vision.LabyrinthBattleElementFilter>()
 
     internal var exhaustedBattleRosterFiltersKey: String? = null
-
-    @Volatile
-    internal var lastBattleTeamActionAt = Long.MIN_VALUE
 
     /**
      * 会话级动作节流：本会话**任意**两次点击之间强制 [BATTLE_TEAM_ACTION_INTERVAL_MILLIS]。
@@ -219,30 +209,14 @@ class LabyrinthEntryRecognitionSession(
     @Volatile
     internal var lastSessionActionAt = Long.MIN_VALUE
 
+    // Compatibility backing field for existing reflection callers; team execution owns mutations.
     @Volatile
     internal var pendingBattleTeamAction: PendingBattleTeamAction? = null
 
     /** 连续多少次「编组页动作派发后画面没动」；画面前进一次或整页重来即清零。 */
+    // Compatibility backing field for existing reflection callers; team execution owns mutations.
     @Volatile
     internal var battleTeamActionUnconfirmedAttempts = 0
-
-    /**
-     * 超限停机已经申请、但还没落定的停机文案（非空即表示申请中）。
-     *
-     * 停机走动作协程（[finishFromPlanner] → `launchGuardedAction`），单动作锁被占的那一帧申请会被
-     * 静默丢掉；所以申请之后每帧都要再要一次，直到运行真的停住（与既有 5 分钟战斗等待超时的写法一致）。
-     */
-    @Volatile
-    internal var battleTeamActionStopReason: String? = null
-
-    /**
-     * 编组页自己的停滞计时戳。
-     *
-     * [handlePostEntryPage] 走到编组页就 return，通用的 120 秒停滞看门狗对这个页面永远不可达
-     * （[LabyrinthPostEntryTapPlan] 里 BATTLE_TEAM_SELECTION 是显式 null），所以本页必须自己记账。
-     */
-    @Volatile
-    internal var battleTeamPageStallSince = Long.MIN_VALUE
 
     internal val battleTeamDispatchSequence = AtomicLong()
 
