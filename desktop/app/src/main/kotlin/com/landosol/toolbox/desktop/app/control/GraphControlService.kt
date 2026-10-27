@@ -21,17 +21,13 @@ import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.awt.Desktop
-import java.awt.image.BufferedImage
-import java.io.ByteArrayOutputStream
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption.CREATE_NEW
 import java.nio.file.StandardOpenOption.WRITE
-import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import javax.imageio.ImageIO
 
 /** Owns one existing graph in its worker JVM. This class performs no transport or tab routing. */
 class GraphControlService(
@@ -571,12 +567,7 @@ class GraphControlService(
         val frame = graph.preview.value ?: return JsonNull
         if (previewTimestamp != frame.timestampMillis) {
             previewPng = withContext(Dispatchers.Default) {
-                val image = BufferedImage(frame.width, frame.height, BufferedImage.TYPE_INT_RGB)
-                image.setRGB(0, 0, frame.width, frame.height, frame.pixels, 0, frame.width)
-                ByteArrayOutputStream().use { bytes ->
-                    check(ImageIO.write(image, "png", bytes)) { "无法编码预览画面" }
-                    Base64.getEncoder().encodeToString(bytes.toByteArray())
-                }
+                encodePreviewPng(frame)
             }
             previewTimestamp = frame.timestampMillis
         }
