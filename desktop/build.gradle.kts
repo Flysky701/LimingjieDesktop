@@ -12,7 +12,8 @@ subprojects {
         if (!providers.gradleProperty("full").isPresent) {
             exclude("**/*IntegrationTest*", "**/*UiTest*", "**/*PackagedRuntimeTest*",
                 "**/WorkerTransportTest*", "**/WorkerLifecycleTest*", "**/DesktopTrayTest*",
-                "**/InstanceInfrastructureTest*", "**/DeviceIdentityReaderTest*")
+                "**/InstanceInfrastructureTest*", "**/DeviceIdentityReaderTest*",
+                "**/ProcessAdbExecutorTest*", "**/MaaTouchTest*")
         }
     }
 }

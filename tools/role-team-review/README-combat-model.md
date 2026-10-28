@@ -40,7 +40,7 @@ V2 针对“模型高分、真实玩家评价明显偏低”的审计结果加�
 
 当前 `data.js.sources` 记录的角色与战斗数据库为 **autopcr-db-builder / 202609021434.db**，版本对应已入库快照。
 
-生成器支持通过 `--database <可读SQLite路径>` 与 `--database-version <版本>` 显式指定数据库。默认缓存位于 `role-team-review/cache/master_cn.db`；`--update-db` 走历史公开源下载分支。早期曾对比以下来源：
+生成器支持通过 `--database <可读SQLite路径>` 与 `--database-version <版本>` 显式指定数据库。默认缓存位于 `tools/role-team-review/cache/master_cn.db`；`--update-db` 走历史公开源下载分支。早期曾对比以下来源：
 
 - Expugn `master_cn.db`
 - `redive.estertion.win/db/redive_cn.db.br`
@@ -794,19 +794,19 @@ neko
 ### 核心战斗模型
 
 ```text
-role-team-review/combat_model.py
+tools/role-team-review/combat_model.py
 ```
 
 ### 数据生成
 
 ```text
-role-team-review/generate-data.py
+tools/role-team-review/generate-data.py
 ```
 
 ### 审计页面
 
 ```text
-role-team-review/index.html
+tools/role-team-review/index.html
 ```
 
 ---
@@ -889,15 +889,15 @@ Android 三选一规划器同样会先做 canonical ID 转换。即使视觉层�
 ### 生成数据
 
 ```text
-role-team-review/data.js
+tools/role-team-review/data.js
 ```
 
 ### 数据结构 / 调试工具
 
 ```text
-role-team-review/inspect-combat-data.py
-role-team-review/inspect-skill-actions.py
-role-team-review/inspect-role-db.py
+tools/role-team-review/inspect-combat-data.py
+tools/role-team-review/inspect-skill-actions.py
+tools/role-team-review/inspect-role-db.py
 ```
 
 ---
@@ -908,26 +908,26 @@ role-team-review/inspect-role-db.py
 
 - `攻略/公主连结角色黎明界强度表无图片.xlsx`：五列玩家评分及属性、职阶等资料。
 - `攻略/tierlist_91x91_output/summary.json`：日服参考档位摘要。
-- 可读国服 SQLite 数据库；默认 `role-team-review/cache/master_cn.db` 和旧 `pick/.../202604021043.db` 当前也不存在。
+- 可读国服 SQLite 数据库；默认 `tools/role-team-review/cache/master_cn.db` 和旧 `pick/.../202604021043.db` 当前也不存在。
 
-准备输入后，从仓库根目录运行。生成器使用 Python 标准库，`--update-db` 会访问网络。输出为 `role-team-review/data.js` 和正式资源 `android/app/src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json`；缺少旧事件库时，事件目录输出为空。重新生成后检查这两个文件的差异。
+准备输入后，从仓库根目录运行。生成器使用 Python 标准库，`--update-db` 会访问网络。输出为 `tools/role-team-review/data.js` 和正式资源 `android/app/src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json`；缺少旧事件库时，事件目录输出为空。重新生成后检查这两个文件的差异。
 
 使用已经准备好的默认数据库：
 
 ```powershell
-python role-team-review/generate-data.py
+python tools/role-team-review/generate-data.py
 ```
 
 显式尝试更新历史公开源后重新生成（不会补齐评分表和事件旧库）：
 
 ```powershell
-python role-team-review/generate-data.py --update-db
+python tools/role-team-review/generate-data.py --update-db
 ```
 
 优先使用 `autopcr-db-builder` 已解混淆并校验的最新数据库：
 
 ```powershell
-python role-team-review/generate-data.py `
+python tools/role-team-review/generate-data.py `
   --database C:\path\to\autopcr-db-builder\db\202609021434.db `
   --database-version 202609021434
 ```
@@ -935,16 +935,16 @@ python role-team-review/generate-data.py `
 单独检查战斗模型（仍依赖脚本内 `DEFAULT_DB` 指向的旧本地库）：
 
 ```powershell
-python role-team-review/combat_model.py
+python tools/role-team-review/combat_model.py
 ```
 
 只读检查现有快照的代表性角色：
 
 ```powershell
-python role-team-review/check-generated-data.py
+python tools/role-team-review/check-generated-data.py
 ```
 
-在资源管理器中打开 `role-team-review/index.html` 查看结果。`generate-data.py` 用于当前 V2 模型，`generate-data.mjs` 保留早期档位生成流程。
+在资源管理器中打开 `tools/role-team-review/index.html` 查看结果。`generate-data.py` 用于当前 V2 模型，`generate-data.mjs` 保留早期档位生成流程。
 
 点击角色“校准”后，可以直接查看：
 

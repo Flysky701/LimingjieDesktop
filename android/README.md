@@ -206,7 +206,7 @@ android/
   app/src/test/                        单元测试与回归素材
   docs/                                功能专题说明
 tools/                                 离线导入、校验与测试辅助
-role-team-review/                      角色/队伍数据审阅工具
+tools/role-team-review/                角色/队伍数据审阅工具
 ```
 
 
