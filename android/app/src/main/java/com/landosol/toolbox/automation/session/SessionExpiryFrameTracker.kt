@@ -26,6 +26,8 @@ class SessionExpiryFrameTracker {
     private var width: Int = 0
     @Volatile
     private var height: Int = 0
+    @Volatile
+    private var settlementNavigationActive = false
 
     /** 由 workflow 的帧处理器在每次识别后调用 */
     fun record(result: LabyrinthEntryFrameResult) {
@@ -34,6 +36,21 @@ class SessionExpiryFrameTracker {
         pageState = result.observation.state
         battleFailureEndPoint = result.battleFailure?.endButtonRect?.let(::centre)
         battleEndConfirmationPoint = result.battleEndConfirmation?.advanceButtonRect?.let(::centre)
+        // ITEM_REWARD is also used during ordinary runs. It is safe to dismiss here only
+        // after a recognized settlement control, and this permission ends on leaving that chain.
+        settlementNavigationActive = when (pageState) {
+            LabyrinthEntryPageState.RUN_CLEAR_RESULT,
+            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY,
+            LabyrinthEntryPageState.RUN_CLEAR_CHEST_RESULT -> sessionInvalidationTrigger != null
+            LabyrinthEntryPageState.UNKNOWN,
+            LabyrinthEntryPageState.NODE_SELECTION,
+            LabyrinthEntryPageState.NODE_MAP_VIEW,
+            LabyrinthEntryPageState.RUN_CLEAR_CONGRATULATIONS,
+            LabyrinthEntryPageState.RUN_CLEAR_REWARD_ANIMATION,
+            LabyrinthEntryPageState.RUN_CLEAR_CHEST_ANIMATION,
+            LabyrinthEntryPageState.ITEM_REWARD -> settlementNavigationActive
+            else -> false
+        }
     }
 
     private fun centre(rect: EntryPixelRect) = ScreenPoint(
@@ -70,7 +87,7 @@ class SessionExpiryFrameTracker {
             LabyrinthEntryPageState.RUN_CLEAR_CHEST_RESULT ->
                 anchorCenter(EntryAnchorId.RUN_CLEAR_CHEST_CONFIRM_BUTTON, TRIGGER_MIN_SCORE)
             LabyrinthEntryPageState.ITEM_REWARD ->
-                anchorCenter(EntryAnchorId.ITEM_REWARD_CLOSE, TRIGGER_MIN_SCORE)
+                anchorCenter(EntryAnchorId.ITEM_REWARD_CLOSE, TRIGGER_MIN_SCORE).takeIf { settlementNavigationActive }
             else -> null
         }
 

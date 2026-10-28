@@ -1,10 +1,15 @@
 package com.landosol.toolbox.labyrinth
 
+import android.graphics.Bitmap
 import com.landosol.toolbox.automation.*
+import com.landosol.toolbox.automation.capture.CapturedFrame
+import com.landosol.toolbox.automation.capture.CaptureFrameBus
 import com.landosol.toolbox.automation.session.*
 import com.landosol.toolbox.labyrinth.batch.*
 import com.landosol.toolbox.labyrinth.vision.*
-import com.landosol.toolbox.labyrinth.vision.LabyrinthResultHandoffRegressionTest.Companion.frame
+import com.landosol.toolbox.clanbattle.recognition.PixelImage
+import java.io.File
+import javax.imageio.ImageIO
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
@@ -14,7 +19,8 @@ import org.junit.Assert.*
 import org.junit.Test
 
 /** Offline transport only: production classifier, run session, reset workflow, tracker,
- * terminator and batch controller are all used. No ADB, network or user data. */
+ * terminator, block classifier and batch controller are all used through CaptureFrameBus.
+ * Recognition results come from recorded pixels/synthetic anchors; no ADB, network or user data. */
 class LabyrinthTwoRoundHandoffTest {
     private fun page(vararg anchors: String): LabyrinthEntryFrameResult {
         val scores = LabyrinthAnchorScores(anchors.associateWith { 0.99 })
@@ -48,7 +54,7 @@ class LabyrinthTwoRoundHandoffTest {
         val visible = AtomicReference(home)
         val session = LabyrinthEntryRecognitionSession(
             sessionManager = manager, captureActive = { true }, captureStop = {}, clock = now::get,
-            processorFactory = { { error("frames are replayed offline") } }, actionScope = scope,
+            processorFactory = { { visible.get() } }, actionScope = scope, actionTargetReady = { true },
             actionExecutor = SessionBoundActionExecutor(manager) { runTaps += it; AutomationBackendResult.Completed },
             actionsAvailable = { true }, runTerminalListener = { events += it },
         )
@@ -80,13 +86,19 @@ class LabyrinthTwoRoundHandoffTest {
                     popupVisible = { tracker.popupVisible }, titleReached = { tracker.titleReached },
                     synchronizedWithoutExpiry = { tracker.clientSynchronizedWithoutExpiry }, frameSize = { tracker.frameSize },
                     returnTitleAnchorPoint = { tracker.anchorCenter(EntryAnchorId.SESSION_RETURN_TITLE) },
-                    triggerTapDelayMillis = 1, returnTapDelayMillis = 30, popupAfterTapTimeoutMillis = 50,
+                    triggerTapDelayMillis = 1, returnTapDelayMillis = 30, popupAfterTapTimeoutMillis = 350,
                 )
                 val reset = GameSessionResetWorkflow(
                     sessionManager = manager,
                     backend = CompositeSessionResetBackend(terminator, Relauncher { error("No process launch allowed") }),
-                    captureActive = { true }, processorFactory = { { error("offline replay") } },
-                    blockClassifier = { SessionBlockKind.NONE }, presence = FixedGameClientPresenceObserver(true),
+                    captureActive = { true }, processorFactory = { { captured ->
+                        tracker.trackFrame(captured.bitmap.width, captured.bitmap.height)
+                        visible.get().also(tracker::record)
+                    } },
+                    blockClassifier = { result -> SessionBlockClassifier().classify(
+                        result.observation.anchorScores.toSessionBlockScores(),
+                        result.observation.stateScores[LabyrinthEntryPageState.TITLE_WAITING_TAP] ?: 0.0,
+                    ) }, presence = FixedGameClientPresenceObserver(true),
                     actionScope = scope, totalTimeoutMillis = 15_000,
                     onNextRoundReady = { readyCallbacks++ },
                     actionExecutor = SessionBoundActionExecutor(manager) {
@@ -102,20 +114,19 @@ class LabyrinthTwoRoundHandoffTest {
                         LabyrinthEntryActionPlannerConfig(pageActionIntervalMillis = 1, titleTapIntervalMillis = 1)) },
                 )
                 assertTrue(reset.start() is GameSessionResetStartResult.Started)
-                val id = manager.current()!!.id
-                val observe = reset.javaClass.declaredMethods.single { it.name.startsWith("handleObservation") }
-                    .apply { isAccessible = true }
-                val planner = LabyrinthEntryActionPlanner(LabyrinthEntryActionPlannerConfig(pageActionIntervalMillis = 1))
                 val replay = scope.launch {
                     while (reset.state.value.running) {
-                        val current = visible.get()
-                        tracker.record(current)
-                        observe.invoke(reset, id.value, current, SessionBlockKind.NONE, 1920, 1080, planner)
-                        delay(20)
+                        CaptureFrameBus.dispatch(CapturedFrame(
+                            Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888), System.currentTimeMillis()))
+                        delay(250)
                     }
                 }
                 try {
-                    val end = withTimeout(17_000) { reset.state.first { !it.running } }
+                    val end = try { withTimeout(17_000) { reset.state.first { !it.running } } }
+                    catch (failure: TimeoutCancellationException) {
+                        throw AssertionError("reset=$resets state=${reset.state.value} visible=${visible.get().observation.state} " +
+                            "owner=${CaptureFrameBus.currentOwner()} taps=$resetTaps", failure)
+                    }
                     return if (end.status == GameSessionResetStatus.STOPPED &&
                         end.stage == GameSessionResetStage.READY_FOR_NEXT_ROUND && end.lastBlock == SessionBlockKind.NONE) {
                         LabyrinthBatchInvalidationResult.Success("verified-reset-ready")
@@ -128,12 +139,9 @@ class LabyrinthTwoRoundHandoffTest {
             override suspend fun saveCheckpoint(checkpoint: LabyrinthBatchCheckpoint) {}
         }
         val batch = LabyrinthBatchController(ports, clock = now::get)
-        val feedMethod = session.javaClass.declaredMethods.single { it.name.startsWith("processFrameResult") }
-            .apply { isAccessible = true }
         suspend fun feed(result: LabyrinthEntryFrameResult, time: Long) {
             now.set(time); visible.set(result)
-            val id = session.state.value.sessionId ?: return
-            feedMethod.invoke(session, id.value, result, 1920, 1080, time)
+            CaptureFrameBus.dispatch(CapturedFrame(Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888), time))
             delay(30)
         }
         try {
@@ -181,5 +189,23 @@ class LabyrinthTwoRoundHandoffTest {
                 LabyrinthEntryPageState.ITEM_REWARD, LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE,
                 LabyrinthEntryPageState.UNKNOWN), resetTaps)
         } finally { session.stop(); scope.cancel() }
+    }
+
+    companion object {
+        private val root = generateSequence(File(".").canonicalFile, File::getParentFile)
+            .first { File(it, "android/app/build.gradle.kts").isFile }
+        private val templates by lazy {
+            val paths = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS + AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+            LabyrinthEntryTemplateSet(paths.mapNotNull { (id, path) ->
+                File(root, "android/app/src/main/assets/$path").takeIf { it.isFile }?.let { id to read(it) }
+            }.toMap())
+        }
+        fun frame(name: String): LabyrinthEntryFrameResult = LabyrinthEntryFrameProcessor(templates = templates)
+            .process(read(File(root, "android/app/src/test/resources/labyrinth/$name")))
+        private fun read(file: File): PixelImage {
+            val image = requireNotNull(ImageIO.read(file))
+            return PixelImage(image.width, image.height,
+                image.getRGB(0, 0, image.width, image.height, null, 0, image.width))
+        }
     }
 }

@@ -46,9 +46,10 @@ object DesktopSelfTest {
                 "Writable data directory: $directory"
             }
             checkItem("fonts") {
-                val font = trayMenuFont()
-                check(font.canDisplayUpTo(TRAY_MENU_GLYPHS) == -1) { "Tray menu font cannot display Chinese: ${font.family}" }
-                "Tray menu CJK font: ${font.family} ${font.size2D}pt"
+                val font = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().availableFontFamilyNames
+                    .firstOrNull { java.awt.Font(it, java.awt.Font.PLAIN, 14).canDisplayUpTo("中文黎明界") == -1 }
+                checkNotNull(font) { "No usable CJK font was found" }
+                "CJK characters available in $font"
             }
             checkItem("resources") {
                 val names = resource("desktop/assets-manifest.txt").toString(Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }.toList()

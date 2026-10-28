@@ -332,6 +332,12 @@ class LabyrinthEntryPageClassifier(
         // modal in control, but require the matching button to decide which page owns it.
         // A logo without a trustworthy button must not expose the background map to actions.
         val runResultLogoScore = anchorScores[EntryAnchorId.RUN_RESULT_LOGO]
+        val resultOverlayCandidate = best.key in setOf(
+            LabyrinthEntryPageState.NODE_SELECTION,
+            LabyrinthEntryPageState.NODE_MAP_VIEW,
+            LabyrinthEntryPageState.RUN_CLEAR_RESULT,
+            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY,
+        )
         val state = when {
             eventOverlayScore >= maxOf(minScore, EVENT_OVERLAY_MIN_SCORE) && best.key in setOf(
                 LabyrinthEntryPageState.NODE_SELECTION,
@@ -343,11 +349,11 @@ class LabyrinthEntryPageClassifier(
                 LabyrinthEntryPageState.NODE_MAP_VIEW,
                 LabyrinthEntryPageState.ITEM_REWARD,
             ) -> LabyrinthEntryPageState.ITEM_REWARD
-            runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE && resultSummaryScore >= 0.80 ->
+            resultOverlayCandidate && runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE && resultSummaryScore >= 0.80 ->
                 LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY
-            runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE && finalResultScore >= 0.80 ->
+            resultOverlayCandidate && runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE && finalResultScore >= 0.80 ->
                 LabyrinthEntryPageState.RUN_CLEAR_RESULT
-            runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE -> LabyrinthEntryPageState.UNKNOWN
+            resultOverlayCandidate && runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE -> LabyrinthEntryPageState.UNKNOWN
             best.value < minScore -> LabyrinthEntryPageState.UNKNOWN
             bestRankingScore - secondRankingScore < minMargin -> LabyrinthEntryPageState.UNKNOWN
             else -> best.key
