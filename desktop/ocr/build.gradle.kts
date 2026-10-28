@@ -23,7 +23,7 @@ val verifyModels by tasks.registering {
 tasks.named("processResources") { dependsOn(verifyModels) }
 tasks.named("check") { dependsOn(verifyModels) }
 apply(from = "evaluation.gradle.kts")
-tasks.named("check") { dependsOn("evaluate") }
+if (providers.gradleProperty("full").isPresent) tasks.named("check") { dependsOn("evaluate") }
 
 // Explicit diagnostics preserve transformed observations without counting them as test cases
 // or adding repeated variants to the accuracy manifest.

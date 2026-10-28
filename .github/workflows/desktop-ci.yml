@@ -75,10 +75,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
-      - name: Verify desktop modules, Windows runtime and OCR quality
+      - name: Fast desktop checks
+        if: github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/desktop-v')
+        run: |
+          & desktop/gradlew.bat -p desktop check --continue --build-cache --no-daemon --max-workers=2 --stacktrace --console=plain
+          if ($LASTEXITCODE -ne 0) { throw 'Fast desktop checks failed' }
+      - name: Full desktop, runtime and OCR checks
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/desktop-v')
         run: |
           $executable = Join-Path $env:GITHUB_WORKSPACE 'desktop/app/build/compose/binaries/main-release/app/LimingjieAssistant/LimingjieAssistant.exe'
-          & desktop/gradlew.bat -p desktop :app:createReleaseDistributable check --continue --build-cache --no-daemon --max-workers=2 --stacktrace --console=plain "-PpackagedWorkerExecutable=$executable"
+          & desktop/gradlew.bat -p desktop :app:createReleaseDistributable check -Pfull --continue --build-cache --no-daemon --max-workers=2 --stacktrace --console=plain "-PpackagedWorkerExecutable=$executable"
           if ($LASTEXITCODE -ne 0) { throw 'Desktop verification failed; see the test and OCR summary' }
       - name: Build Windows candidate ZIP
         if: inputs.package_candidate == true || startsWith(github.ref, 'refs/tags/desktop-v')

@@ -89,7 +89,7 @@ class SharedSupervisorModelTest {
         suspend fun close() { try { model.shutdown() } finally { scope.cancel() } }
     }
 
-    @Test fun phase1Single01ConnectSelectBindAndUnbindNeverStartOrChangeGlobalSelection() = runBlocking {
+    @Test fun connectSelectBindAndUnbindNeverStartOrChangeGlobalSelection() = runBlocking {
         val f = Fixture()
         try {
             f.model.restore()
@@ -108,7 +108,7 @@ class SharedSupervisorModelTest {
         } finally { f.close() }
     }
 
-    @Test fun phase1Single02BusyWorkerRejectsBindingAndDisconnectWithoutChangingSession() = runBlocking {
+    @Test fun busyWorkerRejectsBindingAndDisconnectWithoutChangingSession() = runBlocking {
         val f = Fixture()
         try {
             val id = f.model.connectDevice("127.0.0.1:5555")
@@ -121,7 +121,7 @@ class SharedSupervisorModelTest {
         } finally { f.close() }
     }
 
-    @Test fun phase1Single03RebootDoesNotReuseOldAccountBinding() = runBlocking {
+    @Test fun rebootDoesNotReuseOldAccountBinding() = runBlocking {
         val f = Fixture()
         try {
             val id = f.model.connectDevice("127.0.0.1:5555")
@@ -134,7 +134,7 @@ class SharedSupervisorModelTest {
         } finally { f.close() }
     }
 
-    @Test fun phase1Single04ShutdownDuringConnectCleansPublishedWorker() = runBlocking {
+    @Test fun shutdownDuringConnectCleansPublishedWorker() = runBlocking {
         val f = Fixture()
         try {
             f.gate = CompletableDeferred()
@@ -148,7 +148,7 @@ class SharedSupervisorModelTest {
         } finally { f.close() }
     }
 
-    @Test fun phase1Single05ReconnectAndApplicationRestoreKeepVerifiedRuntimeConfiguration() = runBlocking {
+    @Test fun reconnectAndApplicationRestoreKeepVerifiedRuntimeConfiguration() = runBlocking {
         val f = Fixture()
         try {
             val id = f.model.connectDevice("127.0.0.1:5555")
@@ -174,7 +174,7 @@ class SharedSupervisorModelTest {
         } finally { f.close() }
     }
 
-    @Test fun phase1Single06ConnectAfterRebootRetiresTheOldSessionWithoutTransferringItsBinding() = runBlocking {
+    @Test fun connectAfterRebootRetiresTheOldSessionWithoutTransferringItsBinding() = runBlocking {
         val f = Fixture()
         try {
             val oldId = f.model.connectDevice("127.0.0.1:5555")
@@ -191,7 +191,7 @@ class SharedSupervisorModelTest {
         } finally { f.close() }
     }
 
-    @Test fun phase1Single07DiscoveryRetiresOnlyTheSessionWhoseAddressHasANewBoot() = runBlocking {
+    @Test fun discoveryRetiresOnlyTheSessionWhoseAddressHasANewBoot() = runBlocking {
         val f = Fixture()
         try {
             f.targets += RuntimeDeviceTarget("device-b", "127.0.0.1:5557", "模拟器 B",
@@ -210,7 +210,7 @@ class SharedSupervisorModelTest {
         } finally { f.close() }
     }
 
-    @Test fun phase1Single08RebootDetectionPreservesUnsavedDraftsAndBusyTasks() = runBlocking {
+    @Test fun rebootDetectionPreservesUnsavedDraftsAndBusyTasks() = runBlocking {
         val f = Fixture()
         try {
             val id = f.model.connectDevice("127.0.0.1:5555")
@@ -226,7 +226,7 @@ class SharedSupervisorModelTest {
         } finally { f.close() }
     }
 
-    @Test fun phase1Single09PreparationPhaseRemainsVisibleUntilTheDeviceIsReady() = runBlocking {
+    @Test fun preparationPhaseRemainsVisibleUntilTheDeviceIsReady() = runBlocking {
         val f = Fixture()
         try {
             f.gate = CompletableDeferred()

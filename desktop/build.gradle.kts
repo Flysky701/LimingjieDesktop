@@ -6,3 +6,13 @@ plugins {
     alias(libs.plugins.ksp) apply false
 }
 allprojects { group = "com.landosol.toolbox.desktop"; version = "1.0.18+desktop.11" }
+
+subprojects {
+    tasks.withType<Test>().configureEach {
+        if (!providers.gradleProperty("full").isPresent) {
+            exclude("**/*IntegrationTest*", "**/*UiTest*", "**/*PackagedRuntimeTest*",
+                "**/WorkerTransportTest*", "**/WorkerLifecycleTest*", "**/DesktopTrayTest*",
+                "**/InstanceInfrastructureTest*", "**/DeviceIdentityReaderTest*")
+        }
+    }
+}

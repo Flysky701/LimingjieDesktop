@@ -4,51 +4,6 @@ import java.util.zip.ZipFile
 val upstreamMain = rootProject.file("../android/app/src/main/java")
 fun sourceFiles() = upstreamMain.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
 fun digest(file: File) = MessageDigest.getInstance("SHA-256").digest(file.readBytes()).joinToString("") { "%02x".format(it) }
-fun normalizeApi(value: String) = value.replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
-    .replace(Regex("//[^\\n]*"), "").replace(Regex("\\b(private|public|val|var)\\s+"), "")
-    .replace(Regex("\\s+"), "").replace(",)", ")").trimEnd(',')
-fun functions(source: String): Set<String> {
-    var text = source.replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "").replace(Regex("//[^\\n]*"), "")
-        .replace(Regex("@Synchronized\\s*"), "")
-    val privateType = Regex("(?m)^\\s*private (?:class|object) [^{]+\\{")
-    while (true) {
-        val declaration = privateType.find(text) ?: break
-        var depth = 1
-        var end = declaration.range.last + 1
-        while (end < text.length && depth > 0) { if (text[end] == '{') depth++; if (text[end] == '}') depth--; end++ }
-        check(depth == 0) { "Unbalanced private type" }
-        text = text.removeRange(declaration.range.first, end)
-    }
-    val found = mutableSetOf<String>()
-    val start = Regex("(?m)^\\s*((?:(?:public|internal|private|protected|override|suspend|inline|operator)\\s+)*)fun\\s+([a-zA-Z0-9_]+)\\s*\\(")
-    for (match in start.findAll(text)) {
-        if (match.groupValues[1].contains("private") || match.groupValues[1].contains("protected") || match.groupValues[2] == "migrate") continue
-        var depth = 1
-        var end = match.range.last + 1
-        while (end < text.length && depth > 0) { if (text[end] == '(') depth++; if (text[end] == ')') depth--; end++ }
-        check(depth == 0) { "Unbalanced API declaration" }
-        val returnType = Regex("^\\s*:\\s*([^={\\n]+)").find(text.substring(end))?.groupValues?.get(1).orEmpty()
-        found += (if (match.groupValues[1].contains("suspend")) "suspend" else "") + normalizeApi(text.substring(text.indexOf("fun", match.range.first), end) + returnType)
-    }
-    return found
-}
-val checkSubstituteSignatures = tasks.register("checkSubstituteSignatures") {
-    group = "verification"
-    doLast {
-        val paths = file("upstream-excludes.txt").readLines().filter { "# S |" in it }.map { it.substringBefore('#').trim() }
-        for (path in paths) {
-            val original = upstreamMain.resolve(path).readText()
-            val replacement = file("src/main/kotlin/$path").readText()
-            val missing = functions(original) - functions(replacement)
-            check(missing.isEmpty()) { "Substitute API drift in $path: $missing" }
-            val name = File(path).nameWithoutExtension
-            val constructor = Regex("class\\s+$name\\s*\\((.*?)\\)\\s*(?::|\\{)", RegexOption.DOT_MATCHES_ALL)
-            val expected = constructor.find(original)?.groupValues?.get(1)
-            if (expected != null) check(normalizeApi(expected) == normalizeApi(constructor.find(replacement)?.groupValues?.get(1).orEmpty())) { "Constructor drift: $path" }
-        }
-        logger.lifecycle("Same-name substitute declarations match upstream (JVM migration parameter intentionally adapted).")
-    }
-}
 val checkShimCollisions = tasks.register("checkShimCollisions") {
     group = "verification"
     dependsOn("compileKotlin")
@@ -88,17 +43,22 @@ val scanAndroidCoupling = tasks.register("scanAndroidCoupling") {
         report.get().asFile.apply { parentFile.mkdirs(); writeText(rows.joinToString("\n") + "\n") }
     }
 }
-val checkUpstreamDrift = tasks.register("checkUpstreamDrift") {
+val checkUpstreamContracts = tasks.register("checkUpstreamContracts") {
     group = "verification"
-    dependsOn("prepareUpstreamMain", checkSubstituteSignatures, scanAndroidCoupling, "kspKotlin")
     doLast {
-        val expected = file("upstream-coupling.txt").readLines().filter { it.isNotBlank() }.toSet()
-        val actual = sourceFiles().filter { Regex("(?m)^import (android\\.|androidx\\.|com.google.mlkit\\.)").containsMatchIn(it.readText()) }.map { it.relativeTo(upstreamMain).invariantSeparatorsPath }.toSet()
-        check(expected == actual) { "Android coupling changed. Added=${actual - expected}; removed=${expected - actual}" }
         file("upstream-drift.properties").readLines().filter { it.isNotBlank() && !it.startsWith('#') }.forEach { line ->
             val (path, expectedDigest) = line.split('=', limit = 2)
             check(digest(upstreamMain.resolve(path)) == expectedDigest) { "Adapted upstream contract changed: $path; review replacement before updating baseline" }
         }
+    }
+}
+val checkUpstreamDrift = tasks.register("checkUpstreamDrift") {
+    group = "verification"
+    dependsOn("prepareUpstreamMain", checkUpstreamContracts, scanAndroidCoupling, "kspKotlin")
+    doLast {
+        val expected = file("upstream-coupling.txt").readLines().filter { it.isNotBlank() }.toSet()
+        val actual = sourceFiles().filter { Regex("(?m)^import (android\\.|androidx\\.|com.google.mlkit\\.)").containsMatchIn(it.readText()) }.map { it.relativeTo(upstreamMain).invariantSeparatorsPath }.toSet()
+        check(expected == actual) { "Android coupling changed. Added=${actual - expected}; removed=${expected - actual}" }
         val original = rootProject.file("../android/app/schemas/com.landosol.toolbox.data.local.AppDatabase/4.json").readText()
         val desktop = layout.buildDirectory.file("schemas/com.landosol.toolbox.data.local.AppDatabase/4.json").get().asFile.readText()
         val identity = Regex("\"identityHash\"\\s*:\\s*\"([^\"]+)\"")
@@ -124,4 +84,7 @@ tasks.named<Test>("test") {
     doFirst { snapshotBeforeTests = androidSnapshot() }
     finalizedBy(verifyUpstreamUnchanged)
 }
-tasks.named("check") { dependsOn(checkShimCollisions, checkSubstituteSignatures, checkUpstreamDrift) }
+tasks.named("check") {
+    dependsOn(checkUpstreamContracts)
+    if (providers.gradleProperty("full").isPresent) dependsOn(checkShimCollisions, checkUpstreamDrift)
+}

@@ -25,6 +25,27 @@ dependencies {
 tasks.withType<Test>().configureEach {
     systemProperty("limingjie.test.classpath", sourceSets["test"].runtimeClasspath.asPath)
     providers.gradleProperty("packagedWorkerExecutable").orNull?.let { systemProperty("limingjie.test.packagedWorker", it) }
+    if (providers.gradleProperty("full").isPresent) {
+        dependsOn("createReleaseDistributable")
+        systemProperty("limingjie.test.packagedWorker", providers.gradleProperty("packagedWorkerExecutable")
+            .orElse(layout.buildDirectory.file("compose/binaries/main-release/app/LimingjieAssistant/LimingjieAssistant.exe")
+                .map { it.asFile.absolutePath }).get())
+    }
+}
+val probe = sourceSets.create("probe") {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+configurations[probe.implementationConfigurationName].extendsFrom(configurations.implementation.get())
+kotlin.target.compilations.getByName("probe").associateWith(kotlin.target.compilations.getByName("main"))
+tasks.register<JavaExec>("probeGraph") {
+    group = "verification"
+    description = "Explicit manual graph probe; connects to and launches the selected game"
+    dependsOn(probe.classesTaskName)
+    classpath = probe.runtimeClasspath
+    mainClass.set("com.landosol.toolbox.desktop.app.LiveGraphReadOnlyProbeKt")
+    args(providers.gradleProperty("probeAdb").orElse("").get(), providers.gradleProperty("probeSerial").orElse("").get(),
+        providers.gradleProperty("probeOutput").orElse("").get())
 }
 compose.desktop {
     application {
@@ -119,12 +140,7 @@ tasks.register<Zip>("packagePortableZip") {
     isReproducibleFileOrder = true
     isZip64 = true
     from(layout.buildDirectory.dir("compose/binaries/main-release/app/LimingjieAssistant")) { into("LimingjieAssistant") }
-    from(listOf(rootProject.file("../README-desktop.md"), rootProject.file("../LICENSE"), rootProject.file("../THIRD_PARTY_NOTICES.md"))) { into("LimingjieAssistant") }
-    from(rootProject.file("../docs/desktop/USER_CHECKLIST.md")) { into("LimingjieAssistant"); rename { "用户验收清单.md" } }
-    from(rootProject.file("../docs/desktop/reports/BASELINE-DESKTOP8.md")) { into("LimingjieAssistant"); rename { "基础版说明.md" } }
-    from(rootProject.file("../docs/desktop/reports/ADB-DAEMON-DESKTOP9.md")) { into("LimingjieAssistant"); rename { "ADB修复说明.md" } }
-    from(rootProject.file("../docs/desktop/reports/PREVIEW-DEMAND-DESKTOP10.md")) { into("LimingjieAssistant"); rename { "预览优化说明.md" } }
-    from(rootProject.file("../docs/desktop/reports/ROUND-END-RESULT.txt")) { into("LimingjieAssistant"); rename { "当局结束修复说明.txt" } }
+    from(listOf(rootProject.file("../docs/USER-GUIDE.md"), rootProject.file("../LICENSE"), rootProject.file("../THIRD_PARTY_NOTICES.md"))) { into("LimingjieAssistant") }
     from(rootProject.file("licenses")) { into("LimingjieAssistant/licenses") }
     from(rootProject.file("device/licenses")) { into("LimingjieAssistant/licenses/MaaTouch") }
     from(rootProject.file("ocr/licenses")) { into("LimingjieAssistant/licenses/OCR") }
@@ -134,7 +150,7 @@ tasks.register<Zip>("packagePortableZip") {
     doFirst {
         check(System.getProperty("os.name").startsWith("Windows")) { "Portable Windows ZIP must be built on Windows" }
         check(layout.buildDirectory.file("compose/binaries/main-release/app/LimingjieAssistant/LimingjieAssistant.exe").get().asFile.isFile) { "jpackage app-image is missing" }
-        listOf("../README-desktop.md", "../LICENSE", "../THIRD_PARTY_NOTICES.md", "../docs/desktop/USER_CHECKLIST.md", "licenses/DEPENDENCIES.md", "ocr/MODELS.md").forEach {
+        listOf("../docs/USER-GUIDE.md", "../LICENSE", "../THIRD_PARTY_NOTICES.md", "licenses/DEPENDENCIES.md", "ocr/MODELS.md").forEach {
             check(rootProject.file(it).isFile) { "Missing distribution notice: $it" }
         }
         val inventory = rootProject.file("licenses/DEPENDENCIES.md").readText()

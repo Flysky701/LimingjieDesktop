@@ -71,7 +71,9 @@ val generateBuildConfig by tasks.registering {
     }
 }
 kotlin.sourceSets.main { kotlin.srcDir(prepareUpstreamMain); kotlin.srcDir(generateBuildConfig) }
-kotlin.sourceSets.test { kotlin.srcDir(prepareUpstreamTest) }
+kotlin.sourceSets.test {
+    if (providers.gradleProperty("full").isPresent) kotlin.srcDir(prepareUpstreamTest)
+}
 sourceSets.main { resources.srcDir(prepareUpstreamAssets) }
 sourceSets.test { resources.srcDir(upstream.resolve("src/test/resources")); resources.srcDir(upstream.resolve("../test-fixtures/protocol")) }
 dependencies {

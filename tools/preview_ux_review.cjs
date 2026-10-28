@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const { chromium } = require('playwright');
 
 const root = path.resolve(__dirname, '..');
-const design = path.join(root, 'docs/desktop/design');
+const design = path.join(root, 'docs/archive/desktop/design');
 const assetRoot = path.join(root, 'android/app/src/main/assets/resource-packs/cn-bilibili');
 const catalog = JSON.parse(fs.readFileSync(path.join(assetRoot, 'labyrinth-role-decision.json'), 'utf8'));
 const icons = JSON.parse(fs.readFileSync(path.join(assetRoot, 'icons.json'), 'utf8')).characterIcons;
@@ -25,7 +25,7 @@ fs.writeFileSync(path.join(design, 'ux-sample-roles.js'),
   '// Catalog and portraits are existing project assets. Personal scores in the mockup are examples.\n' +
   'const UX_SAMPLE_ROLES = ' + JSON.stringify(sample, null, 2) + ';\n');
 
-const output = path.join(root, 'docs/desktop/evidence/ux/design');
+const output = path.join(root, 'docs/archive/desktop/evidence/ux/design');
 fs.mkdirSync(output, { recursive: true });
 const views = ['idle', 'running', 'stopped', 'strategy', 'ratings'];
 const report = { source: 'HTML mockup only; all run data is illustrative; no emulator connection', layouts: [], interactions: [] };

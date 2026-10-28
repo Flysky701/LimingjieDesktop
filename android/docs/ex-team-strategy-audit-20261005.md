@@ -1,6 +1,6 @@
 # EX 配队策略核对（2026-10-05）
 
-依据仓库攻略 [README-ex-mechanics.md](../../role-team-review/README-ex-mechanics.md)，逐项核对当前 14 种 EX。代码基线为上游 `098686e`，本次只修正幽灵领主；其余条目记录实际实现和差距。
+依据仓库攻略 [README-ex-mechanics.md](../../tools/role-team-review/README-ex-mechanics.md)，逐项核对当前 14 种 EX。代码基线为上游 `098686e`，本次只修正幽灵领主；其余条目记录实际实现和差距。
 
 ## 幽灵领主：已修正
 
