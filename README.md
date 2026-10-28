@@ -21,6 +21,8 @@
 
 遇到问题见[常见问题](docs/USER-GUIDE.md#日志与常见问题)。
 
+此前制作的简明使用手册：[PDF](output/pdf/黎明界助手桌面版使用说明书.pdf) · [浏览器版](output/pdf/黎明界助手桌面版使用说明书.html)。当前操作说明以[使用指南](docs/USER-GUIDE.md)为准。
+
 ## 从源码构建
 
 准备 x64 JDK 21，从仓库根目录执行：
