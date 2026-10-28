@@ -2568,6 +2568,9 @@ class LabyrinthEntryRecognitionSession(
             return
         }
         when {
+            !current.dryRun && pageState == LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY &&
+                result.observation.anchorScores[EntryAnchorId.RUN_RESULT_NEXT_BUTTON] >= 0.80 ->
+                handlePostEntryPage(sessionId, result, frameWidth, frameHeight, timestampMillis)
             genericConfirmOwnsFrame ->
                 handlePostEntryPage(sessionId, result, frameWidth, frameHeight, timestampMillis)
 
@@ -5500,8 +5503,22 @@ class LabyrinthEntryRecognitionSession(
                 )
             }
 
+            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY ->
+                anchorRect(result, EntryAnchorId.RUN_RESULT_NEXT_BUTTON)?.let { next ->
+                    LabyrinthPostEntryTapPlan(
+                        LabyrinthPostEntryActionKind.ADVANCE_FINAL_SETTLEMENT,
+                        "推进角色汇总，等待最终总分结果",
+                        next,
+                    )
+                } ?: if (finalAnimationActive && finalAnimationPage) {
+                    LabyrinthPostEntryTapPlan(
+                        LabyrinthPostEntryActionKind.ADVANCE_FINAL_SETTLEMENT,
+                        "推进最终结算动画",
+                        finalSettlementFallbackRect(result, pageState, frameWidth, frameHeight),
+                    )
+                } else null
+
             LabyrinthEntryPageState.RUN_CLEAR_CONGRATULATIONS,
-            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY,
             LabyrinthEntryPageState.RUN_CLEAR_REWARD_ANIMATION,
             LabyrinthEntryPageState.RUN_CLEAR_CHEST_ANIMATION,
             LabyrinthEntryPageState.RUN_CLEAR_CHEST_RESULT,

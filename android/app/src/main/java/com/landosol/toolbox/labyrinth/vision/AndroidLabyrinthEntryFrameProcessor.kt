@@ -168,6 +168,7 @@ class AndroidLabyrinthEntryTemplateLoader(
             EntryAnchorId.RUN_CLEAR_CHARACTER_SUMMARY_TITLE to
                 "$ROOT/run_clear/run_clear_character_summary_title.png",
             EntryAnchorId.RUN_CLEAR_NEXT_BUTTON to "$ROOT/run_clear/run_clear_next_button.png",
+        EntryAnchorId.RUN_RESULT_NEXT_BUTTON to "$ROOT/run_result/run_result_next_button.png",
             EntryAnchorId.RUN_CLEAR_REWARD_ANIMATION_TITLE to
                 "$ROOT/run_clear/run_clear_reward_animation_title.png",
             EntryAnchorId.RUN_CLEAR_CHEST_ANIMATION_TITLE to

@@ -86,24 +86,20 @@ class LabyrinthOpeningPopupFixtureTest {
     }
 
     @Test
-    fun `the final RESULT page is recognised even with 下一步 instead of 关闭`() {
-        // 2026-09-20 bundle 110329: the run finished (区域5 · 36/36) and sat on the RESULT page for
-        // the whole 325 s recording with actionCount frozen at 440, reporting "未知或低置信度页面,
-        // 动作已禁用". The RESULT banner matched at 0.995, but the page score is min(banner, close
-        // button) and this variant of the page carries 下一步 in the 关闭 pill, so the button read
-        // 0.60. That put RUN_CLEAR_RESULT 0.073 above NODE_MAP_VIEW — the map's header and side
-        // controls stay visible behind the page — against the 0.080 ambiguity margin.
+    fun `RESULT character summary is recognised separately from the final score page`() {
+        // 2026-09-20 bundle 110329 has the character list and 下一步, not a total score.
+        // Its weak close-button match (~0.60) must never authorize result completion.
         assumeTrue(fixtureRoot?.isDirectory == true)
         val processor = LabyrinthEntryFrameProcessor(templates = loadShippedTemplates())
         val result = processor.process(readImage(File(fixtureRoot, "run-result-next-button-20260920.jpg")))
         assertEquals(
             result.observation.stateScores.toString(),
-            LabyrinthEntryPageState.RUN_CLEAR_RESULT,
+            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY,
             result.observation.state,
         )
-        // The close-button anchor still has to give the planner somewhere to tap.
-        val close = requireNotNull(result.anchorMatches[EntryAnchorId.RUN_RESULT_CLOSE_BUTTON])
-        assertTrue("close ${close.score}", close.score >= 0.45)
+        // Use the actual 下一步 template; the weak close match is not a final-score signal.
+        val close = requireNotNull(result.anchorMatches[EntryAnchorId.RUN_RESULT_NEXT_BUTTON])
+        assertTrue("next ${close.score}", close.score >= 0.80)
         val centreX = close.rect.left + close.rect.width / 2
         val centreY = close.rect.top + close.rect.height / 2
         assertTrue("下一步 centre ($centreX,$centreY)", centreX in 900..1020 && centreY in 950..1040)

@@ -715,7 +715,9 @@ class GameSessionResetWorkflow(
                         _state.value = _state.value.copy(message = decision.reason)
                     }
                     is LabyrinthEntryActionDecision.Complete ->
-                        markReady(sessionId, decision.reason)
+                        // Entry completion also includes in-run and settlement pages. Only
+                        // the READY decision above proves the next run can take ownership.
+                        markFailed(sessionId, "会话重置未到达可接管页面：${pageState.name}；${decision.reason}")
                     is LabyrinthEntryActionDecision.Stop ->
                         markFailed(sessionId, decision.reason)
                 }

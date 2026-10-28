@@ -819,6 +819,7 @@ class DesktopAppGraph(
                         is GameSessionResetStartResult.Started -> {
                             val final = gameSessionResetWorkflow.state.first { !it.running }
                             val ok = final.status == GameSessionResetStatus.STOPPED &&
+                                final.stage == com.landosol.toolbox.automation.session.GameSessionResetStage.READY_FOR_NEXT_ROUND &&
                                 final.lastBlock == SessionBlockKind.NONE
                             if (ok) {
                                 com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Success(

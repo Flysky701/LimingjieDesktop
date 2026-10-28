@@ -143,6 +143,7 @@ object EntryAnchorId {
     const val BATTLE_RESULT_BOSS_SUMMARY_NEXT_BUTTON = "battle.result.boss_summary.next_button"
     const val RUN_RESULT_LOGO = "run.result.logo"
     const val RUN_RESULT_CLOSE_BUTTON = "run.result.close_button"
+    const val RUN_RESULT_NEXT_BUTTON = "run.result.next_button"
     const val RUN_CLEAR_CONGRATULATIONS_TITLE = "run.clear.congratulations.title"
     const val RUN_CLEAR_CHARACTER_SUMMARY_TITLE = "run.clear.character_summary.title"
     const val RUN_CLEAR_NEXT_BUTTON = "run.clear.next_button"
@@ -267,6 +268,7 @@ object EntryAnchorId {
 
     /** Optional anchors are loaded only when a resource pack provides them. */
     val optional = setOf(
+        RUN_RESULT_NEXT_BUTTON,
         EVENT_CHOICE_TITLE,
         EVENT_CHOICE_INSTRUCTION,
         EVENT_CHOICE_OPTION,
@@ -914,6 +916,7 @@ class LabyrinthEntryFrameProcessor(
             standard(EntryAnchorId.BATTLE_RESULT_BOSS_SUMMARY_NEXT_BUTTON, 1412, 966, 414, 92),
             standard(EntryAnchorId.RUN_RESULT_LOGO, 768, 68, 380, 104),
             standard(EntryAnchorId.RUN_RESULT_CLOSE_BUTTON, 752, 948, 416, 92),
+            standard(EntryAnchorId.RUN_RESULT_NEXT_BUTTON, 752, 948, 416, 92),
             standard(EntryAnchorId.RUN_CLEAR_CONGRATULATIONS_TITLE, 430, 280, 1060, 330),
             standard(EntryAnchorId.RUN_CLEAR_CHARACTER_SUMMARY_TITLE, 650, 80, 620, 110),
             standard(EntryAnchorId.RUN_CLEAR_NEXT_BUTTON, 1452, 946, 388, 92),

@@ -65,6 +65,15 @@ class LabyrinthEntryPageClassifier(
         )
         val battleResultNextScore = anchorScores[EntryAnchorId.BATTLE_RESULT_NEXT_BUTTON]
         val finalCharacterSummaryTitleScore = anchorScores[EntryAnchorId.RUN_CLEAR_CHARACTER_SUMMARY_TITLE]
+        // Both pages say RESULT. Only the score page has a clearly matched close button;
+        // the character list has its own next button and must keep advancing without OCR.
+        val resultNext = anchorScores[EntryAnchorId.RUN_RESULT_NEXT_BUTTON]
+        val resultClose = anchorScores[EntryAnchorId.RUN_RESULT_CLOSE_BUTTON]
+        val resultLogo = anchorScores[EntryAnchorId.RUN_RESULT_LOGO]
+        val resultSummaryScore = minimum(resultLogo, resultNext)
+            .takeIf { resultNext >= 0.80 && resultNext > resultClose + 0.08 } ?: 0.0
+        val finalResultScore = minimum(resultLogo, resultClose)
+            .takeIf { resultClose >= 0.80 && resultClose > resultNext + 0.08 } ?: 0.0
         val eventChoiceScore = maxOf(
             minimum(
                 anchorScores[EntryAnchorId.EVENT_CHOICE_TITLE],
@@ -269,17 +278,14 @@ class LabyrinthEntryPageClassifier(
                 EntryAnchorId.BATTLE_IN_PROGRESS_MENU_BUTTON
             ],
             LabyrinthEntryPageState.BATTLE_RESULT to battleResultScore,
-            LabyrinthEntryPageState.RUN_CLEAR_RESULT to minimum(
-                anchorScores[EntryAnchorId.RUN_RESULT_LOGO],
-                anchorScores[EntryAnchorId.RUN_RESULT_CLOSE_BUTTON],
-            ),
+            LabyrinthEntryPageState.RUN_CLEAR_RESULT to finalResultScore,
             LabyrinthEntryPageState.RUN_CLEAR_CONGRATULATIONS to anchorScores[
                 EntryAnchorId.RUN_CLEAR_CONGRATULATIONS_TITLE
             ],
-            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY to minimum(
+            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY to maxOf(resultSummaryScore, minimum(
                 anchorScores[EntryAnchorId.RUN_CLEAR_CHARACTER_SUMMARY_TITLE],
                 anchorScores[EntryAnchorId.RUN_CLEAR_NEXT_BUTTON],
-            ),
+            )),
             LabyrinthEntryPageState.RUN_CLEAR_REWARD_ANIMATION to anchorScores[
                 EntryAnchorId.RUN_CLEAR_REWARD_ANIMATION_TITLE
             ],
@@ -322,19 +328,9 @@ class LabyrinthEntryPageClassifier(
         // reward popup read as UNKNOWN and the run never closed it). When every modal anchor is
         // strong, the modal owns the frame regardless of what is underneath.
         val itemRewardModalScore = stateScores.getValue(LabyrinthEntryPageState.ITEM_REWARD)
-        // The RESULT banner is a large, full-colour, one-of-a-kind crop: nothing else in the game
-        // scores near 1.0 against it. The run-result page it announces is a modal over the map, so
-        // the map's header and side controls stay visible underneath and score highly, exactly as
-        // for 获得道具 above.
-        //
-        // The page score cannot express that on its own because it is min(logo, close button), and
-        // the button is not always 关闭 — the 加入的角色 summary carries 下一步 in the same pill, so
-        // the button anchor reads ~0.60 and drags the whole page down with it.
-        //
-        // 2026-09-20 bundle 110329: logo 0.995, close button 0.602, so RUN_CLEAR_RESULT scored
-        // 0.602 against NODE_MAP_VIEW's 0.529 — a margin of 0.073 against the required 0.080. The
-        // frame read as UNKNOWN, actions were disabled, and the run sat on the final screen for
-        // the whole recording without pressing 下一步.
+        // RESULT overlays the map on both the character summary and score page. Keep the
+        // modal in control, but require the matching button to decide which page owns it.
+        // A logo without a trustworthy button must not expose the background map to actions.
         val runResultLogoScore = anchorScores[EntryAnchorId.RUN_RESULT_LOGO]
         val state = when {
             eventOverlayScore >= maxOf(minScore, EVENT_OVERLAY_MIN_SCORE) && best.key in setOf(
@@ -347,11 +343,11 @@ class LabyrinthEntryPageClassifier(
                 LabyrinthEntryPageState.NODE_MAP_VIEW,
                 LabyrinthEntryPageState.ITEM_REWARD,
             ) -> LabyrinthEntryPageState.ITEM_REWARD
-            runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE && best.key in setOf(
-                LabyrinthEntryPageState.NODE_SELECTION,
-                LabyrinthEntryPageState.NODE_MAP_VIEW,
-                LabyrinthEntryPageState.RUN_CLEAR_RESULT,
-            ) -> LabyrinthEntryPageState.RUN_CLEAR_RESULT
+            runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE && resultSummaryScore >= 0.80 ->
+                LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY
+            runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE && finalResultScore >= 0.80 ->
+                LabyrinthEntryPageState.RUN_CLEAR_RESULT
+            runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE -> LabyrinthEntryPageState.UNKNOWN
             best.value < minScore -> LabyrinthEntryPageState.UNKNOWN
             bestRankingScore - secondRankingScore < minMargin -> LabyrinthEntryPageState.UNKNOWN
             else -> best.key
