@@ -48,6 +48,9 @@ object ControlOps {
     const val DATABASE_UPDATE="database.update" // reply message:String
     const val NETWORK_TEST="network.test" // reply message:String
     const val ENCRYPTION_TEST="encryption.test" // reply message:String
+    const val HISTORY_LOAD="history.load" // complete retained records, requested by the records page
+    const val LOG_LOAD="log.load" // complete retained logs, requested by diagnostics or copy
+    const val CRASHES_LOAD="crashes.load" // directory scan only when diagnostics is opened
     const val LOG_CLEAR="log.clear"
     const val LOG_ADD="log.add" // text:String,kind:UserLogKind.name
     const val DIAGNOSTICS_EXPORT="diagnostics.export" // path:String (chosen by UI); worker writes its own diagnostic ZIP

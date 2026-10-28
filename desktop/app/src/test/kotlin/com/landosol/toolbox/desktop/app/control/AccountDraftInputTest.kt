@@ -41,6 +41,30 @@ class AccountDraftInputTest {
         } finally { withContext(Dispatchers.Main) { ui.close() } }
     }
 
+    @Test fun sectionDedupStillPublishesCaptchaAndTaskCompletion() = runBlocking<Unit> {
+        val port = DraftPort()
+        val ui = withContext(Dispatchers.Main) { ControlSessionUi(port) }
+        val captcha = buildJsonObject { put("ticketId", "synthetic-ticket"); put("url", "http://127.0.0.1/") }
+        try {
+            val initial = port.document()
+            port.snapshots.value = JsonObject(initial + mapOf(
+                "console" to ControlModelCodec.encode(RunConsoleState(busy = true)), "captcha" to captcha))
+            withTimeout(5_000) { ui.captcha.first { it == captcha }; ui.ux.console.first { it.busy } }
+            val console = ui.ux.console.value
+            // An unrelated update preserves the already decoded console object.
+            port.snapshots.value = JsonObject(port.snapshots.value + ("logRevision" to JsonPrimitive(1)))
+            withTimeout(5_000) { ui.log.revision.first { it == 1L } }
+            assertSame(console, ui.ux.console.value)
+            port.snapshots.value = JsonObject(initial + mapOf("captcha" to JsonNull,
+                "console" to ControlModelCodec.encode(console.copy(busy = false,
+                    task = console.task.copy(message = "任务已完成")))))
+            withTimeout(5_000) {
+                ui.captcha.first { it == null }
+                ui.ux.console.first { !it.busy && it.task.message == "任务已完成" }
+            }
+        } finally { withContext(Dispatchers.Main) { ui.close() } }
+    }
+
     private class DraftPort : ControlSessionPort {
         override val instanceId = "draft-test"
         override val workerRunId = "draft-run"

@@ -6,11 +6,13 @@ import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.util.Base64
 import javax.imageio.ImageIO
+import javax.imageio.ImageWriteParam
+import javax.imageio.IIOImage
 
 private const val PREVIEW_MAX_EDGE = 960
 
-/** Scale only the shell's PNG payload; never modify or replace the source capture pixels. */
-internal fun encodePreviewPng(frame: CapturePixels): String {
+/** Scale only the shell's JPEG payload; never modify or replace the source capture pixels. */
+internal fun encodePreviewJpeg(frame: CapturePixels): String {
     val source = BufferedImage(frame.width, frame.height, BufferedImage.TYPE_INT_RGB).apply {
         setRGB(0, 0, frame.width, frame.height, frame.pixels, 0, frame.width)
     }
@@ -29,7 +31,17 @@ internal fun encodePreviewPng(frame: CapturePixels): String {
         }
     }
     return ByteArrayOutputStream().use { bytes ->
-        check(ImageIO.write(image, "png", bytes)) { "无法编码预览画面" }
+        val writer = ImageIO.getImageWritersByFormatName("jpeg").next()
+        try {
+            ImageIO.createImageOutputStream(bytes).use { output ->
+                writer.output = output
+                val options = writer.defaultWriteParam.apply {
+                    compressionMode = ImageWriteParam.MODE_EXPLICIT
+                    compressionQuality = 0.8f
+                }
+                writer.write(null, IIOImage(image, null, null), options)
+            }
+        } finally { writer.dispose() }
         Base64.getEncoder().encodeToString(bytes.toByteArray())
     }
 }

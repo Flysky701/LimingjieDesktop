@@ -318,7 +318,10 @@ class DesktopAppGraph(
         }
         autoRunScope.launch { labyrinthController.uiState.collect { state -> (state.progress ?: state.message)?.let { log.add(it) } } }
         autoRunScope.launch { automationOverlayCoordinator.state.collect { it?.let { log.add("${it.status} ${it.detail.orEmpty()}") } } }
-        if (!dataOnly) autoRunScope.launch { ocr.warmUp() }
+        if (!dataOnly) autoRunScope.launch {
+            device.state.first { it is DeviceConnectionState.Ready }
+            ocr.warmUp()
+        }
         if (startupUpdates) databaseUpdateScope.launch {
             when (val result = labyrinthCnDatabaseRepository.updateIfNeeded()) {
                 is LabyrinthCnDatabaseUpdateResult.UpToDate ->

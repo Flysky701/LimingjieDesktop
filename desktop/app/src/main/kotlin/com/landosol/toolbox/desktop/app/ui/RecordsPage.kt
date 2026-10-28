@@ -21,7 +21,18 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 @Composable internal fun RecordsPage(graph:ControlSessionUi) {
-    val records by graph.ux.history.records.collectAsState()
+    var records by remember(graph) { mutableStateOf(graph.ux.history.records.value) }
+    val revision by graph.ux.history.revision.collectAsState()
+    val connection by graph.port.connection.collectAsState()
+    val visible = LocalControlVisible.current
+    val actions = rememberActions(graph)
+    LaunchedEffect(graph, revision, connection, visible) {
+        if (visible && connection == WorkerConnectionStatus.CONNECTED) {
+            try { records = graph.ux.history.load() }
+            catch (cancelled:kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure:Exception) { actions.message = failure.message ?: "读取记录失败" }
+        }
+    }
     var diagnostics by remember {mutableStateOf(false)}
     var deviceFilter by remember{mutableStateOf<String?>(null)}
     var accountFilter by remember{mutableStateOf<String?>(null)}
@@ -35,6 +46,7 @@ import java.time.ZoneId
         (taskFilter==null||record.type==taskFilter)
     }
     Column(Modifier.fillMaxSize()) {
+        Message(actions.message)
         Row(Modifier.padding(horizontal=24.dp,vertical=10.dp),horizontalArrangement=Arrangement.spacedBy(10.dp)) {
             FilterChip(!diagnostics,{diagnostics=false},label={Text("运行记录")})
             FilterChip(diagnostics,{diagnostics=true},label={Text("日志与诊断")})

@@ -1,6 +1,8 @@
 package com.landosol.toolbox.desktop.app.control
 
 import com.landosol.toolbox.desktop.shared.CapturePixels
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.graphics.toArgb
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.util.Base64
@@ -51,7 +53,7 @@ class ControlSessionPreviewTest {
             val cancelled = CompletableDeferred<Unit>()
             val results = mutableListOf<CapturePixels?>()
             val collector = launch(Dispatchers.Unconfined) {
-                port.previewFrames {
+                port.previewFrames<CapturePixels> {
                     started.complete(Unit)
                     try { awaitCancellation() }
                     finally { cancelled.complete(Unit) }
@@ -109,8 +111,8 @@ class ControlSessionPreviewTest {
             assertNull(replacement.preview.value)
             newPort.publish(preview(png(0xff445566.toInt()), 1))
             val frame = withTimeout(5_000) { replacement.preview.first { it != null } }!!
-            assertEquals(0xff445566.toInt(), frame.pixels.single())
-            assertEquals(0xff112233.toInt(), oldUi.preview.value!!.pixels.single())
+            assertEquals(0xff445566.toInt(), frame.toPixelMap()[0, 0].toArgb())
+            assertEquals(0xff112233.toInt(), oldUi.preview.value!!.toPixelMap()[0, 0].toArgb())
             oldPort.connection.value = WorkerConnectionStatus.CLOSED
             withTimeout(5_000) { oldUi.preview.first { it == null } }
             assertSame(frame, replacement.preview.value)

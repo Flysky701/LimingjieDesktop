@@ -37,7 +37,6 @@ import com.landosol.toolbox.labyrinth.*
 import com.landosol.toolbox.labyrinth.batch.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.sample
-import java.awt.image.BufferedImage
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -218,7 +217,7 @@ internal fun formatTime(ms:Long):String=DateTimeFormatter.ofPattern("MM-dd HH:mm
     val visible=LocalControlVisible.current&&expanded
     DisposableEffect(graph.port,visible){graph.port.setPreviewVisible(visible);onDispose{graph.port.setPreviewVisible(false)}}
     TextButton(onClick={expanded=!expanded;actions.run{withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(previewExpanded=expanded)}};if(expanded&&!running)graph.startPreview()}},enabled=!actions.working){Text(if(expanded)"收起画面" else "展开画面")}
-    if(expanded){val bitmap by produceState<ImageBitmap?>(null,frame){value=withContext(Dispatchers.Default){frame?.let{pixels->BufferedImage(pixels.width,pixels.height,BufferedImage.TYPE_INT_ARGB).apply{setRGB(0,0,pixels.width,pixels.height,pixels.pixels,0,pixels.width)}.toComposeImageBitmap()}}}
+    if(expanded){val bitmap = frame
         if(bitmap==null)Text(actions.message ?: "尚无画面。连接模拟器后，点击展开预览。",color=Muted,style=MaterialTheme.typography.bodySmall)
         else Box(Modifier.fillMaxWidth().aspectRatio(bitmap!!.width.toFloat()/bitmap!!.height)){Image(bitmap!!,"模拟器最新画面",Modifier.fillMaxSize());val accent=Accent;val ok=LocalDesktopColors.current.ok;Canvas(Modifier.fillMaxSize()){overlay?.boxes?.forEach{box->drawRect(if(box.selected)accent else ok,Offset(box.left*size.width,box.top*size.height),Size(box.width*size.width,box.height*size.height),style=Stroke(1.5.dp.toPx()))}}}
     }else Text("空闲时折叠 · 预览上限 2 fps",style=MaterialTheme.typography.bodySmall,color=Muted)
@@ -226,6 +225,7 @@ internal fun formatTime(ms:Long):String=DateTimeFormatter.ofPattern("MM-dd HH:mm
 
 @OptIn(FlowPreview::class)
 @Composable internal fun LogPanel(graph:ControlSessionUi,modifier:Modifier=Modifier,searchFocus:FocusRequester=remember{FocusRequester()}){
+    val actions = rememberActions(graph)
     val lines by remember(graph){graph.log.lines.sample(250)}.collectAsState(graph.log.lines.value)
     var filter by remember{mutableStateOf("关键")};var query by remember{mutableStateOf("")};val listState=rememberLazyListState();val scope=rememberCoroutineScope()
     val shown=remember(lines,filter,query){lines.filter{(filter=="全部"||filter=="关键"&&it.kind!=UserLogKind.NORMAL||filter=="警告与错误"&&it.kind in listOf(UserLogKind.WARNING,UserLogKind.ERROR))&&(query.isBlank()||it.text.contains(query,true))}}
@@ -233,7 +233,7 @@ internal fun formatTime(ms:Long):String=DateTimeFormatter.ofPattern("MM-dd HH:mm
     LaunchedEffect(listState.isScrollInProgress){if(listState.isScrollInProgress)follow=!listState.canScrollForward}
     LaunchedEffect(shown.size,shown.lastOrNull()?.repeats){if(follow&&shown.isNotEmpty())listState.scrollToItem(shown.lastIndex)}
     Surface(modifier.fillMaxWidth(),color=MaterialTheme.colorScheme.surface,shape=DesktopCorners.lg,border=BorderStroke(1.dp,Line)){Column(Modifier.padding(14.dp),verticalArrangement=Arrangement.spacedBy(7.dp)){
-        Row(verticalAlignment=Alignment.CenterVertically){Text("日志",Modifier.weight(1f),style=MaterialTheme.typography.titleSmall);TextButton(onClick={copyText(graph.log.text())}){Text("复制全部",style=MaterialTheme.typography.bodySmall)}}
+        Row(verticalAlignment=Alignment.CenterVertically){Text("日志",Modifier.weight(1f),style=MaterialTheme.typography.titleSmall);TextButton(onClick={actions.run { copyText(graph.log.text(graph.log.load())) }}){Text("复制全部",style=MaterialTheme.typography.bodySmall)}}
         Row(horizontalArrangement=Arrangement.spacedBy(4.dp)){listOf("关键","全部","警告与错误").forEach{label->FilterChip(selected=filter==label,onClick={filter=label},label={Text(label,style=MaterialTheme.typography.bodySmall)})}}
         OutlinedTextField(query,{query=it},placeholder={Text("搜索日志 · Ctrl+F",style=MaterialTheme.typography.bodySmall)},singleLine=true,modifier=Modifier.fillMaxWidth().focusRequester(searchFocus))
         if(shown.isEmpty())Column(Modifier.weight(1f).fillMaxWidth().padding(12.dp),verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally){Symbol("bar_chart",tint=Muted);Text(if(lines.isEmpty())"等待第一条任务日志" else "没有匹配的日志",style=MaterialTheme.typography.bodySmall,color=Muted);TextButton(onClick={filter="全部";query=""}){Text("显示全部")}}

@@ -254,10 +254,26 @@ import javax.swing.filechooser.FileNameExtensionFilter
 }
 
 @Composable internal fun DiagnosticsPage(graph: ControlSessionUi) {
-    val lines by graph.log.lines.collectAsState()
+    var lines by remember(graph) { mutableStateOf(graph.log.lines.value) }
+    var crashes by remember(graph) { mutableStateOf(emptyList<String>()) }
+    val revision by graph.log.revision.collectAsState()
+    val connection by graph.port.connection.collectAsState()
+    val visible = LocalControlVisible.current
     val actions = rememberActions(graph)
-    val wire by graph.port.snapshots.collectAsState()
-    val crashes=wire["crashes"]?.jsonArray?.map{it.jsonPrimitive.content}.orEmpty()
+    LaunchedEffect(graph, revision, connection, visible) {
+        if (visible && connection == WorkerConnectionStatus.CONNECTED) {
+            try { lines = graph.log.load() }
+            catch (cancelled:kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure:Exception) { actions.message = failure.message ?: "读取日志失败" }
+        }
+    }
+    LaunchedEffect(graph, connection, visible) {
+        if (visible && connection == WorkerConnectionStatus.CONNECTED) {
+            try { crashes = graph.request(ControlOps.CRASHES_LOAD).getValue("items").jsonArray.map{it.jsonPrimitive.content} }
+            catch (cancelled:kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (failure:Exception) { actions.message = failure.message ?: "读取崩溃记录失败" }
+        }
+    }
     PageBody("日志与诊断", "查看任务事件，或导出包含当前状态与运行记录的诊断包。") {
         Message(actions.message)
         Panel("诊断面板") {
@@ -275,7 +291,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
         }
         Panel("任务日志 · ${lines.size} 条") {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { copyText(graph.log.text()) }) { Text("复制全部") }
+                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { copyText(graph.log.text(lines)) }) { Text("复制全部") }
                 TextButton(onClick = graph.log::clear) { Text("清空") }
             }
             if (lines.isEmpty()) Text("暂无任务日志", color = Muted)
