@@ -31,7 +31,7 @@ class LabyrinthTwoRoundHandoffTest {
         )
     }
 
-    @Test fun `two rounds use actual reset navigation and leave the last score page visible`() = replay(false)
+    @Test fun `two rounds finish rewards and return home before next-run handoff`() = replay(false)
 
     @Test fun `a result page reappearing after title is not a synchronized next-round state`() = replay(true)
 
@@ -52,11 +52,19 @@ class LabyrinthTwoRoundHandoffTest {
         val popup = page(EntryAnchorId.SESSION_ERROR_TITLE, EntryAnchorId.SESSION_RETURN_TITLE)
         val title = page(EntryAnchorId.TITLE_LOGO, EntryAnchorId.TITLE_TAP_PROMPT)
         val visible = AtomicReference(home)
+        val route = LabyrinthRouteJson(
+            enterId = 100, guildId = 1, difficulty = 1, attempt = 1, rerollUntilFound = false,
+            perfectStart = false, thirdBlockChoice = "", area3BossIds = emptyList(), area5BossIds = emptyList(),
+            nodes = emptyList(),
+        )
         val session = LabyrinthEntryRecognitionSession(
             sessionManager = manager, captureActive = { true }, captureStop = {}, clock = now::get,
             processorFactory = { { visible.get() } }, actionScope = scope, actionTargetReady = { true },
             actionExecutor = SessionBoundActionExecutor(manager) { runTaps += it; AutomationBackendResult.Completed },
             actionsAvailable = { true }, runTerminalListener = { events += it },
+            routeLoader = { route },
+            nodeTemplateLoader = { com.landosol.toolbox.labyrinth.node.NodeTemplateSet(emptyMap()) },
+            routeExecutionGate = { LabyrinthExecutionGateResult.Allowed(route, "offline fixture") },
         )
         var resets = 0
         var readyCallbacks = 0
@@ -149,11 +157,11 @@ class LabyrinthTwoRoundHandoffTest {
             assertEquals(1, readyCallbacks)
             // Ordinary battle results do not produce a whole-run terminal outcome.
             val ordinary = page(EntryAnchorId.BATTLE_RESULT_NEXT_BUTTON)
-            val completion = LabyrinthResultCompletion()
-            assertFalse(completion.observe(ordinary.observation.state, null, 4_000, 1_000))
-            assertNull(completion.summary)
+            val collector = LabyrinthRunScoreCollector()
+            collector.observe(ordinary.observation.state, null, 4_000)
+            assertNull(collector.score)
             for (round in 0..1) {
-                val base = 10_000L + round * 30_000
+                val base = 10_000L + round * 40_000
                 repeat(4) { feed(summary, base + it * 1_500) }
                 assertEquals(round, events.size)
                 assertTrue("summary must navigate", runTaps.size > round)
@@ -161,14 +169,26 @@ class LabyrinthTwoRoundHandoffTest {
                 feed(score, base + 7_500)
                 if (round == 0) {
                     feed(score.copy(runResultScore = 46_000), base + 8_000)
-                    feed(score.copy(runResultScore = 46_000), base + 9_000)
-                } else feed(score, base + 13_000) // missing OCR is bounded and remains a clear
+                    feed(score.copy(runResultScore = 46_000), base + 10_500)
+                } else feed(score, base + 13_000)
+                assertEquals("RESULT must not end the run, even without a score", round, events.size)
+                // The run session, not the next-run reset workflow, must finish the reward chain.
+                val tapsBeforeChest = runTaps.size
+                repeat(3) { feed(chest, base + 15_000 + it * 1_500) }
+                assertTrue("The run must advance the chest page", runTaps.size > tapsBeforeChest)
+                val tapsBeforeItem = runTaps.size
+                repeat(3) { feed(item, base + 20_000 + it * 1_500) }
+                assertTrue("The run must close the final item page", runTaps.size > tapsBeforeItem)
+                assertEquals("Rewards alone do not prove a return home", round, events.size)
+                feed(dawn, base + 25_000)
+                assertEquals("The home page must be stable", round, events.size)
+                feed(dawn, base + 26_500)
                 withTimeout(2_000) { while (events.size <= round) delay(10) }
                 val event = events[round] as LabyrinthRunTerminalEvent.Cleared
-                assertEquals(base + 7_000, event.summary!!.endedAt)
+                assertEquals(base + 26_500, event.summary!!.endedAt)
                 assertEquals(if (round == 0) 46_000L else null, event.summary!!.score)
                 val tapsBeforeTerminal = runTaps.size
-                feed(score, base + 14_000)
+                feed(dawn, base + 28_000)
                 assertEquals(round + 1, events.size)
                 assertEquals(tapsBeforeTerminal, runTaps.size)
                 batch.onRunTerminal(event)
@@ -184,9 +204,8 @@ class LabyrinthTwoRoundHandoffTest {
             assertEquals(LabyrinthBatchStage.COMPLETED, batch.state.value!!.stage)
             assertEquals(2, resets)
             assertEquals(2, readyCallbacks)
-            assertEquals(LabyrinthEntryPageState.RUN_CLEAR_RESULT, visible.get().observation.state)
-            assertEquals(listOf(LabyrinthEntryPageState.RUN_CLEAR_RESULT, LabyrinthEntryPageState.RUN_CLEAR_CHEST_RESULT,
-                LabyrinthEntryPageState.ITEM_REWARD, LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE,
+            assertEquals(LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE, visible.get().observation.state)
+            assertEquals(listOf(LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE,
                 LabyrinthEntryPageState.UNKNOWN), resetTaps)
         } finally { session.stop(); scope.cancel() }
     }

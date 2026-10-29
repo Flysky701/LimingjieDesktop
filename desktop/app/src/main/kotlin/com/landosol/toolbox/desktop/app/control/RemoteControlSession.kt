@@ -189,6 +189,25 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         suspend fun update(change:(DesktopSettings)->DesktopSettings){patch(ControlOps.SETTINGS_PATCH,state.value,change(state.value))}
     }
     inner class StrategyView {
+        val library=field("strategyLibrary"){it.model("strategyLibrary",StrategyLibrary())}
+        suspend fun add(name:String,note:String="",settings:LabyrinthStrategySettings=LabyrinthStrategySettings()):String {
+            val id=request(ControlOps.STRATEGY_ADD,buildJsonObject{put("name",name);put("note",note);put("value",ControlModelCodec.encode(settings))}).getValue("id").jsonPrimitive.content
+            awaitSnapshot{it.model("strategyLibrary",StrategyLibrary()).profiles.any{p->p.id==id}}
+            return id
+        }
+        suspend fun importCode(code:String):String {
+            val id=request(ControlOps.STRATEGY_IMPORT,buildJsonObject{put("code",code)}).getValue("id").jsonPrimitive.content
+            awaitSnapshot{it.model("strategyLibrary",StrategyLibrary()).profiles.any{p->p.id==id}}
+            return id
+        }
+        suspend fun edit(profile:StrategyProfile,settings:LabyrinthStrategySettings=profile.settings):StrategyProfile {
+            request(ControlOps.STRATEGY_EDIT,buildJsonObject{put("id",profile.id);put("revision",profile.revision);put("name",profile.name);put("note",profile.note);put("value",ControlModelCodec.encode(settings))})
+            var updated=profile
+            awaitSnapshot{snapshot->snapshot.model("strategyLibrary",StrategyLibrary()).profiles.firstOrNull{it.id==profile.id&&it.revision>profile.revision}?.also{updated=it}!=null}
+            return updated
+        }
+        suspend fun activate(id:String){request(ControlOps.STRATEGY_ACTIVATE,buildJsonObject{put("id",id)});awaitSnapshot{it.model("strategyLibrary",StrategyLibrary()).activeId==id}}
+        suspend fun delete(id:String){request(ControlOps.STRATEGY_DELETE,buildJsonObject{put("id",id)});awaitSnapshot{it.model("strategyLibrary",StrategyLibrary()).profiles.none{p->p.id==id}}}
         val state=field("strategy"){it.model("strategy",LabyrinthStrategySettings())}
         suspend fun save(value:LabyrinthStrategySettings){request(ControlOps.STRATEGY_SAVE,controlArgs("value" to ControlModelCodec.encode(value)));awaitSnapshot{it.model("strategy",LabyrinthStrategySettings())==value}}
     }

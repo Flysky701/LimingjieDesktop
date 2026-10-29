@@ -37,13 +37,21 @@ import java.time.ZoneId
     var deviceFilter by remember{mutableStateOf<String?>(null)}
     var accountFilter by remember{mutableStateOf<String?>(null)}
     var taskFilter by remember{mutableStateOf<String?>(null)}
+    var strategyFilter by remember{mutableStateOf<String?>(null)}
+    var strategyRevisionFilter by remember{mutableStateOf<String?>(null)}
+    var scoreChart by remember{mutableStateOf(true)}
+    fun strategyKey(record:DesktopRunRecord)=record.strategy?.id ?: "unknown"
+    val strategyOptions=records.filter{it.singleRun}.asReversed().map{strategyKey(it) to (it.strategy?.name ?: "未记录策略")}.distinctBy{it.first}
+    val revisionOptions=records.filter{strategyKey(it)==strategyFilter}.mapNotNull{it.strategy?.revision}.distinct().sortedDescending().map{it.toString() to "修订 $it"}
     val deviceOptions=records.mapNotNull{record->record.deviceId?.let{it to (record.deviceName ?: it)}}.distinctBy{it.first}
     fun accountKey(record:DesktopRunRecord)=record.accountId?.toString() ?: "alias:${record.alias}"
     val accountOptions=records.map{accountKey(it) to it.alias}.distinctBy{it.first}
     val filtered=records.filter{record->
         (deviceFilter==null||record.deviceId==deviceFilter)&&
         (accountFilter==null||accountKey(record)==accountFilter)&&
-        (taskFilter==null||record.type==taskFilter)
+        (taskFilter==null||record.type==taskFilter)&&
+        (strategyFilter==null||strategyKey(record)==strategyFilter)&&
+        (strategyRevisionFilter==null||record.strategy?.revision?.toString()==strategyRevisionFilter)
     }
     Column(Modifier.fillMaxSize()) {
         Message(actions.message)
@@ -54,13 +62,21 @@ import java.time.ZoneId
         if(diagnostics)Box(Modifier.weight(1f)){DiagnosticsPage(graph)}
         else Column(Modifier.weight(1f).padding(start=24.dp,end=24.dp,bottom=16.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text("运行记录",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge);Text("最近 5000 条 / 180 天",color=Muted,style=MaterialTheme.typography.bodySmall)}
-            Row(horizontalArrangement=Arrangement.spacedBy(10.dp),verticalAlignment=Alignment.CenterVertically){
+            Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(10.dp),verticalAlignment=Alignment.CenterVertically){
                 RecordFilter("全部设备",deviceFilter,deviceOptions){deviceFilter=it}
                 RecordFilter("全部账号",accountFilter,accountOptions){accountFilter=it}
                 RecordFilter("全部任务",taskFilter,records.map{it.type}.distinct().map{it to it}){taskFilter=it}
-                if(deviceFilter!=null||accountFilter!=null||taskFilter!=null)TextButton(onClick={deviceFilter=null;accountFilter=null;taskFilter=null}){Text("清除筛选")}
+                if(deviceFilter!=null||accountFilter!=null||taskFilter!=null||strategyFilter!=null)TextButton(onClick={deviceFilter=null;accountFilter=null;taskFilter=null;strategyFilter=null;strategyRevisionFilter=null}){Text("清除筛选")}
             }
-            HistoryChart(filtered)
+            Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(10.dp),verticalAlignment=Alignment.CenterVertically) {
+                RecordFilter("全部策略",strategyFilter,strategyOptions){strategyFilter=it;strategyRevisionFilter=null}
+                if(strategyFilter!=null&&strategyFilter!="unknown") RecordFilter("全部修订",strategyRevisionFilter,revisionOptions){strategyRevisionFilter=it}
+                FilterChip(scoreChart,{scoreChart=true},label={Text("每局分数")})
+                FilterChip(!scoreChart,{scoreChart=false},label={Text("每日通关与耗时")})
+            }
+            Box(Modifier.heightIn(max=360.dp).verticalScroll(rememberScrollState())) {
+                if(scoreChart)RunScoreChart(filtered) else HistoryChart(filtered)
+            }
             if(records.isEmpty()) ConsoleCard("还没有运行记录") {Text("首次任务结束后，这里会显示结果、耗时和停止原因。",color=Muted);TextButton(onClick={diagnostics=true}){Text("查看日志与诊断 →")}}
             else if(filtered.isEmpty())ConsoleCard("没有匹配的运行记录"){Text("调整设备、账号或任务筛选后查看。",color=Muted)}
             else LazyColumn(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -70,6 +86,7 @@ import java.time.ZoneId
                             Row(verticalAlignment=Alignment.CenterVertically){Text("${record.type} · ${record.alias}",Modifier.weight(1f),style=MaterialTheme.typography.titleSmall);StatusBadge(record.result)}
                             Text("${formatTime(record.startedAt)} · ${record.durationMillis?.let(::formatDuration) ?: "运行中"} · ${record.goal}",fontFamily=FontFamily.Monospace,style=MaterialTheme.typography.bodySmall,color=Muted)
                             if(record.cleared>0 && record.singleRun) Text("分数：${record.score?.toString() ?: "未识别"}",style=MaterialTheme.typography.bodySmall,color=Muted)
+                            if(record.singleRun)Text(record.strategyLabel(),style=MaterialTheme.typography.bodySmall,color=Muted)
                             record.deviceName?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=Muted)}
                             if(expanded){SelectionContainer {Text(record.reason.ifBlank{"暂无停止原因"},style=MaterialTheme.typography.bodySmall)};TextButton(onClick={copyText("${record.type} · ${record.result}\n${record.reason}")}){Text("复制详情")}}
                         }
@@ -107,7 +124,7 @@ import java.time.ZoneId
                 times.forEachIndexed{i,t->if(t!=null){val p=Offset((i+.5f)*step,size.height-(t/maxTime*(size.height-8)).toFloat());drawCircle(ok,3f,p);if(i>0&&times[i-1]!=null)drawLine(ok,Offset((i-.5f)*step,size.height-(times[i-1]!!/maxTime*(size.height-8)).toFloat()),p,2f)}}
             }
             Row(Modifier.fillMaxWidth()){days.forEachIndexed{i,d->Text(if(i%2==0||i==13)"${d.monthValue}/${d.dayOfMonth}" else "",Modifier.weight(1f),style=MaterialTheme.typography.labelSmall,color=Muted)}}
-            Text("合计 ${counts.sum()} 次通关 · 总平均 ${formatDuration(records.filter{it.singleRun&&it.cleared>0}.mapNotNull{it.durationMillis}.takeIf{it.isNotEmpty()}?.average()?.toLong() ?: 0)}",style=MaterialTheme.typography.bodySmall)
+            Text("合计 ${counts.sum()} 次通关 · 总平均 ${formatDuration(groups.filterKeys{it in days}.values.flatten().mapNotNull{it.durationMillis}.takeIf{it.isNotEmpty()}?.average()?.toLong() ?: 0)}",style=MaterialTheme.typography.bodySmall)
             val scores=groups.filterKeys{it in days}.values.flatten().mapNotNull{it.score}
             Text(if(scores.isEmpty()) "暂无可用分数" else "已记录 ${scores.size} 局分数 · 平均 ${scores.average().toLong()} · 最高 ${scores.maxOrNull()}",style=MaterialTheme.typography.bodySmall)
         }

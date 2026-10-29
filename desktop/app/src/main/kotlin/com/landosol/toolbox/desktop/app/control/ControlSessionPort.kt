@@ -33,6 +33,11 @@ object ControlOps {
     const val ACCOUNT_DELETE="account.delete" // id:Long (UI has already shown deletion confirmation)
     const val ACCOUNT_DISMISS="account.dismiss"
     const val STRATEGY_SAVE="strategy.save" // value:LabyrinthStrategySettings
+    const val STRATEGY_ADD="strategy.add"
+    const val STRATEGY_EDIT="strategy.edit"
+    const val STRATEGY_ACTIVATE="strategy.activate"
+    const val STRATEGY_DELETE="strategy.delete"
+    const val STRATEGY_IMPORT="strategy.import"
     const val CATALOG="catalog.load" // reply items:[LabyrinthRoleRatingItem]
     const val DEVICE_DISCOVER="device.discover" // force:Boolean
     const val DEVICE_CONNECT="device.connect" // serial:String,reconnect:Boolean

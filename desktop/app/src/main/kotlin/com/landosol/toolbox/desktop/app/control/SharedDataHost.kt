@@ -37,7 +37,7 @@ class SharedDataHost private constructor(
     private val writes = Mutex()
     private val shutdownLock = Mutex()
     @Volatile private var closed = false
-    private var lastStrategy = graph.labyrinthStrategySettings.state.value
+    private var lastStrategy = graph.labyrinthStrategySettings.library.value.active
     private var revision = System.currentTimeMillis()
     private val verifiedFile = graph.dataDirectory.resolve("shared/verified-uids.json")
     private val verifiedUids = if (Files.exists(verifiedFile)) runCatching {
@@ -111,7 +111,7 @@ class SharedDataHost private constructor(
     }
 
     private fun strategyRevision(): Long {
-        val current = graph.labyrinthStrategySettings.state.value
+        val current = graph.labyrinthStrategySettings.library.value.active
         if (current != lastStrategy) { lastStrategy = current; revision = maxOf(revision + 1, System.currentTimeMillis()) }
         return revision
     }
@@ -136,7 +136,8 @@ class SharedDataHost private constructor(
                     material.loginId, material.password, AndroidLabyrinthRerollSettingsStore(graph.context).load(id),
                     strategy, strategyRevision(), graph.settings.state.value,
                     (verifiedUids[id.toString()] as? JsonObject)?.takeIf { it["serverId"]?.jsonPrimitive?.content == account.serverId }
-                        ?.get("uid")?.jsonPrimitive?.longOrNull, graph.ux.preferences.state.value)
+                        ?.get("uid")?.jsonPrimitive?.longOrNull, graph.ux.preferences.state.value,
+                    graph.labyrinthStrategySettings.library.value.active.identity)
                 return buildJsonObject { put("value", ControlModelCodec.encode(value)) }
             }
             "runtime.settings" -> return buildJsonObject { put("value", ControlModelCodec.encode(graph.settings.state.value)) }

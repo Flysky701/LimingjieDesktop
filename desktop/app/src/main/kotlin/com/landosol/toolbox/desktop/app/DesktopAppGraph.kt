@@ -219,6 +219,7 @@ class DesktopAppGraph(
             if (labyrinthController.uiState.value.rerollSettings() != snapshot.reroll) labyrinthController.saveSettings(snapshot.reroll)
         }
         labyrinthStrategySettings.save(snapshot.strategy)
+        sharedStrategyIdentity = snapshot.strategyIdentity
         strategyRevisionState.value = snapshot.strategyRevision
         return snapshot
     }
@@ -229,6 +230,8 @@ class DesktopAppGraph(
         cachedMaterial = null
         database.accountDao().clearSelection()
         withTimeout(10_000) { labyrinthController.uiState.first { it.selectedAccount == null } }
+        sharedStrategyIdentity = null
+        taskStrategy = null
         strategyRevisionState.value = null
     }
     val resolutionGuard = VisualResolutionGuard(device) { reason ->
@@ -399,7 +402,18 @@ class DesktopAppGraph(
         AndroidLabyrinthRoleDecisionDataLoader(context).load()
     }
     val labyrinthStrategySettings by lazy {
-        com.landosol.toolbox.labyrinth.AndroidLabyrinthStrategySettingsStore(context, transient = sharedData != null)
+        com.landosol.toolbox.desktop.app.adapters.storage.DesktopStrategyStore(dataDirectory,
+            legacy = { com.landosol.toolbox.labyrinth.AndroidLabyrinthStrategySettingsStore(context, transient = sharedData != null).state.value },
+            notice = ::addNotice, transient = sharedData != null)
+    }
+    @Volatile private var sharedStrategyIdentity: com.landosol.toolbox.desktop.app.adapters.storage.StrategyIdentity? = null
+    @Volatile private var taskStrategy: com.landosol.toolbox.desktop.app.adapters.storage.StrategyProfile? = null
+    val taskStrategyIdentity get() = taskStrategy?.identity
+    private fun freezeTaskStrategy() {
+        val active = labyrinthStrategySettings.library.value.active
+        taskStrategy = if (sharedData == null) active else sharedStrategyIdentity?.let {
+            active.copy(id = it.id, name = it.name, revision = it.revision)
+        }
     }
     suspend fun loadLabyrinthRoleRatings(): List<com.landosol.toolbox.labyrinth.LabyrinthRoleRatingItem> =
         kotlinx.coroutines.withContext(Dispatchers.IO) {
@@ -437,7 +451,7 @@ class DesktopAppGraph(
             .orEmpty()
         LabyrinthEntryRecognitionSession(
             strategyProvider = {
-                val settings = labyrinthStrategySettings.state.value
+                val settings = taskStrategy?.settings ?: labyrinthStrategySettings.state.value
                 com.landosol.toolbox.labyrinth.LabyrinthStrategySnapshot(
                     settings,
                     roleDecisionRuntime?.document?.let { document ->
@@ -925,6 +939,7 @@ class DesktopAppGraph(
         if (ui.selectedAccount?.id != id || ui.isWorking || ui.captcha != null || labyrinthEntryRecognitionSession.state.value.running) {
             return false
         }
+        freezeTaskStrategy()
         val frozenPackage = (gameClientResolution as GameClientResolution.Available).server.packageName
         startingState.value = true
         autoRunJob = autoRunScope.launch {
@@ -1031,6 +1046,7 @@ class DesktopAppGraph(
     suspend fun startPreview() { captureService.start() }
     fun startRecognition(dryRun: Boolean): Job = synchronized(startLock) {
         if (busy) { log.add("请先停止当前任务", true); return Job().apply { complete() } }
+        freezeTaskStrategy()
         startingState.value = true
         autoRunScope.launch {
         try {

@@ -6,34 +6,35 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LabyrinthResultCompletionTest {
-    @Test fun `stable result reports score and ends at arrival rather than reward dismissal`() {
-        val completion = LabyrinthResultCompletion()
-        assertTrue(completion.observe(Page.RUN_CLEAR_RESULT, null, 10_000, 1_000))
-        completion.observe(Page.RUN_CLEAR_RESULT, 42_000, 10_500, 1_000)
-        completion.observe(Page.RUN_CLEAR_RESULT, 46_000, 11_000, 1_000)
-        assertNull(completion.summary)
-        completion.observe(Page.RUN_CLEAR_RESULT, 46_000, 12_000, 1_000)
-        assertEquals(LabyrinthRunSummary(1_000, 10_000, 46_000), completion.summary)
-        completion.observe(Page.NODE_SELECTION, null, 15_000, 1_000)
-        assertEquals(46_000L, completion.summary?.score)
+    @Test fun `latest confirmed score survives reward pages and map transitions`() {
+        val collector = LabyrinthRunScoreCollector()
+        collector.observe(Page.RUN_CLEAR_RESULT, null, 10_000)
+        collector.observe(Page.RUN_CLEAR_RESULT, 42_000, 10_500)
+        collector.observe(Page.RUN_CLEAR_RESULT, 46_000, 11_000)
+        assertNull(collector.score)
+        collector.observe(Page.RUN_CLEAR_RESULT, 46_000, 12_000)
+        for (page in listOf(Page.NODE_SELECTION, Page.RUN_CLEAR_CHEST_RESULT, Page.ITEM_REWARD, Page.DAWN_REALM_HOME_IDLE)) {
+            collector.observe(page, null, 15_000)
+            assertEquals(46_000L, collector.score)
+        }
     }
 
-    @Test fun `confirmed result owns map frames and missing score is bounded`() {
-        val completion = LabyrinthResultCompletion()
-        completion.observe(Page.RUN_CLEAR_RESULT, null, 10_000, 1_000)
-        completion.observe(Page.RUN_CLEAR_RESULT, null, 10_500, 1_000)
-        assertTrue(completion.observe(Page.NODE_SELECTION, null, 11_000, 1_000))
-        assertNull(completion.summary)
-        assertTrue(completion.observe(Page.NODE_SELECTION, null, 16_000, 1_000))
-        assertEquals(LabyrinthRunSummary(1_000, 10_000, null), completion.summary)
+    @Test fun `unread score stays absent through settlement`() {
+        val collector = LabyrinthRunScoreCollector()
+        repeat(20) { collector.observe(Page.RUN_CLEAR_RESULT, null, it * 1_000L) }
+        collector.observe(Page.ITEM_REWARD, null, 21_000)
+        collector.observe(Page.DAWN_REALM_HOME_IDLE, null, 22_000)
+        assertNull(collector.score)
     }
 
-    @Test fun `single misclassified frame is not a clear and does not leak score`() {
-        val completion = LabyrinthResultCompletion()
-        completion.observe(Page.RUN_CLEAR_RESULT, 46_000, 10_000, 1_000)
-        assertFalse(completion.observe(Page.NODE_SELECTION, null, 11_000, 1_000))
-        assertNull(completion.summary)
-        assertFalse(completion.observe(Page.BATTLE_RESULT, null, 17_000, 1_000))
+    @Test fun `single misclassified frame and ordinary battle do not leak score`() {
+        val collector = LabyrinthRunScoreCollector()
+        collector.observe(Page.RUN_CLEAR_RESULT, 46_000, 10_000)
+        collector.observe(Page.NODE_SELECTION, null, 11_000)
+        collector.observe(Page.BATTLE_RESULT, 46_000, 12_000)
+        collector.observe(Page.RUN_CLEAR_RESULT, null, 13_000)
+        collector.observe(Page.RUN_CLEAR_RESULT, null, 15_000)
+        assertNull(collector.score)
     }
 
     @Test fun `score parser rejects rewards lists confidence and unreadable text`() {

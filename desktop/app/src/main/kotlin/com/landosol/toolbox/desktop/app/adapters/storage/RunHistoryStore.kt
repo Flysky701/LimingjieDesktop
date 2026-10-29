@@ -14,7 +14,7 @@ import java.nio.file.StandardOpenOption.*
 data class DesktopRunRecord(val id: String, val startedAt: Long, val alias: String, val type: String, val goal: String,
     val endedAt: Long? = null, val result: String = "运行中", val reason: String = "", val cleared: Int = 0, val singleRun: Boolean = false,
     val deviceId: String? = null, val deviceName: String? = null, val accountId: Long? = null,
-    val score: Long? = null) {
+    val score: Long? = null, val strategy: StrategyIdentity? = null) {
     val durationMillis get() = endedAt?.let { (it-startedAt).coerceAtLeast(0) }
 }
 
@@ -32,12 +32,14 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
         .put("type",r.type).put("goal",r.goal).put("endedAt",r.endedAt ?: JSONObject.NULL).put("result",r.result)
         .put("reason",DesktopLog.redact(r.reason)).put("cleared",r.cleared).put("singleRun",r.singleRun)
         .put("deviceId",r.deviceId ?: JSONObject.NULL).put("deviceName",r.deviceName ?: JSONObject.NULL)
-        .put("accountId",r.accountId ?: JSONObject.NULL).put("score",r.score ?: JSONObject.NULL).toString()
+        .put("accountId",r.accountId ?: JSONObject.NULL).put("score",r.score ?: JSONObject.NULL)
+        .put("strategy",r.strategy?.let { JSONObject().put("id",it.id).put("name",it.name).put("revision",it.revision) } ?: JSONObject.NULL).toString()
     private fun decode(line: String): DesktopRunRecord = JSONObject(line).let { j ->
         DesktopRunRecord(j.getString("id"),j.getLong("startedAt"),j.getString("alias"),j.getString("type"),j.getString("goal"),
             if(j.isNull("endedAt")) null else j.getLong("endedAt"),j.getString("result"),j.optString("reason"),j.optInt("cleared"),j.optBoolean("singleRun"),
             if(j.isNull("deviceId")) null else j.getString("deviceId"), if(j.isNull("deviceName")) null else j.getString("deviceName"),
-            if(j.isNull("accountId")) null else j.getLong("accountId"), if(j.isNull("score")) null else j.getLong("score"))
+            if(j.isNull("accountId")) null else j.getLong("accountId"), if(j.isNull("score")) null else j.getLong("score"),
+            j.optJSONObject("strategy")?.let { StrategyIdentity(it.getString("id"),it.getString("name"),it.getLong("revision")) })
     }
     private fun retained(rows: Collection<DesktopRunRecord>): List<DesktopRunRecord> = rows.filter { it.startedAt >= now()-180L*86_400_000 }
         .sortedBy { it.startedAt }.takeLast(limit)

@@ -18,7 +18,7 @@ import org.junit.Test
 
 class LabyrinthEntryRecognitionSessionTest {
     @Test
-    fun `result ends real session once without reward taps and reports summary`() = runTest {
+    fun `result without a route does not end the run even after score timeout`() = runTest {
         val manager = AutomationSessionManager()
         val events = mutableListOf<LabyrinthRunTerminalEvent>()
         var now = 1_000L
@@ -45,20 +45,17 @@ class LabyrinthEntryRecognitionSessionTest {
         val resultPage = com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState.RUN_CLEAR_RESULT
         feed(resultPage, 61_000)
         feed(resultPage, 61_500)
-        // A map transition belongs to result collection even with a stale node-error streak.
-        session.javaClass.getDeclaredField("nodeErrorStreak").apply { isAccessible = true; setInt(session, 19) }
-        feed(com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState.NODE_SELECTION, 62_000)
         feed(resultPage, 62_500, 46_000)
         feed(resultPage, 63_500, 46_000)
         runCurrent()
-        feed(resultPage, 64_000, 46_000)
+        feed(resultPage, 70_000, 46_000)
         runCurrent()
-        org.junit.Assert.assertEquals(LabyrinthRunTerminalEvent.Cleared("result-run", LabyrinthRunSummary(1_000, 61_000, 46_000)), events.single())
-        assertFalse(session.state.value.running)
-        assertTrue(manager.current() == null)
-        assertTrue(CaptureFrameBus.currentOwner() == null)
+        assertTrue(events.isEmpty())
+        assertTrue(session.state.value.running)
+        org.junit.Assert.assertNull(session.state.value.runSummary)
         org.junit.Assert.assertEquals(0, taps)
         org.junit.Assert.assertEquals(0, captureStops)
+        session.stop()
     }
     @Test
     fun `starts dry run and releases the shared automation session`() = runTest {

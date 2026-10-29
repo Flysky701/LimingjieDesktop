@@ -2,6 +2,33 @@
 
 以下保留历史已知限制，具体状态以当前代码和检查结果为准；用户问题说明见 [使用指南](USER-GUIDE.md#日志与常见问题)。
 
+## 待 FIX
+
+- [ ] **FIX-01：重新挑战后的旧失败画面可能被误计为第三次战败，导致批次停在挑战页。**
+  - **状态：** 已发现代码时序缺口；本次历史故障的完整触发链尚待确认，暂不修改代码。
+  - **日志依据：** 2026-10-29 00:42:00 单局记录“EX战连续3次挑战失败”并停止；00:42:34 重置接手时识别为 `BATTLE_CHALLENGE`；00:42:39 报 `trigger-not-recognised-after-0-taps` 和 `TIMEOUT`。重置阶段没有执行点击。
+  - **已确认的逻辑：** [LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 在“重新挑战”点击返回成功时立即增加 `battleRetryCount`，只重置稳定帧数，没有要求先离开失败页并确认新一轮战斗。连续两帧失败画面即可重新触发判断，且“三次失败”的终止判断位于点击冷却检查之前。
+  - **最可能的过程：** 第二次重试点击后计数达到 2，尚未消失的旧失败画面被当成新一次战败，提前终止本局；已发出的点击随后使游戏进入挑战页。日志未保留该时刻的逐帧动作，不能据此认定确实完成了三场战斗，也不能把这一推断记为已复现。
+  - **后续核实与修复边界：** 核对重试点击、离开失败页、新战斗和再次失败的顺序；使同一次失败的残留画面不会触发新一次终止判断，保留真实达到三次失败后的停止策略。另核对 [SessionExpiryFrameTracker.kt](../android/app/src/main/java/com/landosol/toolbox/automation/session/SessionExpiryFrameTracker.kt) 缺少挑战页推进路径所造成的后续超时，不能通过未知页面盲点绕过。此处为 Android 与桌面共享逻辑，后续修复需说明两端影响。
+
+- [ ] **FIX-02：启动阶段的公告前 45 秒总时限可能在游戏仍正常加载时终止任务。**
+  - **状态：** 已确认计时规则与此前保留画面相符；记录待修复，本次不修改代码。
+  - **记录依据：** 2026-10-29 01:14:46 启动的批次在 01:16:22 停止；此前诊断中约 01:15:35 点击标题页，停止时仍显示加载漫画与“加载中”，累计动作 23 次，未达到 30 次上限。
+  - **原因：** [LabyrinthEntryActionPlanner.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryActionPlanner.kt) 从首次标题页继续动作开始累计公告前耗时，后续加载页与未知过渡页共用 45 秒总时限；页面有变化也不会延长该时限。达到时限会返回“公告前受限点击超时”。[GameSessionResetWorkflow.kt](../android/app/src/main/java/com/landosol/toolbox/automation/session/GameSessionResetWorkflow.kt) 等待阶段失败时又抛出笼统的“会话重置失败”，使上层记录丢失具体原因。
+  - **后续修复边界：** 区分正常加载与持续无进展，保留有限等待与未知页面点击限制；把实际停止原因传递到运行记录。此前记录与代码支持该超时判断，但加载较慢的具体原因尚未确认。入口与重置逻辑由 Android 和桌面共享，后续修复需说明两端影响。
+
+- [ ] **FIX-03：通关后在结果页提前交接，下一轮重置无法推进结算链并超时。**
+  - **状态：** 日志中多次出现；记录待修复，本次不修改代码，不把工作区已有改动视为已部署或已验证。
+  - **日志依据：** 2026-10-28 01:25:13、02:15:51、02:35:02 分别记录“本局通关”；下一轮重置接手时仍为 `RUN_CLEAR_RESULT`，随后分别在 01:25:39、02:16:09、02:35:17 报 `trigger-not-recognised-after-0-taps` 与 `TIMEOUT`，即重置期间没有执行导航点击。
+  - **原因：** 故障对应的结果处理逻辑在分数稳定或等待 6 秒后即可结束单局，没有以完成后续奖励、宝箱等结算页面作为交接条件；之后重置阶段必须识别到可信的关闭或下一步按钮才能推进。日志确认交接时仍停在结果页、且重置未取得可执行的触发点，但未保留足够的按钮匹配细节，不能断言具体是按钮尚未出现、模板未命中还是按钮匹配置信度未达阈值。“分数未识别”本身不能解释零点击超时。
+  - **后续修复边界：** 核对 [LabyrinthRunSummary.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthRunSummary.kt)、[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 的单局完成条件与 [SessionExpiryFrameTracker.kt](../android/app/src/main/java/com/landosol/toolbox/automation/session/SessionExpiryFrameTracker.kt) 的接手范围，确保结算链有人持续处理、到达可接手页面后再切换；保留可信按钮约束，不用未知页面盲点绕过。此处为 Android 与桌面共享逻辑，后续修复需说明两端影响。
+
+- [ ] **FIX-04：Boss 战尚未结束就触发固定 5 分钟等待上限，导致自动任务提前停止。**
+  - **状态：** 已确认本次停止原因；记录待修复，本次不修改代码。
+  - **日志与画面依据：** 2026-10-29 本轮进入 `Boss#30701`，01:42:15 识别到 `BATTLE_IN_PROGRESS`；01:47:15 日志记录“等待战斗结算超过5分钟，已停止并保留诊断状态”。停止前保留画面仍在战斗，游戏倒计时剩余 11 秒，Boss 血量为 899,909 / 120,000,000（约 0.75%），尚未进入结算页。
+  - **原因：** [LabyrinthBattleWaitPolicy.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthBattleWaitPolicy.kt) 使用固定 300,000 毫秒的现实时间总时限；持续识别到战斗画面也不会延长等待，没有结合 Boss 多队战斗、剩余时间或血量判断进展。[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 收到超时判定后直接终止本局。本次因此在战斗未结束时被截断；现有日志不足以进一步确定动画、速度设置等因素对战斗耗时的影响。
+  - **后续修复边界：** 区分仍有进展的长战斗与持续卡死，核对 Boss 多队战斗的等待预算及可靠的进展信号；保留最终等待上限和诊断状态，不能仅因重复识别到战斗页就无限续期。此处为 Android 与桌面共享逻辑，后续修复需说明两端影响。
+
 ## 方案阶段已知
 
 | # | 限制 | 影响 | 规避方法 | 计划 |
