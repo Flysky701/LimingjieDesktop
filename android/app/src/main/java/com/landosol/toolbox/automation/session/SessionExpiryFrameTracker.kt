@@ -26,8 +26,6 @@ class SessionExpiryFrameTracker {
     private var width: Int = 0
     @Volatile
     private var height: Int = 0
-    @Volatile
-    private var settlementNavigationActive = false
 
     /** 由 workflow 的帧处理器在每次识别后调用 */
     fun record(result: LabyrinthEntryFrameResult) {
@@ -36,21 +34,6 @@ class SessionExpiryFrameTracker {
         pageState = result.observation.state
         battleFailureEndPoint = result.battleFailure?.endButtonRect?.let(::centre)
         battleEndConfirmationPoint = result.battleEndConfirmation?.advanceButtonRect?.let(::centre)
-        // ITEM_REWARD is also used during ordinary runs. It is safe to dismiss here only
-        // after a recognized settlement control, and this permission ends on leaving that chain.
-        settlementNavigationActive = when (pageState) {
-            LabyrinthEntryPageState.RUN_CLEAR_RESULT,
-            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY,
-            LabyrinthEntryPageState.RUN_CLEAR_CHEST_RESULT -> sessionInvalidationTrigger != null
-            LabyrinthEntryPageState.UNKNOWN,
-            LabyrinthEntryPageState.NODE_SELECTION,
-            LabyrinthEntryPageState.NODE_MAP_VIEW,
-            LabyrinthEntryPageState.RUN_CLEAR_CONGRATULATIONS,
-            LabyrinthEntryPageState.RUN_CLEAR_REWARD_ANIMATION,
-            LabyrinthEntryPageState.RUN_CLEAR_CHEST_ANIMATION,
-            LabyrinthEntryPageState.ITEM_REWARD -> settlementNavigationActive
-            else -> false
-        }
     }
 
     private fun centre(rect: EntryPixelRect) = ScreenPoint(
@@ -67,8 +50,6 @@ class SessionExpiryFrameTracker {
      * - 战斗失败页：没有底栏。「重新挑战」只回到 EX 挑战页、不联网（2026-09-17 实测），所以走
      *   结束 → 撤退（无报酬） → 确认 三步：确认才向服务端撤退，旧 enter 被拒即弹会话失效提示。
      *   每一步都按当前帧识别到的对话框阶段给出按钮，识别不到不点。
-     * - 结算页：按已识别的下一步、关闭、宝箱确认与道具关闭推进到可触发同步的页面。
-     *   这些导航点击不等于同步成功；仍须由终止器和重置流程确认后续终态。
      */
     val sessionInvalidationTrigger: ScreenPoint?
         get() = when (pageState) {
@@ -77,17 +58,6 @@ class SessionExpiryFrameTracker {
             LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE,
             LabyrinthEntryPageState.DAWN_REALM_HOME_ACTIVE,
             -> anchorCenter(EntryAnchorId.DAWN_HOME_MY_HOME_TAB, TRIGGER_MIN_SCORE)
-            // Bounded settlement navigation for the next run. These taps do NOT prove
-            // synchronization: the terminator still requires expiry/title or native HOME.
-            LabyrinthEntryPageState.RUN_CLEAR_RESULT ->
-                anchorCenter(EntryAnchorId.RUN_RESULT_CLOSE_BUTTON, TRIGGER_MIN_SCORE)
-            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY ->
-                anchorCenter(EntryAnchorId.RUN_RESULT_NEXT_BUTTON, TRIGGER_MIN_SCORE)
-                    ?: anchorCenter(EntryAnchorId.RUN_CLEAR_NEXT_BUTTON, TRIGGER_MIN_SCORE)
-            LabyrinthEntryPageState.RUN_CLEAR_CHEST_RESULT ->
-                anchorCenter(EntryAnchorId.RUN_CLEAR_CHEST_CONFIRM_BUTTON, TRIGGER_MIN_SCORE)
-            LabyrinthEntryPageState.ITEM_REWARD ->
-                anchorCenter(EntryAnchorId.ITEM_REWARD_CLOSE, TRIGGER_MIN_SCORE).takeIf { settlementNavigationActive }
             else -> null
         }
 

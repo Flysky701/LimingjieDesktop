@@ -1149,7 +1149,7 @@ class LabyrinthEntryRecognitionSession(
     private val persistenceMutex = Mutex()
     private val actionInFlight = AtomicBoolean(false)
     private val stopRequested = AtomicBoolean(false)
-    private var resultCompletion = LabyrinthResultCompletion()
+    private var runScoreCollector = LabyrinthRunScoreCollector()
     private var runStartedAt = 0L
 
     /**
@@ -1888,7 +1888,7 @@ class LabyrinthEntryRecognitionSession(
         resetNodeExecutionState()
         resetExEncounterTracking()
         resetEffectiveCharacterScan()
-        resultCompletion = LabyrinthResultCompletion()
+        runScoreCollector = LabyrinthRunScoreCollector()
         runStartedAt = clock()
         actionPlanner = if (dryRun) null else createActionPlanner()
         relicStackLedger.seedAcquisitions(relicChoicePolicy.markStacks(initialRunSnapshot?.observedRelics.orEmpty()))
@@ -2227,19 +2227,9 @@ class LabyrinthEntryRecognitionSession(
             ),
         )
         val pageState = result.observation.state
-        // RESULT is the user-defined terminal boundary. Collect its score without closing it;
-        // all intervening map/animation frames belong to this boundary, never to node planning.
-        if (!current.dryRun && resultCompletion.observe(pageState, result.runResultScore, timestampMillis, runStartedAt)) {
-            nodeErrorStreak = 0
-            val summary = resultCompletion.summary
-            if (summary != null) {
-                if (_state.value.runSummary == null) nodeLog("run-result-complete durationMs=${summary.durationMillis} score=${summary.score ?: "unread"}")
-                _state.value = _state.value.copy(runSummary = summary)
-                markRunCleared(sessionId)
-            } else {
-                _state.value = _state.value.copy(message = "已到达结果页，正在确认本局分数")
-            }
-            return
+        // Statistics never take ownership from the original settlement flow.
+        if (!current.dryRun) {
+            runScoreCollector.observe(pageState, result.runResultScore, timestampMillis)
         }
         if (clock() < channelPromptVisibleUntil) {
             // The channel prompt poll owns the screen; nothing behind the dialog may be tapped.
@@ -2568,9 +2558,6 @@ class LabyrinthEntryRecognitionSession(
             return
         }
         when {
-            !current.dryRun && pageState == LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY &&
-                result.observation.anchorScores[EntryAnchorId.RUN_RESULT_NEXT_BUTTON] >= 0.80 ->
-                handlePostEntryPage(sessionId, result, frameWidth, frameHeight, timestampMillis)
             genericConfirmOwnsFrame ->
                 handlePostEntryPage(sessionId, result, frameWidth, frameHeight, timestampMillis)
 
@@ -5503,22 +5490,8 @@ class LabyrinthEntryRecognitionSession(
                 )
             }
 
-            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY ->
-                anchorRect(result, EntryAnchorId.RUN_RESULT_NEXT_BUTTON)?.let { next ->
-                    LabyrinthPostEntryTapPlan(
-                        LabyrinthPostEntryActionKind.ADVANCE_FINAL_SETTLEMENT,
-                        "推进角色汇总，等待最终总分结果",
-                        next,
-                    )
-                } ?: if (finalAnimationActive && finalAnimationPage) {
-                    LabyrinthPostEntryTapPlan(
-                        LabyrinthPostEntryActionKind.ADVANCE_FINAL_SETTLEMENT,
-                        "推进最终结算动画",
-                        finalSettlementFallbackRect(result, pageState, frameWidth, frameHeight),
-                    )
-                } else null
-
             LabyrinthEntryPageState.RUN_CLEAR_CONGRATULATIONS,
+            LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY,
             LabyrinthEntryPageState.RUN_CLEAR_REWARD_ANIMATION,
             LabyrinthEntryPageState.RUN_CLEAR_CHEST_ANIMATION,
             LabyrinthEntryPageState.RUN_CLEAR_CHEST_RESULT,
@@ -7166,7 +7139,7 @@ class LabyrinthEntryRecognitionSession(
         }
     }
 
-    /** RESULT is sufficient; score collection finishes before publishing the terminal event. */
+    /** Only closing the final item popup and observing the idle maze home completes a run. */
     private fun markRunCleared(sessionId: AutomationSessionId) {
         if (activeSessionId != sessionId) return
         postBossStage = LabyrinthPostBossStage.WAITING_FOR_DAWN_HOME
@@ -7176,9 +7149,11 @@ class LabyrinthEntryRecognitionSession(
             visitedCount = 0,
             routeNodeCount = routeNodeCount,
         )
-        _state.value = current.copy(routeProgress = progress.copy(complete = true))
+        val summary = LabyrinthRunSummary(runStartedAt, clock(), runScoreCollector.score)
+        _state.value = current.copy(routeProgress = progress.copy(complete = true), runSummary = summary)
+        nodeLog("run-result-complete durationMs=${summary.durationMillis} score=${summary.score ?: "unread"}")
         pendingTerminalOutcome = LabyrinthRunTerminalOutcome.CLEARED
-        finishFromPlanner(sessionId, current.runSummary?.description() ?: "本局通关 · 分数未识别")
+        finishFromPlanner(sessionId, "已完成最终结算并返回黎明界主页 · ${summary.description()}")
     }
 
     private fun anchorRect(result: LabyrinthEntryFrameResult, anchorId: String): EntryPixelRect? =
