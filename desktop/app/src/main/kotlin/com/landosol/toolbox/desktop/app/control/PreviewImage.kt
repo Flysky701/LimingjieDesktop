@@ -8,6 +8,7 @@ import java.util.Base64
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
 import javax.imageio.IIOImage
+import javax.imageio.stream.MemoryCacheImageOutputStream
 
 private const val PREVIEW_MAX_EDGE = 960
 
@@ -33,7 +34,7 @@ internal fun encodePreviewJpeg(frame: CapturePixels): String {
     return ByteArrayOutputStream().use { bytes ->
         val writer = ImageIO.getImageWritersByFormatName("jpeg").next()
         try {
-            ImageIO.createImageOutputStream(bytes).use { output ->
+            MemoryCacheImageOutputStream(bytes).use { output ->
                 writer.output = output
                 val options = writer.defaultWriteParam.apply {
                     compressionMode = ImageWriteParam.MODE_EXPLICIT

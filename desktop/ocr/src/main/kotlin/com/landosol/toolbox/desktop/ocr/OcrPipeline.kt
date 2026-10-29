@@ -54,23 +54,20 @@ internal object OcrPreprocessing {
         val width = max(320, contentWidth)
         // The recognizer expects height 48; extremely wide text is downscaled to fit then padded.
         val height = if (48.0 * image.width / image.height > 1280) max(1, (image.height * 1280.0 / image.width).roundToInt()) else 48
-        val normalized = normalized(image.resize(contentWidth, height), floatArrayOf(.5f, .5f, .5f), floatArrayOf(.5f, .5f, .5f))
-        if (height == 48 && contentWidth == width) return normalized
-        val values = FloatArray(3 * 48 * width)
-        repeat(3) { c -> repeat(height) { y ->
-            normalized.values.copyInto(values, c * 48 * width + y * width,
-                c * contentWidth * height + y * contentWidth, c * contentWidth * height + (y + 1) * contentWidth)
-        } }
-        return TensorImage(width, 48, values)
+        return normalized(image.resize(contentWidth, height), floatArrayOf(.5f, .5f, .5f), floatArrayOf(.5f, .5f, .5f), width, 48)
     }
 
-    private fun normalized(image: OcrImage, mean: FloatArray, std: FloatArray): TensorImage {
-        val size = image.width * image.height
+    private fun normalized(image: OcrImage, mean: FloatArray, std: FloatArray,
+        width: Int = image.width, height: Int = image.height): TensorImage {
+        val size = width * height
         val values = FloatArray(size * 3)
-        image.pixels.forEachIndexed { i, pixel ->
-            repeat(3) { channel -> values[channel * size + i] = (((pixel ushr (channel * 8)) and 255) / 255f - mean[channel]) / std[channel] }
-        }
-        return TensorImage(image.width, image.height, values)
+        // Write directly into the padded planes; untouched right/bottom padding stays zero.
+        repeat(image.height) { y -> repeat(image.width) { x ->
+            val pixel = image.pixels[y * image.width + x]
+            val at = y * width + x
+            repeat(3) { channel -> values[channel * size + at] = (((pixel ushr (channel * 8)) and 255) / 255f - mean[channel]) / std[channel] }
+        } }
+        return TensorImage(width, height, values)
     }
 }
 

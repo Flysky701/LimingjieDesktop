@@ -5,6 +5,7 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import javax.imageio.ImageIO
+import javax.imageio.stream.MemoryCacheImageInputStream
 
 class DeviceOperationException(message: String, val adbFailure: AdbFailureKind? = null) : IOException(message)
 
@@ -65,7 +66,14 @@ class ScreenCapturer(private val adb: AdbExecutor, private val serial: String) {
             return DeviceFrame(width, height, pixels, timestampMillis)
         }
         fun decodePng(bytes: ByteArray, timestampMillis: Long = System.currentTimeMillis()): DeviceFrame {
-            val image = ImageIO.read(ByteArrayInputStream(bytes)) ?: throw DeviceOperationException("PNG 截图无法解码")
+            val image = MemoryCacheImageInputStream(ByteArrayInputStream(bytes)).use { input ->
+                val reader = ImageIO.getImageReaders(input).asSequence().firstOrNull()
+                    ?: throw DeviceOperationException("PNG 截图无法解码")
+                try {
+                    reader.setInput(input, true, true)
+                    reader.read(0)
+                } finally { reader.dispose() }
+            }
             return DeviceFrame(image.width, image.height, image.getRGB(0, 0, image.width, image.height, null, 0, image.width), timestampMillis)
         }
     }

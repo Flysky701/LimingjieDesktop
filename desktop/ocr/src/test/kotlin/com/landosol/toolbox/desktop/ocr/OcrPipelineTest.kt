@@ -2,8 +2,27 @@ package com.landosol.toolbox.desktop.ocr
 
 import org.junit.Assert.*
 import org.junit.Test
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
 
 class OcrPipelineTest {
+    @Test fun `model buffer conversion reuses complete owned arrays`() {
+        val values = floatArrayOf(.1f, .4f, .9f)
+        assertSame(values, FloatBuffer.wrap(values).toFloatArray())
+    }
+
+    @Test fun `model buffer conversion respects views and leaves their position unchanged`() {
+        val heap = FloatBuffer.wrap(floatArrayOf(99f, .4f, .9f, 99f)).apply { position(1); limit(3) }
+        val direct = ByteBuffer.allocateDirect(16).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            .apply { put(floatArrayOf(99f, .4f, .9f, 99f)); position(1); limit(3) }
+        for (buffer in listOf(heap, heap.slice(), heap.asReadOnlyBuffer(), direct, direct.asReadOnlyBuffer())) {
+            val position = buffer.position()
+            assertArrayEquals(floatArrayOf(.4f, .9f), buffer.toFloatArray(), 0f)
+            assertEquals(position, buffer.position())
+        }
+    }
+
     @Test fun `detection uses planar BGR and documented normalization`() {
         val input = OcrPreprocessing.detection(OcrImage(32, 32, IntArray(1024) { 0xffff0000.toInt() }))
         assertEquals(32, input.width)

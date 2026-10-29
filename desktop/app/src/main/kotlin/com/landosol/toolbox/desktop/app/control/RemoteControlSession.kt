@@ -95,6 +95,10 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         .stateIn(scope,SharingStarted.Eagerly,read(models.value))
     private inline fun <reified T> listField(name:String):StateFlow<List<T>> =
         models.decodedListField(scope,name){it.model(name,emptyList<T>())}
+    // Decode the shared console once per change, then project its existing objects for each view.
+    private val consoleState=field("console"){it.console}
+    private fun <T> consoleField(read:(RunConsoleState)->T):StateFlow<T> = consoleState
+        .map(read).distinctUntilChanged().stateIn(scope,SharingStarted.Eagerly,read(consoleState.value))
     val context=object:Context() {
         override val assets=AssetManager()
         override val applicationContext:Context get()=this
@@ -120,7 +124,7 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     val log=LogView()
     val ocr=OcrView()
     val automationOverlayCoordinator=OverlayView()
-    val taskStopping=field("console"){it.console.stopping}
+    val taskStopping=consoleField{it.stopping}
     val preview:StateFlow<ImageBitmap?> = port.previewFrames(::decodeControlPreview).stateIn(scope,SharingStarted.Eagerly,null)
     val captcha=field("captcha"){it.document["captcha"] as? JsonObject}
     val accountVerified=field("accountVerified"){it.document["accountVerified"]?.jsonPrimitive?.booleanOrNull ?: true}
@@ -167,10 +171,10 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
 
     inner class ResolutionView {val status=field("resolution"){it.model("resolution",VisualResolutionStatus(message=VisualResolutionGuardMessage))}}
     inner class OcrView {val status:StateFlow<OcrEngineStatus> = field("ocr"){it.model("ocr",OcrEngineStatus.NotLoaded as OcrEngineStatus)}}
-    inner class OverlayView {val state=field("console"){it.console.overlay}}
+    inner class OverlayView {val state=consoleField{it.overlay}}
     inner class IdentityView {val state=field("identity"){it.model<DeviceIdentitySnapshot?>("identity",null)};fun current():DeviceIdentitySnapshot?=state.value}
     inner class DeviceView {
-        val state=field("console"){it.console.device}
+        val state=consoleField{it.device}
         val foreground=field("foreground"){it.text("foreground")}
         val foregroundPackage get()=models.value.text("foreground")
         suspend fun queryForeground():String?=request(ControlOps.FOREGROUND)["value"]?.jsonPrimitive?.contentOrNull
@@ -193,7 +197,7 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         suspend fun save(value:LabyrinthStrategySettings){request(ControlOps.STRATEGY_SAVE,controlArgs("value" to ControlModelCodec.encode(value)));awaitSnapshot{it.model("strategy",LabyrinthStrategySettings())==value}}
     }
     inner class TaskView {
-        val uiState=field("console"){it.console.task}
+        val uiState=consoleField{it.task}
         fun saveSettings(value:LabyrinthRerollSettings){fire(ControlOps.SAVE_REROLL,controlArgs("value" to ControlModelCodec.encode(value)))}
         fun checkStatus(){fire(ControlOps.START,buildJsonObject{put("task","READ")})}
         fun start(retreatConfirmed:Boolean=false,guildIdOverride:Int?=null){fire(ControlOps.START,buildJsonObject{put("task","REROLL");put("retreatConfirmed",retreatConfirmed);guildIdOverride?.let{put("guildId",it)}})}
@@ -203,7 +207,7 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         fun cancelCaptcha(){captcha.value?.get("ticketId")?.let{fire(ControlOps.CAPTCHA_CANCEL,controlArgs("ticketId" to it))}}
     }
     inner class UxView {
-        val console=field("console"){it.console}
+        val console=consoleState
         val credentials=field("credentials"){it.model<Map<Long,Boolean>>("credentials",emptyMap())}
         val database=field("database"){it.text("database") ?: "正在读取"}
         val foreground=field("foreground"){it.text("foreground")}
