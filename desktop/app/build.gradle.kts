@@ -50,7 +50,8 @@ tasks.register<JavaExec>("probeGraph") {
 compose.desktop {
     application {
         mainClass = "com.landosol.toolbox.desktop.app.MainKt"
-        jvmArgs += listOf("-Dfile.encoding=UTF-8", "-Dsun.stdout.encoding=UTF-8", "-Dsun.stderr.encoding=UTF-8", "-Djava.net.useSystemProxies=true", "-Xmx1536m")
+        jvmArgs += project.file("src/main/resources/desktop/jvm-options.txt").readLines()
+            .map(String::trim).filter { it.isNotEmpty() && !it.startsWith('#') }
         buildTypes.release.proguard.isEnabled = false
         nativeDistributions {
             packageName = "LimingjieAssistant"

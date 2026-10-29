@@ -32,7 +32,8 @@ class WorkerLauncher(
         fun applicationCommand(): List<String> {
             System.getProperty("jpackage.app-path")?.takeIf { Files.isRegularFile(Path.of(it)) }?.let { return listOf(it) }
             val java = Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java")
-            return listOf(java.toString(), "-cp", System.getProperty("java.class.path"), "com.landosol.toolbox.desktop.app.MainKt")
+            return listOf(java.toString()) + DesktopJvmOptions.arguments +
+                listOf("-cp", System.getProperty("java.class.path"), "com.landosol.toolbox.desktop.app.MainKt")
         }
     }
 }

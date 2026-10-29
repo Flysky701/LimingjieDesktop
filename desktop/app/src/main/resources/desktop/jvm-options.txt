@@ -1,0 +1,11 @@
+# Shared by the packaged launcher and development child JVMs.
+-Dfile.encoding=UTF-8
+-Dsun.stdout.encoding=UTF-8
+-Dsun.stderr.encoding=UTF-8
+-Djava.net.useSystemProxies=true
+-Xms64m
+-Xmx1536m
+# Return unused heap after image-heavy work; keep the existing growth ceiling.
+-XX:MinHeapFreeRatio=10
+-XX:MaxHeapFreeRatio=30
+-XX:G1PeriodicGCInterval=30000
