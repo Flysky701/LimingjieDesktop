@@ -12,6 +12,27 @@ import java.io.File
 import javax.imageio.ImageIO
 
 class OnnxOcrEngineTest {
+    @Test fun `pixel budget bounds queued and active requests and is released on completion`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val backend = object : StubBackend() {
+            override fun warmUp() { entered.countDown(); release.await() }
+        }
+        OnnxOcrEngine({ backend }, { _, _ -> }, maxPendingBytes = 16).use { engine ->
+            val first = CompletableFuture<String?>()
+            engine.submit(2, 2, IntArray(4)) { first.complete(it) }
+            assertTrue(entered.await(3, TimeUnit.SECONDS))
+            // Fewer than 64 requests, but the retained pixels already consume the budget.
+            assertNull(result(engine))
+            release.countDown()
+            assertEquals("文字", first.get(3, TimeUnit.SECONDS))
+            val next = CompletableFuture<String?>()
+            engine.submit(2, 2, IntArray(4)) { next.complete(it) }
+            assertEquals("文字", next.get(3, TimeUnit.SECONDS))
+        }
+        assertEquals(1, backend.closed.get())
+    }
+
     @Test fun `reads total score from recorded result page`() {
         val screenshot=ImageIO.read(File("../../android/app/src/test/resources/labyrinth/run-clear-20260917/t0.5.jpg"))
         val crop=screenshot.getSubimage(730,195,460,105)

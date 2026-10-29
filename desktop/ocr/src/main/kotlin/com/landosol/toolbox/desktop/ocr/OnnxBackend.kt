@@ -28,15 +28,22 @@ internal class OnnxBackend : OcrBackend {
         val options = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(min(4, max(1, Runtime.getRuntime().availableProcessors() / 2)))
             setInterOpNumThreads(1)
+            // Variable game ROIs must not keep the largest activation arena indefinitely.
+            setMemoryPatternOptimization(false)
+            addConfigEntry("session.intra_op.allow_spinning", "0")
+            addConfigEntry("session.inter_op.allow_spinning", "0")
         }
         try {
             detection = environment.createSession(resource("ch_PP-OCRv5_det_mobile.onnx"), options)
-            try { recognition = environment.createSession(resource("ch_PP-OCRv5_rec_mobile.onnx"), options) }
+            try { recognition = environment.createSession(resource("ch_PP-OCRv5_rec_mobile_ctc.onnx"), options) }
             catch (error: Exception) { detection.close(); throw error }
         } finally { options.close() }
         try {
             val characters = resource("ppocrv5_dict.txt").toString(Charsets.UTF_8).lineSequence().filter { it.isNotEmpty() }.toList()
             dictionary = listOf("") + characters + " "
+            check(recognition.metadata.customMetadata["desktop_ctc_classes"]?.toIntOrNull() == dictionary.size) {
+                "OCR 模型字符数与字典不一致"
+            }
         } catch (error: Exception) {
             recognition.close(); detection.close(); throw error
         }
@@ -84,23 +91,29 @@ internal class OnnxBackend : OcrBackend {
 
     private fun detect(image: OcrImage): List<TextBox> {
         val input = OcrPreprocessing.detection(image)
-        return run(detection, input) { output ->
+        return run(detection, input) { result ->
+            val output = result[0] as OnnxTensor
             val shape = output.info.shape
             check(shape.size == 4 && shape[0] == 1L && shape[1] == 1L) { "检测模型输出维度不兼容" }
             OcrPostprocessing.boxes(output.floatBuffer.toFloatArray(), shape[3].toInt(), shape[2].toInt(), image.width, image.height)
         }
     }
 
-    private fun recognizeLine(image: OcrImage): Pair<String, Float> = run(recognition, OcrPreprocessing.recognition(image)) { output ->
-        val shape = output.info.shape
-        check(shape.size == 3 && shape[0] == 1L) { "识别模型输出维度不兼容" }
-        check(shape[2].toInt() == dictionary.size) { "OCR 模型字符数与字典不一致" }
-        OcrPostprocessing.ctc(output.floatBuffer.toFloatArray(), shape[1].toInt(), shape[2].toInt(), dictionary)
+    private fun recognizeLine(image: OcrImage): Pair<String, Float> = run(recognition, OcrPreprocessing.recognition(image)) { result ->
+        val indices = result.get("ctc_indices").orElseThrow() as OnnxTensor
+        val confidence = result.get("ctc_confidence").orElseThrow() as OnnxTensor
+        val shape = indices.info.shape
+        check(shape.size == 2 && shape[0] == 1L && shape.contentEquals(confidence.info.shape)) { "识别模型输出维度不兼容" }
+        val values = indices.longBuffer
+        OcrPostprocessing.ctc(IntArray(values.remaining()) { Math.toIntExact(values.get()) }, confidence.floatBuffer.toFloatArray(), dictionary)
     }
 
-    private fun <T> run(session: OrtSession, input: TensorImage, block: (OnnxTensor) -> T): T {
+    private fun <T> run(session: OrtSession, input: TensorImage, block: (OrtSession.Result) -> T): T {
         OnnxTensor.createTensor(environment, FloatBuffer.wrap(input.values), longArrayOf(1, 3, input.height.toLong(), input.width.toLong())).use { tensor ->
-            session.run(mapOf(session.inputNames.single() to tensor)).use { result -> return block(result[0] as OnnxTensor) }
+            OrtSession.RunOptions().use { options ->
+                options.addRunConfigEntry("memory.enable_memory_arena_shrinkage", "cpu:0")
+                session.run(mapOf(session.inputNames.single() to tensor), options).use { result -> return block(result) }
+            }
         }
     }
 

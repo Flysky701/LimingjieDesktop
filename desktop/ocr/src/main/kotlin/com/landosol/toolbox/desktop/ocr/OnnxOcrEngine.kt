@@ -11,6 +11,7 @@ import java.util.logging.Logger
 class OnnxOcrEngine internal constructor(
     private val backendFactory: () -> OcrBackend,
     private val warn: (String, Throwable?) -> Unit,
+    private val maxPendingBytes: Long = 64L * 1024 * 1024,
 ) : OcrEngine {
     constructor() : this(::OnnxBackend, { text, error -> Logger.getLogger(OnnxOcrEngine::class.java.name).log(Level.WARNING, text, error) })
 
@@ -19,6 +20,7 @@ class OnnxOcrEngine internal constructor(
     private val queue = ArrayBlockingQueue<Request>(64)
     private val lifecycle = Any()
     private var started = false
+    private var pendingBytes = 0L
     @Volatile private var closed = false
     private var lastOverflowWarning = Long.MIN_VALUE
     private val worker = Thread(::work, "landosol-ocr").apply { isDaemon = true }
@@ -39,7 +41,12 @@ class OnnxOcrEngine internal constructor(
             if (closed || state.value is OcrEngineStatus.Failed) false
             else {
                 startWorker()
-                queue.offer(request).also { accepted ->
+                val fits = pendingBytes + request.pixelBytes <= maxPendingBytes
+                (fits && queue.offer(request)).also { accepted ->
+                    if (accepted) {
+                        request.reserved = true
+                        pendingBytes += request.pixelBytes
+                    }
                     if (!accepted) {
                         val now = System.nanoTime()
                         if (lastOverflowWarning == Long.MIN_VALUE || now - lastOverflowWarning >= 60_000_000_000L) {
@@ -131,7 +138,14 @@ class OnnxOcrEngine internal constructor(
 
     private inner class Request(val image: OcrImage, val callback: (String?) -> Unit) {
         private val completed = AtomicBoolean()
-        fun finish(value: String?) { if (completed.compareAndSet(false, true)) complete(callback, value) }
+        val pixelBytes = image.pixels.size.toLong() * Int.SIZE_BYTES
+        var reserved = false // protected by lifecycle, including completion on the worker
+        fun finish(value: String?) {
+            if (completed.compareAndSet(false, true)) {
+                synchronized(lifecycle) { if (reserved) { pendingBytes -= pixelBytes; reserved = false } }
+                complete(callback, value)
+            }
+        }
     }
 }
 

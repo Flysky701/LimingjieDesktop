@@ -7,10 +7,14 @@
 | 文件 | 来源 | SHA-256 |
 |---|---|---|
 | ch_PP-OCRv5_det_mobile.onnx | [RapidAI/RapidOCR v3.10.0](https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/det/ch_PP-OCRv5_det_mobile.onnx) | 4d97c44a20d30a81aad087d6a396b08f786c4635742afc391f6621f5c6ae78ae |
-| ch_PP-OCRv5_rec_mobile.onnx | [RapidAI/RapidOCR v3.10.0](https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile.onnx) | 5825fc7ebf84ae7a412be049820b4d86d77620f204a041697b0494669b1742c5 |
+| ch_PP-OCRv5_rec_mobile_ctc.onnx | 由下述锁定的识别模型生成，保留原权重 | 3f650d0b5b20e6e059c15b590fbf0bcc8459adc088592bc0435f74eae4015cf5 |
 | ppocrv5_dict.txt | [RapidAI 对应 v5 字典](https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/paddle/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile/ppocrv5_dict.txt) | d1979e9f794c464c0d2e0b70a7fe14dd978e9dc644c0e71f14158cdf8342af1b |
 
-模型校验值来自 [RapidOCR 官方模型清单](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml)。字典校验值为上列固定版本下载内容的实算值；加载时前置 CTC blank、末尾追加空格，不改变原始资源文件，并校验字符总数与模型输出匹配。
+原始模型校验值来自 [RapidOCR 官方模型清单](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml)。字典校验值为上列固定版本下载内容的实算值；加载时前置 CTC blank、末尾追加空格，不改变字典文件，并校验字符总数与模型元数据匹配。
+
+识别模型源文件为 [RapidAI/RapidOCR 的固定导出](https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile.onnx)，SHA-256 为 `5825fc7ebf84ae7a412be049820b4d86d77620f204a041697b0494669b1742c5`。`tools/ocr/compact_ctc_model.py` 校验该源文件后，在原始概率输出后追加 ArgMax 和 ReduceMax，仅返回每个时间步的字符编号与原始置信度；同分时仍取第一个字符，不修改权重、softmax、CTC 去重、空白字符或置信度阈值。应用只携带派生模型，避免重复打包。重建方法：安装构建工具 `onnx==1.19.1`，执行 `python tools/ocr/compact_ctc_model.py SOURCE.onnx desktop/ocr/src/main/resources/ocr/ch_PP-OCRv5_rec_mobile_ctc.onnx`；普通构建和应用运行不需要 Python。
+
+原生推理保留 CPU arena，但在每次推理完成后收缩未用区域；可变尺寸输入不缓存内存模式，工作线程不自旋。模型与词表仍按设备 JVM 隔离，不共享跨设备识别状态。
 
 模型由 PaddleOCR 提供，ONNX 转换产物由 RapidAI 维护；两项目均提供 Apache-2.0 许可。许可证全文保存在 `licenses/PaddleOCR-APACHE-2.0.txt`、`licenses/RapidOCR-APACHE-2.0.txt`，分别取自 PaddleOCR v2.7.0 和 RapidOCR v3.9.0。随包第三方声明同时保留两者归属。
 
@@ -22,7 +26,7 @@
 
 历史对比使用 RapidAI/RapidOCR 固定 v3.9.2 的 `onnx/PP-OCRv4/det/ch_PP-OCRv4_det_mobile.onnx`（SHA-256 `d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9`）和 `onnx/PP-OCRv4/rec/ch_PP-OCRv4_rec_mobile.onnx`（`48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b`），下载 URL 前缀为 `https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/`。v4字典取自 PaddleOCR v2.7.0 的 `ppocr/utils/ppocr_keys_v1.txt`，SHA-256 `28b2362ad4ab2dc38769aa72feb535e3a9ddb3fd2a7585a05920e6393b1dc7f7`。这些历史文件已从最终运行资源删除。
 
-`warmUp()` 在单个工作线程加载与预热两模型；队列容量 64；失败、关闭或队列满都回调 null。引擎不指定 UI 回调线程，shared 适配器负责切回 Swing Main。提交的像素归请求所有，调用者在提交后不得修改；shared 在提交前同步复制 Bitmap。
+`warmUp()` 在单个工作线程加载与预热两模型；队列容量 64，待完成请求的像素总量上限为 64 MiB（包含正在推理的请求）；失败、关闭或达到任一上限都回调 null。引擎不指定 UI 回调线程，shared 适配器负责切回 Swing Main。提交的像素归请求所有，调用者在提交后不得修改；shared 在提交前同步复制 Bitmap。
 
 
 最终扩大清单（2026-10-25）：保留原14条真值，新增一张不同真实地图的计数ROI。`final-v5-expanded.json/tsv` 为 **14/15（93.33%）**，p50 **23.27ms**、p95 **151.04ms**；商店3/3、详情1/2、堆叠7/7、事件2/2、EX1/1，角色奖励0。仍为 `FAILED_ACCURACY`，样本目标尚缺65，未放松门槛。新增来源及未纳入素材的原因见 `desktop/ocr/evaluation/SAMPLE_AUDIT.md`；旧14例结果是历史基线，不是最终清单结果。

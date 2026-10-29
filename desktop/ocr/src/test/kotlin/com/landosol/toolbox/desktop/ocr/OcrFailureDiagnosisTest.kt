@@ -27,14 +27,13 @@ class OcrFailureDiagnosisTest {
                     session.run(mapOf(session.inputNames.single() to tensor)).use { result ->
                         val t = result[0] as OnnxTensor
                         val shape = t.info.shape
-                        val values = FloatArray(t.floatBuffer.remaining()).also { t.floatBuffer.get(it) }
+                        val indices = t.longBuffer
+                        val values = (result[1] as OnnxTensor).floatBuffer
                         var prior = -1; var sum = 0f; var count = 0
                         val text = StringBuilder()
                         repeat(shape[1].toInt()) { step ->
-                            val offset = step * dictionary.size
-                            var best = 0
-                            for (c in 1 until dictionary.size) if (values[offset + c] > values[offset + best]) best = c
-                            if (best != 0 && best != prior) { text.append(dictionary[best]); sum += values[offset + best]; count++ }
+                            val best = indices[step].toInt()
+                            if (best != 0 && best != prior) { text.append(dictionary[best]); sum += values[step]; count++ }
                             prior = best
                         }
                         return text.toString() to if (count == 0) 0f else sum / count

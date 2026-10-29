@@ -121,18 +121,16 @@ internal object OcrPostprocessing {
         return result
     }
 
-    fun ctc(logits: FloatArray, steps: Int, classes: Int, dictionary: List<String>): Pair<String, Float> {
-        require(logits.size == steps * classes && dictionary.size == classes)
+    fun ctc(indices: IntArray, probabilities: FloatArray, dictionary: List<String>): Pair<String, Float> {
+        require(indices.size == probabilities.size)
         val text = StringBuilder()
         var prior = -1
         var confidence = 0f
         var retained = 0
-        repeat(steps) { step ->
-            val offset = step * classes
-            var best = 0
-            for (candidate in 1 until classes) if (logits[offset + candidate] > logits[offset + best]) best = candidate
+        indices.forEachIndexed { step, best ->
+            require(best in dictionary.indices)
             if (best != 0 && best != prior) {
-                text.append(dictionary[best]); confidence += logits[offset + best]; retained++
+                text.append(dictionary[best]); confidence += probabilities[step]; retained++
             }
             prior = best
         }

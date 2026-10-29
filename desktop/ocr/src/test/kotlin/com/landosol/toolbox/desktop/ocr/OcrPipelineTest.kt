@@ -72,13 +72,17 @@ class OcrPipelineTest {
     }
 
     @Test fun `CTC suppresses adjacent duplicates and restores repetition after blank`() {
-        val indices = listOf(0, 1, 1, 0, 1, 2, 2, 0)
-        val logits = FloatArray(indices.size * 3) { .05f }
-        indices.forEachIndexed { i, index -> logits[i * 3 + index] = .9f }
-        val (text, confidence) = OcrPostprocessing.ctc(logits, indices.size, 3, listOf("", "甲", "乙"))
+        val indices = intArrayOf(0, 1, 1, 0, 1, 2, 2, 0)
+        val (text, confidence) = OcrPostprocessing.ctc(indices, FloatArray(indices.size) { .9f }, listOf("", "甲", "乙"))
         assertEquals("甲甲乙", text)
         assertEquals(.9f, confidence, .00001f)
-        assertEquals("", OcrPostprocessing.ctc(floatArrayOf(.1f, .4f, .3f), 1, 3, listOf("", "甲", "乙")).first)
+        assertEquals("", OcrPostprocessing.ctc(intArrayOf(1), floatArrayOf(.4f), listOf("", "甲", "乙")).first)
+    }
+
+    @Test fun `compact CTC validates shape and dictionary indices`() {
+        assertThrows(IllegalArgumentException::class.java) { OcrPostprocessing.ctc(intArrayOf(1), floatArrayOf(), listOf("", "甲")) }
+        assertThrows(IllegalArgumentException::class.java) { OcrPostprocessing.ctc(intArrayOf(2), floatArrayOf(.9f), listOf("", "甲")) }
+        assertEquals("" to 0f, OcrPostprocessing.ctc(intArrayOf(0, 0), floatArrayOf(1f, 1f), listOf("", "甲")))
     }
 
     @Test fun `join sorts rows and columns without character normalization`() {
