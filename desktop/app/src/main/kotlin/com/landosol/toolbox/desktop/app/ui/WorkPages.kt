@@ -27,44 +27,6 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-@Composable internal fun StrategiesPage(graph: ControlSessionUi) {
-    val saved by graph.labyrinthStrategySettings.state.collectAsState()
-    var edit by remember { mutableStateOf(false) }
-    var ratings by remember { mutableStateOf(false) }
-    var saving by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
-    ReportControlDirty("strategy",edit)
-    val scope = rememberCoroutineScope()
-    if(ratings) { RoleRatingsPage(graph) { ratings=false };return }
-    PageBody("策略", "全局配置 · 保存后从下一次识别或自动执行生效。") {
-        Panel("当前策略") {
-            Detail("玩家评分", "${saved.playerWeight}%")
-            Detail("个人评分", "已修改 ${saved.personalRoleScores.size} 个角色")
-            Detail("Boss 编组", if (saved.bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM) "多队编组" else "单队编组")
-            Detail("部署权重", "第一队 100% · 第二队 ${saved.secondTeamWeight}% · 第三队 ${saved.thirdTeamWeight}%")
-            Row(horizontalArrangement=Arrangement.spacedBy(10.dp)) {
-                Button(shape=MaterialTheme.shapes.small,onClick = { edit = true }) { Text("编辑完整策略与编组") }
-                OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { ratings=true }) { Text("角色个人评分") }
-            }
-        }
-        Panel("配置包含") {
-            Text("评分与角色个人评分、选人部署、Boss 编组、战斗失败处理、开局阵容、遗物、专武、商店、事件、响应间隔。")
-            Text("角色评分支持头像、名称/版本/ID 搜索、0–100 分和恢复原评分。开局编组与评分都保留独立保存/取消与校验。", color = Muted)
-        }
-    }
-    if (edit) BoundStrategyDialog { LabyrinthStrategySettingsScreen(saved = saved, saving = saving, message = message,
-        loadRoleRatings = graph::loadLabyrinthRoleRatings, onClose = { edit = false; message = null },
-        onSave = { value -> if (!saving) {
-            saving = true; message = null
-            scope.launch {
-                try { graph.labyrinthStrategySettings.save(value); graph.log.add("策略配置已保存，下次启动生效") }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (failure: Exception) { message = failure.message ?: "保存失败，请重试" }
-                finally { saving = false }
-            }
-        } }) }
-}
-
 @Composable internal fun AccountsPage(graph: ControlSessionUi,bindings:Map<Long,List<String>> = emptyMap(),shared:Boolean=false) {
     val busy = LocalTaskBusy.current
     val vm = graph.accounts

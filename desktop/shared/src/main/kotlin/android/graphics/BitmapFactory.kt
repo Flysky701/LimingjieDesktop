@@ -30,10 +30,11 @@ object BitmapFactory {
                             ((bytes[offset + 2].toInt() and 255) shl 16) or ((bytes[offset + 3].toInt() and 255) shl 24)
                     }
                 }
-                val full = Bitmap.createBitmap(pixels, image.width, image.height, Bitmap.Config.ARGB_8888)
+                val full = Bitmap.fromOwnedPixels(pixels, image.width, image.height)
                 val requested = options?.inSampleSize?.coerceAtLeast(1) ?: 1
                 val sample = Integer.highestOneBit(requested)
-                if (sample == 1) full else Bitmap.createScaledBitmap(full, (image.width / sample).coerceAtLeast(1), (image.height / sample).coerceAtLeast(1), false).also { full.recycle() }
+                if (sample == 1) full else Bitmap.createScaledBitmap(full, (image.width / sample).coerceAtLeast(1), (image.height / sample).coerceAtLeast(1), false)
+                    .also { if (it !== full) full.recycle() }
             }
         }
     } catch (_: java.io.IOException) { options?.outWidth = -1; options?.outHeight = -1; null }

@@ -240,6 +240,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
     private val nodeRelicStackResolver: AndroidLabyrinthNodeRelicStackResolver,
     private val relicDetailResolver: AndroidLabyrinthRelicDetailResolver,
     private val skipJoinedCharacters: () -> Boolean,
+    private val readResultScore: Boolean,
 ) {
     private val resultScoreResolver = AndroidLabyrinthResultScoreResolver()
     fun process(frame: CapturedFrame): LabyrinthEntryFrameResult {
@@ -260,7 +261,8 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
         val nodeStarted = System.nanoTime()
         val nodeResolved = nodeRelicStackResolver.resolve(frame.bitmap, relicResolved)
         val detailStarted = System.nanoTime()
-        val resolved = resultScoreResolver.resolve(frame.bitmap, relicDetailResolver.resolve(frame.bitmap, nodeResolved))
+        val detailResolved = relicDetailResolver.resolve(frame.bitmap, nodeResolved)
+        val resolved = if (readResultScore) resultScoreResolver.resolve(frame.bitmap, detailResolved) else detailResolved
         val finished = System.nanoTime()
         return resolved.copy(
             elapsedMillis = (finished - started) / 1_000_000,
@@ -285,6 +287,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
             nodeScanRequested: () -> Boolean = { true },
             nodeScanConsumable: () -> Boolean = { true },
             rosterCharacterIds: () -> Set<String> = { emptySet() },
+            readResultScore: Boolean = true,
         ): AndroidLabyrinthEntryFrameProcessor {
             val relicTemplates = AndroidLabyrinthRelicTemplateLoader(context).load()
             val characterTemplates = AndroidLabyrinthBattleTeamTemplateLoader(context).load(characterAttributes)
@@ -332,6 +335,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                 nodeRelicStackResolver = AndroidLabyrinthNodeRelicStackResolver(),
                 relicDetailResolver = AndroidLabyrinthRelicDetailResolver(),
                 skipJoinedCharacters = skipJoinedCharacters,
+                readResultScore = readResultScore,
             )
         }
     }

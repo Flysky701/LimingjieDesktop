@@ -36,6 +36,7 @@ data class SharedTaskData(
     val settings: DesktopSettings,
     val authenticatedUid: Long? = null,
     val taskDefaults: DesktopPreferences = DesktopPreferences(),
+    val strategyIdentity: com.landosol.toolbox.desktop.app.adapters.storage.StrategyIdentity? = null,
 ) {
     override fun toString() = "SharedTaskData(accountId=${account.id}, strategyRevision=$strategyRevision, credentials=REDACTED)"
 }

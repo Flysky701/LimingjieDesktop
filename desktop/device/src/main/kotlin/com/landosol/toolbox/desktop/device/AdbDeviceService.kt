@@ -94,12 +94,18 @@ class AdbDeviceService(
         stopSession("切换设备，任务已停止")
         mutableState.value = DeviceConnectionState.Connecting(serial)
         try {
-            activate(establish(serial, touchMode, true))
+            activate(establish(serial, touchMode, true, expectedBootId))
         } catch (cancelled: CancellationException) { mutableState.value = DeviceConnectionState.Disconnected; throw cancelled }
         catch (error: Exception) { mutableState.value = DeviceConnectionState.Failed(error.message ?: "连接模拟器失败") }
     } }
 
-    private suspend fun establish(serial: String, touchMode: TouchMode, initial: Boolean): Session {
+    private class BootChanged : IllegalStateException("模拟器启动身份已变化，请重新打开设备会话并确认账号绑定")
+
+    private fun verifyBoot(actual: String, expected: String?) {
+        if (expected != null && actual != expected) throw BootChanged()
+    }
+
+    private suspend fun establish(serial: String, touchMode: TouchMode, initial: Boolean, requiredBootId: String?): Session {
         if (':' in serial && (adb.execute(listOf("get-state"), serial, timeoutMillis = 3000) as? AdbResult.Success)?.text()?.trim() != "device") {
             adb.execute(listOf("connect", serial), timeoutMillis = 3000).requireSuccess()
         }
@@ -115,7 +121,7 @@ class AdbDeviceService(
         if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "核验游戏安装信息（首次较慢）")
         val size = DeviceParsers.screenSize(adb.shell(serial, listOf("wm", "size")).requireSuccess().text())
         val bootId = readBootId(serial)
-        check(expectedBootId == null || bootId == expectedBootId) { "模拟器已重新启动，请重新打开设备会话并确认账号绑定" }
+        verifyBoot(bootId, requiredBootId)
         val lease = leases.acquireDevice(bootId)
         var touch: TouchConnection? = null
         try {
@@ -131,9 +137,9 @@ class AdbDeviceService(
             if (maxOf(size.first, size.second) != 1920 || minOf(size.first, size.second) != 1080) emit("上游只在 1920×1080 下验证过")
             if (!awake) emit("模拟器屏幕已休眠，请先在模拟器中唤醒")
             if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "连接触控服务")
-            check(readBootId(serial) == bootId) { "模拟器启动身份已变化，请重新连接" }
+            verifyBoot(readBootId(serial), bootId)
             touch = if (touchMode == TouchMode.MaaTouch) touchFactory.open(adb, serial, dataDirectory) else null
-            check(readBootId(serial) == bootId) { "模拟器启动身份已变化，请重新连接" }
+            verifyBoot(readBootId(serial), bootId)
             val ready = DeviceReady(serial, identity.model.ifBlank { serial }, size.first, size.second, timing, selected, true, awake, identity)
             return Session(serial, touchMode, capturer, ready, bootId, touch, lease)
             } catch (failure: Throwable) {
@@ -153,9 +159,12 @@ class AdbDeviceService(
                 if (iteration++ % 4 == 0) {
                     val status = adb.execute(listOf("get-state"), value.serial, timeoutMillis = 3000)
                     if (status is AdbResult.Failure && status.kind == AdbFailureKind.ServerVersionConflict) { lose(value, status.detail, retry = false); break }
-                    if (status !is AdbResult.Success || status.text().trim() != "device") { lose(value, "设备连接已断开，任务已停止"); break }
-                    val bootId = shellText(value.serial, "cat", "/proc/sys/kernel/random/boot_id")
-                    if (bootId?.lowercase() != value.bootId) { lose(value, "模拟器启动身份已变化或无法确认，任务已停止"); break }
+                    if (status !is AdbResult.Success || status.text().trim() != "device") {
+                        val detail = when (status) { is AdbResult.Failure -> status.detail; is AdbResult.Success -> status.text().trim() }
+                        lose(value, "ADB 设备状态检查失败，任务已停止：$detail")
+                        break
+                    }
+                    if (!lifecycle.withLock { session === value && controlSession() === value }) break
                     val power = shellText(value.serial, "dumpsys", "power")
                     if (power != null && session === value) {
                         val awake = DeviceParsers.awake(power)
@@ -207,15 +216,15 @@ class AdbDeviceService(
                     lifecycle.withLock {
                         ensureActive()
                         mutableState.value = DeviceConnectionState.Reconnecting(index + 1)
-                        val connected = establish(value.serial, value.touchMode, false)
+                        val connected = establish(value.serial, value.touchMode, false, value.bootId)
                         activate(connected)
                     }
                     emit("设备已重新连接；任务保持停止，请手动启动")
                     return@launch
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (error: Exception) {
-                    if ((error as? DeviceOperationException)?.adbFailure == AdbFailureKind.ServerVersionConflict) {
-                        mutableState.value = DeviceConnectionState.Failed(error.message ?: "ADB 版本冲突")
+                    if (error is BootChanged || (error as? DeviceOperationException)?.adbFailure == AdbFailureKind.ServerVersionConflict) {
+                        mutableState.value = DeviceConnectionState.Failed(error.message ?: "设备重连失败")
                         return@launch
                     }
                     if (index == 11) mutableState.value = DeviceConnectionState.Failed(error.message ?: "设备重连失败")
@@ -388,10 +397,20 @@ class AdbDeviceService(
     /** Under lifecycle: no control command can outlive cleanup and lease release. */
     private suspend fun controlSession(): Session? {
         val value = session ?: return null
-        val boot = try { readBootId(value.serial) } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { null }
-        if (!value.lease.isValid || boot != value.bootId) {
-            loseLocked(value, "模拟器启动身份已变化或无法确认，任务已停止")
+        if (!value.lease.isValid) {
+            loseLocked(value, "设备占用锁已失效，任务已停止", retry = false)
+            return null
+        }
+        try {
+            verifyBoot(readBootId(value.serial), value.bootId)
+        } catch (changed: BootChanged) {
+            loseLocked(value, changed.message.orEmpty(), retry = false)
+            return null
+        } catch (error: DeviceOperationException) {
+            loseLocked(value, "无法读取模拟器启动身份，任务已停止：${error.message}", retry = error.adbFailure != AdbFailureKind.ServerVersionConflict)
+            return null
+        } catch (_: IllegalArgumentException) {
+            loseLocked(value, "模拟器返回了无效的启动身份，任务已停止")
             return null
         }
         return value

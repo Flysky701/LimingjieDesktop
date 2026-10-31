@@ -197,6 +197,8 @@ class SharedRunTabsUiTest {
             put("preferences",ControlModelCodec.encode(DesktopPreferences(rightTab=rightTab)))
             put("accounts",ControlModelCodec.encode(AccountUiState(accounts=accounts)))
             put("strategy",ControlModelCodec.encode(LabyrinthStrategySettings(playerWeight=weight)))
+            put("strategyLibrary",ControlModelCodec.encode(com.landosol.toolbox.desktop.app.adapters.storage.StrategyLibrary("fixture", listOf(
+                com.landosol.toolbox.desktop.app.adapters.storage.StrategyProfile("fixture", "测试策略", settings=LabyrinthStrategySettings(playerWeight=weight))))))
         })
         override val connection=MutableStateFlow(WorkerConnectionStatus.CONNECTED)
         override val error=MutableStateFlow<String?>(null)

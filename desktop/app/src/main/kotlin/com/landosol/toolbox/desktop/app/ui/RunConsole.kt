@@ -63,7 +63,6 @@ import java.time.format.DateTimeFormatter
                     Row(Modifier.fillMaxWidth().padding(horizontal=4.dp),verticalAlignment=Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(selected.title,style=MaterialTheme.typography.titleLarge)
-                            Text("运行中使用开始时的固定配置",color=Muted,style=MaterialTheme.typography.bodySmall)
                         }
                         StatusBadge(if(s.stopping)"停止中" else if(s.overlay?.paused==true)"已暂停" else "运行中")
                     }
@@ -78,7 +77,7 @@ import java.time.format.DateTimeFormatter
                         if(record!=null) RunClock(record.startedAt)
                     }
                     val raw=s.batch?.message ?: s.entry.message ?: s.task.message
-                    if(!s.busy && s.batch?.stage==LabyrinthBatchStage.COMPLETED)ConsoleCard("全部目标已完成"){Text("本次批量任务已结束，可在记录中查看各次结果。",color=Muted);TextButton(onClick={navigate(Page.Records)}){Text("查看运行记录")}}
+                    if(!s.busy && s.batch?.stage==LabyrinthBatchStage.COMPLETED)ConsoleCard("全部目标已完成"){TextButton(onClick={navigate(Page.Records)}){Text("查看运行记录")}}
                     else if(!s.busy && raw!=null && (s.halt!=null || s.entry.status!=LabyrinthEntryRecognitionStatus.IDLE || s.task.message!=null)) StopReasonCard(explainStop(s.halt,raw)){target->if(target=="Run")select(DesktopTask.RECOGNIZE) else navigate(Page.valueOf(target))}
                     s.entry.routeProgress?.let { route -> ConsoleCard("本区域进度") {
                         Text("区域 ${route.currentArea} · 节点 ${route.visitedCount}/${route.routeNodeCount}",fontFamily=FontFamily.Monospace,style=MaterialTheme.typography.bodySmall)
@@ -239,6 +238,5 @@ internal fun formatTime(ms:Long):String=DateTimeFormatter.ofPattern("MM-dd HH:mm
         if(shown.isEmpty())Column(Modifier.weight(1f).fillMaxWidth().padding(12.dp),verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally){Symbol("bar_chart",tint=Muted);Text(if(lines.isEmpty())"等待第一条任务日志" else "没有匹配的日志",style=MaterialTheme.typography.bodySmall,color=Muted);TextButton(onClick={filter="全部";query=""}){Text("显示全部")}}
         else SelectionContainer(Modifier.weight(1f)){LazyColumn(state=listState,verticalArrangement=Arrangement.spacedBy(9.dp)){itemsIndexed(shown){_,line->Column {Text("${line.time} · ${line.kind.label}",fontFamily=FontFamily.Monospace,style=MaterialTheme.typography.labelSmall,color=Muted);Text(line.text+if(line.repeats>1)" ×${line.repeats}" else "",style=MaterialTheme.typography.bodySmall,color=when(line.kind){UserLogKind.ERROR->LocalDesktopColors.current.error;UserLogKind.WARNING->LocalDesktopColors.current.warn;UserLogKind.KEY->Accent;else->LocalContentColor.current});HorizontalDivider(color=Line)}}}}
         if(!follow)TextButton(onClick={follow=true;scope.launch{if(shown.isNotEmpty())listState.scrollToItem(shown.lastIndex)}}){Text("回到最新")}
-        Text("可选中文字后 Ctrl+C 复制",style=MaterialTheme.typography.bodySmall,color=Muted)
     }}
 }

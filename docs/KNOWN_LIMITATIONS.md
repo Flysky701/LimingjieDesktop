@@ -4,7 +4,7 @@
 
 ## 待 FIX
 
-当前业务流程已恢复到项目锁定的上游基线。以下问题仍保留待核实或修复；启动与战斗时限、战败重试计数本来就存在于上游，不能因回退而标记解决。
+当前业务流程以项目锁定的上游为基线，共享修复见 [上游说明](UPSTREAM.md)。以下问题仍保留待核实、修复或实机验证；启动与战斗时限、战败重试计数本来就存在于上游，不能因回退而标记解决。
 
 - [ ] **FIX-01：重新挑战后的旧失败画面可能被误计为第三次战败，导致批次停在挑战页。**
   - **状态：** 已发现代码时序缺口；本次历史故障的完整触发链尚待确认，暂不修改代码。
@@ -19,8 +19,10 @@
   - **原因：** [LabyrinthEntryActionPlanner.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryActionPlanner.kt) 从首次标题页继续动作开始累计公告前耗时，后续加载页与未知过渡页共用 45 秒总时限；页面有变化也不会延长该时限。达到时限会返回“公告前受限点击超时”。[GameSessionResetWorkflow.kt](../android/app/src/main/java/com/landosol/toolbox/automation/session/GameSessionResetWorkflow.kt) 等待阶段失败时又抛出笼统的“会话重置失败”，使上层记录丢失具体原因。
   - **后续修复边界：** 区分正常加载与持续无进展，保留有限等待与未知页面点击限制；把实际停止原因传递到运行记录。此前记录与代码支持该超时判断，但加载较慢的具体原因尚未确认。入口与重置逻辑由 Android 和桌面共享，后续修复需说明两端影响。
 
-- [ ] **FIX-03：通关后在结果页提前交接，下一轮重置无法推进结算链并超时。**
-  - **状态：** 历史日志中多次出现。已按用户要求撤回后加的业务流程改动，恢复上游结算链及返回主页后的通关条件；尚未完成真实游戏验证，仍保留待 FIX，不将回退或离线检查等同于问题已解决。
+- [ ] **FIX-03：通关结算衔接中断，导致连续多局无法继续。**
+  - **状态：** 历史提前交接已恢复为关闭最终奖励并返回主页后才完成单局；最新实测又确认上游存在“宝箱结果页与内部阶段不一致”的缺口。已补充页面驱动的阶段纠正，残留分数帧与漏掉宝箱帧的连续两局离线回放均已通过。真实游戏连续两局仍待验证，不将回退或离线检查等同于问题已解决。
+  - **最新日志：** 2026-10-29 22:37:27 至 22:37:32 多次记录 `CHEST_SEQUENCE -> SCORE_RESULT on RUN_CLEAR_RESULT`；22:39:44 因 `RUN_CLEAR_CHEST_RESULT 页面连续120秒无进展` 停止，内部仍为 `SCORE_RESULT`、点击尝试为 0。目标为通关两次，实际只启动第一局；45,200 分已由旁路补记，最终本局为“结果未确认”，第二局未启动。
+  - **本次修复：** 关闭分数后，冷却期间再次识别到 RESULT 会恢复分数阶段；原代码没有在随后识别到宝箱页时恢复宝箱阶段，因而禁用了宝箱确认动作。现在识别到宝箱动画或结果页即可恢复宝箱阶段；若采集漏掉宝箱页而直接看到最终道具，也能进入最终奖励阶段。保留分数关闭重试、点击冷却、次数限制以及关闭最终奖励并稳定返回主页的通关条件；未知页、节点页、分数值均不作为完成证据。Android 与桌面共享此修复。
   - **日志依据：** 2026-10-28 01:25:13、02:15:51、02:35:02 分别记录“本局通关”；下一轮重置接手时仍为 `RUN_CLEAR_RESULT`，随后分别在 01:25:39、02:16:09、02:35:17 报 `trigger-not-recognised-after-0-taps` 与 `TIMEOUT`，即重置期间没有执行导航点击。
   - **原因：** 故障对应的结果处理逻辑在分数稳定或等待 6 秒后即可结束单局，没有以完成后续奖励、宝箱等结算页面作为交接条件；之后重置阶段必须识别到可信的关闭或下一步按钮才能推进。日志确认交接时仍停在结果页、且重置未取得可执行的触发点，但未保留足够的按钮匹配细节，不能断言具体是按钮尚未出现、模板未命中还是按钮匹配置信度未达阈值。“分数未识别”本身不能解释零点击超时。
   - **后续修复边界：** 核对 [LabyrinthRunSummary.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthRunSummary.kt)、[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 的单局完成条件与 [SessionExpiryFrameTracker.kt](../android/app/src/main/java/com/landosol/toolbox/automation/session/SessionExpiryFrameTracker.kt) 的接手范围，确保结算链有人持续处理、到达可接手页面后再切换；保留可信按钮约束，不用未知页面盲点绕过。此处为 Android 与桌面共享逻辑，后续修复需说明两端影响。

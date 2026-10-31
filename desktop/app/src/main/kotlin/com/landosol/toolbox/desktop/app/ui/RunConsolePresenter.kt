@@ -119,7 +119,7 @@ class DesktopUxController(private val graph:DesktopAppGraph) {
     suspend fun refreshDatabase()=withContext(Dispatchers.IO) { databaseMutable.value=graph.labyrinthCnDatabaseRepository.currentMetadata()?.let { "已就绪 · ${it.version}" } ?: "尚无国服数据库，请在设置中更新" }
     suspend fun refreshForeground()=withContext(Dispatchers.IO) { foregroundMutable.value=graph.device.queryForeground() }
     private fun begin(id:String,type:String,goal:String,s:RunConsoleState,single:Boolean=false) {
-        if(history.records.value.none { it.id==id }) { history.put(DesktopRunRecord(id,System.currentTimeMillis(),s.task.selectedAccount?.alias ?: "未选择",type,goal,singleRun=single)); graph.log.add("开始：$type",kind=UserLogKind.KEY) }
+        if(history.records.value.none { it.id==id }) { history.put(DesktopRunRecord(id,System.currentTimeMillis(),s.task.selectedAccount?.alias ?: "未选择",type,goal,singleRun=single,strategy=if(single) graph.taskStrategyIdentity else null)); graph.log.add("开始：$type",kind=UserLogKind.KEY) }
     }
     private fun record(s:RunConsoleState) {
         val batch=s.batch

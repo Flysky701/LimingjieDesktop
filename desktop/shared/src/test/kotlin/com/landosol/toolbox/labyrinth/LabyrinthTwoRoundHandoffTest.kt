@@ -35,7 +35,17 @@ class LabyrinthTwoRoundHandoffTest {
 
     @Test fun `upstream reset accepts entry completion when a result page reappears after title`() = replay(true)
 
-    private fun replay(unexpectedResultAfterTitle: Boolean) = runBlocking {
+    @Test fun `lingering score frame during close cooldown does not strand either round on chest results`() =
+        replay(false, lateScoreFrame = true)
+
+    @Test fun `lingering score frame still completes both rounds when chest frames are missed`() =
+        replay(false, lateScoreFrame = true, chestObserved = false)
+
+    private fun replay(
+        unexpectedResultAfterTitle: Boolean,
+        lateScoreFrame: Boolean = false,
+        chestObserved: Boolean = true,
+    ) = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = AutomationSessionManager()
         val now = AtomicLong(1_000)
@@ -168,11 +178,20 @@ class LabyrinthTwoRoundHandoffTest {
                     feed(score.copy(runResultScore = 46_000), base + 8_000)
                     feed(score.copy(runResultScore = 46_000), base + 10_500)
                 } else feed(score, base + 13_000)
+                if (lateScoreFrame) {
+                    // A close tap has completed, but RESULT is still captured before the action
+                    // cooldown expires. The next recognized page arrives after RESULT is gone.
+                    val tapsAfterClose = runTaps.size
+                    feed(score, base + if (round == 0) 11_500 else 14_000)
+                    assertEquals("A lingering frame must not bypass the close cooldown", tapsAfterClose, runTaps.size)
+                }
                 assertEquals("RESULT must not end the run, even without a score", round, events.size)
                 // The run session, not the next-run reset workflow, must finish the reward chain.
-                val tapsBeforeChest = runTaps.size
-                repeat(3) { feed(chest, base + 15_000 + it * 1_500) }
-                assertTrue("The run must advance the chest page", runTaps.size > tapsBeforeChest)
+                if (chestObserved) {
+                    val tapsBeforeChest = runTaps.size
+                    repeat(3) { feed(chest, base + 15_000 + it * 1_500) }
+                    assertTrue("The run must advance the chest page", runTaps.size > tapsBeforeChest)
+                }
                 val tapsBeforeItem = runTaps.size
                 repeat(3) { feed(item, base + 20_000 + it * 1_500) }
                 assertTrue("The run must close the final item page", runTaps.size > tapsBeforeItem)

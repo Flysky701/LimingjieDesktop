@@ -104,6 +104,7 @@ class GraphControlService(
             put("preferences", cachedModel("preferences", graph.ux.preferences.state.value))
             put("accounts", cached("accounts", accounts) { model(accounts.copy(editor = accounts.editor?.copy(password = ""))) })
             put("strategy", cachedModel("strategy", graph.labyrinthStrategySettings.state.value))
+            if (graph.sharedData == null) put("strategyLibrary", cachedModel("strategyLibrary", graph.labyrinthStrategySettings.library.value))
             put("catalog", catalogJson.encode(graph.ux.catalog.value))
             put("resolution", cachedModel("resolution", graph.resolutionGuard.status.value))
             put("ocr", cachedModel("ocr", graph.ocr.status.value))
@@ -239,6 +240,20 @@ class GraphControlService(
                 graph.accounts.dismissEditor(); graph.accounts.dismissDelete(); graph.accounts.dismissMessage()
             }
             ControlOps.STRATEGY_SAVE -> graph.labyrinthStrategySettings.save(decode(args.required("value")))
+            ControlOps.STRATEGY_ADD -> {
+                val id = graph.labyrinthStrategySettings.add(args.requiredString("name"), args.string("note").orEmpty(),
+                    args["value"]?.let { decode<LabyrinthStrategySettings>(it) } ?: LabyrinthStrategySettings())
+                return buildJsonObject { put("id", id) }
+            }
+            ControlOps.STRATEGY_EDIT -> graph.labyrinthStrategySettings.edit(args.requiredString("id"), args.long("revision"),
+                args.requiredString("name"), args.string("note").orEmpty(), decode(args.required("value")))
+            ControlOps.STRATEGY_ACTIVATE -> graph.labyrinthStrategySettings.activate(args.requiredString("id"))
+            ControlOps.STRATEGY_DELETE -> graph.labyrinthStrategySettings.delete(args.requiredString("id"))
+            ControlOps.STRATEGY_IMPORT -> {
+                val imported = com.landosol.toolbox.desktop.app.adapters.storage.StrategyShareCodec.decode(args.requiredString("code"))
+                val id = graph.labyrinthStrategySettings.add(imported.name, imported.note, imported.settings)
+                return buildJsonObject { put("id", id) }
+            }
             ControlOps.CATALOG -> return buildJsonObject { put("items", model(graph.loadLabyrinthRoleRatings())) }
             ControlOps.DEVICE_DISCOVER -> {
                 requireIdle()
@@ -624,7 +639,8 @@ class GraphControlService(
 
     private companion object {
         val GLOBAL_EDITS = setOf(ControlOps.ACCOUNT_NEW, ControlOps.ACCOUNT_EDIT, ControlOps.ACCOUNT_SAVE,
-            ControlOps.ACCOUNT_DELETE, ControlOps.STRATEGY_SAVE, ControlOps.SETTINGS_PATCH, ControlOps.ADB_CONFIGURE, ControlOps.ADB_DOWNLOAD)
+            ControlOps.ACCOUNT_DELETE, ControlOps.STRATEGY_SAVE, ControlOps.STRATEGY_ADD, ControlOps.STRATEGY_EDIT,
+            ControlOps.STRATEGY_ACTIVATE, ControlOps.STRATEGY_DELETE, ControlOps.STRATEGY_IMPORT, ControlOps.SETTINGS_PATCH, ControlOps.ADB_CONFIGURE, ControlOps.ADB_DOWNLOAD)
         val DATA_ROLE_FORBIDDEN = setOf(ControlOps.START, ControlOps.STOP, ControlOps.PAUSE, ControlOps.PREVIEW,
             ControlOps.DEVICE_CONNECT, ControlOps.DEVICE_DISCONNECT, ControlOps.DEVICE_TEST, ControlOps.CAPTURE_STOP)
     }

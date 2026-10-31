@@ -33,6 +33,16 @@ class ShimTest {
         assertThrows(IllegalArgumentException::class.java) { Bitmap.createBitmap(image, 1, 0, 2, 1) }
         assertNull(BitmapFactory.decodeStream(byteArrayOf(1, 2, 3).inputStream()))
     }
+    @Test fun samplingOnePixelImageDoesNotRecycleReturnedBitmap() {
+        val source = Bitmap.createBitmap(intArrayOf(0xff123456.toInt()), 1, 1, Bitmap.Config.ARGB_8888)
+        val bytes = ByteArrayOutputStream().also { source.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        source.recycle()
+        val sampled = BitmapFactory.decodeStream(bytes.inputStream(), null, BitmapFactory.Options().apply { inSampleSize = 4 })!!
+        try {
+            assertFalse(sampled.isRecycled)
+            assertEquals(0xff123456.toInt(), sampled.getPixel(0, 0))
+        } finally { sampled.recycle() }
+    }
     @Test fun bitmapDecodesUpstreamWebpCharacterIcon() {
         val encoded = android.content.res.AssetManager().open("resource-packs/cn-bilibili/icons/characters/icon_unit_100661.webp").use { it.readBytes() }
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
