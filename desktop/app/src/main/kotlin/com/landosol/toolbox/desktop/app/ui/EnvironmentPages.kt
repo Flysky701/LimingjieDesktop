@@ -327,6 +327,7 @@ internal fun chooseFile(save: Boolean, title: String, extension: String, suggest
                 Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     when (step) {
                         0 -> {
+                            Text("使用助手和模拟器时，请勿同时使用 VPN 或其他网络代理。", style = MaterialTheme.typography.titleMedium)
                             Text("这是 Windows 社区移植版。以下使用风险沿用上游说明：", color = Muted)
                             Text("当前为测试版本，流程可能卡死、停在未知页面、误识别或误操作，不保证自动完成。仅测试过 MuMu 模拟器（B 服）与雷电模拟器 9（小米、华为、vivo 渠道服）、1920 × 1080 分辨率，手机及其他环境暂未测试。请留意运行状态，出现异常及时暂停，不建议无人值守运行。")
                             Text("本项目与游戏官方无关。自动操作和非官方接口访问可能带来账号限制或封禁风险，不保证账号安全；使用前请自行确认游戏相关规则。")
