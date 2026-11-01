@@ -497,7 +497,7 @@ class DesktopAppGraph(
                     nodeScanConsumable = { labyrinthEntryRecognitionSession.nodeScanConsumable() },
                     rosterCharacterIds = { labyrinthEntryRecognitionSession.rosterCharacterIds() },
                     readResultScore = false,
-                )::process
+                )::processDesktopFrame
             },
             captureStop = { captureService.stop() },
             overlayCoordinator = automationOverlayCoordinator,
@@ -775,7 +775,7 @@ class DesktopAppGraph(
                 val processor = AndroidLabyrinthEntryFrameProcessor.create(context, nodeScanRequested = { false })
                 val processFrame: (CapturedFrame) -> LabyrinthEntryFrameResult = { frame ->
                     frameTracker.trackFrame(frame.bitmap.width, frame.bitmap.height)
-                    processor.process(frame).also(frameTracker::record)
+                    processor.processDesktopFrame(frame).also(frameTracker::record)
                 }
                 processFrame
             },

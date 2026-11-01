@@ -243,10 +243,12 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
     private val readResultScore: Boolean,
 ) {
     private val resultScoreResolver = AndroidLabyrinthResultScoreResolver()
-    fun process(frame: CapturedFrame): LabyrinthEntryFrameResult {
+    fun process(frame: CapturedFrame): LabyrinthEntryFrameResult = process(frame, null)
+
+    internal fun process(frame: CapturedFrame, capturePixels: PixelImage?): LabyrinthEntryFrameResult {
         val started = System.nanoTime()
         val result = processor.process(
-            AndroidPixelImageAdapter.from(frame.bitmap),
+            capturePixels ?: AndroidPixelImageAdapter.from(frame.bitmap),
             deferRoleRewardPortraits = true,
             skipJoinedCharacters = skipJoinedCharacters(),
         )

@@ -2,6 +2,8 @@ package com.landosol.toolbox.desktop.shared
 
 import android.graphics.Bitmap
 import com.landosol.toolbox.automation.capture.*
+import com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthEntryFrameProcessor
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import java.util.concurrent.Executors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -26,6 +28,10 @@ data class CapturePixels(
         if (ownsPixels) Bitmap.fromOwnedPixels(pixels, width, height)
         else Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
 }
+
+/** Desktop capture owns its bitmap; keep its storage inside the concrete page reader. */
+fun AndroidLabyrinthEntryFrameProcessor.processDesktopFrame(frame: CapturedFrame): LabyrinthEntryFrameResult =
+    Bitmap.recognizeLabyrinthFrame(this, frame)
 
 /** Owns the capture thread; upstream owns each Bitmap after bus dispatch. */
 class DesktopCaptureService(
