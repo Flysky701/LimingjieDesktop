@@ -7,7 +7,25 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-data class CapturePixels(val width: Int, val height: Int, val pixels: IntArray, val timestampMillis: Long)
+data class CapturePixels(
+    val width: Int,
+    val height: Int,
+    val pixels: IntArray,
+    val timestampMillis: Long,
+) {
+    // A data-class copy can substitute a borrowed buffer, so each copy starts borrowed.
+    private var ownsPixels = false
+
+    /** Transfer only a fresh, exact-sized array the source will never mutate or reuse. */
+    constructor(width: Int, height: Int, pixels: IntArray, timestampMillis: Long, ownsPixels: Boolean) :
+        this(width, height, pixels, timestampMillis) {
+        this.ownsPixels = ownsPixels
+    }
+
+    internal fun recognitionBitmap(): Bitmap =
+        if (ownsPixels) Bitmap.fromOwnedPixels(pixels, width, height)
+        else Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+}
 
 /** Owns the capture thread; upstream owns each Bitmap after bus dispatch. */
 class DesktopCaptureService(
@@ -65,7 +83,7 @@ class DesktopCaptureService(
                                 preview(frame.copy(pixels = frame.pixels.copyOf()))
                                 lastPreview = frame.timestampMillis
                             }
-                            val bitmap = Bitmap.createBitmap(frame.pixels, frame.width, frame.height, Bitmap.Config.ARGB_8888)
+                            val bitmap = frame.recognitionBitmap()
                             CaptureFrameBus.dispatch(CapturedFrame(bitmap, frame.timestampMillis))
                         }
                     }

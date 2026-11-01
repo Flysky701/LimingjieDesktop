@@ -257,7 +257,8 @@ class DesktopAppGraph(
         source = { device.capture().let {
             resolutionGuard.observe(it.width, it.height)
             lastCapturedFrameMillis = it.timestampMillis
-            CapturePixels(it.width, it.height, it.pixels, it.timestampMillis)
+            // The built-in Raw and PNG decoders allocate each frame; injected devices may reuse buffers.
+            CapturePixels(it.width, it.height, it.pixels, it.timestampMillis, ownsPixels = suppliedDevice == null)
         } },
         preview = { synchronized(previewLock) { if (previewRequested) previewState.value = it } },
         onWarning = { log.add(it, true) }, onLost = { stopAll(it) },

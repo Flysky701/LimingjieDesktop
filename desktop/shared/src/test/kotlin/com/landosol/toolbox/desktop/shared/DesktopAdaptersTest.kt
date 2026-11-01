@@ -20,14 +20,21 @@ class DesktopAdaptersTest {
         val enabled = java.util.concurrent.atomic.AtomicBoolean(false)
         val frames = java.util.concurrent.atomic.AtomicInteger()
         val previews = java.util.concurrent.atomic.AtomicInteger()
-        val sourcePixels = IntArray(16 * 9) { 0xff123456.toInt() }
+        val modifiedFrames = java.util.concurrent.atomic.AtomicInteger()
+        val sourceColor = 0xff123456.toInt()
         val registered = CaptureFrameBus.register("preview-demand-fixture") { frame ->
-            assertEquals(0xff123456.toInt(), frame.bitmap.getPixel(0, 0))
+            if (frame.bitmap.getPixel(0, 0) != sourceColor) modifiedFrames.incrementAndGet()
             frames.incrementAndGet(); frame.bitmap.recycle()
         } as CaptureFrameRegistrationResult.Registered
         val service = DesktopCaptureService(
-            source = { CapturePixels(16, 9, sourcePixels, System.currentTimeMillis()) },
-            preview = { assertNotSame(sourcePixels, it.pixels); previews.incrementAndGet() },
+            source = {
+                val sourcePixels = IntArray(16 * 9) { sourceColor }
+                CapturePixels(16, 9, sourcePixels, System.currentTimeMillis(), ownsPixels = true)
+            },
+            preview = {
+                it.pixels[0] = 0
+                previews.incrementAndGet()
+            },
             previewEnabled = enabled::get,
         )
         try {
@@ -44,7 +51,20 @@ class DesktopAdaptersTest {
             val next = frames.get() + 3
             withTimeout(2_000) { while (frames.get() < next) delay(10) }
             assertEquals(retained, previews.get())
+            assertEquals("Preview writes reached recognition", 0, modifiedFrames.get())
         } finally { service.stopAndJoin("preview test complete"); service.close(); CaptureFrameBus.unregister(registered.lease) }
+    }
+
+    @Test fun recognitionRetainsBorrowedPixelsWhenSourceReusesItsBuffer() {
+        val source = intArrayOf(0xff123456.toInt())
+        val bitmap = CapturePixels(1, 1, source, 0L).recognitionBitmap()
+        val owned = CapturePixels(1, 1, intArrayOf(0), 0L, ownsPixels = true)
+        val copied = owned.copy(pixels = source).recognitionBitmap()
+        source[0] = 0
+        assertEquals(0xff123456.toInt(), bitmap.getPixel(0, 0))
+        assertEquals(0xff123456.toInt(), copied.getPixel(0, 0))
+        bitmap.recycle()
+        copied.recycle()
     }
 
     @Test fun captureUsesOwnedThreadAndStopsAfterFiveFailures() = runBlocking {
