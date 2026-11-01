@@ -67,7 +67,7 @@ private class ProcessWorkerLink(
     @Volatile private var server: ServerSocket? = null
     @Volatile private var process: Process? = null
     @Volatile private var containment: AutoCloseable? = null
-    private var lastSequence = 0L
+    private val states = WorkerStateReceiver()
 
     private val launchJob = work.launch(Dispatchers.IO) {
         try {
@@ -116,10 +116,7 @@ private class ProcessWorkerLink(
                 val incoming = peer.read()
                 if (incoming.wireString("profileId") != instanceId || incoming.wireString("runId") != workerRunId) continue
                 when (incoming.wireString("kind")) {
-                    "state" -> {
-                        val seq = (incoming["sequence"] as? JsonPrimitive)?.longOrNull ?: continue
-                        if (seq > lastSequence) { lastSequence = seq; mutableSnapshots.value = incoming.wireObject("state") }
-                    }
+                    "state" -> states.accept(incoming, peer.lastReadBytes)?.let { mutableSnapshots.value = it }
                     "reply" -> incoming.wireString("requestId")?.let { id ->
                         pending.remove(id)?.let { reply ->
                             incoming.wireString("error")?.let { reply.completeExceptionally(IllegalStateException(it)) }

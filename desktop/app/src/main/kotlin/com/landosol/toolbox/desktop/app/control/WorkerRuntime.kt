@@ -25,7 +25,6 @@ internal suspend fun runWorkerTransport(
     val selected = AtomicBoolean(true)
     val previewVisible = AtomicBoolean(false)
     val lastMessage = AtomicLong(System.nanoTime())
-    val sequence = AtomicLong()
     val requests = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
     fun stop(reason: String) {
         if (closing.compareAndSet(false, true)) {
@@ -92,12 +91,15 @@ internal suspend fun runWorkerTransport(
         work.launch {
             var lastState: JsonObject? = null
             var lastSentAt = 0L
+            var sequence = 0L
             while (isActive && !closing.get()) {
                 try {
                     val state = domain.snapshot(selected.get() && previewVisible.get())
                     val now = System.nanoTime()
-                    if (state != lastState) {
-                        wire.write(wireMessage("state", profileId, runId) { put("sequence", sequence.incrementAndGet()); put("state", state) })
+                    val message = workerStateMessage(profileId, runId, sequence + 1, lastState, state)
+                    if (message != null) {
+                        wire.write(message)
+                        sequence++
                         lastState = state
                         lastSentAt = now
                     } else if (now - lastSentAt >= 2_000_000_000L) {
