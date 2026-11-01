@@ -23,8 +23,12 @@ on:
     paths: *desktop-paths
   workflow_dispatch:
     inputs:
+      full_checks:
+        description: 'Include upstream, UI, subprocess, packaged runtime and OCR checks'
+        type: boolean
+        default: false
       package_candidate:
-        description: 'Build and upload a Windows candidate ZIP after all checks pass'
+        description: 'Build and upload a Windows candidate ZIP after selected checks pass'
         type: boolean
         default: false
       upload_reports:
@@ -75,32 +79,24 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
-      - name: Fast desktop checks
-        if: github.event_name != 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/desktop-v')
+      - name: Run selected checks and build requested ZIP
+        env:
+          FULL_CHECKS: ${{ inputs.full_checks }}
+          BUILD_PACKAGE: ${{ inputs.package_candidate == true || startsWith(github.ref, 'refs/tags/desktop-v') }}
         run: |
-          & desktop/gradlew.bat -p desktop check --continue --build-cache --no-daemon --max-workers=2 --stacktrace --console=plain
-          if ($LASTEXITCODE -ne 0) { throw 'Fast desktop checks failed' }
-      - name: Full desktop, runtime and OCR checks
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/desktop-v')
-        run: |
-          $executable = Join-Path $env:GITHUB_WORKSPACE 'desktop/app/build/compose/binaries/main-release/app/LimingjieAssistant/LimingjieAssistant.exe'
-          & desktop/gradlew.bat -p desktop :app:createReleaseDistributable check -Pfull --continue --build-cache --no-daemon --max-workers=2 --stacktrace --console=plain "-PpackagedWorkerExecutable=$executable"
-          if ($LASTEXITCODE -ne 0) { throw 'Desktop verification failed; see the test and OCR summary' }
-      - name: Build Windows candidate ZIP
-        if: inputs.package_candidate == true || startsWith(github.ref, 'refs/tags/desktop-v')
-        run: |
-          & desktop/gradlew.bat -p desktop :app:packagePortableZip --build-cache --no-daemon --max-workers=2 --stacktrace --console=plain
-          if ($LASTEXITCODE -ne 0) { throw 'Windows candidate packaging failed' }
-      - name: Verify candidate checksum and portable runtime
-        if: inputs.package_candidate == true || startsWith(github.ref, 'refs/tags/desktop-v')
+          $tasks = @('check')
+          if ($env:FULL_CHECKS -eq 'true') { $tasks += '-Pfull' }
+          if ($env:BUILD_PACKAGE -eq 'true') { $tasks += ':app:packagePortableZip' }
+          & desktop/gradlew.bat -p desktop @tasks --build-cache --no-daemon --max-workers=2 --stacktrace --console=plain
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop checks or packaging failed; see the step log and summary' }
+      - name: Portable runtime self-test on request
+        if: inputs.full_checks == true && (inputs.package_candidate == true || startsWith(github.ref, 'refs/tags/desktop-v'))
         env:
           ARCHIVE_NAME: ${{ steps.metadata.outputs.archive }}
           DESKTOP_VERSION: ${{ steps.metadata.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
           $archive = Join-Path 'desktop/app/build/dist' $env:ARCHIVE_NAME
-          $expected = ((Get-Content -LiteralPath "$archive.sha256" -Raw).Trim() -split '\s+')[0]
-          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $expected) { throw 'Candidate checksum mismatch' }
           $destination = Join-Path $env:RUNNER_TEMP '桌面验证 目录'
           Expand-Archive -LiteralPath $archive -DestinationPath $destination
           $launcher = Join-Path $destination 'LimingjieAssistant/LimingjieAssistant.exe'

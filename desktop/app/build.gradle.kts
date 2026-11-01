@@ -24,13 +24,23 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
     systemProperty("limingjie.test.classpath", sourceSets["test"].runtimeClasspath.asPath)
-    providers.gradleProperty("packagedWorkerExecutable").orNull?.let { systemProperty("limingjie.test.packagedWorker", it) }
-    if (providers.gradleProperty("full").isPresent) {
-        dependsOn("createReleaseDistributable")
-        systemProperty("limingjie.test.packagedWorker", providers.gradleProperty("packagedWorkerExecutable")
-            .orElse(layout.buildDirectory.file("compose/binaries/main-release/app/LimingjieAssistant/LimingjieAssistant.exe")
-                .map { it.asFile.absolutePath }).get())
-    }
+}
+tasks.test { exclude("**/*PackagedRuntimeTest*") }
+val packagedRuntimeTest by tasks.registering(Test::class) {
+    group = "verification"
+    description = "Check packaged worker isolation; reuse -PpackagedWorkerExecutable when supplied."
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    include("**/*PackagedRuntimeTest*")
+    val executable = providers.gradleProperty("packagedWorkerExecutable")
+    if (!executable.isPresent) dependsOn("createReleaseDistributable")
+    systemProperty("limingjie.test.packagedWorker", executable
+        .orElse(layout.buildDirectory.file("compose/binaries/main-release/app/LimingjieAssistant/LimingjieAssistant.exe")
+            .map { it.asFile.absolutePath }).get())
+    shouldRunAfter(tasks.test)
+}
+tasks.check {
+    if (providers.gradleProperty("full").isPresent) dependsOn(packagedRuntimeTest)
 }
 val probe = sourceSets.create("probe") {
     compileClasspath += sourceSets.main.get().output

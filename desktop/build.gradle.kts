@@ -9,8 +9,8 @@ allprojects { group = "com.landosol.toolbox.desktop"; version = "1.0.18+desktop.
 
 subprojects {
     tasks.withType<Test>().configureEach {
-        if (!providers.gradleProperty("full").isPresent) {
-            exclude("**/*IntegrationTest*", "**/*UiTest*", "**/*PackagedRuntimeTest*",
+        if (name == "test" && !providers.gradleProperty("full").isPresent) {
+            exclude("**/*IntegrationTest*", "**/*UiTest*",
                 "**/WorkerTransportTest*", "**/WorkerLifecycleTest*", "**/DesktopTrayTest*",
                 "**/InstanceInfrastructureTest*", "**/DeviceIdentityReaderTest*",
                 "**/ProcessAdbExecutorTest*", "**/MaaTouchTest*")
