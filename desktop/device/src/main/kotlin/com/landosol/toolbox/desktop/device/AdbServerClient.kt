@@ -38,8 +38,10 @@ class AdbServerClient(private val address: InetSocketAddress = defaultAddress())
         sockets.add(socket)
         try {
             if (closed.get()) return AdbResult.Failure(AdbFailureKind.LaunchFailed, "ADB 通信已关闭")
-            return withTimeout(timeoutMillis) {
-                coroutineScope {
+            return withTimeoutOrNull(timeoutMillis) {
+                // Closing a blocked read during cancellation may throw SocketException in the IO
+                // child. Its cleanup error must not replace the caller's cancellation or deadline.
+                supervisorScope {
                     val work = async(Dispatchers.IO) {
                         val wire = Wire(socket, System.nanoTime() + timeoutMillis * 1_000_000)
                         socket.connect(address, timeoutMillis.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
@@ -55,12 +57,9 @@ class AdbServerClient(private val address: InetSocketAddress = defaultAddress())
                             }
                         }
                     }
-                    // Await cancellation closes the socket before coroutineScope joins its blocked IO child.
                     try { work.await() } finally { socket.close() }
                 }
-            }
-        } catch (_: TimeoutCancellationException) {
-            return AdbResult.Failure(AdbFailureKind.Timeout, "ADB 命令超时（${timeoutMillis}ms）")
+            } ?: throw SocketTimeoutException()
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: SocketTimeoutException) { return AdbResult.Failure(AdbFailureKind.Timeout, "ADB 命令超时（${timeoutMillis}ms）") }
         catch (_: ConnectException) {

@@ -44,6 +44,8 @@ data class UiNode(val packageName: String, val text: String?, val description: S
 interface DeviceService : AutoCloseable {
     val state: StateFlow<DeviceConnectionState>
     val foregroundPackage: String?
+    /** Explains an empty usable-device list when ADB actually returned transports. */
+    val discoveryNotice: String? get() = null
     suspend fun discover(): List<DeviceDescriptor>
     /** Resolve a user-selected address without installing touch or sending game input. */
     suspend fun resolveDevice(serial: String): DeviceDescriptor =

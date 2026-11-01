@@ -9,18 +9,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
-import com.landosol.toolbox.desktop.app.ui.theme.LocalDesktopColors
-import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
 
 @Composable internal fun RecordsPage(graph:ControlSessionUi) {
     var records by remember(graph) { mutableStateOf(graph.ux.history.records.value) }
@@ -36,24 +29,18 @@ import java.time.ZoneId
         }
     }
     var diagnostics by remember {mutableStateOf(false)}
-    var deviceFilter by remember{mutableStateOf<String?>(null)}
     var accountFilter by remember{mutableStateOf<String?>(null)}
-    var taskFilter by remember{mutableStateOf<String?>(null)}
     var strategyFilter by remember{mutableStateOf<String?>(null)}
     var strategyRevisionFilter by remember{mutableStateOf<String?>(null)}
-    var scoreChart by remember{mutableStateOf(true)}
     var chartExpanded by remember{mutableStateOf(true)}
     var scoreRange by remember{mutableStateOf("最近 50 局")}
     fun strategyKey(record:DesktopRunRecord)=record.strategy?.id ?: "unknown"
     val strategyOptions=records.filter{it.singleRun}.asReversed().map{strategyKey(it) to (it.strategy?.name ?: "未记录策略")}.distinctBy{it.first}
     val revisionOptions=records.filter{strategyKey(it)==strategyFilter}.mapNotNull{it.strategy?.revision}.distinct().sortedDescending().map{it.toString() to "修订 $it"}
-    val deviceOptions=records.mapNotNull{record->record.deviceId?.let{it to (record.deviceName ?: it)}}.distinctBy{it.first}
     fun accountKey(record:DesktopRunRecord)=record.accountId?.toString() ?: "alias:${record.alias}"
     val accountOptions=records.map{accountKey(it) to it.alias}.distinctBy{it.first}
     val filtered=records.filter{record->
-        (deviceFilter==null||record.deviceId==deviceFilter)&&
         (accountFilter==null||accountKey(record)==accountFilter)&&
-        (taskFilter==null||record.type==taskFilter)&&
         (strategyFilter==null||strategyKey(record)==strategyFilter)&&
         (strategyRevisionFilter==null||record.strategy?.revision?.toString()==strategyRevisionFilter)
     }
@@ -67,28 +54,13 @@ import java.time.ZoneId
         else Column(Modifier.weight(1f).padding(start=24.dp,end=24.dp,bottom=16.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text("运行记录",Modifier.weight(1f),style=MaterialTheme.typography.titleLarge);Text("最近 5000 条 / 180 天",color=Muted,style=MaterialTheme.typography.bodySmall)}
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){
-                RecordFilter("全部设备",deviceFilter,deviceOptions){deviceFilter=it}
                 RecordFilter("全部账号",accountFilter,accountOptions){accountFilter=it}
-                RecordFilter("全部任务",taskFilter,records.map{it.type}.distinct().map{it to it}){taskFilter=it}
                 RecordFilter("全部策略",strategyFilter,strategyOptions){strategyFilter=it;strategyRevisionFilter=null}
                 if(strategyFilter!=null&&strategyFilter!="unknown") RecordFilter("全部修订",strategyRevisionFilter,revisionOptions){strategyRevisionFilter=it}
-                if(deviceFilter!=null||accountFilter!=null||taskFilter!=null||strategyFilter!=null)TextButton(onClick={deviceFilter=null;accountFilter=null;taskFilter=null;strategyFilter=null;strategyRevisionFilter=null}){Text("清除筛选")}
+                if(accountFilter!=null||strategyFilter!=null)TextButton(onClick={accountFilter=null;strategyFilter=null;strategyRevisionFilter=null}){Text("清除筛选")}
             }
-            Column {
-                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically) {
-                    if(chartExpanded) {
-                        FilterChip(scoreChart,{scoreChart=true},label={Text("每局分数")})
-                        FilterChip(!scoreChart,{scoreChart=false},label={Text("每日通关与耗时")})
-                    } else Text(if(scoreChart) "每局分数" else "每日通关与耗时",style=MaterialTheme.typography.titleSmall)
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick={chartExpanded=!chartExpanded}) {
-                        Text(if(chartExpanded) "收起图表" else "展开图表")
-                        Symbol("expand_more",modifier=Modifier.size(18.dp).rotate(if(chartExpanded) 180f else 0f))
-                    }
-                }
-                if(chartExpanded) Box(Modifier.heightIn(max=360.dp).verticalScroll(rememberScrollState())) {
-                    if(scoreChart)RunScoreChart(filtered,scoreRange){scoreRange=it} else HistoryChart(filtered)
-                }
+            Box(Modifier.heightIn(max=360.dp).verticalScroll(rememberScrollState())) {
+                RunScoreChart(filtered, scoreRange, { scoreRange = it }, chartExpanded, { chartExpanded = !chartExpanded })
             }
             if(records.isEmpty()) ConsoleCard("暂无运行记录") {TextButton(onClick={diagnostics=true}){Text("查看日志")}}
             else if(filtered.isEmpty())ConsoleCard("无匹配记录"){}
@@ -119,29 +91,6 @@ import java.time.ZoneId
         DropdownMenu(open&&LocalControlVisible.current,{open=false}){
             DropdownMenuItem(text={Text(label)},onClick={open=false;select(null)})
             options.forEach{(id,name)->DropdownMenuItem(text={Text(name)},onClick={open=false;select(id)})}
-        }
-    }
-}
-
-@Composable private fun HistoryChart(records:List<DesktopRunRecord>) {
-    val days=remember{(13 downTo 0).map{LocalDate.now().minusDays(it.toLong())}}
-    val groups=remember(records){records.filter{it.singleRun&&it.endedAt!=null&&it.cleared>0}.groupBy{Instant.ofEpochMilli(it.endedAt!!).atZone(ZoneId.systemDefault()).toLocalDate()}}
-    val counts=days.map{groups[it].orEmpty().sumOf{r->r.cleared}}
-    val times=days.map{groups[it].orEmpty().mapNotNull{r->r.durationMillis}.takeIf{it.isNotEmpty()}?.average()}
-    ConsoleCard("近 14 天") {
-        Row {Text("每日通关次数",color=Accent,style=MaterialTheme.typography.bodySmall);Spacer(Modifier.width(20.dp));Text("平均用时（折线）",color=LocalDesktopColors.current.ok,style=MaterialTheme.typography.bodySmall)}
-        if(counts.all{it==0})Text("暂无通关记录",color=Muted,style=MaterialTheme.typography.bodySmall)
-        else {val accent=Accent;val ok=LocalDesktopColors.current.ok;val line=Line
-            Canvas(Modifier.fillMaxWidth().height(105.dp)) {
-                val step=size.width/14;val maxCount=counts.maxOrNull()!!.coerceAtLeast(1);val maxTime=times.filterNotNull().maxOrNull()?.coerceAtLeast(1.0)?:1.0
-                drawLine(line,Offset(0f,size.height),Offset(size.width,size.height))
-                counts.forEachIndexed{i,n->val h=n.toFloat()/maxCount*(size.height-8);drawRect(accent,Offset(i*step+step*.2f,size.height-h),Size(step*.6f,h))}
-                times.forEachIndexed{i,t->if(t!=null){val p=Offset((i+.5f)*step,size.height-(t/maxTime*(size.height-8)).toFloat());drawCircle(ok,3f,p);if(i>0&&times[i-1]!=null)drawLine(ok,Offset((i-.5f)*step,size.height-(times[i-1]!!/maxTime*(size.height-8)).toFloat()),p,2f)}}
-            }
-            Row(Modifier.fillMaxWidth()){days.forEachIndexed{i,d->Text(if(i%2==0||i==13)"${d.monthValue}/${d.dayOfMonth}" else "",Modifier.weight(1f),style=MaterialTheme.typography.labelSmall,color=Muted)}}
-            Text("合计 ${counts.sum()} 次通关 · 总平均 ${formatDuration(groups.filterKeys{it in days}.values.flatten().mapNotNull{it.durationMillis}.takeIf{it.isNotEmpty()}?.average()?.toLong() ?: 0)}",style=MaterialTheme.typography.bodySmall)
-            val scores=groups.filterKeys{it in days}.values.flatten().mapNotNull{it.score}
-            Text(if(scores.isEmpty()) "暂无可用分数" else "已记录 ${scores.size} 局分数 · 平均 ${scores.average().toLong()} · 最高 ${scores.maxOrNull()}",style=MaterialTheme.typography.bodySmall)
         }
     }
 }

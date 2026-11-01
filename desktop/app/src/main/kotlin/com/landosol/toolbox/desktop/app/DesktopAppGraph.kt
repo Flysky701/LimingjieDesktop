@@ -137,7 +137,9 @@ class DesktopAppGraph(
         notice = { log.add(it) },
     )
     val captchaHost = LoopbackCaptchaHost()
-    val device: DeviceService = (suppliedDevice ?: ManagedDeviceService(dataDirectory, { settings.state.value.adbPath }, { log.add(it) }, { reason -> stopAll(reason) }))
+    val device: DeviceService = (suppliedDevice ?: ManagedDeviceService(dataDirectory, { settings.state.value.adbPath },
+        onEvent = { message -> log.add(message); Log.i("Device", message) },
+        onLost = { reason -> Log.w("Device", reason); stopAll(reason) }))
         .let { if (dataOnly) DiscoveryOnlyDevice(it) else it }
     private val sharedIdentity = MutableStateFlow<Pair<String, String>?>(null)
     private data class SharedHistoryEvent(val record: DesktopRunRecord? = null, val flush: CompletableDeferred<Unit>? = null, val scoreOnly: Boolean = false)

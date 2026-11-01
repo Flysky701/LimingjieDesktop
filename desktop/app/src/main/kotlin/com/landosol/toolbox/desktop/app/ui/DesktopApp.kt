@@ -45,7 +45,7 @@ internal val LocalTaskBusy=staticCompositionLocalOf { false }
 internal val LocalDesktopWindow=staticCompositionLocalOf<java.awt.Window?> { null }
 internal class NavigationGuard { var intercept:((()->Unit)->Unit)?=null;fun request(action:()->Unit){intercept?.invoke(action) ?: action()} }
 internal val LocalNavigationGuard=staticCompositionLocalOf { NavigationGuard() }
-internal enum class Page(val label:String,val icon:String) { Run("运行","play_arrow"),Accounts("账号","person"),Strategies("策略","tune"),Devices("设备","smartphone"),Records("记录","bar_chart"),Settings("设置","settings") }
+internal enum class Page(val label:String,val icon:String) { Run("运行","play_arrow"),Accounts("账号","person"),Devices("设备","smartphone"),Strategies("策略","tune"),Records("记录","bar_chart"),Settings("设置","settings") }
 @Composable internal fun Symbol(name:String,label:String?=null,tint:Color=LocalContentColor.current,modifier:Modifier=Modifier.size(20.dp)) { Icon(painterResource("desktop/icons/$name.svg"),label,modifier,tint=tint) }
 
 @Composable internal fun DesktopApp(
