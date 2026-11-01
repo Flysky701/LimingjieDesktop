@@ -17,12 +17,20 @@ class AndroidLabyrinthBattleTeamTemplateLoader(
 ) {
     fun load(
         characterAttributes: Map<String, LabyrinthCharacterAttribute?> = emptyMap(),
-    ): List<LabyrinthBattleCharacterTemplate> {
+    ): List<LabyrinthBattleCharacterTemplate> = templates(characterAttributes).toList()
+
+    fun loadMatcher(
+        characterAttributes: Map<String, LabyrinthCharacterAttribute?> = emptyMap(),
+    ): LabyrinthCharacterIconMatcher = LabyrinthCharacterIconMatcher(templates(characterAttributes))
+
+    private fun templates(
+        characterAttributes: Map<String, LabyrinthCharacterAttribute?>,
+    ): Sequence<LabyrinthBattleCharacterTemplate> {
         val iconDocument = decode<GameIconPackDocument>(ICONS_PATH)
         val roster = decode<CharacterRosterDocument>(CHARACTERS_PATH)
             .characters
             .associateBy(CharacterResource::id)
-        return iconDocument.characterIcons.mapNotNull { icon ->
+        return iconDocument.characterIcons.asSequence().mapNotNull { icon ->
             val character = roster[icon.ownerId] ?: return@mapNotNull null
             LabyrinthBattleCharacterTemplate(
                 characterId = icon.ownerId,

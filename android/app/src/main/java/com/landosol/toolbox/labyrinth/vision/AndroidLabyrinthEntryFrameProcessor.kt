@@ -290,8 +290,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
             readResultScore: Boolean = true,
         ): AndroidLabyrinthEntryFrameProcessor {
             val relicTemplates = AndroidLabyrinthRelicTemplateLoader(context).load()
-            val characterTemplates = AndroidLabyrinthBattleTeamTemplateLoader(context).load(characterAttributes)
-            val characterIconMatcher = LabyrinthCharacterIconMatcher(characterTemplates)
+            val characterIconMatcher = AndroidLabyrinthBattleTeamTemplateLoader(context).loadMatcher(characterAttributes)
             val characterRecognizer = LabyrinthCharacterRecognizer(characterIconMatcher)
             return AndroidLabyrinthEntryFrameProcessor(
                 processor = LabyrinthEntryFrameProcessor(
@@ -303,10 +302,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                     nodeScanConsumable = nodeScanConsumable,
                     rosterCharacterIds = rosterCharacterIds,
                     characterRecognizer = characterRecognizer,
-                    battleTeamRecognizer = LabyrinthBattleTeamRecognizer(
-                        templates = characterTemplates,
-                        iconMatcher = characterIconMatcher,
-                    ),
+                    battleTeamRecognizer = LabyrinthBattleTeamRecognizer(iconMatcher = characterIconMatcher),
                     linkChoiceRecognizer = LabyrinthLinkChoiceRecognizer(
                         AndroidLabyrinthLinkChoiceTemplateLoader(context).load(),
                     ),
@@ -324,9 +320,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                 }.getOrNull(),
                 shopItemResolver = AndroidLabyrinthShopItemResolver(),
                 roleRewardNameResolver = AndroidLabyrinthRoleRewardNameResolver(
-                    names = characterTemplates.map {
-                        LabyrinthCharacterNameCandidate(it.characterId, it.displayName, it.aliases)
-                    }.distinctBy { it.characterId },
+                    names = characterIconMatcher.characterNames(),
                     recognizePortrait = { bitmap, slotId ->
                         characterRecognizer.recognizeRoleRewardSlot(AndroidPixelImageAdapter.from(bitmap), slotId)
                     },
