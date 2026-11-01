@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.LruCache
+import com.landosol.toolbox.clanbattle.recognition.AndroidPixelImageAdapter
 import java.nio.file.Files
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.*
@@ -14,6 +15,7 @@ class ShimTest {
         val pixels = intArrayOf(0xff123456.toInt(), 0xffabcdef.toInt(), 0xff00ff00.toInt(), 0xffffffff.toInt())
         val bitmap = Bitmap.createBitmap(pixels, 2, 2, Bitmap.Config.ARGB_8888)
         pixels[0] = 0
+        AndroidPixelImageAdapter.from(bitmap).pixels[0] = 0
         assertEquals(0xff123456.toInt(), bitmap.getPixel(0, 0))
         assertSame(bitmap, Bitmap.createBitmap(bitmap, 0, 0, 2, 2))
         assertSame(bitmap, Bitmap.createScaledBitmap(bitmap, 2, 2, true))

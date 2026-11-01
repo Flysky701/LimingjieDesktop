@@ -5,6 +5,8 @@
 -Djava.net.useSystemProxies=true
 -Xms64m
 -Xmx1536m
+# Give G1 more time for collection before it expands the heap during screenshot bursts.
+-XX:GCTimeRatio=6
 # Return unused heap after image-heavy work; keep the existing growth ceiling.
 -XX:MinHeapFreeRatio=10
 -XX:MaxHeapFreeRatio=30

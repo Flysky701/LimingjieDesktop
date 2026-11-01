@@ -11,6 +11,8 @@ internal object AndroidChineseRoleNameOcr {
         TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     }
 
+    fun readSeriesAsync(bitmap: Bitmap, callback: (String?) -> Unit) = readAsync(bitmap, callback)
+
     fun readAsync(bitmap: Bitmap, callback: (String?) -> Unit) {
         recognizer
             .process(InputImage.fromBitmap(bitmap, 0))

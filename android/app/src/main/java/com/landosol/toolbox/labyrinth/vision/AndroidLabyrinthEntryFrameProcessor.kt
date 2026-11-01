@@ -243,10 +243,12 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
     private val readResultScore: Boolean,
 ) {
     private val resultScoreResolver = AndroidLabyrinthResultScoreResolver()
-    fun process(frame: CapturedFrame): LabyrinthEntryFrameResult {
+    fun process(frame: CapturedFrame): LabyrinthEntryFrameResult = process(frame, null)
+
+    internal fun process(frame: CapturedFrame, capturePixels: PixelImage?): LabyrinthEntryFrameResult {
         val started = System.nanoTime()
         val result = processor.process(
-            AndroidPixelImageAdapter.from(frame.bitmap),
+            capturePixels ?: AndroidPixelImageAdapter.from(frame.bitmap),
             deferRoleRewardPortraits = true,
             skipJoinedCharacters = skipJoinedCharacters(),
         )
@@ -290,8 +292,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
             readResultScore: Boolean = true,
         ): AndroidLabyrinthEntryFrameProcessor {
             val relicTemplates = AndroidLabyrinthRelicTemplateLoader(context).load()
-            val characterTemplates = AndroidLabyrinthBattleTeamTemplateLoader(context).load(characterAttributes)
-            val characterIconMatcher = LabyrinthCharacterIconMatcher(characterTemplates)
+            val characterIconMatcher = AndroidLabyrinthBattleTeamTemplateLoader(context).loadMatcher(characterAttributes)
             val characterRecognizer = LabyrinthCharacterRecognizer(characterIconMatcher)
             return AndroidLabyrinthEntryFrameProcessor(
                 processor = LabyrinthEntryFrameProcessor(
@@ -303,10 +304,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                     nodeScanConsumable = nodeScanConsumable,
                     rosterCharacterIds = rosterCharacterIds,
                     characterRecognizer = characterRecognizer,
-                    battleTeamRecognizer = LabyrinthBattleTeamRecognizer(
-                        templates = characterTemplates,
-                        iconMatcher = characterIconMatcher,
-                    ),
+                    battleTeamRecognizer = LabyrinthBattleTeamRecognizer(iconMatcher = characterIconMatcher),
                     linkChoiceRecognizer = LabyrinthLinkChoiceRecognizer(
                         AndroidLabyrinthLinkChoiceTemplateLoader(context).load(),
                     ),
@@ -324,9 +322,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                 }.getOrNull(),
                 shopItemResolver = AndroidLabyrinthShopItemResolver(),
                 roleRewardNameResolver = AndroidLabyrinthRoleRewardNameResolver(
-                    names = characterTemplates.map {
-                        LabyrinthCharacterNameCandidate(it.characterId, it.displayName, it.aliases)
-                    }.distinctBy { it.characterId },
+                    names = characterIconMatcher.characterNames(),
                     recognizePortrait = { bitmap, slotId ->
                         characterRecognizer.recognizeRoleRewardSlot(AndroidPixelImageAdapter.from(bitmap), slotId)
                     },

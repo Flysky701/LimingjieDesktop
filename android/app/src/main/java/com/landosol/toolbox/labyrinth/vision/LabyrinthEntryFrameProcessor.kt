@@ -994,7 +994,7 @@ object ReferenceFitMapper {
 class GradientTemplateMatcher(
     private val maxSamples: Int = 25_000,
 ) {
-    private data class TemplateStats(
+    private class TemplateStats(
         val points: IntArray,
         /**
          * Template gradients with the mean already subtracted, and template luminances with
@@ -1009,63 +1009,115 @@ class GradientTemplateMatcher(
         val denominator: Double,
         val centeredLuminances: DoubleArray,
         val luminanceDenominator: Double,
+        val mapping: SampleMapping,
     )
+
+    /** Bounded per template. Axis tables are overwritten when the scale changes. A streamed
+     * page anchor needs only those tables; translated search windows also reuse per-point offsets.
+     * Scoring holds this matcher's monitor while it reads or updates them.
+     */
+    private class SampleMapping(sourceWidth: Int, sourceHeight: Int) {
+        val xs = IntArray(sourceWidth)
+        val rows = IntArray(sourceHeight)
+        private var targetWidth = 0
+        private var targetHeight = 0
+        private var stride = 0
+        private var firstBase = 0
+        private var offsets: IntArray? = null
+        private var offsetsReady = false
+
+        fun update(points: IntArray, rect: EntryPixelRect, frameWidth: Int, base: Int): IntArray? {
+            if (targetWidth != rect.width || targetHeight != rect.height || stride != frameWidth) {
+                if (targetWidth != rect.width) {
+                    for (x in xs.indices) xs[x] = map(x, xs.size, rect.width)
+                }
+                if (targetHeight != rect.height || stride != frameWidth) {
+                    for (y in rows.indices) rows[y] = map(y, rows.size, rect.height) * frameWidth
+                }
+                targetWidth = rect.width
+                targetHeight = rect.height
+                stride = frameWidth
+                firstBase = base
+                offsetsReady = false
+            }
+            if (!offsetsReady && firstBase != base) {
+                val result = offsets ?: IntArray(points.size).also { offsets = it }
+                for (i in points.indices) {
+                    val point = points[i]
+                    result[i] = rows[point and 0xffff] + xs[point ushr 16]
+                }
+                offsetsReady = true
+            }
+            return if (offsetsReady) offsets else null
+        }
+
+        private fun map(value: Int, sourceSize: Int, targetSize: Int): Int =
+            (value.toLong() * (targetSize - 1) / (sourceSize - 1)).toInt().coerceIn(1, targetSize - 2)
+    }
 
     private val cache = IdentityHashMap<PixelImage, TemplateStats>()
 
-    /**
-     * `map()` results for one (source size, target size) pair.
-     *
-     * Both sizes come from a handful of template and window dimensions, so these tables are tiny
-     * and are reused by every sample of every window in a sweep. The values are identical to
-     * calling [map] inline, including the clamp that keeps a sample inside the window. Both sizes
-     * stay far below 2^20, so packing a pair into one key cannot collide.
-     *
-     * [HashMap] on purpose: the sweep is single-threaded today — one coroutine samples the anchors
-     * of a frame — so a plain map is enough and the threading question stays separate from the
-     * arithmetic one. Unlike [cache] these two are deliberately not `@Synchronized`, because they
-     * are only ever touched from inside [score]. If node scanning is ever parallelised, they must
-     * become concurrent structures or be filled once per frame in [prepareFrame].
-     */
-    private val mappedOffsetCache = HashMap<Long, IntArray>()
-    private val rowScaledOffsetCache = HashMap<Long, IntArray>()
-    private data class FrameStats(val frame: PixelImage, val lights: ByteArray, val gradients: ShortArray)
+    /** A borrower keeps its snapshot even if the owner clears it or prepares the next frame. */
+    private class FrameBuffers(size: Int) {
+        val lights = ByteArray(size)
+        val gradients = ShortArray(size)
+        val users = java.util.concurrent.atomic.AtomicInteger()
+    }
+    private class FrameStats(val frame: PixelImage, val buffers: FrameBuffers)
     private var preparedFrame: FrameStats? = null
-    /**
-     * Storage reused across [prepareFrame] calls: ~2 MB of luminance and ~4 MB of gradients for a
-     * 1080p frame, previously allocated fresh every frame. Both arrays are fully rewritten on each
-     * call (the gradient border is cleared explicitly), and [FrameStats.frame] identity still
-     * guards every read in [score], so a stale value can never be served for a different frame.
-     * Matchers that only [sharePreparedFrame] keep no storage of their own.
-     */
-    private var reusableLights: ByteArray? = null
-    private var reusableGradients: ShortArray? = null
+    private var reusableBuffers: FrameBuffers? = null
 
-    /** Shared by the coarse, refinement and full node matchers for one bounded full scan. */
+    @Synchronized
     fun prepareFrame(frame: PixelImage) {
-        // Luminance is 0..255, gradient is 0..510. Compact storage is exact, not lossy.
-        val size = frame.width * frame.height
-        val lights = reusableLights?.takeIf { it.size == size } ?: ByteArray(size).also { reusableLights = it }
-        val gradients = reusableGradients?.takeIf { it.size == size }
-            ?: ShortArray(size).also { reusableGradients = it }
-        for (index in 0 until size) lights[index] = luminance(frame.pixels[index]).toByte()
-        // The loop below leaves the outer border untouched; a fresh array had it at zero.
-        java.util.Arrays.fill(gradients, 0.toShort())
-        for (y in 1 until frame.height - 1) {
-            for (x in 1 until frame.width - 1) {
-                val at = y * frame.width + x
-                gradients[at] = (abs((lights[at + 1].toInt() and 255) - (lights[at - 1].toInt() and 255)) +
-                    abs((lights[at + frame.width].toInt() and 255) - (lights[at - frame.width].toInt() and 255))).toShort()
-            }
-        }
-        preparedFrame = FrameStats(frame, lights, gradients)
+        clearPreparedFrame()
+        val size = frame.pixels.size
+        val buffers = reusableBuffers?.takeIf { it.lights.size == size && it.users.get() == 0 }
+            ?: FrameBuffers(size).also { reusableBuffers = it }
+        val lights = buffers.lights
+        val gradients = buffers.gradients
+        fillLuminances(frame.pixels, lights)
+        fillGradients(lights, gradients, frame.width, frame.height)
+        buffers.users.incrementAndGet()
+        preparedFrame = FrameStats(frame, buffers)
     }
 
-    fun sharePreparedFrame(other: GradientTemplateMatcher) { preparedFrame = other.preparedFrame }
-    fun clearPreparedFrame() { preparedFrame = null }
-    /** Whether [prepareFrame] has been called for exactly this frame and not cleared since. */
+    private fun fillLuminances(source: IntArray, lights: ByteArray) {
+        for (i in source.indices) lights[i] = luminance(source[i]).toByte()
+    }
+
+    private fun fillGradients(lights: ByteArray, gradients: ShortArray, width: Int, height: Int) {
+        java.util.Arrays.fill(gradients, 0.toShort())
+        for (y in 1 until height - 1) {
+            for (x in 1 until width - 1) {
+                val at = y * width + x
+                gradients[at] = (abs((lights[at + 1].toInt() and 255) - (lights[at - 1].toInt() and 255)) +
+                    abs((lights[at + width].toInt() and 255) - (lights[at - width].toInt() and 255))).toShort()
+            }
+        }
+    }
+
+    @Synchronized
+    private fun borrowFrame() = preparedFrame?.also { it.buffers.users.incrementAndGet() }
+
+    fun sharePreparedFrame(other: GradientTemplateMatcher) {
+        if (other === this) return
+        val borrowed = other.borrowFrame()
+        synchronized(this) {
+            clearPreparedFrame()
+            preparedFrame = borrowed
+        }
+    }
+
+    @Synchronized
+    fun clearPreparedFrame() {
+        preparedFrame?.buffers?.users?.decrementAndGet()
+        preparedFrame = null
+    }
+
+    @Synchronized
     fun hasPreparedFrame(frame: PixelImage): Boolean = preparedFrame?.frame === frame
 
+    @Synchronized
     fun score(
         frame: PixelImage,
         rect: EntryPixelRect,
@@ -1075,15 +1127,13 @@ class GradientTemplateMatcher(
         if (rect.width < 3 || rect.height < 3 || template.width < 3 || template.height < 3) return 0.0
         val stats = stats(template)
         if (stats.points.isEmpty()) return 0.0
-        val features = preparedFrame?.takeIf { it.frame === frame }
-        // The template-to-frame coordinate mapping depends only on the two sizes, and those sizes
-        // repeat across the whole sweep, so the per-sample `map()` call, its long multiply, its
-        // integer division and its clamp are all hoisted out of the inner loop.
-        val xTable = mappedOffsets(template.width, rect.width)
-        val yTable = mappedOffsets(template.height, rect.height)
-        val yRowTable = rowScaledOffsets(template.height, rect.height, frame.width)
+        val features = preparedFrame?.takeIf { it.frame === frame }?.buffers
         val rectBase = rect.top * frame.width + rect.left
         val points = stats.points
+        val mapping = stats.mapping
+        val offsets = mapping.update(points, rect, frame.width, rectBase)
+        val xs = mapping.xs
+        val rows = mapping.rows
         val centeredGradients = stats.centeredGradients
         val centeredLuminances = stats.centeredLuminances
         var observedSum = 0.0
@@ -1095,20 +1145,21 @@ class GradientTemplateMatcher(
         val count = points.size
         var index = 0
         while (index < count) {
-            val packed = points[index]
-            val templateX = packed ushr 16
-            val templateY = packed and 0xffff
-            val at = rectBase + yRowTable[templateY] + xTable[templateX]
+            val at = rectBase + if (offsets != null) offsets[index] else {
+                val point = points[index]
+                rows[point and 0xffff] + xs[point ushr 16]
+            }
             val gradient: Double
             val light: Double
             if (features != null) {
                 gradient = features.gradients[at].toDouble()
                 light = (features.lights[at].toInt() and 255).toDouble()
             } else {
-                val frameX = rect.left + xTable[templateX]
-                val frameY = rect.top + yTable[templateY]
-                gradient = gradient(frame, frameX, frameY, rect)
-                light = luminance(frame[frameX, frameY]).toDouble()
+                val pixels = frame.pixels
+                // map() keeps every point at least one pixel inside the window.
+                gradient = (abs(luminance(pixels[at + 1]) - luminance(pixels[at - 1])) +
+                    abs(luminance(pixels[at + frame.width]) - luminance(pixels[at - frame.width]))).toDouble()
+                light = luminance(pixels[at]).toDouble()
             }
             observedSum += gradient
             observedSquares += gradient * gradient
@@ -1128,62 +1179,51 @@ class GradientTemplateMatcher(
         return maxOf(gradientScore, luminanceScore).coerceIn(0.0, 1.0)
     }
 
-    /** [mappedOffsets] for rows, pre-multiplied by the frame width so the inner loop only adds. */
-    private fun rowScaledOffsets(sourceSize: Int, targetSize: Int, frameWidth: Int): IntArray =
-        rowScaledOffsetCache.getOrPut(
-            (sourceSize.toLong() shl 40) or (targetSize.toLong() shl 20) or frameWidth.toLong(),
-        ) {
-            val rows = mappedOffsets(sourceSize, targetSize)
-            IntArray(rows.size) { index -> rows[index] * frameWidth }
-        }
-
-    private fun mappedOffsets(sourceSize: Int, targetSize: Int): IntArray =
-        mappedOffsetCache.getOrPut((sourceSize.toLong() shl 20) or targetSize.toLong()) {
-            IntArray(sourceSize) { value -> map(value, sourceSize, targetSize) }
-        }
-
-    @Synchronized
     private fun stats(template: PixelImage): TemplateStats = cache[template] ?: run {
         val step = max(1, ceil(sqrt(template.width.toDouble() * template.height / maxSamples)).toInt())
-        val points = ArrayList<Int>()
-        val gradients = ArrayList<Double>()
-        val luminances = ArrayList<Double>()
+        val capacity = (1 + (template.width - 3) / step) * (1 + (template.height - 3) / step)
+        val points = IntArray(capacity)
+        val gradients = DoubleArray(capacity)
+        val luminances = DoubleArray(capacity)
+        var count = 0
+        var gradientSum = 0.0
+        var luminanceSum = 0.0
         var y = 1
         while (y < template.height - 1) {
             var x = 1
             while (x < template.width - 1) {
-                // Node templates are PNGs with transparent pixels outside the
-                // node body. Ignore the mask boundary as well, otherwise the
-                // artificial transparent-to-opaque edge becomes a false
-                // feature and neighbouring nodes/routes leak into the score.
+                // Ignore transparent node backgrounds and their artificial mask edges.
                 if (isOpaqueInterior(template, x, y)) {
-                    points += (x shl 16) or y
-                    gradients += gradient(template, x, y, null)
-                    luminances += luminance(template[x, y]).toDouble()
+                    points[count] = (x shl 16) or y
+                    val gradient = gradient(template, x, y, null)
+                    val light = luminance(template[x, y]).toDouble()
+                    gradients[count] = gradient
+                    luminances[count] = light
+                    gradientSum += gradient
+                    luminanceSum += light
+                    count++
                 }
                 x += step
             }
             y += step
         }
-        val values = gradients.toDoubleArray()
-        val mean = values.average()
-        val denominator = values.sumOf { value -> (value - mean) * (value - mean) }
-        val luminanceValues = luminances.toDoubleArray()
-        val luminanceMean = luminanceValues.average()
-        val luminanceDenominator = luminanceValues.sumOf { value ->
-            (value - luminanceMean) * (value - luminanceMean)
+        val mean = gradientSum / count
+        val luminanceMean = luminanceSum / count
+        var denominator = 0.0
+        var luminanceDenominator = 0.0
+        for (i in 0 until count) {
+            gradients[i] -= mean
+            luminances[i] -= luminanceMean
+            denominator += gradients[i] * gradients[i]
+            luminanceDenominator += luminances[i] * luminances[i]
         }
         TemplateStats(
-            points = points.toIntArray(),
-            // Same subtraction the correlation used to repeat per sample, applied once per point.
-            // `mean` and `denominator` above are still computed exactly as before, including the
-            // sequential summation order, because changing either would change the score.
-            centeredGradients = DoubleArray(values.size) { index -> values[index] - mean },
+            points = if (count == capacity) points else points.copyOf(count),
+            centeredGradients = if (count == capacity) gradients else gradients.copyOf(count),
             denominator = denominator,
-            centeredLuminances = DoubleArray(luminanceValues.size) { index ->
-                luminanceValues[index] - luminanceMean
-            },
+            centeredLuminances = if (count == capacity) luminances else luminances.copyOf(count),
             luminanceDenominator = luminanceDenominator,
+            mapping = SampleMapping(template.width, template.height),
         ).also { cache[template] = it }
     }
 
@@ -1199,9 +1239,6 @@ class GradientTemplateMatcher(
         return abs(luminance(image[right, y]) - luminance(image[left, y])).toDouble() +
             abs(luminance(image[x, bottom]) - luminance(image[x, top])).toDouble()
     }
-
-    private fun map(value: Int, sourceSize: Int, targetSize: Int): Int =
-        (value.toLong() * (targetSize - 1) / (sourceSize - 1)).toInt().coerceIn(1, targetSize - 2)
 
     private fun luminance(color: Int): Int {
         val red = color ushr 16 and 0xff

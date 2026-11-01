@@ -26,7 +26,8 @@ internal class OnnxBackend : OcrBackend {
         }
         environment = OrtEnvironment.getEnvironment()
         val options = OrtSession.SessionOptions().apply {
-            setIntraOpNumThreads(min(4, max(1, Runtime.getRuntime().availableProcessors() / 2)))
+            // Each active device has its own inference worker and model sessions.
+            setIntraOpNumThreads(min(3, max(1, Runtime.getRuntime().availableProcessors() / 2)))
             setInterOpNumThreads(1)
             // Variable game ROIs must not keep the largest activation arena indefinitely.
             setMemoryPatternOptimization(false)

@@ -10,6 +10,11 @@ import com.landosol.toolbox.labyrinth.LabyrinthCharacterAttribute
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+/** A platform may ship samples prepared from the same icon assets at build time. */
+interface LabyrinthCompiledIconSource {
+    fun characterIconMatcher(attributes: Map<String, LabyrinthCharacterAttribute?>): LabyrinthCharacterIconMatcher
+}
+
 /** Loads every indexed character icon and its preferred CN name for battle-page matching. */
 class AndroidLabyrinthBattleTeamTemplateLoader(
     private val context: Context,
@@ -17,12 +22,25 @@ class AndroidLabyrinthBattleTeamTemplateLoader(
 ) {
     fun load(
         characterAttributes: Map<String, LabyrinthCharacterAttribute?> = emptyMap(),
-    ): List<LabyrinthBattleCharacterTemplate> {
+    ): List<LabyrinthBattleCharacterTemplate> = templates(characterAttributes).toList()
+
+    fun loadMatcher(
+        characterAttributes: Map<String, LabyrinthCharacterAttribute?> = emptyMap(),
+    ): LabyrinthCharacterIconMatcher = (context as? LabyrinthCompiledIconSource)?.characterIconMatcher(characterAttributes)
+        ?: sampleImages(characterAttributes)
+
+    internal fun sampleImages(
+        characterAttributes: Map<String, LabyrinthCharacterAttribute?>,
+    ): LabyrinthCharacterIconMatcher = LabyrinthCharacterIconMatcher(templates(characterAttributes))
+
+    private fun templates(
+        characterAttributes: Map<String, LabyrinthCharacterAttribute?>,
+    ): Sequence<LabyrinthBattleCharacterTemplate> {
         val iconDocument = decode<GameIconPackDocument>(ICONS_PATH)
         val roster = decode<CharacterRosterDocument>(CHARACTERS_PATH)
             .characters
             .associateBy(CharacterResource::id)
-        return iconDocument.characterIcons.mapNotNull { icon ->
+        return iconDocument.characterIcons.asSequence().mapNotNull { icon ->
             val character = roster[icon.ownerId] ?: return@mapNotNull null
             LabyrinthBattleCharacterTemplate(
                 characterId = icon.ownerId,

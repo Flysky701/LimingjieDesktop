@@ -9,6 +9,10 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import com.landosol.toolbox.labyrinth.vision.ReferenceFitMapper
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ChannelResult
+import kotlinx.coroutines.selects.onTimeout
+import kotlinx.coroutines.selects.select
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 
 /** Owns copied pixels and a separate OCR engine. No actions, shared OCR queue, or session callbacks. */
@@ -16,6 +20,8 @@ internal class RunScoreSidecar(
     private val save: (String, Long) -> Unit,
     private val notice: (String) -> Unit,
     private val engineFactory: () -> OcrEngine = ::OnnxOcrEngine,
+    private val modelIdleMillis: Long = 60_000,
+    private val readTimeoutMillis: Long = 30_000,
 ) {
     private data class Crop(val width: Int, val height: Int, val pixels: IntArray)
     private data class Frame(val timestamp: Long, val title: Crop, val total: Crop)
@@ -24,15 +30,42 @@ internal class RunScoreSidecar(
     private val queue = Channel<Pending>(4)
     private var pending: Pending? = null
     private var closed = false
-    private var engine: OcrEngine? = null // Accessed only by the worker, then by close after joining it.
+    private var engine: OcrEngine? = null // Owned by the queue consumer, including native teardown.
+    private val outstandingReads = ConcurrentHashMap.newKeySet<Any>()
     private val worker = scope.launch {
-        for (candidate in queue) {
-            try {
-                recognize(candidate)?.let { save(candidate.recordId, it) }
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (failure: Exception) { notice("分数旁路识别未完成，保留原任务流程：${failure.message}") }
-            catch (failure: LinkageError) { notice("分数旁路 OCR 不可用：${failure.message}") }
+        try {
+            while (true) {
+                try {
+                    val candidate = nextCandidate() ?: break
+                    recognize(candidate)?.let { save(candidate.recordId, it) }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Exception) { notice("分数旁路识别未完成，保留原任务流程：${failure.message}") }
+                catch (failure: LinkageError) { notice("分数旁路 OCR 不可用：${failure.message}") }
+            }
+        } finally {
+            releaseEngine()
         }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun nextCandidate(): Pending? {
+        while (engine != null) {
+            // The receive and timeout compete atomically; a result arriving at expiry stays in the queue.
+            val next = select<ChannelResult<Pending>?> {
+                queue.onReceiveCatching { it }
+                onTimeout(modelIdleMillis) { null }
+            }
+            if (next != null) return next.getOrNull()
+            // A timed-out native request may still be running. Keep its engine until it calls back.
+            if (outstandingReads.isEmpty()) releaseEngine()
+        }
+        return queue.receiveCatching().getOrNull()
+    }
+
+    private fun releaseEngine() {
+        val owned = engine
+        engine = null
+        owned?.close()
     }
 
     /** Called before the borrowed bitmap is recycled. Only two small pixel copies happen here. */
@@ -81,26 +114,35 @@ internal class RunScoreSidecar(
 
     private suspend fun read(crop: Crop): String? {
         val ownEngine = engine ?: engineFactory().also { engine = it }
-        return withTimeoutOrNull(30_000) {
+        return withTimeoutOrNull(readTimeoutMillis) {
             suspendCancellableCoroutine { continuation ->
-                ownEngine.submit(crop.width, crop.height, crop.pixels) { continuation.resume(it) }
+                val request = Any()
+                outstandingReads.add(request)
+                try {
+                    ownEngine.submit(crop.width, crop.height, crop.pixels) { text ->
+                        if (outstandingReads.remove(request)) continuation.resume(text)
+                    }
+                } catch (failure: Throwable) {
+                    outstandingReads.remove(request)
+                    throw failure
+                }
             }
         }
     }
 
     suspend fun closeAndJoin() {
         synchronized(this) {
-            if (closed) return
-            closed = true
-            seal()
-            queue.close()
+            if (!closed) {
+                closed = true
+                seal()
+                queue.close()
+            }
         }
         try {
             withTimeoutOrNull(5_000) { worker.join() }
         } finally {
-            worker.cancelAndJoin()
             scope.cancel()
-            withContext(Dispatchers.IO) { engine?.close() }
+            withContext(NonCancellable) { worker.join() }
         }
     }
 }

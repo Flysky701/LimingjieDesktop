@@ -22,7 +22,11 @@ class AdbServerClient(private val address: InetSocketAddress = defaultAddress())
     private val closed = AtomicBoolean()
 
     /** Null means a command not implemented here (version, push, pull, persistent MaaTouch). */
-    suspend fun execute(arguments: List<String>, serial: String?, timeoutMillis: Long): AdbResult? {
+    suspend fun execute(arguments: List<String>, serial: String?, timeoutMillis: Long): AdbResult? =
+        execute(arguments, serial, timeoutMillis, null)
+
+    internal suspend fun execute(arguments: List<String>, serial: String?, timeoutMillis: Long,
+        acceptRaw: ((RawCapturePayload) -> Unit)?): AdbResult? {
         val request = when {
             arguments == listOf("devices", "-l") -> "host:devices-l"
             arguments == listOf("get-state") && serial != null -> "host-serial:$serial:get-state"
@@ -49,7 +53,7 @@ class AdbServerClient(private val address: InetSocketAddress = defaultAddress())
                         if (!request.startsWith("host")) wire.request("host:transport:$serial")
                         wire.request(request)
                         when {
-                            request.startsWith("shell,") -> wire.shellResult()
+                            request.startsWith("shell,") -> wire.shellResult(acceptRaw)
                             else -> {
                                 val text = wire.message()
                                 classifyAdbFailure(0, "", if (arguments[0] == "connect") text else "")
@@ -83,17 +87,19 @@ class AdbServerClient(private val address: InetSocketAddress = defaultAddress())
             if (millis <= 0) throw SocketTimeoutException()
             socket.soTimeout = millis.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         }
-        private fun bytes(count: Int): ByteArray {
-            if (count !in 0..MAX_PACKET) throw IOException("ADB 数据帧长度无效")
-            val data = ByteArray(count)
-            var position = 0
-            while (position < count) {
+        private fun readFully(data: ByteArray, offset: Int, count: Int) {
+            var position = offset
+            val end = offset + count
+            while (position < end) {
                 remaining()
-                val read = input.read(data, position, count - position)
+                val read = input.read(data, position, end - position)
                 if (read < 0) throw EOFException("ADB 数据帧不完整")
                 position += read
             }
-            return data
+        }
+        private fun bytes(count: Int): ByteArray {
+            if (count !in 0..MAX_PACKET) throw IOException("ADB 数据帧长度无效")
+            return ByteArray(count).also { readFully(it, 0, count) }
         }
         fun message(): String {
             val length = bytes(4).toString(Charsets.US_ASCII).toIntOrNull(16) ?: throw IOException("ADB 响应长度无效")
@@ -119,13 +125,23 @@ class AdbServerClient(private val address: InetSocketAddress = defaultAddress())
             if (size().toLong() + data.size > MAX_OUTPUT) throw IOException("ADB 输出超过上限")
             write(data)
         }
-        fun shellResult(): AdbResult {
+        fun shellResult(acceptRaw: ((RawCapturePayload) -> Unit)?): AdbResult {
             // Our commands never consume stdin. Send shell-v2 CLOSE_STDIN, not a socket half-close.
             output.write(byteArrayOf(4, 0, 0, 0, 0)); output.flush()
             val stdout = ByteArrayOutputStream(); val stderr = ByteArrayOutputStream()
+            val raw = acceptRaw?.let { RawCapturePayload() }
+            val header = ByteArray(5)
+            val packet = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
+            val readPayload = ::readFully
             while (true) {
-                val header = bytes(5)
-                val length = ByteBuffer.wrap(header, 1, 4).order(ByteOrder.LITTLE_ENDIAN).int
+                readFully(header, 0, header.size)
+                val length = packet.getInt(1)
+                if (length !in 0..MAX_PACKET) throw IOException("ADB 数据帧长度无效")
+                if (raw != null && header[0].toInt() == 1) {
+                    if (raw.size.toLong() + length > MAX_OUTPUT) throw IOException("ADB 输出超过上限")
+                    raw.readPacket(length, readPayload)
+                    continue
+                }
                 val payload = bytes(length)
                 when (header[0].toInt()) {
                     1 -> stdout.append(payload)
@@ -134,7 +150,9 @@ class AdbServerClient(private val address: InetSocketAddress = defaultAddress())
                         if (payload.size != 1) throw IOException("ADB 退出状态无效")
                         val exit = payload[0].toInt() and 255
                         val errors = stderr.toString(Charsets.UTF_8).replace("\r\n", "\n")
-                        return classifyAdbFailure(exit, errors) ?: AdbResult.Success(exit, stdout.toByteArray(), errors)
+                        classifyAdbFailure(exit, errors)?.let { return it }
+                        if (raw != null) acceptRaw?.invoke(raw)
+                        return AdbResult.Success(exit, stdout.toByteArray(), errors)
                     }
                     else -> throw IOException("ADB shell 数据帧类型无效")
                 }

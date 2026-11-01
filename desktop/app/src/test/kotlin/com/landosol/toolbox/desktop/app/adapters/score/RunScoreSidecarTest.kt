@@ -5,13 +5,18 @@ import com.landosol.toolbox.desktop.ocr.OcrEngine
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.imageio.ImageIO
 
 class RunScoreSidecarTest {
@@ -87,6 +92,85 @@ class RunScoreSidecarTest {
         } finally { bitmap.recycle(); sidecar.closeAndJoin() }
         assertEquals(listOf("next"), saved)
         assertEquals(1, notices.size)
+    }
+
+    @Test fun idleReleasesOnlyBetweenCandidatesAndTheNextScoreReopensTheModel() = runBlocking {
+        val firstRead = CompletableDeferred<(String?) -> Unit>()
+        val firstClose = CompletableDeferred<Unit>()
+        val opened = AtomicInteger()
+        val closed = AtomicInteger()
+        val delayFirst = AtomicBoolean(true)
+        val saved = mutableListOf<Pair<String, Long>>()
+        val sidecar = RunScoreSidecar({ id, value -> saved += id to value }, {}, engineFactory = {
+            val instance = opened.incrementAndGet()
+            object : FakeEngine() {
+                override fun submit(width: Int, height: Int, pixels: IntArray, onResult: (String?) -> Unit) {
+                    if (delayFirst.getAndSet(false)) firstRead.complete(onResult)
+                    else super.submit(width, height, pixels, onResult)
+                }
+                override fun close() {
+                    closed.incrementAndGet()
+                    if (instance == 1) firstClose.complete(Unit)
+                }
+            }
+        }, modelIdleMillis = 50)
+        val image = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888)
+        try {
+            capture(sidecar, "first", image)
+            val resume = withTimeout(3_000) { firstRead.await() }
+            capture(sidecar, "queued", image)
+            delay(150)
+            assertEquals(0, closed.get())
+            resume("分数明细")
+            withTimeout(3_000) { firstClose.await() }
+            assertEquals(1, opened.get())
+            capture(sidecar, "reopened", image)
+        } finally {
+            sidecar.closeAndJoin()
+            image.recycle()
+        }
+        assertEquals(listOf("first", "queued", "reopened").map { it to 46_000L }, saved)
+        assertEquals(2, opened.get())
+        assertEquals(opened.get(), closed.get())
+    }
+
+    @Test fun timedOutNativeReadKeepsItsEngineUntilTheLateCallbackReturns() = runBlocking {
+        val callback = CompletableDeferred<(String?) -> Unit>()
+        val nextScore = CompletableDeferred<Long>()
+        val released = CompletableDeferred<Unit>()
+        val opened = AtomicInteger()
+        val holdFirst = AtomicBoolean(true)
+        val saved = mutableListOf<String>()
+        val sidecar = RunScoreSidecar({ id, score ->
+            saved += id
+            if (id == "next") nextScore.complete(score)
+        }, {}, engineFactory = {
+            opened.incrementAndGet()
+            object : FakeEngine() {
+                override fun submit(width: Int, height: Int, pixels: IntArray, onResult: (String?) -> Unit) {
+                    if (holdFirst.getAndSet(false)) callback.complete(onResult)
+                    else super.submit(width, height, pixels, onResult)
+                }
+                override fun close() { released.complete(Unit) }
+            }
+        }, modelIdleMillis = 40, readTimeoutMillis = 60)
+        val image = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888)
+        try {
+            capture(sidecar, "timed-out", image)
+            val late = withTimeout(3_000) { callback.await() }
+            capture(sidecar, "next", image)
+            assertEquals(46_000L, withTimeout(3_000) { nextScore.await() })
+            delay(120)
+            assertFalse(released.isCompleted)
+            assertEquals(1, opened.get())
+            late("分数明细")
+            late("分数明细")
+            withTimeout(3_000) { released.await() }
+        } finally {
+            sidecar.closeAndJoin()
+            image.recycle()
+        }
+        assertEquals(listOf("next"), saved)
     }
 
     @Test fun parserAcceptsOnlyPositiveWholeTotalsAndDetailsTitle() {

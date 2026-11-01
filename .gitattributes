@@ -17,3 +17,15 @@ android/app/src/test/resources/*-golden.txt text eol=lf
 
 # This OCR resource is verified byte-for-byte against its pinned SHA-256.
 desktop/ocr/src/main/resources/ocr/ppocrv5_dict.txt text eol=lf
+
+# Desktop adapter contracts are checked against exact Android source bytes.
+android/app/src/main/java/com/landosol/toolbox/data/local/AppDatabase.kt text eol=lf
+android/app/src/main/java/com/landosol/toolbox/security/AndroidKeystoreEncryptedStore.kt text eol=lf
+android/app/src/main/java/com/landosol/toolbox/protocol/bilibili/AndroidBilibiliSdkRequestProfileFactory.kt text eol=lf
+android/app/src/main/java/com/landosol/toolbox/protocol/bilibili/AndroidGameProtocolProfileFactory.kt text eol=lf
+android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidChineseRoleNameOcr.kt text eol=lf
+android/app/src/main/java/com/landosol/toolbox/labyrinth/debug/LabyrinthRuntimeDiagnostics.kt text eol=lf
+android/app/src/main/java/com/landosol/toolbox/ui/account/GeetestCaptchaDialog.kt text eol=lf
+android/app/src/main/java/com/landosol/toolbox/automation/accessibility/LandosolAccessibilityService.kt text eol=lf
+android/app/src/main/java/com/landosol/toolbox/automation/capture/MediaProjectionCaptureService.kt text eol=lf
+android/app/src/main/java/com/landosol/toolbox/labyrinth/AndroidLabyrinthCnDatabaseRepository.kt text eol=lf

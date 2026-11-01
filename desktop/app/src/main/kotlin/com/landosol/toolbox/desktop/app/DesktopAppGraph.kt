@@ -259,7 +259,8 @@ class DesktopAppGraph(
         source = { device.capture().let {
             resolutionGuard.observe(it.width, it.height)
             lastCapturedFrameMillis = it.timestampMillis
-            CapturePixels(it.width, it.height, it.pixels, it.timestampMillis)
+            // The built-in Raw and PNG decoders allocate each frame; injected devices may reuse buffers.
+            CapturePixels(it.width, it.height, it.pixels, it.timestampMillis, ownsPixels = suppliedDevice == null)
         } },
         preview = { synchronized(previewLock) { if (previewRequested) previewState.value = it } },
         onWarning = { log.add(it, true) }, onLost = { stopAll(it) },
@@ -498,7 +499,7 @@ class DesktopAppGraph(
                     nodeScanConsumable = { labyrinthEntryRecognitionSession.nodeScanConsumable() },
                     rosterCharacterIds = { labyrinthEntryRecognitionSession.rosterCharacterIds() },
                     readResultScore = false,
-                )::process
+                )::processDesktopFrame
             },
             captureStop = { captureService.stop() },
             overlayCoordinator = automationOverlayCoordinator,
@@ -776,7 +777,7 @@ class DesktopAppGraph(
                 val processor = AndroidLabyrinthEntryFrameProcessor.create(context, nodeScanRequested = { false })
                 val processFrame: (CapturedFrame) -> LabyrinthEntryFrameResult = { frame ->
                     frameTracker.trackFrame(frame.bitmap.width, frame.bitmap.height)
-                    processor.process(frame).also(frameTracker::record)
+                    processor.processDesktopFrame(frame).also(frameTracker::record)
                 }
                 processFrame
             },

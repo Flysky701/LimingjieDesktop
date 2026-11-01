@@ -1,5 +1,9 @@
 package android.graphics
 
+import com.landosol.toolbox.automation.capture.CapturedFrame
+import com.landosol.toolbox.clanbattle.recognition.PixelImage
+import com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthEntryFrameProcessor
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.awt.image.DataBufferInt
@@ -53,6 +57,16 @@ class Bitmap private constructor(val width: Int, val height: Int, private var pi
         } finally { writer.dispose() }
     }
     companion object {
+        /** Confine the pixel view to the synchronous page recognizer. Its public result contains decisions. */
+        internal fun recognizeLabyrinthFrame(
+            processor: AndroidLabyrinthEntryFrameProcessor,
+            frame: CapturedFrame,
+        ): LabyrinthEntryFrameResult {
+            val bitmap = frame.bitmap
+            require(!bitmap.isRecycled) { "截图 Bitmap 已释放" }
+            return processor.process(frame, PixelImage(bitmap.width, bitmap.height, bitmap.data()))
+        }
+
         fun createBitmap(pixels: IntArray, width: Int, height: Int, config: Config): Bitmap {
             require(width > 0 && height > 0 && width.toLong() * height <= pixels.size)
             return Bitmap(width, height, pixels.copyOf(width * height))
