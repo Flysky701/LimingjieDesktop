@@ -50,7 +50,7 @@ import com.landosol.toolbox.desktop.device.AdbLocation
             OutlinedButton(onClick={callbacks.connect(address.trim())},enabled=address.isNotBlank()&&!actions.working,shape=MaterialTheme.shapes.small){Text("添加并连接")}
         }
         if(discovering)LinearProgressIndicator(Modifier.fillMaxWidth())
-        if(devices.isEmpty()&&!discovering)Panel("尚未发现设备"){
+        if(devices.isEmpty()&&!discovering)Panel("暂无可连接的设备"){
             Text("启动模拟器并打开 ADB 调试后重新检测。MuMu 会自动识别端口；也可以手动填写其他设备的 ADB 地址。",color=Muted)
             Text("可以先在账号和策略页完成全局配置。",color=Muted)
         }

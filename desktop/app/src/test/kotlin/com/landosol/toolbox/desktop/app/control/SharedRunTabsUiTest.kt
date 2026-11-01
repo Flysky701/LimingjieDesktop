@@ -42,7 +42,7 @@ class SharedRunTabsUiTest {
         compose.onNodeWithText("策略").performClick()
         compose.onNodeWithText("37%").assertIsDisplayed()
         compose.onNodeWithText("设备").performClick()
-        compose.onNodeWithText("尚未发现设备").assertIsDisplayed()
+        compose.onNodeWithText("暂无可连接的设备").assertIsDisplayed()
         compose.runOnIdle{assertTrue(global.commands.isEmpty())}
     }
 
@@ -57,7 +57,7 @@ class SharedRunTabsUiTest {
         compose.onNodeWithText("设备").performClick()
         compose.waitUntil(5_000){attempts.size==1}
         compose.onNodeWithText("正在检测…").assertIsNotEnabled()
-        compose.onNodeWithText("尚未发现设备").assertDoesNotExist()
+        compose.onNodeWithText("暂无可连接的设备").assertDoesNotExist()
         first.complete(Unit)
         compose.waitForIdle()
         compose.onNodeWithText("模拟检测失败，请重试").assertIsDisplayed()

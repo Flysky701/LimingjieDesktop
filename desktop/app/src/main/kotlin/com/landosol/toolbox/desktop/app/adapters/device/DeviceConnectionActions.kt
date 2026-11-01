@@ -47,7 +47,8 @@ class DeviceConnectionActions(
             devicesState.value = device.discover()
             discoverySucceeded = true
             succeeded = true
-            if (devicesState.value.isEmpty()) messageState.value = "ADB 暂无已在线且授权的设备。请在模拟器中开启并允许 ADB 调试；若仍未列出，请在“手动填写地址”连接模拟器显示的端口。离线历史记录已隐藏。"
+            if (devicesState.value.isEmpty()) messageState.value = device.discoveryNotice
+                ?: "ADB 暂无已在线且授权的设备。请在模拟器中开启并允许 ADB 调试；若仍未列出，请在“手动填写地址”连接模拟器显示的端口。离线历史记录已隐藏。"
         }
         return succeeded
     }
