@@ -30,7 +30,20 @@ private val ICON_SCORING_EXECUTOR: ExecutorService =
     }
 
 // Three RGB planes on the coarse grid, plus luminance and gradient on the fine grid.
-private typealias IconSampleGrid = Array<ShortArray>
+internal typealias IconSampleGrid = Array<ShortArray>
+
+internal enum class IconSampleShape(val width: Int, val height: Int, val planes: Int) {
+    COARSE(12, 9, 3),
+    FINE(20, 12, 5);
+
+    val cells = width * height
+
+    companion object {
+        const val CROP_TOP = 20
+        const val CROP_HEIGHT = 80
+        const val MIN_SOURCE_HEIGHT = CROP_TOP + CROP_HEIGHT
+    }
+}
 
 /** Shared safety floor for every page that identifies a character from the full icon pack. */
 const val LABYRINTH_CHARACTER_ICON_SAFE_CONFIDENCE = 0.35
@@ -77,10 +90,16 @@ data class LabyrinthCharacterIconMatch(
  * not compete with each other when the rival margin is calculated.
  */
 class LabyrinthCharacterIconMatcher internal constructor(
-    templates: Sequence<LabyrinthBattleCharacterTemplate>,
-    private val minimumConfidence: Double = LABYRINTH_CHARACTER_ICON_SAFE_CONFIDENCE,
-    private val minimumRivalMargin: Double = LABYRINTH_CHARACTER_ICON_SAFE_RIVAL_MARGIN,
+    private val minimumConfidence: Double,
+    private val minimumRivalMargin: Double,
+    samples: Sequence<SampledTemplate>,
 ) {
+    internal constructor(
+        templates: Sequence<LabyrinthBattleCharacterTemplate>,
+        minimumConfidence: Double = LABYRINTH_CHARACTER_ICON_SAFE_CONFIDENCE,
+        minimumRivalMargin: Double = LABYRINTH_CHARACTER_ICON_SAFE_RIVAL_MARGIN,
+    ) : this(minimumConfidence, minimumRivalMargin, templates.map(::sampleTemplate))
+
     constructor(
         templates: List<LabyrinthBattleCharacterTemplate> = emptyList(),
         minimumConfidence: Double = LABYRINTH_CHARACTER_ICON_SAFE_CONFIDENCE,
@@ -94,7 +113,9 @@ class LabyrinthCharacterIconMatcher internal constructor(
         require(minimumRivalMargin in 0.0..1.0)
     }
 
-    private class SampledTemplate(
+    internal val pack = samples.toList()
+
+    internal class SampledTemplate(
         val character: LabyrinthCharacterNameCandidate,
         val iconVariant: String,
         val attribute: LabyrinthCharacterAttribute?,
@@ -103,18 +124,6 @@ class LabyrinthCharacterIconMatcher internal constructor(
         val coarse: IconSampleGrid,
         val fine: IconSampleGrid,
     )
-
-    /** Keep the scoring grids, never the decoded icon or the sequence that produced it. */
-    private val pack = templates.map { template ->
-        val image = template.image
-        val crop = EntryPixelRect(0, ICON_CROP_TOP, image.width, ICON_CROP_HEIGHT)
-        SampledTemplate(
-            LabyrinthCharacterNameCandidate(template.characterId, template.displayName, template.aliases),
-            template.iconVariant, template.attribute, image.width, image.height,
-            sampleGrid(image, crop, COARSE_SAMPLE_WIDTH, COARSE_SAMPLE_HEIGHT),
-            sampleGrid(image, crop, SCORE_SAMPLE_WIDTH, SCORE_SAMPLE_HEIGHT, withLuminanceAndGradient = true),
-        )
-    }.toList()
 
     // Legacy callers may pass a short icon for an attribute that is never selected. Preserve the
     // original failure at match time only if that icon survives the attribute filter.
@@ -167,13 +176,13 @@ class LabyrinthCharacterIconMatcher internal constructor(
         // stored complete so it can serve any mask, and the GridMask below decides what is read.
         val observedTarget = candidateTemplates.firstOrNull()
             ?.let { comparisonRect(frame, iconRect, it) }
-        val coarseMask = maskOf(mask, COARSE_SAMPLE_WIDTH, COARSE_SAMPLE_HEIGHT)
-        val scoreMask = maskOf(mask, SCORE_SAMPLE_WIDTH, SCORE_SAMPLE_HEIGHT)
+        val coarseMask = maskOf(mask, IconSampleShape.COARSE)
+        val scoreMask = maskOf(mask, IconSampleShape.FINE)
         val coarseObserved = observedTarget?.let {
-            center(sampleGrid(frame, it, COARSE_SAMPLE_WIDTH, COARSE_SAMPLE_HEIGHT), coarseMask)
+            center(sampleGrid(frame, it, IconSampleShape.COARSE), coarseMask)
         }
         val scoreObserved = observedTarget?.let {
-            center(sampleGrid(frame, it, SCORE_SAMPLE_WIDTH, SCORE_SAMPLE_HEIGHT, withLuminanceAndGradient = true), scoreMask)
+            center(sampleGrid(frame, it, IconSampleShape.FINE), scoreMask)
         }
         val coarseScores = scoreAll(candidateTemplates.size) { index ->
             coarseIconScore(candidateTemplates[index].coarse, coarseObserved, coarseMask)
@@ -365,10 +374,11 @@ class LabyrinthCharacterIconMatcher internal constructor(
      */
     private fun maskOf(
         mask: LabyrinthCharacterIconMask,
-        sampleWidth: Int,
-        sampleHeight: Int,
+        shape: IconSampleShape,
     ): GridMask {
-        val indices = IntArray(sampleWidth * sampleHeight)
+        val sampleWidth = shape.width
+        val sampleHeight = shape.height
+        val indices = IntArray(shape.cells)
         var count = 0
         repeat(sampleHeight) { sampleY ->
             val yRatio = sampleY.toDouble() / (sampleHeight - 1)
@@ -382,53 +392,16 @@ class LabyrinthCharacterIconMatcher internal constructor(
         return GridMask(indices, count)
     }
 
-    /**
-     * Samples the same grid from a template crop or an observed frame.
-     *
-     * The mask is deliberately not applied here: the grid is stored complete so the same samples
-     * can serve any mask, and [GridMask] then decides which cells a correlation actually reads.
-     */
-    private fun sampleGrid(
-        frame: PixelImage,
-        target: EntryPixelRect,
-        sampleWidth: Int,
-        sampleHeight: Int,
-        withLuminanceAndGradient: Boolean = false,
-    ): IconSampleGrid {
-        if (target.top + target.height > frame.height) return emptyArray()
-        // Colour/luminance range from 0..255 and the gradient from 0..510.
-        val samples = Array(if (withLuminanceAndGradient) 5 else 3) { ShortArray(sampleWidth * sampleHeight) }
-        var grid = 0
-        repeat(sampleHeight) { sampleY ->
-            val yRatio = sampleY.toDouble() / (sampleHeight - 1)
-            for (sampleX in 0 until sampleWidth) {
-                val xRatio = sampleX.toDouble() / (sampleWidth - 1)
-                val frameX = target.left + (xRatio * (target.width - 1)).roundToInt()
-                val frameY = target.top + (yRatio * (target.height - 1)).roundToInt()
-                val pixel = frame[frameX, frameY]
-                for (channel in 0..2) {
-                    samples[channel][grid] = channel(pixel, channel).toShort()
-                }
-                if (withLuminanceAndGradient) {
-                    samples[LUMINANCE][grid] = luminance(pixel).toShort()
-                    samples[GRADIENT][grid] = localGradient(frame, frameX, frameY, target).toShort()
-                }
-                grid++
-            }
-        }
-        return samples
-    }
-
     private fun comparisonRect(
         frame: PixelImage,
         iconRect: EntryPixelRect,
         template: SampledTemplate,
     ): EntryPixelRect? {
-        if (template.width < 3 || template.height < ICON_CROP_TOP + ICON_CROP_HEIGHT) return null
+        if (template.width < 3 || template.height < IconSampleShape.MIN_SOURCE_HEIGHT) return null
         val top = iconRect.top +
-            (iconRect.height * ICON_CROP_TOP.toDouble() / template.height).roundToInt()
+            (iconRect.height * IconSampleShape.CROP_TOP.toDouble() / template.height).roundToInt()
         val height =
-            (iconRect.height * ICON_CROP_HEIGHT.toDouble() / template.height).roundToInt()
+            (iconRect.height * IconSampleShape.CROP_HEIGHT.toDouble() / template.height).roundToInt()
                 .coerceAtLeast(16)
         val target = EntryPixelRect(iconRect.left, top, iconRect.width, height)
         return target.takeIf {
@@ -451,15 +424,6 @@ class LabyrinthCharacterIconMatcher internal constructor(
                 xRatio <= BOTTOM_LEFT_OVERLAY_IGNORE_X_RATIO &&
                 yRatio >= BOTTOM_LEFT_OVERLAY_IGNORE_Y_RATIO) ||
             (mask.ignoreBottomBand && yRatio >= BOTTOM_BAND_OVERLAY_IGNORE_Y_RATIO)
-
-    private fun localGradient(image: PixelImage, x: Int, y: Int, bounds: EntryPixelRect): Int {
-        val right = (x + 1).coerceAtMost(bounds.left + bounds.width - 1)
-        val bottom = (y + 1).coerceAtMost(bounds.top + bounds.height - 1)
-        val previousX = (x - 1).coerceAtLeast(bounds.left)
-        val previousY = (y - 1).coerceAtLeast(bounds.top)
-        return kotlin.math.abs(luminance(image[right, y]) - luminance(image[previousX, y])) +
-            kotlin.math.abs(luminance(image[x, bottom]) - luminance(image[x, previousY]))
-    }
 
     private class CenteredChannel(val deltas: DoubleArray, val square: Double)
 
@@ -541,26 +505,76 @@ class LabyrinthCharacterIconMatcher internal constructor(
         return scores
     }
 
-    private fun channel(color: Int, channel: Int): Int = when (channel) {
-        0 -> color ushr 16 and 0xff
-        1 -> color ushr 8 and 0xff
-        else -> color and 0xff
-    }
-
-    private fun luminance(color: Int): Int =
-        (channel(color, 0) * 299 + channel(color, 1) * 587 + channel(color, 2) * 114 + 500) / 1000
-
     private companion object {
+        /** Keep the scoring grids, never the decoded icon or the sequence that produced it. */
+        private fun sampleTemplate(template: LabyrinthBattleCharacterTemplate): SampledTemplate {
+            val image = template.image
+            val crop = EntryPixelRect(0, IconSampleShape.CROP_TOP, image.width, IconSampleShape.CROP_HEIGHT)
+            return SampledTemplate(
+                LabyrinthCharacterNameCandidate(template.characterId, template.displayName, template.aliases),
+                template.iconVariant, template.attribute, image.width, image.height,
+                sampleGrid(image, crop, IconSampleShape.COARSE),
+                sampleGrid(image, crop, IconSampleShape.FINE),
+            )
+        }
+
+        /**
+         * Samples the same grid from a template crop or an observed frame.
+         *
+         * The mask is deliberately not applied here: the grid is stored complete so the same samples
+         * can serve any mask, and [GridMask] then decides which cells a correlation actually reads.
+         */
+        private fun sampleGrid(
+            frame: PixelImage,
+            target: EntryPixelRect,
+            shape: IconSampleShape,
+        ): IconSampleGrid {
+            if (target.top + target.height > frame.height) return emptyArray()
+            val sampleWidth = shape.width
+            val sampleHeight = shape.height
+            // Colour/luminance range from 0..255 and the gradient from 0..510.
+            val samples = Array(shape.planes) { ShortArray(shape.cells) }
+            var grid = 0
+            repeat(sampleHeight) { sampleY ->
+                val yRatio = sampleY.toDouble() / (sampleHeight - 1)
+                for (sampleX in 0 until sampleWidth) {
+                    val xRatio = sampleX.toDouble() / (sampleWidth - 1)
+                    val frameX = target.left + (xRatio * (target.width - 1)).roundToInt()
+                    val frameY = target.top + (yRatio * (target.height - 1)).roundToInt()
+                    val pixel = frame[frameX, frameY]
+                    for (channel in 0..2) {
+                        samples[channel][grid] = channel(pixel, channel).toShort()
+                    }
+                    if (shape == IconSampleShape.FINE) {
+                        samples[LUMINANCE][grid] = luminance(pixel).toShort()
+                        samples[GRADIENT][grid] = localGradient(frame, frameX, frameY, target).toShort()
+                    }
+                    grid++
+                }
+            }
+            return samples
+        }
+
+        private fun localGradient(image: PixelImage, x: Int, y: Int, bounds: EntryPixelRect): Int {
+            val right = (x + 1).coerceAtMost(bounds.left + bounds.width - 1)
+            val bottom = (y + 1).coerceAtMost(bounds.top + bounds.height - 1)
+            val previousX = (x - 1).coerceAtLeast(bounds.left)
+            val previousY = (y - 1).coerceAtLeast(bounds.top)
+            return kotlin.math.abs(luminance(image[right, y]) - luminance(image[previousX, y])) +
+                kotlin.math.abs(luminance(image[x, bottom]) - luminance(image[x, previousY]))
+        }
+
+        private fun channel(color: Int, channel: Int): Int = when (channel) {
+            0 -> color ushr 16 and 0xff
+            1 -> color ushr 8 and 0xff
+            else -> color and 0xff
+        }
+
+        private fun luminance(color: Int): Int =
+            (channel(color, 0) * 299 + channel(color, 1) * 587 + channel(color, 2) * 114 + 500) / 1000
+
         const val LUMINANCE = 3
         const val GRADIENT = 4
-        const val ICON_CROP_TOP = 20
-        const val ICON_CROP_HEIGHT = 80
-
-        const val COARSE_SAMPLE_WIDTH = 12
-        const val COARSE_SAMPLE_HEIGHT = 9
-        const val SCORE_SAMPLE_WIDTH = 20
-        const val SCORE_SAMPLE_HEIGHT = 12
-
         const val MAX_ICON_CANDIDATES = 512
         const val MIN_ICON_CANDIDATES = 64
         const val MAX_EXPOSED_CHARACTER_CANDIDATES = 5

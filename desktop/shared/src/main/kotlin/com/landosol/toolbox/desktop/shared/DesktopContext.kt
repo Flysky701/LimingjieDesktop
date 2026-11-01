@@ -3,12 +3,17 @@ package com.landosol.toolbox.desktop.shared
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.res.AssetManager
+import com.landosol.toolbox.labyrinth.LabyrinthCharacterAttribute
+import com.landosol.toolbox.labyrinth.vision.LabyrinthCompiledIconSource
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONObject
 
-class DesktopContext(val dataDir: File, private val onRecovered: (File) -> Unit = {}) : Context() {
+class DesktopContext(val dataDir: File, private val onRecovered: (File) -> Unit = {}) : Context(), LabyrinthCompiledIconSource {
+    override fun characterIconMatcher(attributes: Map<String, LabyrinthCharacterAttribute?>) =
+        DesktopCharacterIconPack.load(attributes)
+
     override val assets = AssetManager()
     override val applicationContext: Context get() = this
     override val filesDir = File(dataDir, "files").apply { mkdirs() }

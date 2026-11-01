@@ -10,6 +10,11 @@ import com.landosol.toolbox.labyrinth.LabyrinthCharacterAttribute
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+/** A platform may ship samples prepared from the same icon assets at build time. */
+interface LabyrinthCompiledIconSource {
+    fun characterIconMatcher(attributes: Map<String, LabyrinthCharacterAttribute?>): LabyrinthCharacterIconMatcher
+}
+
 /** Loads every indexed character icon and its preferred CN name for battle-page matching. */
 class AndroidLabyrinthBattleTeamTemplateLoader(
     private val context: Context,
@@ -21,6 +26,11 @@ class AndroidLabyrinthBattleTeamTemplateLoader(
 
     fun loadMatcher(
         characterAttributes: Map<String, LabyrinthCharacterAttribute?> = emptyMap(),
+    ): LabyrinthCharacterIconMatcher = (context as? LabyrinthCompiledIconSource)?.characterIconMatcher(characterAttributes)
+        ?: sampleImages(characterAttributes)
+
+    internal fun sampleImages(
+        characterAttributes: Map<String, LabyrinthCharacterAttribute?>,
     ): LabyrinthCharacterIconMatcher = LabyrinthCharacterIconMatcher(templates(characterAttributes))
 
     private fun templates(
