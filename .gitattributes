@@ -17,3 +17,6 @@ android/app/src/test/resources/*-golden.txt text eol=lf
 
 # This OCR resource is verified byte-for-byte against its pinned SHA-256.
 desktop/ocr/src/main/resources/ocr/ppocrv5_dict.txt text eol=lf
+
+# The desktop OCR adapter contract is checked against the exact Android source bytes.
+android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidChineseRoleNameOcr.kt text eol=lf
