@@ -5,7 +5,7 @@ plugins {
     alias(libs.plugins.compose) apply false
     alias(libs.plugins.ksp) apply false
 }
-allprojects { group = "com.landosol.toolbox.desktop"; version = "1.0.18+desktop.12" }
+allprojects { group = "com.landosol.toolbox.desktop"; version = "1.0.18+desktop.13" }
 
 subprojects {
     tasks.withType<Test>().configureEach {
