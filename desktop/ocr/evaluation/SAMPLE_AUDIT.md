@@ -1,27 +1,27 @@
-# 现有真实素材覆盖审计
+# 真实素材覆盖盘点
 
-日期：2026-10-25。只读核查主仓库上游截图、测试与资源；不访问旧项目或真实账号数据，不生成图片、不重复缩放充数。本次只追加一条有明确业务 ROI 和真值的样本；原 14 条与原匹配器保持不变，评估结果由主分支运行后记录。
+本文说明 `manifest.json` 现有 15 条真实 ROI 样本的来源，以及仓库内其余测试截图未直接计入实体评估清单的原因。
 
-## 可正式追加的样本
+## 已纳入的扩展样本
 
-`android/app/src/test/resources/labyrinth/node-target-missed-20260916.jpg` 中，地图左下唯一绿色 HP 标记旁计数为 **1**。使用 `AndroidLabyrinthNodeRelicStackResolver.kt:211` 的首个 `OCR_DIGIT_RECTS`（360,970,48,48）及原 `OCR_SCALE=4`，调用现有 `node-stack` matcher。此图之前未进入清单；不重复计入相同数字/同帧的其他缩放。
+- `android/app/src/test/resources/labyrinth/node-target-missed-20260916.jpg`：取地图左下绿色 HP 标记旁计数 **1**，使用 `AndroidLabyrinthNodeRelicStackResolver.kt` 的首个 `OCR_DIGIT_RECTS` `(360,970,48,48)` 与 `OCR_SCALE=4`，对应 `node-stack` 匹配器。
+- 纳入后合计 **15 条**（商店 3、详情 2、堆叠 7、角色奖励 0、事件 2、EX 1）。
 
-追加后共 **15/80**：商店 3、详情 2、堆叠 7、角色奖励 0、事件 2、EX 1。总量仍缺 65；各类达到 8 分别缺 5/6/1/8/6/7。
+## 未计入实体准确率清单的现有素材
 
-## 六条商店标题只保留为转写候选
+### 1. 普通遗物商店标题（6 条）
 
-以下均来自已有截图，可目视读取，但本次不计入实体解析准确率：
+| 原图（相对 `android/app/src/test/resources/`） | 顶部三项标题 | 说明 |
+| --- | --- | --- |
+| `shop/live_shop_20260909.jpg` | 强化宝石；魔护灵装；回生杖 | 实体 ID（14001/25004/15001）由图标模板识别决定 |
+| `shop/shop.png` | 贵族之刀；进化之耳环；再生之手镯 | 仅归类为 `SHOP` 页面，未绑定遗物 ID 真值 |
 
-| 原图（相对 `android/app/src/test/resources/`） | 顶部三项原文 | 已有证据 |
-|---|---|---|
-| `shop/live_shop_20260909.jpg` | 强化宝石；魔护灵装；回生杖 | `LabyrinthEntryFrameProcessorTest.kt:415-436` 对同图的原图标识别断言 ID 为 14001/25004/15001 |
-| `shop/shop.png` | 贵族之刀；进化之耳环；再生之手镯 | 同测试文件 `video shop flow recognizes the page, purchase dialog, completion, and exit dialog` 对该图归类 SHOP；标题目视转写，未推断遗物 ID |
+`AndroidLabyrinthShopItemResolver` 对普通遗物仅要求标题 OCR 非空且图标已识别，只有职能印记通过 `shop-imprint` 文本匹配器解析实体。因此普通遗物标题仅可作为转写参考，不计入 `shop-imprint` 实体解析指标。
 
-原因：`AndroidLabyrinthShopItemResolver` 通过 `LabyrinthShopCategoryResolution.resolve` 将文字送入原分类器；普通遗物只要求“文字非空且图标已识别”，实体 ID 来自图标，不来自标题。现有 `shop-imprint` matcher 只解析职能印记。把任意非空普通遗物 OCR 都算成功会稀释质量指标；另写名称匹配器又不再是原业务匹配器。后续可单独报告这些图的字符错误率，不改变当前实体指标含义。底部印记虽可见，但不在原 resolver 三个顶部标题 ROI 中，本次也未加入。
+### 2. 角色奖励与其他类别
 
-## 角色奖励与其他稀缺类别
+- **角色姓名裁片**：`vision/initial_role_reward/characters/character_{1335,1233,1256}_name.png` 为局部姓名模板，缺少原始整帧截图与 resolver ROI 映射（且 1256 截图字形与标准显示名存在差异），暂不作为整帧实采样本。
+- **角色加入弹窗**：`labyrinth/shop-character-joined-20260915.png` 与 `guild-bonus-joined-20260917.png` 属于 `CHARACTER_JOINED` 页面，而非三选一 `ROLE_REWARD`。
+- **其他非对应页面**：`ex/ex_monster_detail_live_20260910.jpg` 实为战斗失败页，`labyrinth/ex-antimatter-beast-20260911.png` 实为助手日志界面，均非 EX 遭遇详情页。
 
-- `vision/initial_role_reward/characters/character_{1335,1233,1256}_name.png` 三张模板可读，`LabyrinthEntryFrameProcessorTest.kt:1364-1383` 将其绑定到咲恋（新年）/涅娅/碧卡拉及对应 ID。它们是姓名裁片，仓库缺少原始完整截图、裁剪来源及真实 resolver ROI 对应关系；不按三条正式实采样本计入。即使后续补齐出处，也只有三条，仍少于八条。1256 截图用字与资源显示名不同，不能为通过 OCR 擅自改字或重写别名规则。
-- `labyrinth/shop-character-joined-20260915.png`（千歌（礼服））和 `guild-bonus-joined-20260917.png`（拉比莉斯塔）属于 `CHARACTER_JOINED` 弹窗，不是三选一 `ROLE_REWARD`；不混算。`LabyrinthRoleRewardTextIdentityTest` 的合成字符串/ID 不构成截图样本。测试引用的外部 `素材/ui/黎明界进入` 原图目录在当前仓库不存在。
-- 系列效果详情只有已纳入的 `series-effect-panel-20261012.jpg`；遗物获得弹窗不替代系列详情。事件无奖励/移动确认弹窗不替代事件选项。`ex/ex_monster_detail_live_20260910.jpg` 实际是战斗失败画面；`labyrinth/ex-antimatter-beast-20260911.png` 实际是助手状态日志，不能按文件名记为 EX 遭遇。
-- 上游截图目录共有约 55 张图，另有连续结果帧、队伍页、对话框和诊断页。文件数不等于六类有效 OCR 样本数。现存素材不足以完成总量 80、每类 8；需补采有真实业务 ROI 与实体真值的角色奖励、系列详情、事件和 EX，堆叠仍缺至少一条。
+后续补充样本需采集包含完整游戏画面、对应 resolver ROI 及明确实体真值的角色奖励、系列详情、事件、EX 与地图堆叠截图。
