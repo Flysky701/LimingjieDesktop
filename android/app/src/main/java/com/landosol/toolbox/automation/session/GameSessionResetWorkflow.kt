@@ -15,6 +15,7 @@ import com.landosol.toolbox.automation.overlay.AutomationOverlayPresentation
 import com.landosol.toolbox.automation.overlay.AutomationOverlaySessionHandler
 import com.landosol.toolbox.labyrinth.LabyrinthEntryActionDecision
 import com.landosol.toolbox.labyrinth.LabyrinthEntryActionPlanner
+import com.landosol.toolbox.labyrinth.vision.EntryAnchorId
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import java.util.concurrent.atomic.AtomicBoolean
@@ -152,7 +153,7 @@ class GameSessionResetWorkflow(
     @Volatile
     private var activeSessionId: AutomationSessionId? = null
     private var lease: com.landosol.toolbox.automation.capture.CaptureFrameConsumerLease? = null
-    private var stage: GameSessionResetStage = GameSessionResetStage.PENDING
+    @Volatile private var stage: GameSessionResetStage = GameSessionResetStage.PENDING
     private var stableStageFrames = 0
     private var lastStageChangeAt = Long.MIN_VALUE
 
@@ -492,7 +493,7 @@ class GameSessionResetWorkflow(
                 // the total timeout (for example a rotation that outlasted the capture grace).
                 error(CaptureStateRegistry.lastStopReason() ?: "屏幕捕获已停止，请重新授权")
             }
-            if (stage == GameSessionResetStage.FAILED) error("会话重置失败")
+            if (stage == GameSessionResetStage.FAILED) error(_state.value.message ?: "会话重置失败")
             if (stage == GameSessionResetStage.SESSION_BLOCKED) {
                 onBlocked(sessionId, _state.value.lastBlock)
                 error("会话被阻塞：${_state.value.lastBlock}")
@@ -595,6 +596,7 @@ class GameSessionResetWorkflow(
         if (!inFlight.compareAndSet(false, true)) return
         actionScope.launch {
             try {
+                if (stage == GameSessionResetStage.FAILED || stage == GameSessionResetStage.READY_FOR_NEXT_ROUND) return@launch
                 if (clock() < channelPromptVisibleUntil) {
                     // A white SDK dialog can also score as a session prompt; neither the block
                     // classifier nor the entry planner may act on it while the poll owns it.
@@ -632,12 +634,16 @@ class GameSessionResetWorkflow(
                     _state.value = _state.value.copy(message = "识别客户端当前页面：${pageState.name}")
                     return@launch
                 }
+                val readyDecision = gameSessionResetReadyDecision(stage, pageState)
+                // A frame recorded before the relaunch cannot prove a cold start or finish it.
+                if (readyDecision == GameSessionResetReadyDecision.HOLD_FOR_TERMINATION) {
+                    _state.value = _state.value.copy(message = "等待旧会话失效（当前页面 ${pageState.name}）")
+                    return@launch
+                }
                 coldStartGate?.let { gate ->
-                    when (gate.observe(pageState)) {
+                    when (gate.observe(pageState, EntryAnchorId.TITLE_LOGO in result.matchedFeatures)) {
                         ColdStartVerdict.CONFIRMED -> Unit
-                        ColdStartVerdict.PENDING -> if (pageState != LabyrinthEntryPageState.UNKNOWN &&
-                            pageState != LabyrinthEntryPageState.GAME_LOADING_PROGRESS
-                        ) {
+                        ColdStartVerdict.PENDING -> {
                             _state.value = _state.value.copy(message = "确认冷启动：等待标题页（当前 ${pageState.name}）")
                             return@launch
                         }
@@ -651,20 +657,9 @@ class GameSessionResetWorkflow(
                         }
                     }
                 }
-                // While the terminator is still driving the client (TERMINATING / RELAUNCHING) the
-                // screen is by definition the *old* labyrinth home; recognising it as "ready" here
-                // would let the entry planner tap 出发 on stale state. Only frames observed after
-                // the flow has moved into the login/navigation phase may complete the reset.
-                when (gameSessionResetReadyDecision(stage, pageState)) {
-                    GameSessionResetReadyDecision.HOLD_FOR_TERMINATION -> {
-                        _state.value = _state.value.copy(message = "等待旧会话失效（当前页面 ${pageState.name}）")
-                        return@launch
-                    }
-                    GameSessionResetReadyDecision.READY -> {
-                        markReady(sessionId, "已回到黎明界，可以开始下一轮")
-                        return@launch
-                    }
-                    GameSessionResetReadyDecision.CONTINUE -> Unit
+                if (readyDecision == GameSessionResetReadyDecision.READY) {
+                    markReady(sessionId, "已回到黎明界，可以开始下一轮")
+                    return@launch
                 }
                 if (
                     pageState == LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION ||
@@ -752,11 +747,12 @@ class GameSessionResetWorkflow(
     }
 
     private fun markFailed(sessionId: AutomationSessionId, message: String) {
-        stage = GameSessionResetStage.FAILED
+        Log.w(LOG_TAG, "会话重置停止：$message")
         _state.value = _state.value.copy(
             stage = GameSessionResetStage.FAILED,
             message = message,
         )
+        stage = GameSessionResetStage.FAILED
         overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
     }
 

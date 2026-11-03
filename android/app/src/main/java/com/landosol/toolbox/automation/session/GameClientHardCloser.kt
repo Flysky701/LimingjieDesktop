@@ -144,9 +144,10 @@ class ColdStartTitleGate(private val requiredSightings: Int = 2) {
         require(requiredSightings > 0)
     }
 
-    fun observe(page: LabyrinthEntryPageState): ColdStartVerdict {
+    fun observe(page: LabyrinthEntryPageState, titleLogoMatched: Boolean = false): ColdStartVerdict {
         if (confirmed) return ColdStartVerdict.CONFIRMED
-        if (page == LabyrinthEntryPageState.TITLE_WAITING_TAP) {
+        if (page == LabyrinthEntryPageState.TITLE_WAITING_TAP ||
+            (page == LabyrinthEntryPageState.GAME_LOADING_PROGRESS && titleLogoMatched)) {
             confirmed = true
             return ColdStartVerdict.CONFIRMED
         }
@@ -164,6 +165,7 @@ class ColdStartTitleGate(private val requiredSightings: Int = 2) {
         val BEFORE_TITLE = setOf(
             LabyrinthEntryPageState.UNKNOWN,
             LabyrinthEntryPageState.GAME_LOADING_PROGRESS,
+            LabyrinthEntryPageState.PRE_HOME_DATA_LOADING,
         )
     }
 }

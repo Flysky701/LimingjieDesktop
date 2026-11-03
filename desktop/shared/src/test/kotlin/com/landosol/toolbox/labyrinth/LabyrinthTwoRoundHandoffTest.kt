@@ -41,10 +41,14 @@ class LabyrinthTwoRoundHandoffTest {
     @Test fun `lingering score frame still completes both rounds when chest frames are missed`() =
         replay(false, lateScoreFrame = true, chestObserved = false)
 
+    @Test fun `winning opening survives a minute of title data loading and starts the run`() =
+        replay(false, slowColdStart = true)
+
     private fun replay(
         unexpectedResultAfterTitle: Boolean,
         lateScoreFrame: Boolean = false,
         chestObserved: Boolean = true,
+        slowColdStart: Boolean = false,
     ) = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = AutomationSessionManager()
@@ -85,6 +89,10 @@ class LabyrinthTwoRoundHandoffTest {
                 LabyrinthBatchRerollResult.Success(100L + resets)
             override suspend fun invalidateClientSessionAndReturn(accountId: Long): LabyrinthBatchInvalidationResult {
                 resets++
+                val cold = slowColdStart && resets == 1
+                val resetTime = AtomicLong(1_000)
+                val loading = page(EntryAnchorId.TITLE_LOGO, EntryAnchorId.LOADING_PROGRESS)
+                    .copy(matchedFeatures = listOf(EntryAnchorId.TITLE_LOGO, EntryAnchorId.LOADING_PROGRESS))
                 val tracker = SessionExpiryFrameTracker().apply { trackFrame(1920, 1080); record(visible.get()) }
                 val terminator = AnchorTriggerSessionExpiryTerminator(
                     onTap = {
@@ -105,7 +113,11 @@ class LabyrinthTwoRoundHandoffTest {
                 )
                 val reset = GameSessionResetWorkflow(
                     sessionManager = manager,
-                    backend = CompositeSessionResetBackend(terminator, Relauncher { error("No process launch allowed") }),
+                    backend = CompositeSessionResetBackend(terminator, Relauncher {
+                        check(cold)
+                        visible.set(loading)
+                        GameClientRelaunchResult.LAUNCH_REQUESTED
+                    }),
                     captureActive = { true }, processorFactory = { { captured ->
                         tracker.trackFrame(captured.bitmap.width, captured.bitmap.height)
                         visible.get().also(tracker::record)
@@ -115,6 +127,7 @@ class LabyrinthTwoRoundHandoffTest {
                         result.observation.stateScores[LabyrinthEntryPageState.TITLE_WAITING_TAP] ?: 0.0,
                     ) }, presence = FixedGameClientPresenceObserver(true),
                     actionScope = scope, totalTimeoutMillis = 15_000,
+                    clock = if (cold) resetTime::get else System::currentTimeMillis,
                     onNextRoundReady = { readyCallbacks++ },
                     actionExecutor = SessionBoundActionExecutor(manager) {
                         visible.set(when (visible.get().observation.state) {
@@ -128,9 +141,12 @@ class LabyrinthTwoRoundHandoffTest {
                     entryActionPlannerFactory = { LabyrinthEntryActionPlanner(
                         LabyrinthEntryActionPlannerConfig(pageActionIntervalMillis = 1, titleTapIntervalMillis = 1)) },
                 )
-                assertTrue(reset.start() is GameSessionResetStartResult.Started)
+                assertTrue(reset.start(clientHardClosed = cold) is GameSessionResetStartResult.Started)
                 val replay = scope.launch {
                     while (reset.state.value.running) {
+                        if (cold && resetTime.addAndGet(5_000) >= 66_000 && visible.get() === loading) {
+                            visible.set(home)
+                        }
                         CaptureFrameBus.dispatch(CapturedFrame(
                             Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888), System.currentTimeMillis()))
                         delay(250)
@@ -161,7 +177,7 @@ class LabyrinthTwoRoundHandoffTest {
         }
         try {
             assertTrue(batch.start("recorded-two-rounds", 1, listOf(LabyrinthBatchGoal(1, 2, LabyrinthBatchGoalMode.CLEARS)), 1))
-            assertEquals(1, readyCallbacks)
+            assertEquals(batch.state.value?.message, 1, readyCallbacks)
             // Ordinary battle results do not produce a whole-run terminal outcome.
             val ordinary = page(EntryAnchorId.BATTLE_RESULT_NEXT_BUTTON)
             val collector = LabyrinthRunScoreCollector()

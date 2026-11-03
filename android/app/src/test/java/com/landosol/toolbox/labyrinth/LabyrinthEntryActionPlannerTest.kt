@@ -537,6 +537,17 @@ class LabyrinthEntryActionPlannerTest {
     }
 
     @Test
+    fun `confirmed loading spends no fallback taps before the home announcement`() {
+        val planner = LabyrinthEntryActionPlanner(LabyrinthEntryActionPlannerConfig(stableFrames = 1))
+        assertTrue(decide(planner, LabyrinthEntryPageState.TITLE_WAITING_TAP, 0L) is LabyrinthEntryActionDecision.Execute)
+        for (second in 1L..65L) {
+            val page = if (second <= 60) LabyrinthEntryPageState.GAME_LOADING_PROGRESS else LabyrinthEntryPageState.PRE_HOME_DATA_LOADING
+            assertTrue(decide(planner, page, second * 1_000) is LabyrinthEntryActionDecision.Wait)
+        }
+        assertTrue(decide(planner, LabyrinthEntryPageState.HOME_ANNOUNCEMENT, 66_000L) is LabyrinthEntryActionDecision.Execute)
+    }
+
+    @Test
     fun `unknown clicks are allowed only inside bounded pre announcement phase`() {
         val planner = LabyrinthEntryActionPlanner(
             LabyrinthEntryActionPlannerConfig(

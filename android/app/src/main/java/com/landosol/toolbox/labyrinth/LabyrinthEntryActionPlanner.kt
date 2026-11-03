@@ -236,10 +236,15 @@ class LabyrinthEntryActionPlanner(
 
             LabyrinthEntryPageState.GAME_LOADING_PROGRESS,
             LabyrinthEntryPageState.PRE_HOME_DATA_LOADING,
-            -> planPreAnnouncementClick(nowMillis, frameWidth, frameHeight, allowStartingPhase = true)
+            -> {
+                // Network loading is passive. Allow a bounded fallback on subsequent UNKNOWN
+                // frames without spending a tap on the progress bar.
+                preAnnouncementStartedAt = nowMillis
+                LabyrinthEntryActionDecision.Wait("游戏正在加载，等待数据连接完成")
+            }
 
             LabyrinthEntryPageState.UNKNOWN ->
-                planPreAnnouncementClick(nowMillis, frameWidth, frameHeight, allowStartingPhase = false)
+                planPreAnnouncementClick(nowMillis, frameWidth, frameHeight)
 
             LabyrinthEntryPageState.HOME_ANNOUNCEMENT -> {
                 preAnnouncementStartedAt = Long.MIN_VALUE
@@ -789,11 +794,9 @@ class LabyrinthEntryActionPlanner(
         nowMillis: Long,
         frameWidth: Int,
         frameHeight: Int,
-        allowStartingPhase: Boolean,
     ): LabyrinthEntryActionDecision {
         if (preAnnouncementStartedAt == Long.MIN_VALUE) {
-            if (!allowStartingPhase) return LabyrinthEntryActionDecision.Wait("未知页面禁止启动点击")
-            preAnnouncementStartedAt = nowMillis
+            return LabyrinthEntryActionDecision.Wait("未知页面禁止启动点击")
         }
         if (nowMillis - preAnnouncementStartedAt > config.preAnnouncementTimeoutMillis) {
             return LabyrinthEntryActionDecision.Stop("公告前受限点击超时")

@@ -1,6 +1,6 @@
 # 桌面开发与构建
 
-当前业务逻辑解耦测试版为 **1.0.18+desktop.13.logic.4**。独立 Gradle 多模块工程，使用 x64 JDK 21，桌面构建无需 Android SDK。
+当前业务逻辑解耦测试版为 **1.0.18+desktop.13.logic.5**。独立 Gradle 多模块工程，使用 x64 JDK 21，桌面构建无需 Android SDK。
 
 业务模块位置、兼容接线和本次构建范围见 [逻辑拆解记录](../docs/desktop/registers/LOGIC_DECOMPOSITION.md)。
 
