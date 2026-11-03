@@ -1,4 +1,5 @@
 package com.landosol.toolbox.labyrinth
+import com.landosol.toolbox.gamedata.RelicResource
 import android.util.Log
 import com.landosol.toolbox.automation.AutomationMode
 import com.landosol.toolbox.automation.AutomationSessionId
@@ -98,6 +99,9 @@ class LabyrinthEntryRecognitionSession(
     /** Channel SDK login dialogs (九游) on the way from the title, read via accessibility. */
     internal val channelPrompts: com.landosol.toolbox.automation.session.ChannelLoginPromptAssistant? = null,
     internal val actionScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    internal val scoreLedger: ScoreRunLedger? = null,
+    internal val mayRetireForScoreEvent: () -> Boolean = { false },
+    private val relicCatalog: () -> List<RelicResource> = { emptyList() },
 ) {
 
 
@@ -732,6 +736,7 @@ class LabyrinthEntryRecognitionSession(
         }
         configureRunStrategy(strategySnapshot)
         val initialRunSnapshot = try {
+            relicChoicePolicy.useOpening(executionRoute, if (executionRoute?.openingRelicIds.isNullOrEmpty() && !shopPolicy.highScore) emptyList() else relicCatalog())
             runStateStore?.begin(accountId, clock())
         } catch (failure: Throwable) {
             sessionManager.stop(session.id)

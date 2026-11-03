@@ -35,9 +35,29 @@ import java.time.format.DateTimeFormatter
     var message by remember { mutableStateOf<String?>(null) }
     ReportControlDirty("strategy",edit)
     val scope = rememberCoroutineScope()
+    fun saveStrategy(value: LabyrinthStrategySettings) {
+        if (saving) return
+        saving = true
+        message = null
+        scope.launch {
+            try {
+                graph.labyrinthStrategySettings.save(value)
+                graph.log.add("策略已保存，下次任务生效")
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Exception) { message = failure.message ?: "保存失败，请重试" }
+            finally { saving = false }
+        }
+    }
     if(ratings) { RoleRatingsPage(graph) { ratings=false };return }
     PageBody("策略", "全局配置 · 保存后从下一次识别或自动执行生效。") {
         Panel("当前策略") {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("一键凹分")
+                Switch(checked = saved.highScorePreset, enabled = !saving && !edit,
+                    onCheckedChange = { saveStrategy(saved.copy(highScorePreset = it)) })
+                Text(if (saved.highScorePreset) "凹分 · 有限筛图与商店预算" else "日常 · 直接执行")
+            }
+            if (!edit) message?.let { Text(it) }
             Detail("玩家评分", "${saved.playerWeight}%")
             Detail("个人评分", "已修改 ${saved.personalRoleScores.size} 个角色")
             Detail("Boss 编组", if (saved.bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM) "多队编组" else "单队编组")
@@ -54,15 +74,7 @@ import java.time.format.DateTimeFormatter
     }
     if (edit) BoundStrategyDialog { LabyrinthStrategySettingsScreen(saved = saved, saving = saving, message = message,
         loadRoleRatings = graph::loadLabyrinthRoleRatings, onClose = { edit = false; message = null },
-        onSave = { value -> if (!saving) {
-            saving = true; message = null
-            scope.launch {
-                try { graph.labyrinthStrategySettings.save(value); graph.log.add("策略配置已保存，下次启动生效") }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (failure: Exception) { message = failure.message ?: "保存失败，请重试" }
-                finally { saving = false }
-            }
-        } }) }
+        onSave = ::saveStrategy) }
 }
 
 @Composable internal fun AccountsPage(graph: ControlSessionUi,bindings:Map<Long,List<String>> = emptyMap(),shared:Boolean=false) {

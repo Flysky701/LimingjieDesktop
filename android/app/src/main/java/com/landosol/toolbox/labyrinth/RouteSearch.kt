@@ -28,6 +28,7 @@ data class LabyrinthRoutePolicy(
     val thirdBlockChoice: LabyrinthThirdBlockChoice = LabyrinthThirdBlockChoice.EITHER,
     val area3BossIds: Set<Int> = LabyrinthRerollOptions.defaultArea3BossIds,
     val area5BossIds: Set<Int> = LabyrinthRerollOptions.defaultArea5BossIds,
+    val highScore: Boolean = false,
 ) {
     fun targetAreas(difficulty: Int): List<Int> = if (difficulty == 1) listOf(1, 2, 3) else AREA_REQUIREMENTS.keys.toList()
 
@@ -264,6 +265,9 @@ class LabyrinthOpeningRouteMatcher(
         policy: LabyrinthRoutePolicy,
         currentBlockId: Long? = null,
     ): RouteSearchResult {
+        if (policy.highScore && difficulty == 5) {
+            return highScoreRoute(enterId, nodes, policy, currentBlockId)
+        }
         if (policy.evaluationMode == LabyrinthRouteEvaluationMode.VALUE_ROUTE) {
             return searchValueRoute(enterId, nodes, difficulty, policy, currentBlockId)
         }

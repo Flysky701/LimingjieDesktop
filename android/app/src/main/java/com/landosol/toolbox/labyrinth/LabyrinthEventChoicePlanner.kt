@@ -84,12 +84,20 @@ class LabyrinthEventChoicePlanner(
         // "Currently usable" means the bright blue, not merely blue: the game dims an option the
         // player cannot afford but keeps it blue, so the dimmed fill used to pass this filter and
         // the run tapped a 消耗2000 option holding 1,550 coins until it gave up.
-        val best = selectable.firstOrNull { evaluated ->
+        val usable = selectable.filter { evaluated ->
             visualsByChoiceId[evaluated.choice.id]
                 ?.enabledConfidence
                 ?.let { it >= MINIMUM_ENABLED_BUTTON_CONFIDENCE }
                 ?: false
-        } ?: selectable.first()
+        }
+        // Take a known immediate reward over an optional extra battle, paid option or chain.
+        // If all choices need another step, keep their original utility order.
+        val scoreTarget = if (strategy.highScorePreset) SCORE_EVENT_OPTIONS[event.id] else null
+        val best = usable.firstOrNull { it.choice.id == scoreTarget } ?: usable.firstOrNull {
+            it.choice.id.toIntOrNull() !in EXTRA_ACTION_CHOICES && it.choice.conditionValue == 0 &&
+                (it.utility > 0.0 || it.choice.id in BANKED_REWARDS)
+        }
+            ?: usable.firstOrNull() ?: selectable.first()
         val visual = observation.choices.firstOrNull { it.choice.id == best.choice.id }
             ?: return LabyrinthEventChoiceDecision.Wait("事件${event.id}推荐项${best.choice.id}没有按钮映射")
         val missingOwnedProfiles = canonicalAcquired.filterNot(profiles::containsKey)
@@ -377,6 +385,9 @@ class LabyrinthEventChoicePlanner(
             11131 to (true to 400), 11132 to (false to 600),
             11171 to (true to 500), 11172 to (false to 750),
         )
+        val SCORE_EVENT_OPTIONS = mapOf("1105" to "11052", "1111" to "11111")
+        val BANKED_REWARDS = setOf("23162", "33162")
+        val EXTRA_ACTION_CHOICES = BATTLE_REWARDS.keys + setOf(13141, 23141, 13151, 23151, 33151, 13161, 23161, 33161)
         val CONTINUATION_CHOICES = mapOf(
             2314 to listOf(23141), 3314 to listOf(33141),
             2315 to listOf(23152, 23151), 3315 to listOf(33152, 33151),

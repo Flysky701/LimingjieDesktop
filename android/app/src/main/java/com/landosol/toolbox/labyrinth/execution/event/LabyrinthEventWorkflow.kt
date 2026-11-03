@@ -14,6 +14,7 @@ import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.MAX_EVENT_CHOICE_
 import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.POST_ENTRY_ACTION_INTERVAL_MILLIS
 
 internal interface LabyrinthEventPort {
+    fun requestScoreRestart(sessionId: AutomationSessionId, reason: String): Boolean
     val _state: MutableStateFlow<LabyrinthEntryRecognitionSessionState>
     val actionInFlight: AtomicBoolean
     var activeNodeArea: Int?
@@ -326,8 +327,17 @@ internal class LabyrinthEventWorkflow(private val port: LabyrinthEventPort) : La
         }
     }
 
+    private fun rejectOffTargetEvent(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult): Boolean {
+        val route = validatedRoute?.takeIf { it.seekScoreEvent } ?: return false
+        val node = labyrinthPersistedCurrentNode(route)?.takeIf { it.blockType == LabyrinthRoutePolicy.EVENT_BLOCK_TYPE } ?: return false
+        val event = result.eventChoiceSelection?.takeIf { it.trusted }?.event ?: return false
+        val wanted = when (node.area to node.column) { 1 to 5 -> "1105"; 2 to 2 -> "1111"; else -> return false }
+        return event.id != wanted && requestScoreRestart(sessionId, "凹分目标事件 $wanted，已确认本格为 ${event.id}")
+    }
+
     fun planEventChoice(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, timestampMillis: Long): LabyrinthPostEntryTapPlan? =
-if (
+            if (!eventChoiceCommitted && rejectOffTargetEvent(sessionId, result)) null
+            else if (
                 eventChoiceCommitted &&
                 !labyrinthEventChoiceCommitExpired(eventChoiceCommittedAt, timestampMillis)
             ) {

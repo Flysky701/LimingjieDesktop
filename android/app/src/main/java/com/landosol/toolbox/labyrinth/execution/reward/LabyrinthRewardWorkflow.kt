@@ -336,6 +336,7 @@ run {
                         nodeLog("relic-choice-retry attempts=$relicChoiceCommitAttempts", warning = true)
                     }
                     relicChoicePolicy.choose(
+                        freeReward = true,
                         acquired = _state.value.observedRelics,
                         candidates = result.relicChoiceSelection?.choices.orEmpty(),
                         lockedFocus = relicFocusMark,

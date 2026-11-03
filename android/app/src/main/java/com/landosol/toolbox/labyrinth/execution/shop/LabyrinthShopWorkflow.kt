@@ -18,6 +18,9 @@ import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.SHOP_REFRESH_TRAN
 
 internal interface LabyrinthShopPort {
     val _state: MutableStateFlow<LabyrinthEntryRecognitionSessionState>
+    val scoreLedger: ScoreRunLedger?
+    val validatedRoute: LabyrinthRouteJson?
+    val activeRunAccountId: Long?
     val activeNodeArea: Int?
     var activeNodeType: Int?
     val activeSessionId: AutomationSessionId?
@@ -60,6 +63,16 @@ internal interface LabyrinthShopPort {
 
 /** 管理购买计划、商品核对、购买回执和刷新轮次。 */
 internal class LabyrinthShopWorkflow(private val port: LabyrinthShopPort) : LabyrinthShopPort by port {
+    private fun withVisit(action: (ScoreRunLedger, Long, Long, Long) -> Unit): Boolean {
+        if (!shopPolicy.highScore) return false
+        val ledger = scoreLedger ?: return false
+        val account = activeRunAccountId ?: return false
+        val route = validatedRoute ?: return false
+        val node = labyrinthPersistedCurrentNode(route)?.takeIf { it.blockType == LabyrinthNodeTypes.SHOP } ?: return false
+        action(ledger, account, route.enterId, node.blockId)
+        return true
+    }
+
     fun clearPlannedShopPurchase() {
         plannedShopPurchaseRelicId = null
         plannedShopRoleImprintLabel = null
@@ -79,12 +92,17 @@ internal class LabyrinthShopWorkflow(private val port: LabyrinthShopPort) : Laby
             ?.score
             ?.let { it >= POST_ENTRY_ANCHOR_MIN_SCORE }
             ?: false
+        // Unknown visit identity permits purchases, but cannot spend a new refresh budget.
+        var visitRefreshes = Int.MAX_VALUE
+        withVisit { ledger, account, enter, node -> visitRefreshes = ledger.refreshes(account, enter, node) }
         return shopPolicy.decide(
             // Prefer the area of the node we actually tapped. routeProgress.currentArea can lag
             // behind while the post-entry shop page is already visible, which previously caused
             // an area-4 shop to fall through into relic recognition and stop on missing metadata.
             currentArea = activeNodeArea ?: _state.value.routeProgress?.currentArea,
             items = shop.items,
+            shop = shop,
+            visitRefreshes = visitRefreshes,
             acquired = _state.value.observedRelics,
             calibratedStacks = relicMarkStackCalibration,
             refreshAvailable = refreshAnchorReady && shop.refreshButtonEnabled,
@@ -162,6 +180,7 @@ internal class LabyrinthShopWorkflow(private val port: LabyrinthShopPort) : Laby
                 )
             ) {
                 shopRelicPurchasesThisCycle = 0
+                withVisit { ledger, account, enter, node -> ledger.refreshConfirmed(account, enter, node) }
                 clearPlannedShopRefresh()
                 postEntryStableFrames = 0
                 postEntryAttempts = 0
@@ -390,6 +409,7 @@ internal class LabyrinthShopWorkflow(private val port: LabyrinthShopPort) : Laby
                             clearPlannedShopPurchase()
                         }
                         LabyrinthPostEntryActionKind.SHOP_CONFIRM_REFRESH -> {
+                            withVisit { ledger, account, enter, node -> ledger.refreshPending(account, enter, node) }
                             plannedShopRefreshConfirmedAt = clock()
                             postEntryStableFrames = 0
                             postEntryAttempts = 0

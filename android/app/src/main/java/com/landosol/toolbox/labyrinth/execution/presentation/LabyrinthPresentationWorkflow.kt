@@ -208,6 +208,7 @@ internal class LabyrinthPresentationWorkflow(private val port: LabyrinthPresenta
                         },
                     )
                     relicChoicePolicy.choose(
+                        freeReward = true,
                         acquired = current.observedRelics,
                         candidates = relics.choices,
                         calibratedStacks = relicMarkStackCalibration,

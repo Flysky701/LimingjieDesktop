@@ -192,6 +192,9 @@ fun LabyrinthStrategySettingsScreen(
                         onChange = { draft = draft.copy(relicMarkPriority = it) },
                     )
                 }
+                StrategySwitch("一键凹分预设", "日常默认关闭。开启后，难度5最多筛8张六EX路线；商店按余额与本店额度购买。无需外部组件。", draft.highScorePreset, !saving) {
+                    draft = draft.copy(highScorePreset = it)
+                }
                 StrategySection("商店", if (draft.buyRelics) "购买遗物 · ${if (draft.refreshShop) "区域 ${draft.refreshFromArea} 起刷新" else "不刷新"}" else "不购买", section, { section = it }) {
                     Text("遗物始终优先；达到允许刷新起始区域后，本轮遗物买完或当前商品行已无可购买遗物且刷新可用时，继续花300金币刷新。只有遗物/刷新都无法继续时，才用剩余金币购买已确认的职能印记。无法确认的商品不会盲买。")
                     StrategySwitch("购买遗物", "关闭后退出商店，也不会刷新。", draft.buyRelics, !saving) { draft = draft.copy(buyRelics = it) }

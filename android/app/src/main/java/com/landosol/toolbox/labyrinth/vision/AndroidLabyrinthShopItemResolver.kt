@@ -5,8 +5,10 @@ import android.graphics.Bitmap
 /** Every visible title is classified before a relic match can authorize a purchase. */
 class AndroidLabyrinthShopItemResolver(
     submitTextRead: (Bitmap, (String?) -> Unit) -> Unit = AndroidChineseRoleNameOcr::readAsync,
+    scoreShop: Boolean = false,
 ) {
     private val ocr = AndroidRelicRoiOcr(submitTextRead, maximumAttempts = 1)
+    private val prices = if (scoreShop) ShopPriceReader(submitTextRead) else null
     private val categories = LabyrinthShopCategoryResolution()
     private val accepted = mutableMapOf<String, Pair<Long, RelicOcrScheduler.Read>>()
 
@@ -15,6 +17,7 @@ class AndroidLabyrinthShopItemResolver(
         if (result.observation.state != LabyrinthEntryPageState.SHOP) {
             ocr.clear()
             categories.clear()
+            prices?.clear()
             accepted.clear()
             return result
         }
@@ -56,7 +59,8 @@ class AndroidLabyrinthShopItemResolver(
             }
             resolved
         }
-        return result.copy(shopObservation = shop.copy(items = items))
+        val classified = shop.copy(items = items)
+        return result.copy(shopObservation = prices?.observe(bitmap, classified) ?: classified)
     }
 
     private companion object {

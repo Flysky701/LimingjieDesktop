@@ -69,3 +69,7 @@
 - [ ] 没有格式化无关代码
 - [x] Android lintDebug、testDebugUnitTest、assembleDebug 全通过；见 evidence/android/result.json。1,247 项中 1,201 通过、46 个缺素材跳过、0 失败。
 - [ ] 桌面 `upstream-excludes.txt` 和分类表已同步
+
+## 日常策略与凹分预设
+
+共享 Kotlin 规则同时用于 Android 与桌面。日常只复用当前回复、已识别遗物和候选队伍。开局记录新增可缺省的遗物 ID；旧路线读取为空。凹分开关默认关闭，经策略保存后在下一次任务生效。商店价格识别、分区预算和六 EX 筛图仅在凹分预设启用；难度 5 筛图上限 8 次，已确认的不匹配目标事件最多在十分钟内换图两次。额外的工作台不属于这条执行路径。

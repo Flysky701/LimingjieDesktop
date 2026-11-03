@@ -88,12 +88,15 @@ data class LabyrinthRouteJson(
     val currentBlockId: Long? = null,
     val routeEvaluationMode: String = LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE.name,
     val valueAllowance: Int = 0,
+    val openingRelicIds: Set<Int> = emptySet(),
+    val seekScoreEvent: Boolean = false,
 ) {
     val blockIds: List<Long> get() = nodes.map(LabyrinthNodeJson::blockId)
 
     fun toLabyrinthRoute(): LabyrinthRoute = LabyrinthRoute(
         enterId = enterId,
         nodes = nodes.map { it.toLabyrinthMapNode() },
+        openingRelicIds = openingRelicIds,
     )
 
     fun toFullMap(): List<LabyrinthMapNode> = allNodes.map { it.toLabyrinthMapNode() }
@@ -169,6 +172,7 @@ private data class LabyrinthRoutePolicyJson(
     val area5BossIds: List<Int>,
     val routeEvaluationMode: String = LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE.name,
     val valueAllowance: Int = 0,
+    val highScore: Boolean = false,
 )
 
 class RoomLabyrinthRerollCheckpointStore(
@@ -230,6 +234,7 @@ private fun LabyrinthRoutePolicy.toJson() = LabyrinthRoutePolicyJson(
     area5BossIds = area5BossIds.sorted(),
     routeEvaluationMode = evaluationMode.name,
     valueAllowance = valueAllowance,
+    highScore = highScore,
 )
 
 private fun LabyrinthRoutePolicyJson.toDomain() = LabyrinthRoutePolicy(
@@ -242,10 +247,20 @@ private fun LabyrinthRoutePolicyJson.toDomain() = LabyrinthRoutePolicy(
     evaluationMode = runCatching { LabyrinthRouteEvaluationMode.valueOf(routeEvaluationMode) }
         .getOrDefault(LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE),
     valueAllowance = valueAllowance.coerceIn(0, LabyrinthRerollOptions.MAX_VALUE_ALLOWANCE),
+    highScore = highScore,
     thirdBlockChoice = LabyrinthThirdBlockChoice.valueOf(thirdBlockChoice),
     area3BossIds = area3BossIds.toSet(),
     area5BossIds = area5BossIds.toSet(),
 )
+
+// Guild entry_reward and the node-31 add_relic_id are deterministic catalog grants.
+private fun openingRelics(guildId: Int?, enhancedNodes: Set<Int>, owned: Set<Int>): Set<Int> = buildSet {
+    addAll(owned)
+    if (guildId != null && guildId in 1..5) {
+        add(40_000 + guildId)
+        if (31 in enhancedNodes) add(50_000 + guildId)
+    }
+}
 
 class RoomLabyrinthRouteStore(
     private val database: AppDatabase,
@@ -295,6 +310,8 @@ class RoomLabyrinthRouteStore(
             currentBlockId = currentBlockId,
             routeEvaluationMode = config.routePolicy.evaluationMode.name,
             valueAllowance = config.routePolicy.valueAllowance,
+            openingRelicIds = route.openingRelicIds,
+            seekScoreEvent = config.routePolicy.highScore && config.retireExisting && attempt < config.maxAttempts,
         )
         database.labyrinthRouteDao().insert(
             LabyrinthRouteEntity(
@@ -409,7 +426,7 @@ class ExistingLabyrinthRouteResolver(
                 ) {
                     is RouteSearchResult.Found -> ExistingLabyrinthRouteResult.Found(
                         ResolvedLabyrinthRoute(
-                            route = search.route,
+                            route = search.route.copy(openingRelicIds = openingRelics(value.guildId ?: top.guildId, top.enhancedNodes, value.relicIds)),
                             allNodes = value.map,
                             currentBlockId = value.currentBlockId,
                             guildId = value.guildId ?: top.guildId,
@@ -454,9 +471,11 @@ class LabyrinthRerollWorkflow(
         }
 
         onProgress(progress(config, 0, "检查当前黎明界状态"))
+        val enhancedNodes: Set<Int>
         when (val top = readTopWithRetry(config, 0, "读取当前黎明界状态", onProgress)) {
             is LabyrinthOperationResult.Failure -> return LabyrinthRerollResult.Failure(top.message, top.kind)
             is LabyrinthOperationResult.Success -> {
+                enhancedNodes = top.value.enhancedNodes
                 val existing = top.value.enterId
                 if (existing != null && config.abandonExisting) {
                     onProgress(progress(config, 0, "放弃现有开局（不复用）"))
@@ -665,8 +684,9 @@ class LabyrinthRerollWorkflow(
                     verdict = LabyrinthRouteVerdict.TARGET,
                     message = "当前开局符合目标路线",
                 )
-                routeStore.save(config, search.route, attempt, allNodes = entered.map)
-                return LabyrinthRerollResult.Success(search.route, attempt)
+                val route = search.route.copy(openingRelicIds = openingRelics(config.guildId, enhancedNodes, entered.relicIds))
+                routeStore.save(config, route, attempt, allNodes = entered.map)
+                return LabyrinthRerollResult.Success(route, attempt)
             }
             saveCheckpoint(
                 config = config,
@@ -675,6 +695,18 @@ class LabyrinthRerollWorkflow(
                 verdict = LabyrinthRouteVerdict.NOT_TARGET,
                 message = "当前开局不符合目标路线",
             )
+            if (config.routePolicy.highScore && (attempt >= config.maxAttempts || !config.retireExisting)) {
+                // On the final map relax only the score preset. Honor the user's ordinary route and Boss filters.
+                val ordinary = config.copy(routePolicy = config.routePolicy.copy(highScore = false))
+                val fallback = matcher.search(entered.enterId, entered.map, config.difficulty, ordinary.routePolicy)
+                if (fallback is RouteSearchResult.Found) {
+                    val route = fallback.route.copy(openingRelicIds = openingRelics(config.guildId, enhancedNodes, entered.relicIds))
+                    routeStore.save(ordinary, route, attempt, allNodes = entered.map)
+                    saveCheckpoint(ordinary, attempt, entered.enterId, LabyrinthRouteVerdict.TARGET, "凹分预算已用完，采用可用路线")
+                    return LabyrinthRerollResult.Success(route, attempt)
+                }
+                return LabyrinthRerollResult.Exhausted(attempt)
+            }
             val retirementFailure = retireUntilGone(
                 config = config,
                 attempt = attempt,

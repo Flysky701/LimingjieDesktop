@@ -43,7 +43,7 @@ class SharedDataIntegrationTest {
             assertEquals("unused-shared-secret", first.password)
             assertNull(first.authenticatedUid)
 
-            val strategy = LabyrinthStrategySettings(playerWeight = 61)
+            val strategy = LabyrinthStrategySettings(playerWeight = 61, highScorePreset = true)
             port.request(ControlOps.STRATEGY_SAVE, controlArgs("value" to ControlModelCodec.encode(strategy)))
             val reroll = LabyrinthRerollSettings(difficulty = 2, maxAttempts = "17", rerollUntilFound = false)
             client.saveReroll(id, reroll)

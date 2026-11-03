@@ -453,6 +453,22 @@ class LabyrinthRerollWorkflowTest {
         )
     }
 
+    @Test fun scoreBudgetKeepsLastPlayableMapAndItsConfirmedInventory() = runTest {
+        val map = fullMap(area3BossQuest = 770330401, area5BossQuest = 770530301)
+        val api = FakeApi(
+            top = LabyrinthTop(null, null, null, listOf(ClearedDifficulty(1, 4)), setOf(31)),
+            enters = ArrayDeque(listOf(LabyrinthEnter(17, map, setOf(40001, 11001)))),
+        )
+        val store = FakeRouteStore()
+        val result = LabyrinthRerollWorkflow(api, store).run(config(maxAttempts = 1).copy(
+            guildId = 1, difficulty = 5, routePolicy = LabyrinthRoutePolicy(highScore = true),
+        ))
+        assertTrue(result is LabyrinthRerollResult.Success)
+        assertTrue(api.retired.isEmpty())
+        assertEquals(setOf(11001, 40001, 50001), store.route?.openingRelicIds)
+        assertEquals(false, store.savedConfig?.routePolicy?.highScore)
+    }
+
     private fun config(
         retireExisting: Boolean = true,
         maxAttempts: Int = 3,

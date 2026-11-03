@@ -592,6 +592,7 @@ data class LabyrinthTeamEvaluation(
     val pureTankCount: Int = 0,
     val pureHealerCount: Int = 0,
     val duplicateRolePenalty: Double = 0.0,
+    val encounterFit: Double = 0.0,
 )
 
 class LabyrinthTeamScorer(
@@ -1036,6 +1037,7 @@ class LabyrinthTeamScorer(
             pureTankCount = pureTankCount,
             pureHealerCount = pureHealerCount,
             duplicateRolePenalty = duplicatePenalty,
+            encounterFit = if (context.targetCount > 1 || context.encounterStrategy != null) scenarioFunction else 0.0,
         )
     }
 
@@ -1400,7 +1402,7 @@ class LabyrinthTeamOptimizer(
         // Worst candidate first. For equal scores keep the earlier enumeration, exactly like
         // the old stable full sort, without retaining tens of thousands of evaluations.
         val order = compareByDescending<RankedCandidate> { it.formationRisk }
-            .thenBy { it.score }.thenByDescending { it.ordinal }
+            .thenBy { it.score }.thenBy { it.encounterFit }.thenByDescending { it.ordinal }
         val comboCount = binomialCount(searchPool.size, size)
         val filter = CombinationFilter(
             context = context,
@@ -1446,7 +1448,7 @@ class LabyrinthTeamOptimizer(
             }
             val score = if (systemOnly) evaluation.systemScore else evaluation.score
             return RankedCandidate(evaluation.members, score, ordinal,
-                labyrinthEncounterFormationRisk(team, context))
+                labyrinthEncounterFormationRisk(team, context), evaluation.encounterFit)
         }
     }
 
@@ -1586,6 +1588,7 @@ class LabyrinthTeamOptimizer(
         val score: Double,
         val ordinal: Long,
         val formationRisk: Int,
+        val encounterFit: Double,
     )
 
     private fun individualSearchPriority(role: LabyrinthRoleProfile, context: LabyrinthRoleDecisionContext): Double {

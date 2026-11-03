@@ -220,6 +220,7 @@ class LabyrinthController(
     /** Runs after a standalone (non-batch) reroll ends; the batch cold-starts the client itself. */
     private val afterStandaloneReroll: suspend (accountId: Long) -> Unit = {},
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
+    private val highScorePreset: () -> Boolean = { false },
 ) {
     // 缺少国服游戏包时，首页构造本 Controller 不应触发 BilibiliSDK 的包查询。
     // 协调器改为按需解析：仅在登录/验证码等真实操作走到时才求值。
@@ -390,7 +391,7 @@ class LabyrinthController(
         chrome.update {
             it.copy(
                 startedAtMillis = System.currentTimeMillis(),
-                message = "连续3次战斗失败，正在撤退当前开局并重新刷取",
+                message = "按本局策略撤退当前开局，正在重新刷取",
             )
         }
         requestFrozenStart()
@@ -1145,11 +1146,17 @@ class LabyrinthController(
             chrome.update { it.copy(message = error) }
             return null
         }
-        return uiSettings().toConfig(accountId)
+        val config = uiSettings().toConfig(accountId)
+        if (!highScorePreset() || config.difficulty != 5) return config
+        return config.copy(
+            maxAttempts = minOf(config.maxAttempts, 8), rerollUntilFound = false,
+            routePolicy = config.routePolicy.copy(highScore = true),
+        )
     }
 
     private fun currentRoutePolicy(): LabyrinthRoutePolicy = chrome.value.let { current ->
         LabyrinthRoutePolicy(
+            highScore = highScorePreset() && current.selectedDifficulty == 5,
             perfectStart = current.perfectStart,
             evaluationMode = current.routeEvaluationMode,
             valueAllowance = current.valueAllowance,

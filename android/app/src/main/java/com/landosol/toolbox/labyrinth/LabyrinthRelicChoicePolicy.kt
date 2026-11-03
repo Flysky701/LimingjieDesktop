@@ -1,5 +1,6 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.gamedata.RelicResource
 import com.landosol.toolbox.labyrinth.vision.LabyrinthRelicMatch
 import kotlinx.serialization.Serializable
 
@@ -80,12 +81,26 @@ data class LabyrinthRelicChoiceDecision(
 class LabyrinthRelicChoicePolicy(
     private val config: LabyrinthRelicChoicePolicyConfig = LabyrinthRelicChoicePolicyConfig(),
 ) {
+    private var startingRelics: List<RelicResource> = emptyList()
+    private var rarities: Map<String, Int?> = emptyMap()
+    internal fun rarity(id: String?) = rarities[id]
+    private var venomBossArea: Int? = null
+
+    internal fun useOpening(route: LabyrinthRouteJson?, catalog: List<RelicResource>) {
+        rarities = catalog.associate { it.id to it.rarity.toIntOrNull() }
+        startingRelics = catalog.filter { it.id.toIntOrNull() in route?.openingRelicIds.orEmpty() }.distinctBy { it.id }
+        venomBossArea = route?.nodes?.firstOrNull {
+            it.blockType == LabyrinthRoutePolicy.BOSS_BLOCK_TYPE && LabyrinthBossCatalog.unitIdForQuest(it.area, it.questId) == 306604
+        }?.area
+    }
+
     fun choose(
         acquired: List<LabyrinthObservedRelic>,
         candidates: List<LabyrinthRelicMatch>,
         lockedFocus: LabyrinthRelicMark? = null,
         calibratedStacks: Map<LabyrinthRelicMark, Int> = emptyMap(),
         currentArea: Int? = null,
+        freeReward: Boolean = false,
     ): LabyrinthRelicChoiceDecision? {
         val stacks = markStacks(acquired, calibratedStacks)
         val recognized = candidates.mapNotNull { match ->
@@ -146,8 +161,24 @@ class LabyrinthRelicChoicePolicy(
                 (if (candidate.mark == debuff && debuffCanPivot && useful > 0) 1.0 else 0.0) +
                 (if (useful > 0) config.priorityBonus(candidate.mark) else 0.0)
         }
+        val effects = if (freeReward) acquired.map { it.effect } + startingRelics.map { it.effect } else emptyList()
+        fun marginalEffect(candidate: Candidate): Int {
+            if (!freeReward) return 0
+            val effect = candidate.match.effect.orEmpty()
+            val healing = isRegeneration(effect) && currentArea != null && venomBossArea?.let { currentArea <= it } == true
+            if (healing && effects.none(::isRegeneration)) return 2
+            for (kind in listOf("中毒", "诅咒")) {
+                if (kind in effect && effects.none { kind in it }) return 1
+            }
+            return 0
+        }
+
         val choice = immediateCapstone ?: recognized.maxWithOrNull(
-            compareBy<Candidate> { score(it) }.thenBy { it.bonus },
+            compareBy<Candidate> { score(it) }
+                .thenBy { freeReward && stacks.getValue(it.mark) < 9 && stacks.getValue(it.mark) + it.bonus >= 9 }
+                .thenBy { if (freeReward) minOf(it.bonus, (config.capstoneTarget - stacks.getValue(it.mark)).coerceAtLeast(0)) else 0 }
+                .thenBy { marginalEffect(it) }
+                .thenBy { it.bonus },
         ) ?: return null
         // A missing focus candidate alone doesn't force a switch; an available but clearly
         // worse focus can be displaced. Focus is a small bonus, never a hard filter.
@@ -182,6 +213,12 @@ class LabyrinthRelicChoicePolicy(
         calibratedStacks: Map<LabyrinthRelicMark, Int> = emptyMap(),
     ): Map<LabyrinthRelicMark, Int> {
         val totals = LabyrinthRelicMark.entries.associateWith { 0 }.toMutableMap()
+        val observedIds = acquired.mapTo(hashSetOf()) { it.relicId }
+        startingRelics.filterNot { it.id in observedIds }.forEach { relic ->
+            val mark = LabyrinthRelicMark.fromLabel(relic.mark) ?: return@forEach
+            val count = relic.markBonus.toIntOrNull()?.takeIf { it > 0 } ?: return@forEach
+            totals[mark] = totals.getValue(mark) + count
+        }
         acquired.forEach { relic ->
             val mark = LabyrinthRelicMark.fromLabel(relic.attribute) ?: return@forEach
             val bonus = relic.attributeBonus.trim().toIntOrNull()?.takeIf { it > 0 } ?: return@forEach
@@ -192,6 +229,8 @@ class LabyrinthRelicChoicePolicy(
         }
         return totals
     }
+
+    private fun isRegeneration(effect: String) = "持续恢复" in effect || "持续回复" in effect
 
     private data class Candidate(
         val match: LabyrinthRelicMatch,

@@ -72,6 +72,7 @@ data class LabyrinthBatchReusableOpening(
 enum class LabyrinthRunOutcome {
     CLEARED,
     FAILED_MAX_RETRY,
+    SCORE_OPENING_SKIPPED,
     ABORTED_UNKNOWN,
     USER_STOPPED,
 }
@@ -85,6 +86,7 @@ sealed interface LabyrinthRunTerminalEvent {
 
     data class Cleared(override val runId: String) : LabyrinthRunTerminalEvent
     data class FailedMaxRetry(override val runId: String) : LabyrinthRunTerminalEvent
+    data class ScoreOpeningSkipped(override val runId: String) : LabyrinthRunTerminalEvent
     data class FatalUnknown(override val runId: String, val reason: String) : LabyrinthRunTerminalEvent
     data class UserStopped(override val runId: String) : LabyrinthRunTerminalEvent
 
@@ -92,6 +94,7 @@ sealed interface LabyrinthRunTerminalEvent {
         get() = when (this) {
             is Cleared -> LabyrinthRunOutcome.CLEARED
             is FailedMaxRetry -> LabyrinthRunOutcome.FAILED_MAX_RETRY
+            is ScoreOpeningSkipped -> LabyrinthRunOutcome.SCORE_OPENING_SKIPPED
             is FatalUnknown -> LabyrinthRunOutcome.ABORTED_UNKNOWN
             is UserStopped -> LabyrinthRunOutcome.USER_STOPPED
         }
@@ -165,6 +168,7 @@ internal fun LabyrinthBatchCheckpoint.recordOutcome(
                 goal.completedCount
             },
         )
+        LabyrinthRunOutcome.SCORE_OPENING_SKIPPED,
         LabyrinthRunOutcome.ABORTED_UNKNOWN,
         LabyrinthRunOutcome.USER_STOPPED,
         -> goal

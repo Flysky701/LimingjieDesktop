@@ -27,6 +27,26 @@ class LabyrinthEventChoicePlannerTest {
         assertFalse(decision(20, false).actionSafe)
     }
 
+    @Test fun dailyBanksVisibleRewardsWhileScorePresetTakesTheTargetEvent() {
+        fun pick(event: EventResource, settings: LabyrinthStrategySettings): String {
+            val planner = LabyrinthEventChoicePlanner(emptyMap(), LabyrinthTeamOptimizer(LabyrinthTeamScorer(
+                LabyrinthTeamScoringConfig(attributeDamageBonus = mapOf(1 to 0.0, 2 to 0.08, 3 to 0.16, 4 to 0.25, 5 to 0.75)))), settings)
+            val observed = LabyrinthEventChoiceObservation(event, event.choices.map {
+                LabyrinthEventChoiceVisual(it, EntryPixelRect(0, 0, 100, 100), 0.8)
+            }, event.name, 1.0, 0.2, 2, true)
+            return (planner.decide(observed, emptySet(), LabyrinthRoleDecisionContext(0), emptyMap())
+                as LabyrinthEventChoiceDecision.Select).choiceId
+        }
+        val bank = EventResource("2316", name = "挑战", choices = listOf(
+            EventChoiceResource("23161", slot = 1, conditionType = 1, conditionValue = 2000),
+            EventChoiceResource("23162", slot = 2)))
+        assertEquals("23162", pick(bank, LabyrinthStrategySettings()))
+        val arena = EventResource("1105", name = "斗技场", choices = listOf(
+            EventChoiceResource("11051", slot = 1), EventChoiceResource("11052", slot = 2)))
+        assertEquals("11051", pick(arena, LabyrinthStrategySettings(extremeWinRate = 20)))
+        assertEquals("11052", pick(arena, LabyrinthStrategySettings(highScorePreset = true, extremeWinRate = 20)))
+    }
+
     private val planner = LabyrinthEventChoicePlanner(
         profiles = emptyMap(),
         optimizer = LabyrinthTeamOptimizer(

@@ -422,7 +422,11 @@ class DesktopAppGraph(
         val characterAttributes = roleDecisionRuntime?.profiles
             ?.mapValues { (_, profile) -> profile.attribute }
             .orEmpty()
+        val catalog by lazy { com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthRelicTemplateLoader(context).loadRelics() }
         LabyrinthEntryRecognitionSession(
+            relicCatalog = { catalog },
+            scoreLedger = com.landosol.toolbox.labyrinth.ScoreRunLedger(context),
+            mayRetireForScoreEvent = { labyrinthStrategySettings.state.value.highScorePreset && labyrinthController.uiState.value.retireExisting },
             strategyProvider = {
                 val settings = labyrinthStrategySettings.state.value
                 com.landosol.toolbox.labyrinth.LabyrinthStrategySnapshot(
@@ -453,6 +457,8 @@ class DesktopAppGraph(
                     context = context,
                     characterAttributes = characterAttributes,
                     finalBossOnly = finalBossOnly,
+                    scoreShop = labyrinthStrategySettings.state.value.highScorePreset,
+                    relicCatalog = catalog,
                     skipJoinedCharacters = { labyrinthEntryRecognitionSession.skipRoleRewardJoinedRecognition },
                     nodeSearchHint = { labyrinthEntryRecognitionSession.currentNodeSearchHint() },
                     nodeScanRequested = { labyrinthEntryRecognitionSession.nodeScanRequested() },
@@ -604,6 +610,7 @@ class DesktopAppGraph(
         com.landosol.toolbox.labyrinth.LabyrinthController(
             accountRepository, gameSessionRegistry, database, { bilibiliNativeLoginCoordinator },
             if (sharedData == null) com.landosol.toolbox.labyrinth.AndroidLabyrinthRerollSettingsStore(context) else sharedRerollCache,
+            highScorePreset = { labyrinthStrategySettings.state.value.highScorePreset },
             launchForeground = ::startRerollHost,
             scope = mainScope,
             beforeRerollLogin = { accountId -> withContext(Dispatchers.IO) { hardCloseChannelClientBeforeReroll(accountId) } },

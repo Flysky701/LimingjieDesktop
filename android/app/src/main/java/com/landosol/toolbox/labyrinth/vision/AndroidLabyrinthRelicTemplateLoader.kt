@@ -15,8 +15,8 @@ class AndroidLabyrinthRelicTemplateLoader(
     private val context: Context,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
-    fun load(): List<LabyrinthRelicTemplate> {
-        val relics = loadRelics().associateBy(RelicResource::id)
+    fun load(catalog: List<RelicResource> = loadRelics()): List<LabyrinthRelicTemplate> {
+        val relics = catalog.associateBy(RelicResource::id)
         val icons = load<GameIconPackDocument>(ICONS_FILE)
         return icons.relicIcons.mapNotNull { icon ->
             val relic = relics[icon.ownerId] ?: return@mapNotNull null
@@ -33,7 +33,7 @@ class AndroidLabyrinthRelicTemplateLoader(
         }
     }
 
-    private fun loadRelics(): List<RelicResource> {
+    fun loadRelics(): List<RelicResource> {
         val root = json.parseToJsonElement(readAsset(RELICS_FILE)).jsonObject
         return root["relics"]?.jsonArray.orEmpty().map { json.decodeFromJsonElement<RelicResource>(it) }
     }

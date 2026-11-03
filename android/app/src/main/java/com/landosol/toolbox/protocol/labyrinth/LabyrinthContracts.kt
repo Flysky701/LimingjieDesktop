@@ -5,6 +5,7 @@ data class LabyrinthTop(
     val guildId: Int?,
     val difficulty: Int?,
     val clearedDifficulties: List<ClearedDifficulty>,
+    val enhancedNodes: Set<Int> = emptySet(),
 )
 
 data class ClearedDifficulty(val guildId: Int, val difficulty: Int)
@@ -14,6 +15,7 @@ data class LabyrinthEnterRequest(val guildId: Int, val difficulty: Int)
 data class LabyrinthEnter(
     val enterId: Long,
     val map: List<LabyrinthMapNode>,
+    val relicIds: Set<Int> = emptySet(),
 )
 
 data class LabyrinthResume(
@@ -21,6 +23,7 @@ data class LabyrinthResume(
     val guildId: Int?,
     val currentBlockId: Long?,
     val map: List<LabyrinthMapNode>,
+    val relicIds: Set<Int> = emptySet(),
 )
 
 data class LabyrinthMapNode(
@@ -37,6 +40,7 @@ data class LabyrinthMapNode(
 data class LabyrinthRoute(
     val enterId: Long,
     val nodes: List<LabyrinthMapNode>,
+    val openingRelicIds: Set<Int> = emptySet(),
 ) {
     val blockIds: List<Long> get() = nodes.map(LabyrinthMapNode::blockId)
 }

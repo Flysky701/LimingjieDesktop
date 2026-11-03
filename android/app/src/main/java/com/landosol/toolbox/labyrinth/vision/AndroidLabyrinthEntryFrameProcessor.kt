@@ -284,8 +284,11 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
             nodeScanRequested: () -> Boolean = { true },
             nodeScanConsumable: () -> Boolean = { true },
             rosterCharacterIds: () -> Set<String> = { emptySet() },
+            scoreShop: Boolean = false,
+            relicCatalog: List<com.landosol.toolbox.gamedata.RelicResource>? = null,
         ): AndroidLabyrinthEntryFrameProcessor {
-            val relicTemplates = AndroidLabyrinthRelicTemplateLoader(context).load()
+            val relicLoader = AndroidLabyrinthRelicTemplateLoader(context)
+            val relicTemplates = relicLoader.load(relicCatalog ?: relicLoader.loadRelics())
             val characterTemplates = AndroidLabyrinthBattleTeamTemplateLoader(context).load(characterAttributes)
             val characterIconMatcher = LabyrinthCharacterIconMatcher(characterTemplates)
             val characterRecognizer = LabyrinthCharacterRecognizer(characterIconMatcher)
@@ -318,7 +321,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                         AndroidLabyrinthEventRecognitionDataLoader(context).load(),
                     )
                 }.getOrNull(),
-                shopItemResolver = AndroidLabyrinthShopItemResolver(),
+                shopItemResolver = AndroidLabyrinthShopItemResolver(scoreShop = scoreShop),
                 roleRewardNameResolver = AndroidLabyrinthRoleRewardNameResolver(
                     names = characterTemplates.map {
                         LabyrinthCharacterNameCandidate(it.characterId, it.displayName, it.aliases)

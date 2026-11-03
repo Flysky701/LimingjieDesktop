@@ -599,6 +599,14 @@ internal fun LabyrinthEntryRecognitionSession.createRewardWorkflow(): LabyrinthR
 
 internal fun LabyrinthEntryRecognitionSession.createEventWorkflow(): LabyrinthEventWorkflow =
     LabyrinthEventWorkflow(object : LabyrinthEventPort {
+        override fun requestScoreRestart(sessionId: AutomationSessionId, reason: String): Boolean {
+            val session = this@createEventWorkflow
+            val account = session.activeRunAccountId ?: return false
+            val route = session.validatedRoute ?: return false
+            if (!session.mayRetireForScoreEvent() || session.scoreLedger?.allowEventRestart(account, route.enterId, session.clock()) != true) return false
+            session.settlementWorkflow.finishFromPlannerAndRequestReroll(sessionId, reason, scoreEvent = true)
+            return true
+        }
         override val _state: MutableStateFlow<LabyrinthEntryRecognitionSessionState>
             get() = this@createEventWorkflow._state
         override val actionInFlight: AtomicBoolean
@@ -696,6 +704,9 @@ internal fun LabyrinthEntryRecognitionSession.createEventWorkflow(): LabyrinthEv
 
 internal fun LabyrinthEntryRecognitionSession.createShopWorkflow(): LabyrinthShopWorkflow =
     LabyrinthShopWorkflow(object : LabyrinthShopPort {
+        override val scoreLedger get() = this@createShopWorkflow.scoreLedger
+        override val validatedRoute get() = this@createShopWorkflow.validatedRoute
+        override val activeRunAccountId get() = this@createShopWorkflow.activeRunAccountId
         override val _state: MutableStateFlow<LabyrinthEntryRecognitionSessionState>
             get() = this@createShopWorkflow._state
         override val activeNodeArea: Int?

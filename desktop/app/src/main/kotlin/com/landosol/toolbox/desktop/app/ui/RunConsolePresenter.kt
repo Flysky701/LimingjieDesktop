@@ -128,7 +128,7 @@ class DesktopUxController(private val graph:DesktopAppGraph) {
             if(batch.stage in activeStages) begin(id,"批量自动执行",batch.goals.joinToString { "${it.guildId}: ${it.targetCount} ${if(it.mode==LabyrinthBatchGoalMode.CLEARS) "次通关" else "次执行"}" },s)
             batch.currentRunId?.let { begin("run:$it","批量执行 · 单次","公会 ${batch.currentGuildId ?: batch.activeGoal?.guildId ?: "—"}",s,true) }
             batch.lastRecordedRunId?.let { runId -> batch.currentRunOutcome?.let { outcome ->
-                history.finish("run:$runId",when(outcome){LabyrinthRunOutcome.CLEARED->"通关";LabyrinthRunOutcome.USER_STOPPED->"手动停止";else->"未通关"},outcome.name,if(outcome==LabyrinthRunOutcome.CLEARED)1 else 0)
+                history.finish("run:$runId",when(outcome){LabyrinthRunOutcome.CLEARED->"通关";LabyrinthRunOutcome.USER_STOPPED->"手动停止";LabyrinthRunOutcome.SCORE_OPENING_SKIPPED->"凹分事件换图";else->"未通关"},outcome.name,if(outcome==LabyrinthRunOutcome.CLEARED)1 else 0)
             } }
             if(batch.stage in setOf(LabyrinthBatchStage.COMPLETED,LabyrinthBatchStage.FAILED,LabyrinthBatchStage.PAUSED)) {
                 val result=if(batch.stage==LabyrinthBatchStage.COMPLETED) "已完成" else if(s.halt==LabyrinthBatchHaltReason.USER_STOPPED) "手动停止" else "已停止"

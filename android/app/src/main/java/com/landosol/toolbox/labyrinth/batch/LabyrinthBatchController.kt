@@ -200,6 +200,7 @@ class LabyrinthBatchController(
             is LabyrinthRunTerminalEvent.UserStopped -> halt(recorded, LabyrinthBatchHaltReason.USER_STOPPED, "用户停止")
             is LabyrinthRunTerminalEvent.FatalUnknown -> halt(recorded, LabyrinthBatchHaltReason.FATAL_RUN, event.reason)
             is LabyrinthRunTerminalEvent.Cleared,
+            is LabyrinthRunTerminalEvent.ScoreOpeningSkipped,
             is LabyrinthRunTerminalEvent.FailedMaxRetry,
             -> {
                 val advanced = recorded.advanceGoal(clock())

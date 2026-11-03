@@ -44,6 +44,7 @@ data class LabyrinthShopItemMatch(
     val titleEvidenceId: Long? = null,
     val categoryState: LabyrinthShopCategoryState = LabyrinthShopCategoryState.READY,
     val categoryAttempt: Int = 0,
+    val price: Int? = null,
 ) {
     val purchasable: Boolean get() = status == LabyrinthShopItemStatus.AVAILABLE
 }
@@ -121,6 +122,9 @@ data class LabyrinthShopObservation(
     val refreshButtonEnabledEvidence: Double = 0.0,
     /** The relic shown in the purchase-confirmation dialog, if the icon is trusted. */
     val purchaseCandidate: LabyrinthRelicMatch? = null,
+    val wallet: Int? = null,
+    val refreshFee: Int? = null,
+    val readingPrices: Boolean = false,
 ) {
     val availableItemCount: Int get() = items.count(LabyrinthShopItemMatch::purchasable)
     val recognizedButtonCount: Int get() = items.count { it.buyButtonScore >= BUTTON_MIN_CONFIDENCE }

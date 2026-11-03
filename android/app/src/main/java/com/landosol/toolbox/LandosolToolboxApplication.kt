@@ -231,7 +231,11 @@ class LandosolToolboxApplication : Application() {
         val characterAttributes = roleDecisionRuntime?.profiles
             ?.mapValues { (_, profile) -> profile.attribute }
             .orEmpty()
+        val catalog by lazy { com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthRelicTemplateLoader(this).loadRelics() }
         LabyrinthEntryRecognitionSession(
+            relicCatalog = { catalog },
+            scoreLedger = com.landosol.toolbox.labyrinth.ScoreRunLedger(this),
+            mayRetireForScoreEvent = { labyrinthStrategySettings.state.value.highScorePreset && labyrinthController.uiState.value.retireExisting },
             strategyProvider = {
                 val settings = labyrinthStrategySettings.state.value
                 com.landosol.toolbox.labyrinth.LabyrinthStrategySnapshot(
@@ -262,6 +266,8 @@ class LandosolToolboxApplication : Application() {
                     context = this,
                     characterAttributes = characterAttributes,
                     finalBossOnly = finalBossOnly,
+                    scoreShop = labyrinthStrategySettings.state.value.highScorePreset,
+                    relicCatalog = catalog,
                     skipJoinedCharacters = { labyrinthEntryRecognitionSession.skipRoleRewardJoinedRecognition },
                     nodeSearchHint = { labyrinthEntryRecognitionSession.currentNodeSearchHint() },
                     nodeScanRequested = { labyrinthEntryRecognitionSession.nodeScanRequested() },
@@ -393,6 +399,7 @@ class LandosolToolboxApplication : Application() {
         com.landosol.toolbox.labyrinth.LabyrinthController(
             accountRepository, gameSessionRegistry, database, { bilibiliNativeLoginCoordinator },
             com.landosol.toolbox.labyrinth.AndroidLabyrinthRerollSettingsStore(this),
+            highScorePreset = { labyrinthStrategySettings.state.value.highScorePreset },
             launchForeground = { com.landosol.toolbox.labyrinth.LabyrinthRerollService.start(this) },
             beforeRerollLogin = { accountId -> hardCloseChannelClientBeforeReroll(accountId) },
             afterStandaloneReroll = { accountId -> coldStartChannelClientAfterReroll(accountId) },

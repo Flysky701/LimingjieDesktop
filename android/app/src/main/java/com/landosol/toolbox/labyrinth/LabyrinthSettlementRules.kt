@@ -42,7 +42,7 @@ internal fun labyrinthCompletionWaitsWithoutRoute(state: LabyrinthEntryPageState
     LabyrinthEntryPageState.RUN_CLEAR_CHEST_RESULT,
 )
 
-internal enum class LabyrinthRunTerminalOutcome { CLEARED, FAILED_MAX_RETRY }
+internal enum class LabyrinthRunTerminalOutcome { CLEARED, FAILED_MAX_RETRY, SCORE_OPENING_SKIPPED }
 
 internal enum class LabyrinthPostBossStage {
     NONE,

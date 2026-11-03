@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemKind
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryState
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemStatus
 
 sealed interface LabyrinthShopDecision {
@@ -48,8 +49,76 @@ class LabyrinthShopPolicy(
     private val ambiguousRelicLikeConfidence: Double = 0.45,
     private val buyRelics: Boolean = true,
     private val refreshEnabled: Boolean = true,
+    val highScore: Boolean = false,
 ) {
     fun decide(
+        currentArea: Int?,
+        items: List<LabyrinthShopItemMatch>,
+        acquired: List<LabyrinthObservedRelic>,
+        calibratedStacks: Map<LabyrinthRelicMark, Int> = emptyMap(),
+        refreshAvailable: Boolean,
+        lockedFocus: LabyrinthRelicMark? = null,
+        relicPurchasesInCycle: Int = 0,
+        refreshAvailabilityKnown: Boolean = true,
+        shop: LabyrinthShopObservation? = null,
+        visitRefreshes: Int = 0,
+    ): LabyrinthShopDecision {
+        if (!highScore || shop == null) return ordinary(currentArea, items, acquired, calibratedStacks,
+            refreshAvailable, lockedFocus, relicPurchasesInCycle, refreshAvailabilityKnown)
+        if (!buyRelics || currentArea == null || currentArea == 4) return LabyrinthShopDecision.Close("凹分预设：本店不购买")
+        val limit = when (currentArea) { 3 -> 1; 5 -> 2; else -> 0 }
+        val canRefresh = refreshEnabled && refreshAvailable && visitRefreshes < limit
+        if (shop.readingPrices) return LabyrinthShopDecision.Wait("凹分：正在复核本店价格")
+        val wallet = shop.wallet
+        val goods = items.filter { it.purchasable && it.categoryState == LabyrinthShopCategoryState.READY &&
+            (it.relicMatch?.recognized == true || it.kind == LabyrinthShopItemKind.ROLE_IMPRINT && !it.roleImprintLabel.isNullOrBlank()) }
+        if (wallet == null || items.any { it.purchasable && (it.price == null || it.categoryState != LabyrinthShopCategoryState.READY) }) {
+            return ordinary(currentArea, items, acquired, calibratedStacks, false, lockedFocus, relicPurchasesInCycle, true)
+        }
+        val cheapest = goods.minOfOrNull { it.price!! }
+        val fee = shop.refreshFee?.takeIf { it > 0 }
+        val reserve = if (canRefresh && fee != null && cheapest != null && wallet >= fee + cheapest) fee + cheapest else 0
+        val clearance = currentArea == 5 && reserve == 0
+        val candidates = goods.filter { item ->
+            val roleAllowed = !item.choiceRoleImprint || currentArea == 5 && reserve == 0
+            val rarity = relicChoicePolicy.rarity(item.relicMatch?.relicId)
+            val skipExpensive = currentArea in setOf(3, 5) && (rarity == 4 || rarity == 3 && !clearance)
+            roleAllowed && !skipExpensive && item.price!! <= wallet - reserve
+        }
+        // The game exposes three slots. Enumerate these baskets; buy one item and re-read after compaction.
+        val stacks = relicChoicePolicy.markStacks(acquired, calibratedStacks)
+        var best = emptyList<LabyrinthShopItemMatch>()
+        var bestGain = 0
+        var bestCost = 0
+        var bestProgress = 0
+        if (candidates.size <= 3) for (mask in 1 until (1 shl candidates.size)) {
+            val basket = candidates.filterIndexed { i, _ -> mask and (1 shl i) != 0 }
+            val cost = basket.sumOf { it.price!! }
+            if (cost > wallet - reserve) continue
+            val gain = basket.size + basket.count { it.kind != LabyrinthShopItemKind.ROLE_IMPRINT }
+            val bonuses = basket.mapNotNull { it.relicMatch }.groupBy { LabyrinthRelicMark.fromLabel(it.attribute) }
+            val progress = bonuses.entries.sumOf { (mark, matches) ->
+                val before = stacks[mark] ?: return@sumOf 0
+                val after = (before + matches.sumOf { it.attributeBonus?.toIntOrNull() ?: 0 }).coerceAtMost(15)
+                (after - before).coerceAtLeast(0) + listOf(4, 9, 15).count { before < it && it <= after } * 15
+            }
+            if (gain > bestGain || gain == bestGain && (progress > bestProgress || progress == bestProgress && cost < bestCost)) {
+                best = basket
+                bestGain = gain
+                bestCost = cost
+                bestProgress = progress
+            }
+        }
+        val relic = relicChoicePolicy.choose(acquired, best.filterNot { it.kind == LabyrinthShopItemKind.ROLE_IMPRINT }.mapNotNull { it.relicMatch }, lockedFocus, calibratedStacks, currentArea)
+        if (relic != null) return LabyrinthShopDecision.BuyRelic(best.first { it.relicMatch?.relicId == relic.choice.relicId }, relic)
+        best.firstOrNull { it.kind == LabyrinthShopItemKind.ROLE_IMPRINT }?.let {
+            return LabyrinthShopDecision.BuyRoleImprint(it, it.roleImprintLabel!!, "凹分预算：余额${wallet}，预留${reserve}")
+        }
+        if (reserve > 0) return LabyrinthShopDecision.Refresh("凹分：本店第${visitRefreshes + 1}/${limit}次刷新，费用${fee}")
+        return LabyrinthShopDecision.Close("凹分：预算内无可确认商品或可用刷新")
+    }
+
+    private fun ordinary(
         currentArea: Int?,
         items: List<LabyrinthShopItemMatch>,
         acquired: List<LabyrinthObservedRelic>,

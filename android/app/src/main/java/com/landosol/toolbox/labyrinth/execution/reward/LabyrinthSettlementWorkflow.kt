@@ -160,6 +160,7 @@ internal class LabyrinthSettlementWorkflow(private val port: LabyrinthSettlement
         val listener = runTerminalListener ?: return
         val event = when {
             outcome == LabyrinthRunTerminalOutcome.CLEARED -> LabyrinthRunTerminalEvent.Cleared(runId)
+            outcome == LabyrinthRunTerminalOutcome.SCORE_OPENING_SKIPPED -> LabyrinthRunTerminalEvent.ScoreOpeningSkipped(runId)
             outcome == LabyrinthRunTerminalOutcome.FAILED_MAX_RETRY -> LabyrinthRunTerminalEvent.FailedMaxRetry(runId)
             userInitiated -> LabyrinthRunTerminalEvent.UserStopped(runId)
             else -> LabyrinthRunTerminalEvent.FatalUnknown(runId, reason)
@@ -170,16 +171,28 @@ internal class LabyrinthSettlementWorkflow(private val port: LabyrinthSettlement
     fun finishFromPlannerAndRequestReroll(
         sessionId: AutomationSessionId,
         reason: String,
+        scoreEvent: Boolean = false,
     ) {
         if (!beginGuardedAction()) return
         val accountId = activeRunAccountId
         launchGuardedAction {
             if (activeSessionId == sessionId) {
                 // The next run reuses this projection; only the run ends here.
-                pendingTerminalOutcome = LabyrinthRunTerminalOutcome.FAILED_MAX_RETRY
+                pendingTerminalOutcome = if (scoreEvent) LabyrinthRunTerminalOutcome.SCORE_OPENING_SKIPPED
+                    else LabyrinthRunTerminalOutcome.FAILED_MAX_RETRY
+                // stop() publishes the terminal event and clears currentRunId. The batch
+                // owns its next attempt; do not race its listener with a standalone restart.
+                val batchWillRestart = scoreEvent && currentRunId != null && runTerminalListener != null
                 val stopped = stop("$reason；正在切换到刷开局", releaseCapture = false)
+                if (batchWillRestart) return@launchGuardedAction
                 if (stopped && accountId != null) {
-                    val started = runCatching { rerollRequester?.invoke(accountId) == true }.getOrDefault(false)
+                    val started = try {
+                        rerollRequester?.invoke(accountId) == true
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        false
+                    }
                     if (!started) {
                         _state.value = _state.value.copy(
                             message = "$reason；自动重刷启动失败，请手动进入刷开局页面继续",

@@ -23,6 +23,7 @@ class BilibiliLabyrinthApi(
                 guildId = result.data.int("guild_id")?.takeIf { it > 0 },
                 difficulty = result.data.int("difficulty")?.takeIf { it > 0 },
                 clearedDifficulties = cleared,
+                enhancedNodes = result.data.list("labyrinth_enhance_node_list").mapNotNull { it.asLong()?.toInt() }.toSet(),
             )
         }.fold(
             onSuccess = { LabyrinthOperationResult.Success(it) },
@@ -49,7 +50,7 @@ class BilibiliLabyrinthApi(
         is GameSessionResult.Success -> runCatching {
             val enterId = result.data.long("enter_id") ?: error("enter_id missing")
             val nodes = result.data.list("map_list").map { item -> parseNode(item.asMap() ?: error("node missing")) }
-            LabyrinthEnter(enterId, nodes)
+            LabyrinthEnter(enterId, nodes, result.data.relicIds())
         }.fold(
             onSuccess = { LabyrinthOperationResult.Success(it) },
             onFailure = {
@@ -73,6 +74,7 @@ class BilibiliLabyrinthApi(
                 guildId = result.data.int("guild_id")?.takeIf { it > 0 },
                 currentBlockId = result.data.long("block_id")?.takeIf { it > 0 },
                 map = nodes,
+                relicIds = result.data.relicIds(),
             )
         }.fold(
             onSuccess = { LabyrinthOperationResult.Success(it) },
@@ -122,6 +124,10 @@ private fun Any?.asLong(): Long? = when (this) {
     is String -> toLongOrNull()
     else -> null
 }
+
+private fun Map<*, *>.relicIds(): Set<Int> = list("relic_list").mapNotNull { item ->
+    (item.asMap()?.int("relic_id") ?: item.asLong()?.toInt())?.takeIf { it > 0 }
+}.toSet()
 
 private fun Map<*, *>.long(key: String): Long? = this[key].asLong()
 

@@ -156,6 +156,7 @@ internal class LabyrinthRunBoundaryWorkflow(private val port: LabyrinthRunBounda
                 finalArea = snapshot.settings.refreshFromArea,
                 buyRelics = snapshot.settings.buyRelics,
                 refreshEnabled = snapshot.settings.refreshShop,
+                highScore = snapshot.settings.highScorePreset,
             )
             configuredOpeningRosters = snapshot.settings.openingRosters
             roleDisplayNames = snapshot.roleRuntime?.document?.characters

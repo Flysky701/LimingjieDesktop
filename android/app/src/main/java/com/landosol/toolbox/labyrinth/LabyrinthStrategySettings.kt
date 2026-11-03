@@ -113,6 +113,7 @@ data class LabyrinthStrategySettings(
      * 旧配置缺这个字段时取 [DEFAULT_RESPONSE_INTERVAL_MILLIS]，与本项目当前行为一致。
      */
     val responseIntervalMillis: Int = DEFAULT_RESPONSE_INTERVAL_MILLIS,
+    val highScorePreset: Boolean = false,
 ) {
     fun validationError(): String? = when {
         specialEquipmentMode == LabyrinthSpecialEquipmentMode.AUTO_EQUIP && specialEquipmentKinds.isEmpty() ->
