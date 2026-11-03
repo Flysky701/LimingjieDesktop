@@ -418,7 +418,7 @@ class DesktopAppGraph(
     @Volatile private var taskStrategy: com.landosol.toolbox.desktop.app.adapters.storage.StrategyProfile? = null
     val taskStrategyIdentity get() = taskStrategy?.identity
     private val runStrategySettings get() = taskStrategy?.settings ?: labyrinthStrategySettings.state.value
-    private fun freezeTaskStrategy() {
+    internal fun freezeTaskStrategy() {
         val active = labyrinthStrategySettings.library.value.active
         taskStrategy = if (sharedData == null) active else sharedStrategyIdentity?.let {
             active.copy(id = it.id, name = it.name, revision = it.revision)
@@ -652,7 +652,7 @@ class DesktopAppGraph(
         com.landosol.toolbox.labyrinth.LabyrinthController(
             accountRepository, gameSessionRegistry, database, { bilibiliNativeLoginCoordinator },
             if (sharedData == null) com.landosol.toolbox.labyrinth.AndroidLabyrinthRerollSettingsStore(context) else sharedRerollCache,
-            highScorePreset = { runStrategySettings.highScorePreset },
+            strategySettings = { runStrategySettings },
             launchForeground = ::startRerollHost,
             scope = mainScope,
             beforeRerollLogin = { accountId -> withContext(Dispatchers.IO) { hardCloseChannelClientBeforeReroll(accountId) } },

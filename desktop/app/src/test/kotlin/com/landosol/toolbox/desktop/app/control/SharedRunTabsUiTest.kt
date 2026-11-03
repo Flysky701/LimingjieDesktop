@@ -57,7 +57,7 @@ class SharedRunTabsUiTest {
                 assertEquals(profile.id, args.getValue("id").jsonPrimitive.content)
                 assertEquals(profile.revision, args.getValue("revision").jsonPrimitive.long)
                 val settings = ControlModelCodec.decode<LabyrinthStrategySettings>(args.getValue("value"))
-                assertEquals(profile.settings.copy(highScorePreset = !profile.settings.highScorePreset), settings)
+                assertEquals(37, settings.playerWeight)
                 val updated = profile.copy(settings = settings, revision = profile.revision + 1)
                 global.snapshots.value = JsonObject(snapshots.value + ("strategyLibrary" to
                     ControlModelCodec.encode(library.copy(profiles = listOf(updated)))))
@@ -65,12 +65,25 @@ class SharedRunTabsUiTest {
             }
         }
         compose.setContent { SharedRunTabsApp(profilePort, emptyList(), null, callbacks()) }
+        compose.onNodeWithText("日常模式").assertIsDisplayed()
+        compose.onNodeWithContentDescription("切换一键凹分").performClick()
+        compose.onNodeWithText("一键凹分 · 测试中").assertIsDisplayed()
+        compose.onNodeWithText("筛图上限 · 8 次").performClick()
+        val attempts = compose.onNode(hasSetTextAction())
+        attempts.performTextReplacement("801")
+        compose.onNodeWithText("保存").assertIsNotEnabled()
+        attempts.performTextReplacement("12")
+        compose.onNodeWithText("保存").performClick()
+        compose.onNodeWithText("筛图上限 · 12 次").assertIsDisplayed()
         compose.onNodeWithText("策略").performClick()
-        compose.onNodeWithText("日常 · 直接执行").assertIsDisplayed()
-        compose.onNode(isToggleable()).performClick()
-        compose.onNodeWithText("凹分 · 有限筛图与商店预算").assertIsDisplayed()
-        compose.onNode(isToggleable()).performClick()
-        compose.onNodeWithText("日常 · 直接执行").assertIsDisplayed()
+        compose.onNodeWithText("筛图上限 · 12 次").performClick()
+        compose.onNode(hasSetTextAction()).performTextReplacement("3")
+        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithText("筛图上限 · 12 次").assertIsDisplayed()
+        compose.onNodeWithContentDescription("切换一键凹分").performClick()
+        compose.onNodeWithText("运行").performClick()
+        compose.onNodeWithText("日常模式").assertIsDisplayed()
+        compose.onNodeWithText("筛图上限 · 12 次").assertIsDisplayed()
     }
 
     @Test fun devicePageDetectsOnEntryShowsProgressAndAllowsRetryAfterFailure(){

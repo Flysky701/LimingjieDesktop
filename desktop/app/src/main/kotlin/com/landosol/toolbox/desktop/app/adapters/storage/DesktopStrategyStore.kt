@@ -33,7 +33,8 @@ object StrategyShareCodec {
     private const val MAX_BYTES = 256 * 1024
     private val json = Json { encodeDefaults = true }
     private val settingKeys = json.encodeToJsonElement(LabyrinthStrategySettings.serializer(), LabyrinthStrategySettings()).jsonObject.keys
-    private val stableKeys = settingKeys - "highScorePreset"
+    private val presetKeys = setOf("highScorePreset", "scoreMapAttempts")
+    private val stableKeys = settingKeys - presetKeys
 
     fun encode(profile: StrategyProfile): String {
         validate(profile.name, profile.note, profile.settings)
@@ -41,7 +42,13 @@ object StrategyShareCodec {
             put("format", "limingjie-strategy"); put("version", 1)
             put("name", profile.name); put("note", profile.note)
             val settings = json.encodeToJsonElement(LabyrinthStrategySettings.serializer(), profile.settings).jsonObject
-            put("settings", if (profile.settings.highScorePreset) settings else JsonObject(settings - "highScorePreset"))
+            put("settings", JsonObject(settings.filterKeys { key ->
+                when (key) {
+                    "highScorePreset" -> profile.settings.highScorePreset
+                    "scoreMapAttempts" -> profile.settings.scoreMapAttempts != LabyrinthStrategySettings.DEFAULT_SCORE_MAP_ATTEMPTS
+                    else -> true
+                }
+            }))
         }.toString().toByteArray(Charsets.UTF_8)
         require(document.size <= MAX_BYTES) { "策略内容过大，无法分享" }
         val output = ByteArrayOutputStream()
@@ -63,7 +70,7 @@ object StrategyShareCodec {
             document["version"]?.jsonPrimitive?.intOrNull == 1) { "不支持此策略格式，请更新助手" }
         require(document.keys == setOf("format", "version", "name", "note", "settings")) { "策略包含不支持的内容，请更新助手" }
         val keys = (document["settings"] as? JsonObject)?.keys
-        require(keys == stableKeys || keys == settingKeys) { "策略字段不完整或不兼容，请复制完整分享码或更新助手" }
+        require(keys != null && keys - presetKeys == stableKeys) { "策略字段不完整或不兼容，请复制完整分享码或更新助手" }
         val profile = try {
             StrategyProfile(UUID.randomUUID().toString(), document.getValue("name").jsonPrimitive.content,
                 document.getValue("note").jsonPrimitive.content, settings =

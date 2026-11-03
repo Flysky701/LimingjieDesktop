@@ -18,12 +18,18 @@ data class LabyrinthRerollSettings(
     val rerollUntilFound: Boolean = true,
     val retireExisting: Boolean = true,
 ) {
-    fun toConfig(accountId: Long): LabyrinthRerollConfig {
+    fun toConfig(accountId: Long, strategy: LabyrinthStrategySettings = LabyrinthStrategySettings()): LabyrinthRerollConfig {
         require(validationError() == null)
+        val scoreMap = strategy.highScorePreset && difficulty == 5
+        val limit = when {
+            !scoreMap -> maxAttempts.toInt()
+            rerollUntilFound -> strategy.scoreMapAttempts
+            else -> minOf(maxAttempts.toInt(), strategy.scoreMapAttempts)
+        }
         return LabyrinthRerollConfig(accountId = accountId, guildId = guildId, difficulty = difficulty,
-            maxAttempts = maxAttempts.toInt(), retireExisting = retireExisting,
-            rerollUntilFound = rerollUntilFound,
-            routePolicy = LabyrinthRoutePolicy(perfectStart = perfectStart,
+            maxAttempts = limit, retireExisting = retireExisting,
+            rerollUntilFound = rerollUntilFound && !scoreMap,
+            routePolicy = LabyrinthRoutePolicy(perfectStart = perfectStart, highScore = scoreMap,
                 evaluationMode = routeEvaluationMode, valueAllowance = valueAllowance,
                 thirdBlockChoice = thirdBlockChoice,
                 area3BossIds = area3BossIds.toSet(), area5BossIds = area5BossIds.toSet()))

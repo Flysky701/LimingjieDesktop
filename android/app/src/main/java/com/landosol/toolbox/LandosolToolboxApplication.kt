@@ -399,7 +399,7 @@ class LandosolToolboxApplication : Application() {
         com.landosol.toolbox.labyrinth.LabyrinthController(
             accountRepository, gameSessionRegistry, database, { bilibiliNativeLoginCoordinator },
             com.landosol.toolbox.labyrinth.AndroidLabyrinthRerollSettingsStore(this),
-            highScorePreset = { labyrinthStrategySettings.state.value.highScorePreset },
+            strategySettings = { labyrinthStrategySettings.state.value },
             launchForeground = { com.landosol.toolbox.labyrinth.LabyrinthRerollService.start(this) },
             beforeRerollLogin = { accountId -> hardCloseChannelClientBeforeReroll(accountId) },
             afterStandaloneReroll = { accountId -> coldStartChannelClientAfterReroll(accountId) },

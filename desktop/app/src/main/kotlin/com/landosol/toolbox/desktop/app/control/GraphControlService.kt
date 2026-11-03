@@ -416,9 +416,13 @@ class GraphControlService(
             DesktopTask.REROLL -> {
                 val confirmed = args.boolean("retreatConfirmed")
                 check(!graph.labyrinthController.uiState.value.retireExisting || confirmed) { "请先确认允许撤退现有开局" }
+                graph.freezeTaskStrategy()
                 graph.labyrinthController.start(confirmed, args["guildId"]?.jsonPrimitive?.intOrNull)
             }
-            DesktopTask.READ -> graph.labyrinthController.checkStatus()
+            DesktopTask.READ -> {
+                graph.freezeTaskStrategy()
+                graph.labyrinthController.checkStatus()
+            }
             DesktopTask.RECOGNIZE -> graph.startRecognition(true)
             DesktopTask.ENTRY -> graph.startRecognition(false)
         }

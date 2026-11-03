@@ -20,6 +20,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.landosol.toolbox.labyrinth.LabyrinthBossTeamMode
 import com.landosol.toolbox.labyrinth.LabyrinthCombatKind
 import com.landosol.toolbox.labyrinth.LabyrinthRelicMark
+import com.landosol.toolbox.labyrinth.LabyrinthRerollOptions
 import com.landosol.toolbox.labyrinth.LabyrinthSpecialEquipmentMode
 import com.landosol.toolbox.labyrinth.RESPONSE_INTERVAL_FAST
 import com.landosol.toolbox.labyrinth.RESPONSE_INTERVAL_STANDARD
@@ -192,8 +193,14 @@ fun LabyrinthStrategySettingsScreen(
                         onChange = { draft = draft.copy(relicMarkPriority = it) },
                     )
                 }
-                StrategySwitch("一键凹分预设", "日常默认关闭。开启后，难度5最多筛8张六EX路线；商店按余额与本店额度购买。无需外部组件。", draft.highScorePreset, !saving) {
-                    draft = draft.copy(highScorePreset = it)
+                StrategySection("凹分预设（测试中）", if (draft.highScorePreset) "已开启 · 筛图上限 ${draft.scoreMapAttempts} 次" else "日常", section, { section = it }) {
+                    StrategySwitch("一键凹分", "下一次任务使用凹分的事件和商店规则。难度 5 会筛选六 EX 路线。", draft.highScorePreset, !saving) {
+                        draft = draft.copy(highScorePreset = it)
+                    }
+                    StrategyNumber("凹分筛图上限", draft.scoreMapAttempts, 1..LabyrinthRerollOptions.MAX_ATTEMPTS, "次", !saving) {
+                        draft = draft.copy(scoreMapAttempts = it)
+                    }
+                    Text("每次难度 5 刷开局单独计数。账号若也限制尝试次数，取较小值。")
                 }
                 StrategySection("商店", if (draft.buyRelics) "购买遗物 · ${if (draft.refreshShop) "区域 ${draft.refreshFromArea} 起刷新" else "不刷新"}" else "不购买", section, { section = it }) {
                     Text("遗物始终优先；达到允许刷新起始区域后，本轮遗物买完或当前商品行已无可购买遗物且刷新可用时，继续花300金币刷新。只有遗物/刷新都无法继续时，才用剩余金币购买已确认的职能印记。无法确认的商品不会盲买。")

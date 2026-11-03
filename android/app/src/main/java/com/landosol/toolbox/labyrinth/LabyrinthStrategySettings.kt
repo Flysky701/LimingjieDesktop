@@ -114,8 +114,11 @@ data class LabyrinthStrategySettings(
      */
     val responseIntervalMillis: Int = DEFAULT_RESPONSE_INTERVAL_MILLIS,
     val highScorePreset: Boolean = false,
+    val scoreMapAttempts: Int = DEFAULT_SCORE_MAP_ATTEMPTS,
 ) {
     fun validationError(): String? = when {
+        scoreMapAttempts !in 1..LabyrinthRerollOptions.MAX_ATTEMPTS ->
+            "凹分筛图上限须为 1–${LabyrinthRerollOptions.MAX_ATTEMPTS} 次"
         specialEquipmentMode == LabyrinthSpecialEquipmentMode.AUTO_EQUIP && specialEquipmentKinds.isEmpty() ->
             SPECIAL_EQUIPMENT_EMPTY_KINDS_ERROR
         responseIntervalMillis != RESPONSE_INTERVAL_FAST &&
@@ -203,6 +206,7 @@ data class LabyrinthStrategySettings(
         !saving && validationError() == null && this != saved
 
     companion object {
+        const val DEFAULT_SCORE_MAP_ATTEMPTS = 8
         /**
          *勾选「自动穿戴」却一个关卡类型都没勾选时的中文错误文案。
          * 设置页提示与单测引用同一常量，避免文案各自漂移。

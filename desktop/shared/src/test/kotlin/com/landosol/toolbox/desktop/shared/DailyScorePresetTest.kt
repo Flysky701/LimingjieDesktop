@@ -85,8 +85,25 @@ class DailyScorePresetTest {
 
     @Test fun presetRoundTripsAndOldSettingsUseDaily() {
         assertFalse(LabyrinthStrategySettingsCodec.decode("{}").highScorePreset)
-        val score = LabyrinthStrategySettings(highScorePreset = true, playerWeight = 66)
+        assertEquals(8, LabyrinthStrategySettingsCodec.decode("""{"highScorePreset":true}""").scoreMapAttempts)
+        val score = LabyrinthStrategySettings(highScorePreset = true, playerWeight = 66, scoreMapAttempts = 12)
         assertEquals(score, LabyrinthStrategySettingsCodec.decode(LabyrinthStrategySettingsCodec.encode(score)))
+    }
+
+    @Test fun mapCapUsesTheRunDifficultyAndOnlyAnEnabledAccountLimit() {
+        val account = LabyrinthRerollSettings(difficulty = 5, maxAttempts = "3", rerollUntilFound = true)
+        val preset = LabyrinthStrategySettings(highScorePreset = true, scoreMapAttempts = 12)
+        val score = account.toConfig(1, preset)
+        assertTrue(score.routePolicy.highScore)
+        assertFalse(score.rerollUntilFound)
+        assertEquals(12, score.maxAttempts)
+        assertEquals(3, account.copy(rerollUntilFound = false).toConfig(1, preset).maxAttempts)
+        assertEquals(1, account.toConfig(1, preset.copy(scoreMapAttempts = 1)).maxAttempts)
+        assertEquals(800, account.toConfig(1, preset.copy(scoreMapAttempts = 800)).maxAttempts)
+        assertEquals(account.toConfig(1), account.toConfig(1, preset.copy(highScorePreset = false)))
+        val otherDifficulty = account.copy(difficulty = 4)
+        assertEquals(otherDifficulty.toConfig(1), otherDifficulty.toConfig(1, preset))
+        for (invalid in listOf(0, 801)) assertNotNull(preset.copy(scoreMapAttempts = invalid).validationError())
     }
 
     @Test fun sixExRouteRequiresCrossAreaEdgesAndExactCounts() {

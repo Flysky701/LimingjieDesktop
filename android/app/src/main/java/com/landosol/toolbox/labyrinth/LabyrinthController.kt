@@ -220,7 +220,7 @@ class LabyrinthController(
     /** Runs after a standalone (non-batch) reroll ends; the batch cold-starts the client itself. */
     private val afterStandaloneReroll: suspend (accountId: Long) -> Unit = {},
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
-    private val highScorePreset: () -> Boolean = { false },
+    private val strategySettings: () -> LabyrinthStrategySettings = { LabyrinthStrategySettings() },
 ) {
     // 缺少国服游戏包时，首页构造本 Controller 不应触发 BilibiliSDK 的包查询。
     // 协调器改为按需解析：仅在登录/验证码等真实操作走到时才求值。
@@ -432,7 +432,7 @@ class LabyrinthController(
         if (account == null || account.id != accountId || account.id != settingsAccountId) {
             return failure("当前账号已变化")
         }
-        val base = parseConfig(account.id) ?: return failure(chrome.value.message ?: "刷开局配置无效")
+        val base = parseConfig(account.id, difficulty) ?: return failure(chrome.value.message ?: "刷开局配置无效")
         // The batch has already recorded the previous run (cleared or lost); whatever the server
         // still holds is that run and must be retired, never resumed as "a matching opening".
         val config = labyrinthBatchRerollConfig(base, guildId, difficulty)
@@ -1130,13 +1130,13 @@ class LabyrinthController(
         chrome.update { it.copy(message = null) }
     }
 
-    private fun parseConfig(accountId: Long): LabyrinthRerollConfig? {
+    private fun parseConfig(accountId: Long, difficulty: Int = chrome.value.selectedDifficulty): LabyrinthRerollConfig? {
         val current = chrome.value
         val maxAttempts = current.maxAttempts.toIntOrNull()
         val error = when {
             LabyrinthRerollOptions.guilds.none { it.guildId == current.selectedGuildId } -> "请选择有效公会"
-            current.selectedDifficulty !in 1..LabyrinthRerollOptions.MAX_DIFFICULTY -> "请选择有效难度"
-            current.maxUnlockedDifficulty != null && current.selectedDifficulty > current.maxUnlockedDifficulty ->
+            difficulty !in 1..LabyrinthRerollOptions.MAX_DIFFICULTY -> "请选择有效难度"
+            current.maxUnlockedDifficulty != null && difficulty > current.maxUnlockedDifficulty ->
                 "所选难度尚未解锁"
             maxAttempts == null || maxAttempts !in 1..LabyrinthRerollOptions.MAX_ATTEMPTS ->
                 "最大尝试次数必须在 1 到 ${LabyrinthRerollOptions.MAX_ATTEMPTS} 之间"
@@ -1146,17 +1146,12 @@ class LabyrinthController(
             chrome.update { it.copy(message = error) }
             return null
         }
-        val config = uiSettings().toConfig(accountId)
-        if (!highScorePreset() || config.difficulty != 5) return config
-        return config.copy(
-            maxAttempts = minOf(config.maxAttempts, 8), rerollUntilFound = false,
-            routePolicy = config.routePolicy.copy(highScore = true),
-        )
+        return uiSettings().copy(difficulty = difficulty).toConfig(accountId, strategySettings())
     }
 
     private fun currentRoutePolicy(): LabyrinthRoutePolicy = chrome.value.let { current ->
         LabyrinthRoutePolicy(
-            highScore = highScorePreset() && current.selectedDifficulty == 5,
+            highScore = strategySettings().highScorePreset && current.selectedDifficulty == 5,
             perfectStart = current.perfectStart,
             evaluationMode = current.routeEvaluationMode,
             valueAllowance = current.valueAllowance,

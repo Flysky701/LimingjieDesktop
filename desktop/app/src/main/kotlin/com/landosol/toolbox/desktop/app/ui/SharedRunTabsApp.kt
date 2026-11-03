@@ -132,6 +132,14 @@ private data class PendingSessionAction(val title:String,val message:String,val 
                         IconButton(onClick={actions.run{global.ux.preferences.update{it.copy(theme=if(dark)DesktopThemeMode.LIGHT else DesktopThemeMode.DARK)}}}){Symbol(if(dark)"light_mode" else "dark_mode","切换主题")}
                     }
                     HorizontalDivider(color=Line)
+                    if (page == Page.Run) {
+                        val library by global.labyrinthStrategySettings.library.collectAsState()
+                        library.profiles.firstOrNull { it.id == library.activeId }?.let { profile ->
+                            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                                ScorePresetControls(global, profile, actions)
+                            }
+                        }
+                    }
                     (error ?: globalError ?: globalLocalError ?: actions.message)?.let{Message(it)}
                     BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()){
                         val configuration=Configuration(maxWidth.value.toInt(),maxHeight.value.toInt())

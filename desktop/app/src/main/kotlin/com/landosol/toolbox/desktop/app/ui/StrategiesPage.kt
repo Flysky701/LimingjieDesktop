@@ -1,16 +1,62 @@
 package com.landosol.toolbox.desktop.app.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.desktop.app.adapters.storage.*
 import com.landosol.toolbox.desktop.app.control.ControlSessionUi
+import com.landosol.toolbox.labyrinth.LabyrinthRerollOptions
 import com.landosol.toolbox.ui.labyrinth.LabyrinthStrategySettingsScreen
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
+
+@Composable internal fun ScorePresetControls(graph: ControlSessionUi, profile: StrategyProfile, actions: UiActions) {
+    var editing by remember(profile.id) { mutableStateOf<StrategyProfile?>(null) }
+    val settings = profile.settings
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f)) {
+            Text(if (settings.highScorePreset) "一键凹分 · 测试中" else "日常模式")
+            Text("${profile.name} · 所有设备的下一次任务生效", color = Muted, style = MaterialTheme.typography.bodySmall)
+        }
+        Text("一键凹分（测试中）", style = MaterialTheme.typography.bodySmall)
+        Switch(checked = settings.highScorePreset, enabled = !actions.working,
+            modifier = Modifier.semantics { contentDescription = "切换一键凹分" },
+            onCheckedChange = { enabled -> actions.run {
+                graph.labyrinthStrategySettings.edit(profile, settings.copy(highScorePreset = enabled))
+            } })
+        OutlinedButton(onClick = { editing = profile }, enabled = !actions.working) {
+            Text("筛图上限 · ${settings.scoreMapAttempts} 次")
+        }
+    }
+    editing?.let { original ->
+        var input by remember(original) { mutableStateOf(original.settings.scoreMapAttempts.toString()) }
+        val limit = input.toIntOrNull()?.takeIf { it in 1..LabyrinthRerollOptions.MAX_ATTEMPTS }
+        AlertDialog(onDismissRequest = { if (!actions.working) editing = null },
+            title = { Text("凹分筛图上限") },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("每次难度 5 刷开局最多筛多少张图。账号若也限制尝试次数，取较小值。")
+                OutlinedTextField(input, { input = it }, label = { Text("尝试次数（1–${LabyrinthRerollOptions.MAX_ATTEMPTS}）") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true,
+                    enabled = !actions.working, isError = limit == null)
+                Text("达到上限后尝试当前图的普通路线。", style = MaterialTheme.typography.bodySmall)
+                Message(actions.message)
+            } },
+            confirmButton = { TextButton(enabled = limit != null && !actions.working, onClick = {
+                if (limit != null) actions.run {
+                    graph.labyrinthStrategySettings.edit(original, original.settings.copy(scoreMapAttempts = limit))
+                    editing = null
+                }
+            }) { Text("保存") } },
+            dismissButton = { TextButton(onClick = { editing = null }, enabled = !actions.working) { Text("取消") } })
+    }
+}
 
 @Composable internal fun StrategiesPage(graph: ControlSessionUi) {
     val library by graph.labyrinthStrategySettings.library.collectAsState()
@@ -42,15 +88,8 @@ import java.awt.datatransfer.DataFlavor
                         if (profile.id == library.activeId) StatusBadge("全局已启用")
                         Text("第 ${profile.revision} 次修订 · 个人评分 ${profile.settings.personalRoleScores.size} 人", color = Muted, style = MaterialTheme.typography.bodySmall)
                     }
-                    if (profile.id == library.activeId) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text("一键凹分")
-                            Switch(checked = profile.settings.highScorePreset, enabled = !actions.working,
-                                onCheckedChange = { enabled -> actions.run {
-                                    graph.labyrinthStrategySettings.edit(profile, profile.settings.copy(highScorePreset = enabled))
-                                } })
-                            Text(if (profile.settings.highScorePreset) "凹分 · 有限筛图与商店预算" else "日常 · 直接执行")
-                        }
+                    if (profile.id == library.activeId && LocalControlVisible.current) {
+                        ScorePresetControls(graph, profile, actions)
                     }
                     Detail("玩家评分", "${profile.settings.playerWeight}%")
                     if (profile.note.isNotBlank()) Text(profile.note, style = MaterialTheme.typography.bodySmall)

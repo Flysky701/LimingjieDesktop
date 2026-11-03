@@ -44,8 +44,13 @@ class StrategyShareCodecTest {
         val code = StrategyShareCodec.encode(daily)
         assertFalse("highScorePreset" in document(code).getValue("settings").jsonObject)
         assertEquals(daily.settings, StrategyShareCodec.decode(code).settings)
-        val score = daily.copy(settings = daily.settings.copy(highScorePreset = true))
+        assertFalse("scoreMapAttempts" in document(code).getValue("settings").jsonObject)
+        val oldScore = daily.copy(settings = daily.settings.copy(highScorePreset = true))
+        assertEquals(8, StrategyShareCodec.decode(StrategyShareCodec.encode(oldScore)).settings.scoreMapAttempts)
+        val score = daily.copy(settings = daily.settings.copy(highScorePreset = true, scoreMapAttempts = 12))
         assertEquals(score.settings, StrategyShareCodec.decode(StrategyShareCodec.encode(score)).settings)
+        val disabled = score.copy(settings = score.settings.copy(highScorePreset = false))
+        assertEquals(disabled.settings, StrategyShareCodec.decode(StrategyShareCodec.encode(disabled)).settings)
     }
 
     @Test fun malformedIncompatibleAndOversizedInputCannotBecomeDefaultStrategy() {
