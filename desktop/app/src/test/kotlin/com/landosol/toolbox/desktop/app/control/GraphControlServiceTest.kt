@@ -38,6 +38,51 @@ import java.net.ServerSocket
 class GraphControlServiceTest {
     @get:Rule val directory = TemporaryFolder()
 
+    @Test fun compactSnapshotsKeepFullRecordsAvailableAndRefreshFinishedRows() = runBlocking {
+        val graph = DesktopAppGraph(directory.root.toPath(), suppliedDevice = NoIoDevice(), startupUpdates = false, dataOnly = true)
+        val service = GraphControlService(graph, "compact", "离线测试")
+        try {
+            val now = System.currentTimeMillis()
+            repeat(60) { i ->
+                graph.ux.history.put(com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord(
+                    "run-$i", now + i, "synthetic", "test", "test"))
+                graph.log.add("synthetic-line-$i")
+            }
+            val first = service.snapshot(false)
+            val unchanged = service.snapshot(false)
+            assertEquals(50, first.getValue("history").jsonArray.size)
+            assertEquals(60, first.getValue("historyTotal").jsonPrimitive.int)
+            assertEquals(50, first.getValue("logs").jsonArray.size)
+            assertSame(first["history"], unchanged["history"])
+            assertSame(first["settings"], unchanged["settings"])
+            assertFalse(first.containsKey("crashes"))
+            assertEquals(60, service.execute(ControlOps.HISTORY_LOAD, emptyArgs()).getValue("items").jsonArray.size)
+            assertEquals(graph.log.lines.value.size, service.execute(ControlOps.LOG_LOAD, emptyArgs()).getValue("items").jsonArray.size)
+            // Completion can update an older row without changing list length or the last 50.
+            graph.ux.history.finish("run-0", "完成", "合成数据")
+            val completed = service.snapshot(false)
+            assertEquals(first["history"], completed["history"])
+            assertNotEquals(first["historyRevision"], completed["historyRevision"])
+            val all = service.execute(ControlOps.HISTORY_LOAD, emptyArgs()).getValue("items").jsonArray
+            assertEquals("完成", all.first().jsonObject.getValue("result").jsonPrimitive.content)
+        } finally { service.shutdown() }
+    }
+
+    @Test fun discoveryFailureCannotBeReturnedAsAValidEmptyInventory() = runBlocking {
+        val fake = com.landosol.toolbox.desktop.app.adapters.device.ConnectionFixture()
+        val graph = DesktopAppGraph(directory.root.toPath(), suppliedDevice = fake, startupUpdates = false, dataOnly = true)
+        val service = GraphControlService(graph, "discovery", "检测")
+        try {
+            assertEquals(1, service.execute(ControlOps.DEVICE_DISCOVER, emptyArgs()).getValue("devices").jsonArray.size)
+            fake.onDiscover = { error("ADB 检测失败") }
+            assertEquals("ADB 检测失败", runCatching { service.execute(ControlOps.DEVICE_DISCOVER, emptyArgs()) }.exceptionOrNull()?.message)
+            assertTrue(runCatching { service.execute(ControlOps.DEVICE_DISCOVER, buildJsonObject { put("force", false) }) }.isFailure)
+            fake.onDiscover = {}
+            fake.descriptors = emptyList()
+            assertTrue(service.execute(ControlOps.DEVICE_DISCOVER, emptyArgs()).getValue("devices").jsonArray.isEmpty())
+        } finally { service.shutdown() }
+    }
+
     @Test fun formsUseOriginalValidationAndSnapshotsNeverPublishEditorPasswords() = runBlocking {
         val fake = NoIoDevice()
         val graph = DesktopAppGraph(directory.root.toPath().resolve("data"), suppliedDevice = fake, startupUpdates = false)

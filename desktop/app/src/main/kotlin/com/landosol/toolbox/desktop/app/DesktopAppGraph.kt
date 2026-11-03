@@ -8,6 +8,7 @@ import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.*
 import com.landosol.toolbox.desktop.platform.*
 import com.landosol.toolbox.desktop.app.adapters.storage.*
+import com.landosol.toolbox.desktop.app.adapters.score.RunScoreSidecar
 import com.landosol.toolbox.desktop.app.adapters.captcha.*
 import com.landosol.toolbox.desktop.app.adapters.cndb.*
 import com.landosol.toolbox.desktop.app.adapters.device.*
@@ -131,11 +132,17 @@ class DesktopAppGraph(
     private val resetScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + failures)
     val identityStore = FileDeviceIdentityStore(dataDirectory) { log.add(it, true) }
     val ocr: OcrEngine = if (dataOnly) DataOnlyOcr() else OnnxOcrEngine()
+    private val scoreSidecar = if (dataOnly) null else RunScoreSidecar(
+        save = { id, score -> if (runHistory.supplementScore(id, score)) log.add("本局分数已补记：$score", kind = UserLogKind.KEY) },
+        notice = { log.add(it) },
+    )
     val captchaHost = LoopbackCaptchaHost()
-    val device: DeviceService = (suppliedDevice ?: ManagedDeviceService(dataDirectory, { settings.state.value.adbPath }, { log.add(it) }, { reason -> stopAll(reason) }))
+    val device: DeviceService = (suppliedDevice ?: ManagedDeviceService(dataDirectory, { settings.state.value.adbPath },
+        onEvent = { message -> log.add(message); Log.i("Device", message) },
+        onLost = { reason -> Log.w("Device", reason); stopAll(reason) }))
         .let { if (dataOnly) DiscoveryOnlyDevice(it) else it }
     private val sharedIdentity = MutableStateFlow<Pair<String, String>?>(null)
-    private data class SharedHistoryEvent(val record: DesktopRunRecord? = null, val flush: CompletableDeferred<Unit>? = null)
+    private data class SharedHistoryEvent(val record: DesktopRunRecord? = null, val flush: CompletableDeferred<Unit>? = null, val scoreOnly: Boolean = false)
     private val sharedHistoryEvents = Channel<SharedHistoryEvent>(Channel.UNLIMITED)
     private val sharedHistoryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sharedHistoryForwarder by lazy {
@@ -149,7 +156,7 @@ class DesktopAppGraph(
                 catch (failure: Exception) {
                     log.add("运行记录尚未同步，已保留本地任务日志：${failure.message}", true)
                     event.flush?.completeExceptionally(failure)
-                    stopAll("共享数据连接失败，已停止当前设备任务")
+                    if (!event.scoreOnly) stopAll("共享数据连接失败，已停止当前设备任务")
                 }
             }
         }
@@ -159,7 +166,8 @@ class DesktopAppGraph(
             if (sharedData == null) record else record.copy(deviceId = record.deviceId ?: sharedIdentity.value?.first,
                 deviceName = record.deviceName ?: sharedIdentity.value?.second,
                 accountId = record.accountId ?: labyrinthController.uiState.value.selectedAccount?.id)
-        }, onRecord = { record -> if (sharedData != null) sharedHistoryEvents.trySend(SharedHistoryEvent(record = record)) })
+        }, onRecord = { record -> if (sharedData != null) sharedHistoryEvents.trySend(SharedHistoryEvent(record = record)) },
+            onScoreRecord = { record -> if (sharedData != null) sharedHistoryEvents.trySend(SharedHistoryEvent(record = record, scoreOnly = true)) })
     }
     private val strategyRevisionState = MutableStateFlow<Long?>(null)
     val strategyRevision = strategyRevisionState.asStateFlow()
@@ -197,6 +205,11 @@ class DesktopAppGraph(
         val key = "shared-account-$accountId"
         val material = com.landosol.toolbox.protocol.bilibili.AccountLoginMaterial(accountId, key, snapshot.loginId, snapshot.password,
             requireNotNull(GameServer.fromStorageId(account.serverId)) { "共享账号服务器无法识别" })
+        sharedRerollCache.save(accountId, snapshot.reroll)
+        database.accountDao().bindSharedProjection(
+            AccountEntity(id = accountId, alias = account.alias, serverId = account.serverId, gameUid = account.gameUid,
+                credentialKey = key, isSelected = true, createdAt = account.updatedAt, updatedAt = System.currentTimeMillis()),
+        )
         val previous = cachedMaterial
         if (previous != null && (previous.accountId != accountId || previous.server != material.server ||
                 previous.loginId != material.loginId || previous.password != material.password)) {
@@ -205,13 +218,7 @@ class DesktopAppGraph(
         }
         credentialStore.save(key, AccountCredentials(material.loginId, material.password))
         cachedMaterial = material
-        sharedRerollCache.save(accountId, snapshot.reroll)
         withContext(Dispatchers.IO) {
-            val existing = database.accountDao().getById(accountId)
-            val row = AccountEntity(id = accountId, alias = account.alias, serverId = account.serverId, gameUid = account.gameUid,
-                credentialKey = key, isSelected = true, createdAt = existing?.createdAt ?: account.updatedAt, updatedAt = account.updatedAt)
-            if (existing == null) database.accountDao().insert(row) else database.accountDao().update(row)
-            database.accountDao().selectAccount(accountId)
             settings.save(snapshot.settings.copy(lastDevice = settings.state.value.lastDevice))
         }
         withTimeout(10_000) { labyrinthController.uiState.first { it.selectedAccount?.id == accountId && it.settingsReady } }
@@ -219,6 +226,7 @@ class DesktopAppGraph(
             if (labyrinthController.uiState.value.rerollSettings() != snapshot.reroll) labyrinthController.saveSettings(snapshot.reroll)
         }
         labyrinthStrategySettings.save(snapshot.strategy)
+        sharedStrategyIdentity = snapshot.strategyIdentity
         strategyRevisionState.value = snapshot.strategyRevision
         return snapshot
     }
@@ -229,6 +237,8 @@ class DesktopAppGraph(
         cachedMaterial = null
         database.accountDao().clearSelection()
         withTimeout(10_000) { labyrinthController.uiState.first { it.selectedAccount == null } }
+        sharedStrategyIdentity = null
+        taskStrategy = null
         strategyRevisionState.value = null
     }
     val resolutionGuard = VisualResolutionGuard(device) { reason ->
@@ -240,15 +250,26 @@ class DesktopAppGraph(
     private val actionDevice: DeviceService = ResolutionGuardedDevice(device, resolutionGuard)
     val deviceConnection = DeviceConnectionActions(device, { settings.state.value.adbPath }, { log.add(it, true) })
     private val previewState = MutableStateFlow<CapturePixels?>(null)
+    private val previewLock = Any()
+    @Volatile private var previewRequested = true
+    @Volatile private var lastCapturedFrameMillis = 0L
     val preview = previewState.asStateFlow()
     val captureService = DesktopCaptureService(
         source = { device.capture().let {
             resolutionGuard.observe(it.width, it.height)
-            CapturePixels(it.width, it.height, it.pixels, it.timestampMillis)
+            lastCapturedFrameMillis = it.timestampMillis
+            // The built-in Raw and PNG decoders allocate each frame; injected devices may reuse buffers.
+            CapturePixels(it.width, it.height, it.pixels, it.timestampMillis, ownsPixels = suppliedDevice == null)
         } },
-        preview = { previewState.value = it }, onWarning = { log.add(it, true) }, onLost = { stopAll(it) },
+        preview = { synchronized(previewLock) { if (previewRequested) previewState.value = it } },
+        onWarning = { log.add(it, true) }, onLost = { stopAll(it) },
         deferFrame = { resolutionGuard.deferTransitionFrame(it.width, it.height) },
+        previewEnabled = { previewRequested },
     )
+    fun setPreviewRequested(requested: Boolean) = synchronized(previewLock) {
+        previewRequested = requested
+        if (!requested) previewState.value = null
+    }
     private val viewModels = androidx.lifecycle.ViewModelStore()
     val accounts by lazy { com.landosol.toolbox.account.AccountViewModel(accountRepository).also { viewModels.put("accounts", it) } }
     private val diagnostics by lazy { com.landosol.toolbox.labyrinth.debug.LabyrinthRuntimeDiagnostics(context).also { diagnostics ->
@@ -258,7 +279,7 @@ class DesktopAppGraph(
                 .put("model", ready?.identity?.model ?: "unknown").put("width", ready?.width ?: 0).put("height", ready?.height ?: 0)
                 .put("captureMode", ready?.selectedMode?.name ?: "none").put("captureRunning", CaptureStateRegistry.isActive())
                 .put("touchReady", ready?.touchReady ?: false).put("awake", ready?.awake ?: false)
-                .put("lastFrameMillis", previewState.value?.timestampMillis ?: 0)
+                .put("lastFrameMillis", lastCapturedFrameMillis)
                 .put("screenshotP95Millis", ready?.timing?.firstOrNull { it.mode == ready.selectedMode }?.p95Millis ?: 0)
         }
     } }
@@ -308,7 +329,10 @@ class DesktopAppGraph(
         }
         autoRunScope.launch { labyrinthController.uiState.collect { state -> (state.progress ?: state.message)?.let { log.add(it) } } }
         autoRunScope.launch { automationOverlayCoordinator.state.collect { it?.let { log.add("${it.status} ${it.detail.orEmpty()}") } } }
-        if (!dataOnly) autoRunScope.launch { ocr.warmUp() }
+        if (!dataOnly) autoRunScope.launch {
+            device.state.first { it is DeviceConnectionState.Ready }
+            ocr.warmUp()
+        }
         if (startupUpdates) databaseUpdateScope.launch {
             when (val result = labyrinthCnDatabaseRepository.updateIfNeeded()) {
                 is LabyrinthCnDatabaseUpdateResult.UpToDate ->
@@ -386,7 +410,19 @@ class DesktopAppGraph(
         AndroidLabyrinthRoleDecisionDataLoader(context).load()
     }
     val labyrinthStrategySettings by lazy {
-        com.landosol.toolbox.labyrinth.AndroidLabyrinthStrategySettingsStore(context, transient = sharedData != null)
+        com.landosol.toolbox.desktop.app.adapters.storage.DesktopStrategyStore(dataDirectory,
+            legacy = { com.landosol.toolbox.labyrinth.AndroidLabyrinthStrategySettingsStore(context, transient = sharedData != null).state.value },
+            notice = ::addNotice, transient = sharedData != null)
+    }
+    @Volatile private var sharedStrategyIdentity: com.landosol.toolbox.desktop.app.adapters.storage.StrategyIdentity? = null
+    @Volatile private var taskStrategy: com.landosol.toolbox.desktop.app.adapters.storage.StrategyProfile? = null
+    val taskStrategyIdentity get() = taskStrategy?.identity
+    private val runStrategySettings get() = taskStrategy?.settings ?: labyrinthStrategySettings.state.value
+    private fun freezeTaskStrategy() {
+        val active = labyrinthStrategySettings.library.value.active
+        taskStrategy = if (sharedData == null) active else sharedStrategyIdentity?.let {
+            active.copy(id = it.id, name = it.name, revision = it.revision)
+        }
     }
     suspend fun loadLabyrinthRoleRatings(): List<com.landosol.toolbox.labyrinth.LabyrinthRoleRatingItem> =
         kotlinx.coroutines.withContext(Dispatchers.IO) {
@@ -426,9 +462,9 @@ class DesktopAppGraph(
         LabyrinthEntryRecognitionSession(
             relicCatalog = { catalog },
             scoreLedger = com.landosol.toolbox.labyrinth.ScoreRunLedger(context),
-            mayRetireForScoreEvent = { labyrinthStrategySettings.state.value.highScorePreset && labyrinthController.uiState.value.retireExisting },
+            mayRetireForScoreEvent = { runStrategySettings.highScorePreset && labyrinthController.uiState.value.retireExisting },
             strategyProvider = {
-                val settings = labyrinthStrategySettings.state.value
+                val settings = runStrategySettings
                 com.landosol.toolbox.labyrinth.LabyrinthStrategySnapshot(
                     settings,
                     roleDecisionRuntime?.document?.let { document ->
@@ -449,7 +485,11 @@ class DesktopAppGraph(
                     labyrinthController.startAfterBattleFailureReroll(accountId)
                 }
             },
-            runTerminalListener = { event -> labyrinthBatchController.onRunTerminal(event) },
+            runTerminalListener = { event ->
+                (event as? com.landosol.toolbox.labyrinth.batch.LabyrinthRunTerminalEvent.Cleared)?.summary
+                    ?.let { log.add(it.description(), kind = UserLogKind.KEY) }
+                labyrinthBatchController.onRunTerminal(event)
+            },
             channelPrompts = channelLoginPromptAssistant("LabyrinthEntry"),
             sessionManager = automationSessionManager,
             processorFactory = { finalBossOnly ->
@@ -457,14 +497,15 @@ class DesktopAppGraph(
                     context = context,
                     characterAttributes = characterAttributes,
                     finalBossOnly = finalBossOnly,
-                    scoreShop = labyrinthStrategySettings.state.value.highScorePreset,
+                    scoreShop = runStrategySettings.highScorePreset,
                     relicCatalog = catalog,
                     skipJoinedCharacters = { labyrinthEntryRecognitionSession.skipRoleRewardJoinedRecognition },
                     nodeSearchHint = { labyrinthEntryRecognitionSession.currentNodeSearchHint() },
                     nodeScanRequested = { labyrinthEntryRecognitionSession.nodeScanRequested() },
                     nodeScanConsumable = { labyrinthEntryRecognitionSession.nodeScanConsumable() },
                     rosterCharacterIds = { labyrinthEntryRecognitionSession.rosterCharacterIds() },
-                )::process
+                    readResultScore = false,
+                )::processDesktopFrame
             },
             captureStop = { captureService.stop() },
             overlayCoordinator = automationOverlayCoordinator,
@@ -497,16 +538,17 @@ class DesktopAppGraph(
             },
             routeExecutionGate = ::validateLabyrinthExecutionForAccount,
             nodeTemplateLoader = { AndroidLabyrinthNodeTemplateLoader(context).load() },
-            debugFramePublisher = debugDashboard?.let { dashboard ->
-                { frame, state, result, presentation ->
-                    dashboard.publish(
+            debugFramePublisher = { frame, state, result, presentation ->
+                val recordId = if (state.dryRun || state.sessionId == null) null
+                    else state.runId?.let { "run:$it" } ?: "recognition:${state.sessionId}"
+                scoreSidecar?.observe(recordId, result.observation.state, frame.bitmap, frame.timestampMillis)
+                debugDashboard?.publish(
                         bitmap = frame.bitmap,
                         state = state,
                         result = result,
                         presentation = presentation,
                         nowMillis = frame.timestampMillis,
-                    )
-                }
+                )
             },
             actionScope = recognitionScope,
             gameLauncher = gameLauncher@{
@@ -610,7 +652,7 @@ class DesktopAppGraph(
         com.landosol.toolbox.labyrinth.LabyrinthController(
             accountRepository, gameSessionRegistry, database, { bilibiliNativeLoginCoordinator },
             if (sharedData == null) com.landosol.toolbox.labyrinth.AndroidLabyrinthRerollSettingsStore(context) else sharedRerollCache,
-            highScorePreset = { labyrinthStrategySettings.state.value.highScorePreset },
+            highScorePreset = { runStrategySettings.highScorePreset },
             launchForeground = ::startRerollHost,
             scope = mainScope,
             beforeRerollLogin = { accountId -> withContext(Dispatchers.IO) { hardCloseChannelClientBeforeReroll(accountId) } },
@@ -742,7 +784,7 @@ class DesktopAppGraph(
                 val processor = AndroidLabyrinthEntryFrameProcessor.create(context, nodeScanRequested = { false })
                 val processFrame: (CapturedFrame) -> LabyrinthEntryFrameResult = { frame ->
                     frameTracker.trackFrame(frame.bitmap.width, frame.bitmap.height)
-                    processor.process(frame).also(frameTracker::record)
+                    processor.processDesktopFrame(frame).also(frameTracker::record)
                 }
                 processFrame
             },
@@ -812,6 +854,7 @@ class DesktopAppGraph(
                         is GameSessionResetStartResult.Started -> {
                             val final = gameSessionResetWorkflow.state.first { !it.running }
                             val ok = final.status == GameSessionResetStatus.STOPPED &&
+                                final.stage == com.landosol.toolbox.automation.session.GameSessionResetStage.READY_FOR_NEXT_ROUND &&
                                 final.lastBlock == SessionBlockKind.NONE
                             if (ok) {
                                 com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Success(
@@ -914,6 +957,7 @@ class DesktopAppGraph(
         if (ui.selectedAccount?.id != id || ui.isWorking || ui.captcha != null || labyrinthEntryRecognitionSession.state.value.running) {
             return false
         }
+        freezeTaskStrategy()
         val frozenPackage = (gameClientResolution as GameClientResolution.Available).server.packageName
         startingState.value = true
         autoRunJob = autoRunScope.launch {
@@ -1012,7 +1056,7 @@ class DesktopAppGraph(
         }
     }
 
-    suspend fun disconnectDevice() { check(!busy) { "请先停止任务" }; resolutionGuard.disarm(clearStatus = true); deviceConnection.disconnect { captureService.stopAndJoin("断开设备") }; previewState.value = null }
+    suspend fun disconnectDevice() { check(!busy) { "请先停止任务" }; resolutionGuard.disarm(clearStatus = true); deviceConnection.disconnect { captureService.stopAndJoin("断开设备") }; previewState.value = null; lastCapturedFrameMillis = 0L }
     suspend fun recheckResolution(): VisualResolutionStatus {
         check(!busy) { "请先停止任务，再重新检查画面尺寸" }
         return resolutionGuard.recheck().also { log.add(it.message, !it.supported) }
@@ -1020,6 +1064,7 @@ class DesktopAppGraph(
     suspend fun startPreview() { captureService.start() }
     fun startRecognition(dryRun: Boolean): Job = synchronized(startLock) {
         if (busy) { log.add("请先停止当前任务", true); return Job().apply { complete() } }
+        freezeTaskStrategy()
         startingState.value = true
         autoRunScope.launch {
         try {
@@ -1095,6 +1140,7 @@ class DesktopAppGraph(
             withContext(NonCancellable) {
                 deviceConnection.closeAndJoin()
                 ux.closeAndJoin()
+                scoreSidecar?.closeAndJoin()
                 withTimeoutOrNull(5_000) { flushSharedRecords() }
                 sharedHistoryScope.cancel()
                 withContext(Dispatchers.Main) { viewModels.clear() }
@@ -1103,7 +1149,8 @@ class DesktopAppGraph(
                     { labyrinthDebugDashboard?.close(); Unit }, { diagnostics.close() }, { database.close() }, { power.close() }, { network.close() })
                     .forEach { release -> runCatching(release).onFailure { Log.e(APP_LOG_TAG, "释放桌面资源失败", it) } }
                 DesktopBindings.release(installedServices)
-                previewState.value = null
+                setPreviewRequested(false)
+                lastCapturedFrameMillis = 0L
             }
         }
     }

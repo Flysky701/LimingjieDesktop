@@ -11,5 +11,6 @@ interface WorkerLink {
     val error: StateFlow<String?>
     suspend fun request(op: String, args: JsonObject = JsonObject(emptyMap())): JsonObject
     fun setSelected(selected: Boolean)
+    fun setPreviewVisible(visible: Boolean) = Unit
     suspend fun shutdown()
 }

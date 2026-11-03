@@ -84,7 +84,7 @@ enum class LabyrinthRunOutcome {
 sealed interface LabyrinthRunTerminalEvent {
     val runId: String
 
-    data class Cleared(override val runId: String) : LabyrinthRunTerminalEvent
+    data class Cleared(override val runId: String, val summary: com.landosol.toolbox.labyrinth.LabyrinthRunSummary? = null) : LabyrinthRunTerminalEvent
     data class FailedMaxRetry(override val runId: String) : LabyrinthRunTerminalEvent
     data class ScoreOpeningSkipped(override val runId: String) : LabyrinthRunTerminalEvent
     data class FatalUnknown(override val runId: String, val reason: String) : LabyrinthRunTerminalEvent
@@ -128,6 +128,8 @@ data class LabyrinthBatchCheckpoint(
     val reusedVerifiedOpeningForFirstRun: Boolean = false,
     val message: String? = null,
     val updatedAt: Long,
+    val lastRunSummary: com.landosol.toolbox.labyrinth.LabyrinthRunSummary? = null,
+    val lastRecordedOutcome: LabyrinthRunOutcome? = null,
 ) {
     init {
         require(goals.isNotEmpty()) { "a batch needs at least one goal" }
@@ -177,6 +179,7 @@ internal fun LabyrinthBatchCheckpoint.recordOutcome(
     return copy(
         goals = goals,
         currentRunOutcome = outcome,
+        lastRecordedOutcome = outcome,
         lastRecordedRunId = runId,
         abnormalRuns = if (outcome == LabyrinthRunOutcome.ABORTED_UNKNOWN) abnormalRuns + 1 else abnormalRuns,
         stage = LabyrinthBatchStage.RECORDING_RESULT,

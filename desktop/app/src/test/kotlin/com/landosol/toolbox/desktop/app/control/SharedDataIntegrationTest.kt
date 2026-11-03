@@ -125,6 +125,30 @@ class SharedDataIntegrationTest {
         } finally { service.shutdown() }
     }
 
+    @Test fun runtimeRebindsReusedAliasWithoutLosingAccountRecords() = runBlocking {
+        val shared = SyntheticSharedData()
+        val graph = DesktopAppGraph(directory.root.toPath(), suppliedDevice = UiTestNoIoDevice(),
+            startupUpdates = false, sharedData = shared)
+        try {
+            graph.prepareSharedAccount(5)
+            graph.database.seedRelatedRecordsForTest(5)
+            graph.clearSharedBinding()
+            // The owner deleted or renamed 5 and now assigns its old alias to 6.
+            graph.prepareSharedAccount(6)
+            val dao = graph.database.accountDao()
+            assertEquals(6L, dao.getSelected()!!.id)
+            assertEquals("synthetic", dao.getSelected()!!.alias)
+            assertEquals(1, graph.database.labyrinthRouteDao().countForAccount(5))
+            assertEquals(0, graph.database.labyrinthRouteDao().countForAccount(6))
+
+            // A subsequent bind updates an existing projection and restores its authoritative name.
+            graph.prepareSharedAccount(5)
+            assertEquals(5L, dao.getSelected()!!.id)
+            assertEquals("synthetic", dao.getSelected()!!.alias)
+            assertEquals(1, graph.database.labyrinthRouteDao().countForAccount(5))
+        } finally { graph.shutdown() }
+    }
+
     private class SyntheticSharedData : SharedDataAccess {
         override val authorityId = "synthetic-authority"
         var currentStrategy = LabyrinthStrategySettings(playerWeight = 63)

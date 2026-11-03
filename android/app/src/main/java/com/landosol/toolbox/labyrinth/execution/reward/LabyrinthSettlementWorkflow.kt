@@ -15,6 +15,7 @@ import com.landosol.toolbox.labyrinth.LabyrinthExecutionLimits.POST_ENTRY_STABLE
 
 internal interface LabyrinthSettlementPort {
     val _state: MutableStateFlow<LabyrinthEntryRecognitionSessionState>
+    val clock: () -> Long
     val actionScope: CoroutineScope
     val activeRunAccountId: Long?
     val activeSessionId: AutomationSessionId?
@@ -42,6 +43,18 @@ internal interface LabyrinthSettlementPort {
 
 /** 推进最终结算并发布本局终止结果。 */
 internal class LabyrinthSettlementWorkflow(private val port: LabyrinthSettlementPort) : LabyrinthSettlementPort by port {
+    private var runStartedAt = 0L
+    private var scoreCollector = LabyrinthRunScoreCollector()
+
+    fun beginRun() {
+        runStartedAt = clock()
+        scoreCollector = LabyrinthRunScoreCollector()
+    }
+
+    fun observeScore(result: LabyrinthEntryFrameResult, timestampMillis: Long) {
+        scoreCollector.observe(result.observation.state, result.runResultScore, timestampMillis)
+    }
+
     fun finalSettlementFallbackRect(
         result: LabyrinthEntryFrameResult,
         pageState: LabyrinthEntryPageState,
@@ -89,27 +102,24 @@ internal class LabyrinthSettlementWorkflow(private val port: LabyrinthSettlement
             visitedCount = 0,
             routeNodeCount = routeNodeCount,
         )
-        _state.value = current.copy(routeProgress = progress.copy(complete = true))
+        val summary = LabyrinthRunSummary(runStartedAt, clock(), scoreCollector.score)
+        _state.value = current.copy(routeProgress = progress.copy(complete = true), runSummary = summary)
+        nodeLog("run-result-complete durationMs=${summary.durationMillis} score=${summary.score ?: "unread"}")
         pendingTerminalOutcome = LabyrinthRunTerminalOutcome.CLEARED
-        finishFromPlanner(sessionId, "已完成最终结算并返回黎明界主页")
+        finishFromPlanner(sessionId, "已完成最终结算并返回黎明界主页 · ${summary.description()}")
     }
 
     fun handleSettlementProgress(sessionId: AutomationSessionId, pageState: LabyrinthEntryPageState, timestampMillis: Long): Boolean {
-        if (pageState == LabyrinthEntryPageState.RUN_CLEAR_RESULT) {
-            val next = labyrinthPostBossStageOnFinalResult(postBossStage)
-            if (next != postBossStage) {
-                nodeLog("post-boss-stage ${postBossStage.name} -> ${next.name} on RUN_CLEAR_RESULT")
-                postBossStage = next
+        val nextPostBossStage = labyrinthPostBossStageOnPage(postBossStage, pageState)
+        if (nextPostBossStage != postBossStage) {
+            nodeLog("post-boss-stage ${postBossStage.name} -> ${nextPostBossStage.name} on ${pageState.name}")
+            postBossStage = nextPostBossStage
+            if (pageState == LabyrinthEntryPageState.RUN_CLEAR_RESULT) {
                 postBossStartedAt = timestampMillis
                 postBossUnknownAttempts = 0
-                // postEntryAttempts is deliberately kept: a CHEST_SEQUENCE -> SCORE_RESULT return true.also { traceWorkflow("settlement", "completion") }
+                // postEntryAttempts is deliberately kept: a CHEST_SEQUENCE -> SCORE_RESULT return
                 // means 关闭 was already tapped once and the per-page budget bounds the re-taps.
             }
-        }
-        if (postBossStage == LabyrinthPostBossStage.CHEST_SEQUENCE &&
-            pageState == LabyrinthEntryPageState.ITEM_REWARD
-        ) {
-            postBossStage = LabyrinthPostBossStage.FINAL_ITEM_REWARD
         }
         if (postBossStage == LabyrinthPostBossStage.WAITING_FOR_DAWN_HOME &&
             pageState == LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE
@@ -159,7 +169,7 @@ internal class LabyrinthSettlementWorkflow(private val port: LabyrinthSettlement
         pendingTerminalOutcome = null
         val listener = runTerminalListener ?: return
         val event = when {
-            outcome == LabyrinthRunTerminalOutcome.CLEARED -> LabyrinthRunTerminalEvent.Cleared(runId)
+            outcome == LabyrinthRunTerminalOutcome.CLEARED -> LabyrinthRunTerminalEvent.Cleared(runId, _state.value.runSummary)
             outcome == LabyrinthRunTerminalOutcome.SCORE_OPENING_SKIPPED -> LabyrinthRunTerminalEvent.ScoreOpeningSkipped(runId)
             outcome == LabyrinthRunTerminalOutcome.FAILED_MAX_RETRY -> LabyrinthRunTerminalEvent.FailedMaxRetry(runId)
             userInitiated -> LabyrinthRunTerminalEvent.UserStopped(runId)

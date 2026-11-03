@@ -2,7 +2,12 @@ package com.landosol.toolbox.desktop.ocr
 
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
+import java.awt.image.DataBufferInt
+import java.awt.image.DirectColorModel
+import java.awt.image.Raster
 import kotlin.math.*
+
+private val rgbModel = DirectColorModel(24, 0xff0000, 0xff00, 0xff)
 
 /** Image and model operations are internal so production and deterministic tests use one pipeline. */
 internal data class OcrImage(val width: Int, val height: Int, val pixels: IntArray) {
@@ -10,14 +15,15 @@ internal data class OcrImage(val width: Int, val height: Int, val pixels: IntArr
 
     fun resize(targetWidth: Int, targetHeight: Int): OcrImage {
         if (width == targetWidth && height == targetHeight) return this
-        val source = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
-        source.setRGB(0, 0, width, height, pixels, 0, width)
+        // Java2D reads this RGB view synchronously. The caller retains its input pixels.
+        val raster = Raster.createPackedRaster(DataBufferInt(pixels, pixels.size), width, height, width, rgbModel.masks, null)
+        val source = BufferedImage(rgbModel, raster, false, null)
         val target = BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_RGB)
         target.createGraphics().useGraphics { g ->
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
             g.drawImage(source, 0, 0, targetWidth, targetHeight, null)
         }
-        return OcrImage(targetWidth, targetHeight, target.getRGB(0, 0, targetWidth, targetHeight, null, 0, targetWidth))
+        return OcrImage(targetWidth, targetHeight, (target.raster.dataBuffer as DataBufferInt).data)
     }
 
     fun crop(box: TextBox): OcrImage {
@@ -38,13 +44,17 @@ internal data class TensorImage(val width: Int, val height: Int, val values: Flo
 internal data class RecognizedText(val box: TextBox, val text: String, val confidence: Float)
 
 internal object OcrPreprocessing {
+    private fun channelValues(mean: Float, std: Float) = FloatArray(256) { (it / 255f - mean) / std }
+    private val detectionChannels = arrayOf(channelValues(.485f, .229f), channelValues(.456f, .224f), channelValues(.406f, .225f))
+    private val recognitionChannels = channelValues(.5f, .5f).let { arrayOf(it, it, it) }
+
     fun detection(image: OcrImage): TensorImage {
         val minScale = max(1.0, 32.0 / min(image.width, image.height))
         val maxScale = min(1.0, 960.0 / (max(image.width, image.height) * minScale))
         val ratio = minScale * maxScale
         val width = max(32, (image.width * ratio / 32.0).roundToInt() * 32)
         val height = max(32, (image.height * ratio / 32.0).roundToInt() * 32)
-        return normalized(image.resize(width, height), floatArrayOf(.485f, .456f, .406f), floatArrayOf(.229f, .224f, .225f))
+        return normalized(image.resize(width, height), detectionChannels)
     }
 
     fun recognition(image: OcrImage): TensorImage {
@@ -54,23 +64,23 @@ internal object OcrPreprocessing {
         val width = max(320, contentWidth)
         // The recognizer expects height 48; extremely wide text is downscaled to fit then padded.
         val height = if (48.0 * image.width / image.height > 1280) max(1, (image.height * 1280.0 / image.width).roundToInt()) else 48
-        val normalized = normalized(image.resize(contentWidth, height), floatArrayOf(.5f, .5f, .5f), floatArrayOf(.5f, .5f, .5f))
-        if (height == 48 && contentWidth == width) return normalized
-        val values = FloatArray(3 * 48 * width)
-        repeat(3) { c -> repeat(height) { y ->
-            normalized.values.copyInto(values, c * 48 * width + y * width,
-                c * contentWidth * height + y * contentWidth, c * contentWidth * height + (y + 1) * contentWidth)
-        } }
-        return TensorImage(width, 48, values)
+        return normalized(image.resize(contentWidth, height), recognitionChannels, width, 48)
     }
 
-    private fun normalized(image: OcrImage, mean: FloatArray, std: FloatArray): TensorImage {
-        val size = image.width * image.height
+    private fun normalized(image: OcrImage, channels: Array<FloatArray>,
+        width: Int = image.width, height: Int = image.height): TensorImage {
+        val size = width * height
         val values = FloatArray(size * 3)
-        image.pixels.forEachIndexed { i, pixel ->
-            repeat(3) { channel -> values[channel * size + i] = (((pixel ushr (channel * 8)) and 255) / 255f - mean[channel]) / std[channel] }
-        }
-        return TensorImage(image.width, image.height, values)
+        val (blue, green, red) = channels
+        // Write directly into the padded planes; untouched right/bottom padding stays zero.
+        repeat(image.height) { y -> repeat(image.width) { x ->
+            val pixel = image.pixels[y * image.width + x]
+            val at = y * width + x
+            values[at] = blue[pixel and 255]
+            values[size + at] = green[(pixel ushr 8) and 255]
+            values[2 * size + at] = red[(pixel ushr 16) and 255]
+        } }
+        return TensorImage(width, height, values)
     }
 }
 
@@ -124,18 +134,16 @@ internal object OcrPostprocessing {
         return result
     }
 
-    fun ctc(logits: FloatArray, steps: Int, classes: Int, dictionary: List<String>): Pair<String, Float> {
-        require(logits.size == steps * classes && dictionary.size == classes)
+    fun ctc(indices: IntArray, probabilities: FloatArray, dictionary: List<String>): Pair<String, Float> {
+        require(indices.size == probabilities.size)
         val text = StringBuilder()
         var prior = -1
         var confidence = 0f
         var retained = 0
-        repeat(steps) { step ->
-            val offset = step * classes
-            var best = 0
-            for (candidate in 1 until classes) if (logits[offset + candidate] > logits[offset + best]) best = candidate
+        indices.forEachIndexed { step, best ->
+            require(best in dictionary.indices)
             if (best != 0 && best != prior) {
-                text.append(dictionary[best]); confidence += logits[offset + best]; retained++
+                text.append(dictionary[best]); confidence += probabilities[step]; retained++
             }
             prior = best
         }

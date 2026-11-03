@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.LruCache
+import com.landosol.toolbox.clanbattle.recognition.AndroidPixelImageAdapter
 import java.nio.file.Files
 import java.io.ByteArrayOutputStream
 import org.junit.Assert.*
@@ -14,6 +15,7 @@ class ShimTest {
         val pixels = intArrayOf(0xff123456.toInt(), 0xffabcdef.toInt(), 0xff00ff00.toInt(), 0xffffffff.toInt())
         val bitmap = Bitmap.createBitmap(pixels, 2, 2, Bitmap.Config.ARGB_8888)
         pixels[0] = 0
+        AndroidPixelImageAdapter.from(bitmap).pixels[0] = 0
         assertEquals(0xff123456.toInt(), bitmap.getPixel(0, 0))
         assertSame(bitmap, Bitmap.createBitmap(bitmap, 0, 0, 2, 2))
         assertSame(bitmap, Bitmap.createScaledBitmap(bitmap, 2, 2, true))
@@ -32,6 +34,16 @@ class ShimTest {
         val image = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
         assertThrows(IllegalArgumentException::class.java) { Bitmap.createBitmap(image, 1, 0, 2, 1) }
         assertNull(BitmapFactory.decodeStream(byteArrayOf(1, 2, 3).inputStream()))
+    }
+    @Test fun samplingOnePixelImageDoesNotRecycleReturnedBitmap() {
+        val source = Bitmap.createBitmap(intArrayOf(0xff123456.toInt()), 1, 1, Bitmap.Config.ARGB_8888)
+        val bytes = ByteArrayOutputStream().also { source.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        source.recycle()
+        val sampled = BitmapFactory.decodeStream(bytes.inputStream(), null, BitmapFactory.Options().apply { inSampleSize = 4 })!!
+        try {
+            assertFalse(sampled.isRecycled)
+            assertEquals(0xff123456.toInt(), sampled.getPixel(0, 0))
+        } finally { sampled.recycle() }
     }
     @Test fun bitmapDecodesUpstreamWebpCharacterIcon() {
         val encoded = android.content.res.AssetManager().open("resource-packs/cn-bilibili/icons/characters/icon_unit_100661.webp").use { it.readBytes() }

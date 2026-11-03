@@ -240,11 +240,15 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
     private val nodeRelicStackResolver: AndroidLabyrinthNodeRelicStackResolver,
     private val relicDetailResolver: AndroidLabyrinthRelicDetailResolver,
     private val skipJoinedCharacters: () -> Boolean,
+    private val readResultScore: Boolean,
 ) {
-    fun process(frame: CapturedFrame): LabyrinthEntryFrameResult {
+    private val resultScoreResolver = AndroidLabyrinthResultScoreResolver()
+    fun process(frame: CapturedFrame): LabyrinthEntryFrameResult = process(frame, null)
+
+    internal fun process(frame: CapturedFrame, capturePixels: PixelImage?): LabyrinthEntryFrameResult {
         val started = System.nanoTime()
         val result = processor.process(
-            AndroidPixelImageAdapter.from(frame.bitmap),
+            capturePixels ?: AndroidPixelImageAdapter.from(frame.bitmap),
             deferRoleRewardPortraits = true,
             skipJoinedCharacters = skipJoinedCharacters(),
         )
@@ -259,7 +263,8 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
         val nodeStarted = System.nanoTime()
         val nodeResolved = nodeRelicStackResolver.resolve(frame.bitmap, relicResolved)
         val detailStarted = System.nanoTime()
-        val resolved = relicDetailResolver.resolve(frame.bitmap, nodeResolved)
+        val detailResolved = relicDetailResolver.resolve(frame.bitmap, nodeResolved)
+        val resolved = if (readResultScore) resultScoreResolver.resolve(frame.bitmap, detailResolved) else detailResolved
         val finished = System.nanoTime()
         return resolved.copy(
             elapsedMillis = (finished - started) / 1_000_000,
@@ -286,11 +291,11 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
             rosterCharacterIds: () -> Set<String> = { emptySet() },
             scoreShop: Boolean = false,
             relicCatalog: List<com.landosol.toolbox.gamedata.RelicResource>? = null,
+            readResultScore: Boolean = true,
         ): AndroidLabyrinthEntryFrameProcessor {
             val relicLoader = AndroidLabyrinthRelicTemplateLoader(context)
             val relicTemplates = relicLoader.load(relicCatalog ?: relicLoader.loadRelics())
-            val characterTemplates = AndroidLabyrinthBattleTeamTemplateLoader(context).load(characterAttributes)
-            val characterIconMatcher = LabyrinthCharacterIconMatcher(characterTemplates)
+            val characterIconMatcher = AndroidLabyrinthBattleTeamTemplateLoader(context).loadMatcher(characterAttributes)
             val characterRecognizer = LabyrinthCharacterRecognizer(characterIconMatcher)
             return AndroidLabyrinthEntryFrameProcessor(
                 processor = LabyrinthEntryFrameProcessor(
@@ -302,10 +307,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                     nodeScanConsumable = nodeScanConsumable,
                     rosterCharacterIds = rosterCharacterIds,
                     characterRecognizer = characterRecognizer,
-                    battleTeamRecognizer = LabyrinthBattleTeamRecognizer(
-                        templates = characterTemplates,
-                        iconMatcher = characterIconMatcher,
-                    ),
+                    battleTeamRecognizer = LabyrinthBattleTeamRecognizer(iconMatcher = characterIconMatcher),
                     linkChoiceRecognizer = LabyrinthLinkChoiceRecognizer(
                         AndroidLabyrinthLinkChoiceTemplateLoader(context).load(),
                     ),
@@ -323,9 +325,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                 }.getOrNull(),
                 shopItemResolver = AndroidLabyrinthShopItemResolver(scoreShop = scoreShop),
                 roleRewardNameResolver = AndroidLabyrinthRoleRewardNameResolver(
-                    names = characterTemplates.map {
-                        LabyrinthCharacterNameCandidate(it.characterId, it.displayName, it.aliases)
-                    }.distinctBy { it.characterId },
+                    names = characterIconMatcher.characterNames(),
                     recognizePortrait = { bitmap, slotId ->
                         characterRecognizer.recognizeRoleRewardSlot(AndroidPixelImageAdapter.from(bitmap), slotId)
                     },
@@ -334,6 +334,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                 nodeRelicStackResolver = AndroidLabyrinthNodeRelicStackResolver(),
                 relicDetailResolver = AndroidLabyrinthRelicDetailResolver(),
                 skipJoinedCharacters = skipJoinedCharacters,
+                readResultScore = readResultScore,
             )
         }
     }

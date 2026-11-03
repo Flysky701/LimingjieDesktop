@@ -21,7 +21,9 @@ import kotlinx.serialization.json.*
 import java.io.File
 import java.nio.file.Path
 import java.util.Base64
-import javax.imageio.ImageIO
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import org.jetbrains.skia.Image
 
 /** Transport stays in WorkerLink; this adapter never owns a local Graph or device. */
 class RemoteControlSession(private val link:WorkerLink):ControlSessionPort {
@@ -32,14 +34,15 @@ class RemoteControlSession(private val link:WorkerLink):ControlSessionPort {
     override val error get()=link.error
     override suspend fun request(op:String,args:kotlinx.serialization.json.JsonObject)=link.request(op,args)
     override fun setSelected(selected:Boolean)=link.setSelected(selected)
+    override fun setPreviewVisible(visible:Boolean)=link.setPreviewVisible(visible)
     override suspend fun shutdown()=link.shutdown()
 }
 
 /** Each port is one worker incarnation; never share decoded frames across ports. */
 @OptIn(ExperimentalCoroutinesApi::class)
-internal fun ControlSessionPort.previewFrames(
-    decode: suspend (JsonObject) -> CapturePixels? = ::decodeControlPreview,
-): Flow<CapturePixels?> = combine(snapshots, connection) { raw, status ->
+internal fun <T> ControlSessionPort.previewFrames(
+    decode: suspend (JsonObject) -> T?,
+): Flow<T?> = combine(snapshots, connection) { raw, status ->
     if (status == WorkerConnectionStatus.CONNECTED) raw["preview"] as? JsonObject else null
 }.distinctUntilChanged().mapLatest { image ->
     // Compare the whole preview (pixels AND timestamp), not unrelated console/log updates.
@@ -47,17 +50,15 @@ internal fun ControlSessionPort.previewFrames(
     image?.let { decode(it) }
 }.buffer(0)
 
-private suspend fun decodeControlPreview(image: JsonObject): CapturePixels? = try {
+private suspend fun decodeControlPreview(image: JsonObject): ImageBitmap? = try {
     withContext(Dispatchers.Default) {
-        val png = image["png"]?.jsonPrimitive?.contentOrNull ?: return@withContext null
-        val bitmap = ImageIO.read(Base64.getDecoder().decode(png).inputStream()) ?: return@withContext null
-        CapturePixels(bitmap.width, bitmap.height,
-            bitmap.getRGB(0, 0, bitmap.width, bitmap.height, null, 0, bitmap.width),
-            image["timestampMillis"]?.jsonPrimitive?.longOrNull ?: 0L)
+        val payload = (image["jpeg"] ?: image["png"])?.jsonPrimitive?.contentOrNull ?: return@withContext null
+        Image.makeFromEncoded(Base64.getDecoder().decode(payload)).toComposeImageBitmap()
     }
 } catch (cancelled: CancellationException) {
     throw cancelled
 } catch (_: Exception) {
+    System.err.println("Control preview decode failed")
     null
 }
 
@@ -88,9 +89,16 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     private val localError=MutableStateFlow<String?>(null)
     val error=localError.asStateFlow()
     private val models:StateFlow<ControlUiSnapshot> = port.snapshots.filter{it["console"] is JsonObject}.map(::ControlUiSnapshot).stateIn(scope,SharingStarted.Eagerly,ControlUiSnapshot(previous?.models?.value?.document ?: port.snapshots.value))
-    private fun <T> field(read:(ControlUiSnapshot)->T):StateFlow<T> = models.map(read).stateIn(scope,SharingStarted.Eagerly,read(models.value))
+    private fun <T> field(name:String,read:(ControlUiSnapshot)->T):StateFlow<T> = models
+        .map{it.document[name]}.distinctUntilChanged()
+        .map{read(ControlUiSnapshot(JsonObject(mapOf(name to (it ?: JsonNull)))))}
+        .stateIn(scope,SharingStarted.Eagerly,read(models.value))
     private inline fun <reified T> listField(name:String):StateFlow<List<T>> =
         models.decodedListField(scope,name){it.model(name,emptyList<T>())}
+    // Decode the shared console once per change, then project its existing objects for each view.
+    private val consoleState=field("console"){it.console}
+    private fun <T> consoleField(read:(RunConsoleState)->T):StateFlow<T> = consoleState
+        .map(read).distinctUntilChanged().stateIn(scope,SharingStarted.Eagerly,read(consoleState.value))
     val context=object:Context() {
         override val assets=AssetManager()
         override val applicationContext:Context get()=this
@@ -100,9 +108,8 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     }
     val dataDirectory get()=Path.of(models.value.text("dataDirectory") ?: ".")
     val debugUrl get()=models.value.text("debugUrl")
-    val crashes get()=models.value.document["crashes"]?.jsonArray?.map{it.jsonPrimitive.content}.orEmpty()
     val gameClientResolution get()=models.value.model("gameClient",GameClientResolution.Unavailable as GameClientResolution)
-    val gameClient=field{it.model("gameClient",GameClientResolution.Unavailable as GameClientResolution)}
+    val gameClient=field("gameClient"){it.model("gameClient",GameClientResolution.Unavailable as GameClientResolution)}
     val busy get()=port.connection.value!=WorkerConnectionStatus.CONNECTED||models.value.console.busy
     val resolutionGuard=ResolutionView()
     val deviceConnection=ConnectionView()
@@ -117,10 +124,10 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     val log=LogView()
     val ocr=OcrView()
     val automationOverlayCoordinator=OverlayView()
-    val taskStopping=field{it.console.stopping}
-    val preview:StateFlow<CapturePixels?> = port.previewFrames().stateIn(scope,SharingStarted.Eagerly,null)
-    val captcha=field{it.document["captcha"] as? JsonObject}
-    val accountVerified=field{it.document["accountVerified"]?.jsonPrimitive?.booleanOrNull ?: true}
+    val taskStopping=consoleField{it.stopping}
+    val preview:StateFlow<ImageBitmap?> = port.previewFrames(::decodeControlPreview).stateIn(scope,SharingStarted.Eagerly,null)
+    val captcha=field("captcha"){it.document["captcha"] as? JsonObject}
+    val accountVerified=field("accountVerified"){it.document["accountVerified"]?.jsonPrimitive?.booleanOrNull ?: true}
     val accountReminder get()=models.value.text("accountReminder") ?: "助手账号不会切换模拟器中的游戏账号，请人工核对同一账号。"
     suspend fun request(op:String,args:JsonObject=JsonObject(emptyMap())):JsonObject {
         check(port.connection.value==WorkerConnectionStatus.CONNECTED){"控制连接未就绪，请重新打开此标签"}
@@ -162,35 +169,54 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     suspend fun messageRequest(op:String):String=request(op)["message"]?.jsonPrimitive?.contentOrNull ?: "操作已完成"
     override fun close(){scope.cancel()}
 
-    inner class ResolutionView {val status=field{it.model("resolution",VisualResolutionStatus(message=VisualResolutionGuardMessage))}}
-    inner class OcrView {val status:StateFlow<OcrEngineStatus> = field{it.model("ocr",OcrEngineStatus.NotLoaded as OcrEngineStatus)}}
-    inner class OverlayView {val state=field{it.console.overlay}}
-    inner class IdentityView {val state=field{it.model<DeviceIdentitySnapshot?>("identity",null)};fun current():DeviceIdentitySnapshot?=state.value}
+    inner class ResolutionView {val status=field("resolution"){it.model("resolution",VisualResolutionStatus(message=VisualResolutionGuardMessage))}}
+    inner class OcrView {val status:StateFlow<OcrEngineStatus> = field("ocr"){it.model("ocr",OcrEngineStatus.NotLoaded as OcrEngineStatus)}}
+    inner class OverlayView {val state=consoleField{it.overlay}}
+    inner class IdentityView {val state=field("identity"){it.model<DeviceIdentitySnapshot?>("identity",null)};fun current():DeviceIdentitySnapshot?=state.value}
     inner class DeviceView {
-        val state=field{it.console.device}
-        val foreground=field{it.text("foreground")}
+        val state=consoleField{it.device}
+        val foreground=field("foreground"){it.text("foreground")}
         val foregroundPackage get()=models.value.text("foreground")
         suspend fun queryForeground():String?=request(ControlOps.FOREGROUND)["value"]?.jsonPrimitive?.contentOrNull
         suspend fun tap(x:Float,y:Float,expectedPackage:String):TouchResult {request(ControlOps.DEVICE_TEST);return TouchResult.Completed}
     }
     inner class ConnectionView {
-        val activity=field{it.text("connectionActivity")}
-        val message=field{it.text("connectionMessage")}
-        val devices=field{it.model<List<DeviceDescriptor>>("devices",emptyList())}
+        val activity=field("connectionActivity"){it.text("connectionActivity")}
+        val message=field("connectionMessage"){it.text("connectionMessage")}
+        val devices=field("devices"){it.model<List<DeviceDescriptor>>("devices",emptyList())}
         suspend fun discover(force:Boolean=true){request(ControlOps.DEVICE_DISCOVER,buildJsonObject{put("force",force)})}
         suspend fun cancel(){request(ControlOps.DEVICE_CANCEL)}
         suspend fun configure(block:suspend()->Unit){check(!busy){"请先停止任务"};block()}
     }
     inner class SettingsView {
-        val state=field{it.model("settings",DesktopSettings())}
+        val state=field("settings"){it.model("settings",DesktopSettings())}
         suspend fun update(change:(DesktopSettings)->DesktopSettings){patch(ControlOps.SETTINGS_PATCH,state.value,change(state.value))}
     }
     inner class StrategyView {
-        val state=field{it.model("strategy",LabyrinthStrategySettings())}
+        val library=field("strategyLibrary"){it.model("strategyLibrary",StrategyLibrary())}
+        suspend fun add(name:String,note:String="",settings:LabyrinthStrategySettings=LabyrinthStrategySettings()):String {
+            val id=request(ControlOps.STRATEGY_ADD,buildJsonObject{put("name",name);put("note",note);put("value",ControlModelCodec.encode(settings))}).getValue("id").jsonPrimitive.content
+            awaitSnapshot{it.model("strategyLibrary",StrategyLibrary()).profiles.any{p->p.id==id}}
+            return id
+        }
+        suspend fun importCode(code:String):String {
+            val id=request(ControlOps.STRATEGY_IMPORT,buildJsonObject{put("code",code)}).getValue("id").jsonPrimitive.content
+            awaitSnapshot{it.model("strategyLibrary",StrategyLibrary()).profiles.any{p->p.id==id}}
+            return id
+        }
+        suspend fun edit(profile:StrategyProfile,settings:LabyrinthStrategySettings=profile.settings):StrategyProfile {
+            request(ControlOps.STRATEGY_EDIT,buildJsonObject{put("id",profile.id);put("revision",profile.revision);put("name",profile.name);put("note",profile.note);put("value",ControlModelCodec.encode(settings))})
+            var updated=profile
+            awaitSnapshot{snapshot->snapshot.model("strategyLibrary",StrategyLibrary()).profiles.firstOrNull{it.id==profile.id&&it.revision>profile.revision}?.also{updated=it}!=null}
+            return updated
+        }
+        suspend fun activate(id:String){request(ControlOps.STRATEGY_ACTIVATE,buildJsonObject{put("id",id)});awaitSnapshot{it.model("strategyLibrary",StrategyLibrary()).activeId==id}}
+        suspend fun delete(id:String){request(ControlOps.STRATEGY_DELETE,buildJsonObject{put("id",id)});awaitSnapshot{it.model("strategyLibrary",StrategyLibrary()).profiles.none{p->p.id==id}}}
+        val state=field("strategy"){it.model("strategy",LabyrinthStrategySettings())}
         suspend fun save(value:LabyrinthStrategySettings){request(ControlOps.STRATEGY_SAVE,controlArgs("value" to ControlModelCodec.encode(value)));awaitSnapshot{it.model("strategy",LabyrinthStrategySettings())==value}}
     }
     inner class TaskView {
-        val uiState=field{it.console.task}
+        val uiState=consoleField{it.task}
         fun saveSettings(value:LabyrinthRerollSettings){fire(ControlOps.SAVE_REROLL,controlArgs("value" to ControlModelCodec.encode(value)))}
         fun checkStatus(){fire(ControlOps.START,buildJsonObject{put("task","READ")})}
         fun start(retreatConfirmed:Boolean=false,guildIdOverride:Int?=null){fire(ControlOps.START,buildJsonObject{put("task","REROLL");put("retreatConfirmed",retreatConfirmed);guildIdOverride?.let{put("guildId",it)}})}
@@ -200,10 +226,10 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         fun cancelCaptcha(){captcha.value?.get("ticketId")?.let{fire(ControlOps.CAPTCHA_CANCEL,controlArgs("ticketId" to it))}}
     }
     inner class UxView {
-        val console=field{it.console}
-        val credentials=field{it.model<Map<Long,Boolean>>("credentials",emptyMap())}
-        val database=field{it.text("database") ?: "正在读取"}
-        val foreground=field{it.text("foreground")}
+        val console=consoleState
+        val credentials=field("credentials"){it.model<Map<Long,Boolean>>("credentials",emptyMap())}
+        val database=field("database"){it.text("database") ?: "正在读取"}
+        val foreground=field("foreground"){it.text("foreground")}
         val catalog=listField<LabyrinthRoleRatingItem>("catalog")
         val history=HistoryView()
         val preferences=PreferencesView()
@@ -212,14 +238,20 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         suspend fun refreshDatabase(){request(ControlOps.REFRESH,buildJsonObject{put("database",true)})}
         suspend fun refreshForeground(){request(ControlOps.REFRESH,buildJsonObject{put("foreground",true)})}
     }
-    inner class HistoryView {val records=listField<DesktopRunRecord>("history")}
+    inner class HistoryView {
+        val records=listField<DesktopRunRecord>("history")
+        val revision=field("historyRevision"){it.document["historyRevision"]?.jsonPrimitive?.longOrNull ?: 0L}
+        suspend fun load():List<DesktopRunRecord> = ControlModelCodec.decode(request(ControlOps.HISTORY_LOAD).getValue("items"))
+    }
     inner class PreferencesView {
-        val state=field{it.model("preferences",DesktopPreferences())}
+        val state=field("preferences"){it.model("preferences",DesktopPreferences())}
         suspend fun update(change:(DesktopPreferences)->DesktopPreferences){patch(ControlOps.PREFS_PATCH,state.value,change(state.value))}
     }
     inner class LogView {
         val lines=listField<UserLogLine>("logs")
-        fun text()=lines.value.joinToString("\n"){"${it.time} [${it.kind.label}] ${it.text}${if(it.repeats>1)" ×${it.repeats}"else ""}"}
+        val revision=field("logRevision"){it.document["logRevision"]?.jsonPrimitive?.longOrNull ?: 0L}
+        suspend fun load():List<UserLogLine> = ControlModelCodec.decode(request(ControlOps.LOG_LOAD).getValue("items"))
+        fun text(lines:List<UserLogLine> = this.lines.value)=lines.joinToString("\n"){"${it.time} [${it.kind.label}] ${it.text}${if(it.repeats>1)" ×${it.repeats}"else ""}"}
         fun add(text:String,error:Boolean=false,kind:UserLogKind=if(error)UserLogKind.ERROR else UserLogKind.NORMAL){fire(ControlOps.LOG_ADD,buildJsonObject{put("text",text);put("kind",kind.name)})}
         fun clear(){fire(ControlOps.LOG_CLEAR)}
     }
@@ -231,7 +263,7 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         private var baseline:AccountEditorState?=null
         val dirty get()=editor.value!=null&&editor.value!=baseline
         fun copyDraftFrom(other:AccountsView){baseline=other.baseline;editor.value=other.editor.value;deletion.value=other.deletion.value;message.value=other.message.value;publish()}
-        private val backend=field{it.model("accounts",AccountUiState())}
+        private val backend=field("accounts"){it.model("accounts",AccountUiState())}
         private fun snapshot():AccountUiState=backend.value.let{s->s.copy(editor=editor.value,deleteCandidate=deletion.value,isWorking=s.isWorking||working.value,message=message.value ?: s.message)}
         private val mutableUiState=MutableStateFlow(snapshot())
         val uiState=mutableUiState.asStateFlow()
@@ -261,5 +293,15 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
 class ControlUiSnapshot(val document:JsonObject) {
     val console:RunConsoleState by lazy{model("console",RunConsoleState())}
     fun text(name:String)=document[name]?.jsonPrimitive?.contentOrNull
-    inline fun <reified T> model(name:String,fallback:T):T = document[name]?.takeUnless{it is JsonNull}?.let{runCatching{ControlModelCodec.decode<T>(it)}.getOrElse{fallback}} ?: fallback
+    inline fun <reified T> model(name:String,fallback:T):T = document[name]?.takeUnless{it is JsonNull}?.let{
+        try { ControlModelCodec.decode<T>(it) }
+        catch (cancelled:CancellationException) { throw cancelled }
+        catch (_:Exception) { reportDecodeFailure(name); fallback }
+    } ?: fallback
+    companion object {
+        private val failedSections=java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        fun reportDecodeFailure(name:String) {
+            if(failedSections.add(name)) System.err.println("Control snapshot decode failed for section: $name")
+        }
+    }
 }

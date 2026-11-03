@@ -80,6 +80,7 @@ class DeviceLeaseTest {
             adb.handler={ call -> if(call.arguments==listOf("cat","/proc/sys/kernel/random/boot_id"))
                 FakeAdb.success("20000000-1111-2222-3333-444444444444") else adb.default(call) }
             assertTrue(device.back(FakeAdb.GAME) is TouchResult.Rejected)
+            assertTrue(device.state.value is DeviceConnectionState.Failed)
             assertEquals(0,touch.sent.get())
             leases().acquireDevice(boot).close()
             cleanupTouchPid(adb,"fixture",boot,123)
@@ -88,5 +89,31 @@ class DeviceLeaseTest {
         val same=FakeAdb()
         cleanupTouchPid(same,"fixture",boot,123)
         assertTrue(same.calls.any { it.arguments.take(2)==listOf("sh","-c") && it.arguments.last().contains(boot) })
+    }
+
+    @Test fun unreadableBootStopsInputAndReconnectCannotAdoptAnotherBoot() = runBlocking {
+        val adb = FakeAdb()
+        val lost = CompletableDeferred<String>()
+        val opens = AtomicInteger()
+        val touch = Touch()
+        AdbDeviceService(adb, folder.root.toPath(), emptySet(), onLost = { lost.complete(it) },
+            touchFactory = TouchConnectionFactory { _, _, _ -> opens.incrementAndGet(); touch },
+            leases = leases(), expectedBootId = null).use { device ->
+            device.connect("fixture")
+            adb.handler = { call ->
+                if (call.arguments == listOf("cat", "/proc/sys/kernel/random/boot_id")) {
+                    if (lost.isCompleted) FakeAdb.success("20000000-1111-2222-3333-444444444444")
+                    else AdbResult.Failure(AdbFailureKind.Timeout, "ADB 命令超时")
+                } else adb.default(call)
+            }
+            assertTrue(device.back(FakeAdb.GAME) is TouchResult.Rejected)
+            assertTrue(lost.await().contains("ADB 命令超时"))
+            withTimeout(8_000) {
+                while (device.state.value !is DeviceConnectionState.Failed) delay(20)
+            }
+            assertEquals(2, adb.calls.count { it.arguments == listOf("getprop", "sys.boot_completed") })
+            assertEquals(1, opens.get())
+            assertEquals(0, touch.sent.get())
+        }
     }
 }

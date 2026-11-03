@@ -31,7 +31,7 @@ object MuMuDeviceDiscovery {
         val online = registered.filter { it.state == "device" }.map { it.serial }.toSet()
         for (endpoint in endpoints - online) {
             when (val result = connect(endpoint)) {
-                is AdbResult.Success -> onEvent("已登记 MuMu 设备：$endpoint")
+                is AdbResult.Success -> onEvent("已向 ADB 请求连接 MuMu 设备：$endpoint")
                 is AdbResult.Failure -> onEvent("MuMu 设备 $endpoint 尚未就绪：${result.detail}")
             }
         }

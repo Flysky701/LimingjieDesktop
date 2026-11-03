@@ -1,7 +1,14 @@
 package android.graphics
 
+import com.landosol.toolbox.automation.capture.CapturedFrame
+import com.landosol.toolbox.clanbattle.recognition.PixelImage
+import com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthEntryFrameProcessor
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
+import java.awt.image.DataBufferInt
+import java.awt.image.DirectColorModel
+import java.awt.image.Raster
 import java.io.OutputStream
 import javax.imageio.ImageIO
 import javax.imageio.ImageWriteParam
@@ -27,9 +34,17 @@ class Bitmap private constructor(val width: Int, val height: Int, private var pi
     fun toBufferedImage(rgb: Boolean = false): BufferedImage = BufferedImage(width, height, if (rgb) BufferedImage.TYPE_INT_RGB else BufferedImage.TYPE_INT_ARGB).apply {
         setRGB(0, 0, width, height, data(), 0, width)
     }
+    /** Only synchronous readers may use this view; the public conversion stays a copy. */
+    private fun imageView(rgb: Boolean = false): BufferedImage {
+        val data = data()
+        val masks = if (rgb) intArrayOf(0xff0000, 0xff00, 0xff) else intArrayOf(0xff0000, 0xff00, 0xff, -0x1000000)
+        val raster = Raster.createPackedRaster(DataBufferInt(data, data.size), width, height, width, masks, null)
+        val color = DirectColorModel(if (rgb) 24 else 32, masks[0], masks[1], masks[2], if (rgb) 0 else masks[3])
+        return BufferedImage(color, raster, false, null)
+    }
     fun compress(format: CompressFormat, quality: Int, stream: OutputStream): Boolean {
         require(quality in 0..100)
-        val image = toBufferedImage(format == CompressFormat.JPEG)
+        val image = imageView(format == CompressFormat.JPEG)
         if (format == CompressFormat.PNG) return ImageIO.write(image, "png", stream)
         val writer = ImageIO.getImageWritersByFormatName("jpeg").next()
         val output = javax.imageio.stream.MemoryCacheImageOutputStream(stream)
@@ -42,13 +57,28 @@ class Bitmap private constructor(val width: Int, val height: Int, private var pi
         } finally { writer.dispose() }
     }
     companion object {
+        /** Confine the pixel view to the synchronous page recognizer. Its public result contains decisions. */
+        internal fun recognizeLabyrinthFrame(
+            processor: AndroidLabyrinthEntryFrameProcessor,
+            frame: CapturedFrame,
+        ): LabyrinthEntryFrameResult {
+            val bitmap = frame.bitmap
+            require(!bitmap.isRecycled) { "截图 Bitmap 已释放" }
+            return processor.process(frame, PixelImage(bitmap.width, bitmap.height, bitmap.data()))
+        }
+
         fun createBitmap(pixels: IntArray, width: Int, height: Int, config: Config): Bitmap {
             require(width > 0 && height > 0 && width.toLong() * height <= pixels.size)
             return Bitmap(width, height, pixels.copyOf(width * height))
         }
         fun createBitmap(width: Int, height: Int, config: Config): Bitmap {
             require(width > 0 && height > 0)
-            return createBitmap(IntArray(Math.multiplyExact(width, height)), width, height, config)
+            return Bitmap(width, height, IntArray(Math.multiplyExact(width, height)))
+        }
+        /** Internal decode results own fresh arrays; caller-provided arrays still copy above. */
+        internal fun fromOwnedPixels(pixels: IntArray, width: Int, height: Int): Bitmap {
+            require(width > 0 && height > 0 && width.toLong() * height == pixels.size.toLong())
+            return Bitmap(width, height, pixels)
         }
         fun createBitmap(source: Bitmap, x: Int, y: Int, width: Int, height: Int): Bitmap {
             source.data(); source.checkRect(x, y, width, height); require(width > 0 && height > 0)
@@ -64,10 +94,11 @@ class Bitmap private constructor(val width: Int, val height: Int, private var pi
             image.createGraphics().let { g ->
                 try {
                     g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, if (filter) RenderingHints.VALUE_INTERPOLATION_BILINEAR else RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR)
-                    g.drawImage(source.toBufferedImage(), 0, 0, width, height, null)
+                    g.drawImage(source.imageView(), 0, 0, width, height, null)
                 } finally { g.dispose() }
             }
-            return createBitmap(image.getRGB(0, 0, width, height, null, 0, width), width, height, Config.ARGB_8888)
+            // This newly created TYPE_INT_ARGB raster is contiguous and exclusively owned.
+            return Bitmap(width, height, (image.raster.dataBuffer as DataBufferInt).data)
         }
     }
 }

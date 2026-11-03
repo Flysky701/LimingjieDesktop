@@ -9,6 +9,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import com.landosol.toolbox.account.AccountListItem
 import com.landosol.toolbox.account.AccountUiState
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopPreferences
+import com.landosol.toolbox.desktop.app.adapters.storage.StrategyLibrary
 import com.landosol.toolbox.desktop.app.ui.*
 import com.landosol.toolbox.desktop.platform.DesktopSettings
 import com.landosol.toolbox.labyrinth.LabyrinthStrategySettings
@@ -18,6 +19,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.imageio.ImageIO
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
@@ -41,8 +43,63 @@ class SharedRunTabsUiTest {
         compose.onNodeWithText("策略").performClick()
         compose.onNodeWithText("37%").assertIsDisplayed()
         compose.onNodeWithText("设备").performClick()
-        compose.onNodeWithText("尚未发现设备").assertIsDisplayed()
+        compose.onNodeWithText("暂无可连接的设备").assertIsDisplayed()
         compose.runOnIdle{assertTrue(global.commands.isEmpty())}
+    }
+
+    @Test fun scoreSwitchEditsTheActiveProfileAndCanReturnToDaily(){
+        val global = FakePort("global", weight = 37)
+        val profilePort = object : ControlSessionPort by global {
+            override suspend fun request(op: String, args: JsonObject): JsonObject {
+                assertEquals(ControlOps.STRATEGY_EDIT, op)
+                val library = ControlModelCodec.decode<StrategyLibrary>(snapshots.value.getValue("strategyLibrary"))
+                val profile = library.active
+                assertEquals(profile.id, args.getValue("id").jsonPrimitive.content)
+                assertEquals(profile.revision, args.getValue("revision").jsonPrimitive.long)
+                val settings = ControlModelCodec.decode<LabyrinthStrategySettings>(args.getValue("value"))
+                assertEquals(profile.settings.copy(highScorePreset = !profile.settings.highScorePreset), settings)
+                val updated = profile.copy(settings = settings, revision = profile.revision + 1)
+                global.snapshots.value = JsonObject(snapshots.value + ("strategyLibrary" to
+                    ControlModelCodec.encode(library.copy(profiles = listOf(updated)))))
+                return JsonObject(emptyMap())
+            }
+        }
+        compose.setContent { SharedRunTabsApp(profilePort, emptyList(), null, callbacks()) }
+        compose.onNodeWithText("策略").performClick()
+        compose.onNodeWithText("日常 · 直接执行").assertIsDisplayed()
+        compose.onNode(isToggleable()).performClick()
+        compose.onNodeWithText("凹分 · 有限筛图与商店预算").assertIsDisplayed()
+        compose.onNode(isToggleable()).performClick()
+        compose.onNodeWithText("日常 · 直接执行").assertIsDisplayed()
+    }
+
+    @Test fun devicePageDetectsOnEntryShowsProgressAndAllowsRetryAfterFailure(){
+        val global=FakePort("global")
+        val first=CompletableDeferred<Unit>()
+        val attempts=CopyOnWriteArrayList<Boolean>()
+        compose.setContent{SharedRunTabsApp(global,emptyList(),null,callbacks(discover={force->
+            attempts+=force
+            if(attempts.size==1){first.await();error("模拟检测失败，请重试")}
+        }))}
+        compose.onNodeWithText("设备").performClick()
+        compose.waitUntil(5_000){attempts.size==1}
+        compose.onNodeWithText("正在检测…").assertIsNotEnabled()
+        compose.onNodeWithText("暂无可连接的设备").assertDoesNotExist()
+        first.complete(Unit)
+        compose.waitForIdle()
+        compose.onNodeWithText("模拟检测失败，请重试").assertIsDisplayed()
+        compose.onNodeWithText("重新检测").performClick()
+        compose.waitUntil(5_000){attempts.size==2}
+        compose.onNodeWithText("模拟检测失败，请重试").assertDoesNotExist()
+        compose.onNodeWithText("账号").performClick()
+        compose.onNodeWithText("设备").performClick()
+        compose.waitUntil(5_000){attempts.size==3}
+        compose.runOnIdle{
+            assertTrue(attempts.all{it})
+            global.snapshots.value=JsonObject(global.snapshots.value+("connectionMessage" to JsonPrimitive("请开启 ADB 调试")))
+        }
+        compose.waitUntil(5_000){compose.onAllNodesWithText("请开启 ADB 调试",useUnmergedTree=true).fetchSemanticsNodes().isNotEmpty()}
+        compose.onNodeWithText("请开启 ADB 调试",useUnmergedTree=true).assertIsDisplayed()
     }
 
     @Test fun selectingRunTabsChangesOnlyTheViewportAndHotkeysTargetTheSelectedSession(){
@@ -102,6 +159,33 @@ class SharedRunTabsUiTest {
         compose.runOnIdle{assertTrue(a.commands.isEmpty());assertTrue(b.commands.isEmpty());assertTrue(global.commands.isEmpty())}
     }
 
+    @Test fun previewsOnlySubscribeWhileExpandedOnTheVisibleRunPage(){
+        val global=FakePort("global",accounts=listOf(alice,bob))
+        val a=FakePort("a",alice,busy=true,rightTab="preview")
+        val b=FakePort("b",bob,busy=true,rightTab="preview")
+        var selected by mutableStateOf("a")
+        var windowVisible by mutableStateOf(true)
+        compose.setContent{SharedRunTabsApp(global,listOf(tab(a,alice),tab(b,bob)),selected,callbacks(select={selected=it}),windowVisible=windowVisible)}
+        compose.waitUntil(5_000){a.previewSubscribed&&!b.previewSubscribed}
+        compose.onNode(hasText("收起画面") and hasAnyAncestor(hasTestTag("run-a"))).performClick()
+        compose.waitUntil(5_000){!a.previewSubscribed}
+        compose.onNode(hasText("展开画面") and hasAnyAncestor(hasTestTag("run-a"))).performClick()
+        compose.waitUntil(5_000){a.previewSubscribed}
+        compose.runOnIdle{windowVisible=false}
+        compose.waitUntil(5_000){!a.previewSubscribed&&!b.previewSubscribed}
+        compose.runOnIdle{windowVisible=true}
+        compose.waitUntil(5_000){a.previewSubscribed}
+        compose.onNodeWithText("设备 b · 共享乙").performClick()
+        compose.waitUntil(5_000){!a.previewSubscribed&&b.previewSubscribed}
+        compose.onNodeWithText("账号").performClick()
+        compose.waitUntil(5_000){!a.previewSubscribed&&!b.previewSubscribed}
+        compose.onNodeWithText("运行").performClick()
+        compose.waitUntil(5_000){b.previewSubscribed}
+        compose.runOnIdle{b.snapshots.value=JsonObject(b.snapshots.value+("preferences" to ControlModelCodec.encode(DesktopPreferences(rightTab="logs"))))}
+        compose.waitUntil(5_000){!b.previewSubscribed}
+        compose.runOnIdle{assertFalse(a.commands.any{it==ControlOps.START||it==ControlOps.STOP});assertTrue(b.commands.isEmpty())}
+    }
+
     @Test fun preparingADeviceDisplaysItsPhaseAndDisablesRepeatedConnection(){
         val global=FakePort("global")
         val a=FakePort("a")
@@ -125,28 +209,32 @@ class SharedRunTabsUiTest {
     }
 
     private fun tab(port:FakePort,account:AccountListItem)=DeviceRunTab(port.instanceId,"设备 ${port.instanceId}",port,"device-${port.instanceId}","serial-${port.instanceId}",account.id)
-    private fun callbacks(select:(String)->Unit={},stopAll:()->Unit={},reconnect:(String)->Unit={})=SharedRunShellCallbacks(
-        selectSession=select,discover={},connect={},bindAccount={_,_->},disconnect={},closeSession={},reconnectSession=reconnect,stopAll=stopAll,
+    private fun callbacks(select:(String)->Unit={},stopAll:()->Unit={},reconnect:(String)->Unit={},discover:suspend(Boolean)->Unit={})=SharedRunShellCallbacks(
+        selectSession=select,discover=discover,connect={},bindAccount={_,_->},disconnect={},closeSession={},reconnectSession=reconnect,stopAll=stopAll,
     )
 
     private class FakePort(
         override val instanceId:String,account:AccountListItem?=null,busy:Boolean=false,
-        accounts:List<AccountListItem> = emptyList(),weight:Int=70,
+        accounts:List<AccountListItem> = emptyList(),weight:Int=70,rightTab:String="logs",
     ):ControlSessionPort{
         override val workerRunId="worker-$instanceId"
         override val snapshots=MutableStateFlow(buildJsonObject{
             put("console",ControlModelCodec.encode(RunConsoleState(task=LabyrinthUiState(selectedAccount=account,settingsReady=true),busy=busy)))
             put("settings",ControlModelCodec.encode(DesktopSettings(wizardCompleted=true)))
-            put("preferences",ControlModelCodec.encode(DesktopPreferences()))
+            put("preferences",ControlModelCodec.encode(DesktopPreferences(rightTab=rightTab)))
             put("accounts",ControlModelCodec.encode(AccountUiState(accounts=accounts)))
             put("strategy",ControlModelCodec.encode(LabyrinthStrategySettings(playerWeight=weight)))
+            put("strategyLibrary",ControlModelCodec.encode(com.landosol.toolbox.desktop.app.adapters.storage.StrategyLibrary("fixture", listOf(
+                com.landosol.toolbox.desktop.app.adapters.storage.StrategyProfile("fixture", "测试策略", settings=LabyrinthStrategySettings(playerWeight=weight))))))
         })
         override val connection=MutableStateFlow(WorkerConnectionStatus.CONNECTED)
         override val error=MutableStateFlow<String?>(null)
         val commands=CopyOnWriteArrayList<String>()
         @Volatile var previewSelected=false
+        @Volatile var previewSubscribed=false
         override suspend fun request(op:String,args:JsonObject):JsonObject{commands+=op;return JsonObject(emptyMap())}
         override fun setSelected(selected:Boolean){previewSelected=selected}
+        override fun setPreviewVisible(visible:Boolean){previewSubscribed=visible}
         override suspend fun shutdown(){}
     }
 }

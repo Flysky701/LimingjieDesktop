@@ -23,8 +23,8 @@ internal suspend fun runWorkerTransport(
     val finished = CompletableDeferred<Unit>()
     val closing = AtomicBoolean(false)
     val selected = AtomicBoolean(true)
+    val previewVisible = AtomicBoolean(false)
     val lastMessage = AtomicLong(System.nanoTime())
-    val sequence = AtomicLong()
     val requests = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
     fun stop(reason: String) {
         if (closing.compareAndSet(false, true)) {
@@ -48,8 +48,11 @@ internal suspend fun runWorkerTransport(
                     if (message.wireString("profileId") != profileId || message.wireString("runId") != runId) continue
                     lastMessage.set(System.nanoTime())
                     when (message.wireString("kind")) {
-                        "ping" -> wire.write(wireMessage("pong", profileId, runId))
+                        // Only the snapshot loop emits liveness: a stuck domain must not
+                        // look healthy just because the socket reader still accepts pings.
+                        "ping" -> Unit
                         "selected" -> selected.set((message["value"] as? JsonPrimitive)?.booleanOrNull == true)
+                        "preview.visible" -> previewVisible.set((message["value"] as? JsonPrimitive)?.booleanOrNull == true)
                         "request" -> {
                             val requestId = message.wireString("requestId") ?: continue
                             val op = message.wireString("op") ?: continue
@@ -86,10 +89,23 @@ internal suspend fun runWorkerTransport(
             } catch (_: Exception) { stop("总控连接已断开，任务已停止") }
         }
         work.launch {
+            var lastState: JsonObject? = null
+            var lastSentAt = 0L
+            var sequence = 0L
             while (isActive && !closing.get()) {
                 try {
-                    val state = domain.snapshot(selected.get())
-                    wire.write(wireMessage("state", profileId, runId) { put("sequence", sequence.incrementAndGet()); put("state", state) })
+                    val state = domain.snapshot(selected.get() && previewVisible.get())
+                    val now = System.nanoTime()
+                    val message = workerStateMessage(profileId, runId, sequence + 1, lastState, state)
+                    if (message != null) {
+                        wire.write(message)
+                        sequence++
+                        lastState = state
+                        lastSentAt = now
+                    } else if (now - lastSentAt >= 2_000_000_000L) {
+                        wire.write(wireMessage("pong", profileId, runId))
+                        lastSentAt = now
+                    }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { stop("状态连接已失效，任务已停止") }
                 delay(500)

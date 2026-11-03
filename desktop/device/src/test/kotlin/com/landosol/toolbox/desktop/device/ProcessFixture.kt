@@ -25,6 +25,12 @@ object ProcessFixture {
                 repeat(8192) { System.out.write(ByteArray(8192) { 42 }) }; System.out.flush(); other.join()
             }
             "parent" -> { val child = start("sleep"); Files.writeString(Path.of(args[1]), child.pid().toString()); Thread.sleep(60_000) }
+            "daemon" -> {
+                val child = ProcessBuilder(command("sleep"))
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD).start()
+                Files.writeString(Path.of(args[1]), child.pid().toString())
+            }
             "sleep" -> Thread.sleep(60_000)
             "touch" -> {
                 println("^ 10 1920 1080 255"); println("\$ 1234"); System.out.flush()

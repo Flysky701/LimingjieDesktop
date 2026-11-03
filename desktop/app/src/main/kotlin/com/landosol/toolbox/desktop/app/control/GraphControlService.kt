@@ -58,8 +58,17 @@ class GraphControlService(
     private var captchaTicket: String? = null
     private var captchaGeneration: Long? = null
     private var previewTimestamp: Long? = null
-    private var previewPng: String? = null
+    private var previewJpeg: String? = null
     private val catalogJson = RoleCatalogJson()
+    // Snapshot construction is confined to Main; StateFlow values are immutable.
+    private val encoded = HashMap<String, Pair<Any?, JsonElement>>()
+    private var historyRevision = 0L
+    private var logRevision = 0L
+    private fun cachedModel(name: String, source: Any?) = cached(name, source) { model(source) }
+    private fun cached(name: String, source: Any?, encode: () -> JsonElement): JsonElement {
+        encoded[name]?.let { if (it.first === source || it.first == source) return it.second }
+        return encode().also { encoded[name] = source to it }
+    }
 
     init {
         graph.bindSharedRuntime(profileId, profileName)
@@ -70,6 +79,8 @@ class GraphControlService(
     }
 
     override suspend fun snapshot(includePreview: Boolean): JsonObject = withContext(Dispatchers.Main) {
+        graph.setPreviewRequested(includePreview)
+        if (!includePreview) { previewTimestamp = null; previewJpeg = null }
         releaseAccountIfIdle()
         refreshCaptcha()
         val accounts = graph.accounts.uiState.value
@@ -79,37 +90,42 @@ class GraphControlService(
             halt = graph.labyrinthBatchController.haltReason.value, overlay = graph.automationOverlayCoordinator.state.value,
             device = graph.device.state.value, busy = graph.busy || stopping.get(),
             starting = graph.taskStarting.value, stopping = graph.taskStopping.value || stopping.get())
-        val crashes = withContext(Dispatchers.IO) { crashNames() }
+        val records = graph.ux.history.records.value
+        val logs = graph.log.lines.value
+        val historyJson = cached("history", records) { historyRevision++; model(records.takeLast(50)) }
+        val logsJson = cached("logs", logs) { logRevision++; model(logs.takeLast(50)) }
         val preview = if (includePreview) previewDocument() else JsonNull
         buildJsonObject {
             put("version", ControlSnapshot.VERSION)
             put("profileId", profileId)
             put("title", profileName)
-            put("console", model(console))
-            put("settings", model(graph.settings.state.value))
-            put("preferences", model(graph.ux.preferences.state.value))
-            put("accounts", model(accounts.copy(editor = accounts.editor?.copy(password = ""))))
-            put("strategy", model(graph.labyrinthStrategySettings.state.value))
+            put("console", cachedModel("console", console))
+            put("settings", cachedModel("settings", graph.settings.state.value))
+            put("preferences", cachedModel("preferences", graph.ux.preferences.state.value))
+            put("accounts", cached("accounts", accounts) { model(accounts.copy(editor = accounts.editor?.copy(password = ""))) })
+            put("strategy", cachedModel("strategy", graph.labyrinthStrategySettings.state.value))
+            if (graph.sharedData == null) put("strategyLibrary", cachedModel("strategyLibrary", graph.labyrinthStrategySettings.library.value))
             put("catalog", catalogJson.encode(graph.ux.catalog.value))
-            put("resolution", model(graph.resolutionGuard.status.value))
-            put("ocr", model(graph.ocr.status.value))
-            put("credentials", model(graph.ux.credentials.value))
-            put("identity", model(graph.identityStore.current()))
-            put("gameClient", model(graph.gameClientResolution))
+            put("resolution", cachedModel("resolution", graph.resolutionGuard.status.value))
+            put("ocr", cachedModel("ocr", graph.ocr.status.value))
+            put("credentials", cachedModel("credentials", graph.ux.credentials.value))
+            put("identity", cachedModel("identity", graph.identityStore.current()))
+            put("gameClient", cachedModel("gameClient", graph.gameClientResolution))
             put("database", graph.ux.database.value)
             put("foreground", graph.device.foregroundPackage)
             put("connectionActivity", graph.deviceConnection.activity.value)
             put("connectionMessage", graph.deviceConnection.message.value)
-            put("devices", model(graph.deviceConnection.devices.value))
-            put("history", model(graph.ux.history.records.value.takeLast(500)))
+            put("devices", cachedModel("devices", graph.deviceConnection.devices.value))
+            put("history", historyJson)
+            put("historyRevision", historyRevision)
             put("historyTotal", graph.ux.history.records.value.size)
-            put("logs", model(graph.log.lines.value.takeLast(400)))
+            put("logs", logsJson)
+            put("logRevision", logRevision)
             put("logTotal", graph.log.lines.value.size)
             put("dataDirectory", graph.dataDirectory.toString())
             put("debugUrl", graph.debugUrl)
-            put("crashes", model(crashes))
             put("preview", preview)
-            put("notices", model(graph.notices.value))
+            put("notices", cachedModel("notices", graph.notices.value))
             put("binding", binding)
             put("dataOnly", graph.dataOnly)
             put("strategyRevision", graph.strategyRevision.value)
@@ -224,9 +240,26 @@ class GraphControlService(
                 graph.accounts.dismissEditor(); graph.accounts.dismissDelete(); graph.accounts.dismissMessage()
             }
             ControlOps.STRATEGY_SAVE -> graph.labyrinthStrategySettings.save(decode(args.required("value")))
+            ControlOps.STRATEGY_ADD -> {
+                val id = graph.labyrinthStrategySettings.add(args.requiredString("name"), args.string("note").orEmpty(),
+                    args["value"]?.let { decode<LabyrinthStrategySettings>(it) } ?: LabyrinthStrategySettings())
+                return buildJsonObject { put("id", id) }
+            }
+            ControlOps.STRATEGY_EDIT -> graph.labyrinthStrategySettings.edit(args.requiredString("id"), args.long("revision"),
+                args.requiredString("name"), args.string("note").orEmpty(), decode(args.required("value")))
+            ControlOps.STRATEGY_ACTIVATE -> graph.labyrinthStrategySettings.activate(args.requiredString("id"))
+            ControlOps.STRATEGY_DELETE -> graph.labyrinthStrategySettings.delete(args.requiredString("id"))
+            ControlOps.STRATEGY_IMPORT -> {
+                val imported = com.landosol.toolbox.desktop.app.adapters.storage.StrategyShareCodec.decode(args.requiredString("code"))
+                val id = graph.labyrinthStrategySettings.add(imported.name, imported.note, imported.settings)
+                return buildJsonObject { put("id", id) }
+            }
             ControlOps.CATALOG -> return buildJsonObject { put("items", model(graph.loadLabyrinthRoleRatings())) }
             ControlOps.DEVICE_DISCOVER -> {
-                requireIdle(); graph.deviceConnection.discover(args.boolean("force", true))
+                requireIdle()
+                check(graph.deviceConnection.discover(args.boolean("force", true))) {
+                    graph.deviceConnection.message.value ?: "设备检测未完成，请稍后重试"
+                }
                 return buildJsonObject { put("devices", model(graph.deviceConnection.devices.value)) }
             }
             SharedSupervisorOps.DEVICE_RESOLVE -> {
@@ -293,6 +326,12 @@ class GraphControlService(
                 check(WindowsDpapi.unprotect(WindowsDpapi.protect(fixture, entropy), entropy).contentEquals(fixture))
                 "DPAPI 当前用户自检通过"
             })
+            ControlOps.HISTORY_LOAD -> return buildJsonObject { put("items", model(graph.ux.history.records.value)) }
+            ControlOps.LOG_LOAD -> return buildJsonObject { put("items", model(graph.log.lines.value)) }
+            ControlOps.CRASHES_LOAD -> {
+                val names = withContext(Dispatchers.IO) { crashNames() }
+                return buildJsonObject { put("items", model(names)) }
+            }
             ControlOps.LOG_CLEAR -> graph.log.clear()
             ControlOps.LOG_ADD -> graph.log.add(args.requiredString("text"), kind = enumValueOf(args.string("kind") ?: "NORMAL"))
             ControlOps.DIAGNOSTICS_EXPORT -> {
@@ -567,12 +606,12 @@ class GraphControlService(
     private suspend fun previewDocument(): JsonElement {
         val frame = graph.preview.value ?: return JsonNull
         if (previewTimestamp != frame.timestampMillis) {
-            previewPng = withContext(Dispatchers.Default) {
-                encodePreviewPng(frame)
+            previewJpeg = withContext(Dispatchers.Default) {
+                encodePreviewJpeg(frame)
             }
             previewTimestamp = frame.timestampMillis
         }
-        return buildJsonObject { put("png", previewPng); put("timestampMillis", frame.timestampMillis) }
+        return buildJsonObject { put("jpeg", previewJpeg); put("timestampMillis", frame.timestampMillis) }
     }
 
     private fun crashNames(): List<String> = graph.dataDirectory.resolve("logs").toFile().listFiles()
@@ -600,7 +639,8 @@ class GraphControlService(
 
     private companion object {
         val GLOBAL_EDITS = setOf(ControlOps.ACCOUNT_NEW, ControlOps.ACCOUNT_EDIT, ControlOps.ACCOUNT_SAVE,
-            ControlOps.ACCOUNT_DELETE, ControlOps.STRATEGY_SAVE, ControlOps.SETTINGS_PATCH, ControlOps.ADB_CONFIGURE, ControlOps.ADB_DOWNLOAD)
+            ControlOps.ACCOUNT_DELETE, ControlOps.STRATEGY_SAVE, ControlOps.STRATEGY_ADD, ControlOps.STRATEGY_EDIT,
+            ControlOps.STRATEGY_ACTIVATE, ControlOps.STRATEGY_DELETE, ControlOps.STRATEGY_IMPORT, ControlOps.SETTINGS_PATCH, ControlOps.ADB_CONFIGURE, ControlOps.ADB_DOWNLOAD)
         val DATA_ROLE_FORBIDDEN = setOf(ControlOps.START, ControlOps.STOP, ControlOps.PAUSE, ControlOps.PREVIEW,
             ControlOps.DEVICE_CONNECT, ControlOps.DEVICE_DISCONNECT, ControlOps.DEVICE_TEST, ControlOps.CAPTURE_STOP)
     }

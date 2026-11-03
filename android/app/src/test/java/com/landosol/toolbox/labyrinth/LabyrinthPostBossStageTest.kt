@@ -1,5 +1,6 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState as Page
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -13,11 +14,11 @@ class LabyrinthPostBossStageTest {
     fun `result page enters score stage from either pre-score stage`() {
         assertEquals(
             LabyrinthPostBossStage.SCORE_RESULT,
-            labyrinthPostBossStageOnFinalResult(LabyrinthPostBossStage.NONE),
+            labyrinthPostBossStageOnPage(LabyrinthPostBossStage.NONE, Page.RUN_CLEAR_RESULT),
         )
         assertEquals(
             LabyrinthPostBossStage.SCORE_RESULT,
-            labyrinthPostBossStageOnFinalResult(LabyrinthPostBossStage.BEFORE_SCORE),
+            labyrinthPostBossStageOnPage(LabyrinthPostBossStage.BEFORE_SCORE, Page.RUN_CLEAR_RESULT),
         )
     }
 
@@ -25,7 +26,7 @@ class LabyrinthPostBossStageTest {
     fun `result page still visible after the first close tap returns to the score stage`() {
         assertEquals(
             LabyrinthPostBossStage.SCORE_RESULT,
-            labyrinthPostBossStageOnFinalResult(LabyrinthPostBossStage.CHEST_SEQUENCE),
+            labyrinthPostBossStageOnPage(LabyrinthPostBossStage.CHEST_SEQUENCE, Page.RUN_CLEAR_RESULT),
         )
     }
 
@@ -36,7 +37,37 @@ class LabyrinthPostBossStageTest {
             LabyrinthPostBossStage.FINAL_ITEM_REWARD,
             LabyrinthPostBossStage.WAITING_FOR_DAWN_HOME,
         )) {
-            assertEquals(stage.name, stage, labyrinthPostBossStageOnFinalResult(stage))
+            assertEquals(stage.name, stage, labyrinthPostBossStageOnPage(stage, Page.RUN_CLEAR_RESULT))
+        }
+    }
+
+    @Test
+    fun `recognized chest pages recover from a lingering score frame`() {
+        for (page in listOf(Page.RUN_CLEAR_CHEST_ANIMATION, Page.RUN_CLEAR_CHEST_RESULT)) {
+            assertEquals(page.name, LabyrinthPostBossStage.CHEST_SEQUENCE,
+                labyrinthPostBossStageOnPage(LabyrinthPostBossStage.SCORE_RESULT, page))
+        }
+    }
+
+    @Test
+    fun `final item advances after score even when chest frames were not observed`() {
+        for (stage in listOf(LabyrinthPostBossStage.SCORE_RESULT, LabyrinthPostBossStage.CHEST_SEQUENCE)) {
+            assertEquals(stage.name, LabyrinthPostBossStage.FINAL_ITEM_REWARD,
+                labyrinthPostBossStageOnPage(stage, Page.ITEM_REWARD))
+        }
+    }
+
+    @Test
+    fun `transitions and ordinary rewards do not infer completion or regress final progress`() {
+        for (page in listOf(Page.UNKNOWN, Page.NODE_SELECTION, Page.DAWN_REALM_HOME_IDLE, Page.BATTLE_RESULT)) {
+            assertEquals(page.name, LabyrinthPostBossStage.SCORE_RESULT,
+                labyrinthPostBossStageOnPage(LabyrinthPostBossStage.SCORE_RESULT, page))
+        }
+        for (stage in listOf(LabyrinthPostBossStage.NONE, LabyrinthPostBossStage.BEFORE_SCORE,
+            LabyrinthPostBossStage.FINAL_ITEM_REWARD, LabyrinthPostBossStage.WAITING_FOR_DAWN_HOME)) {
+            for (page in listOf(Page.RUN_CLEAR_CHEST_ANIMATION, Page.RUN_CLEAR_CHEST_RESULT, Page.ITEM_REWARD)) {
+                assertEquals("$stage on $page", stage, labyrinthPostBossStageOnPage(stage, page))
+            }
         }
     }
 

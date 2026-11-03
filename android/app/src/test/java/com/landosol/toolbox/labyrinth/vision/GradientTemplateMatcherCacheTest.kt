@@ -7,6 +7,28 @@ import org.junit.Test
 
 class GradientTemplateMatcherCacheTest {
     @Test
+    fun `borrowed snapshots survive the owner preparing another frame of the same size`() {
+        fun frame(seed: Int) = PixelImage(64, 48, IntArray(64 * 48) { i ->
+            0xff000000.toInt() or ((seed * i * 7919 + 17) and 0xffffff)
+        })
+        val first = frame(7)
+        val second = frame(19)
+        val rect = EntryPixelRect(5, 3, 22, 18)
+        val template = first.crop(rect.left, rect.top, rect.width, rect.height)
+        val owner = GradientTemplateMatcher()
+        val borrower = GradientTemplateMatcher()
+        owner.prepareFrame(first)
+        borrower.sharePreparedFrame(owner)
+        val expected = owner.score(first, rect, template)
+        first.pixels.fill(0)
+        owner.clearPreparedFrame()
+        owner.prepareFrame(second)
+        assertEquals(expected, borrower.score(first, rect, template), 0.0)
+        borrower.clearPreparedFrame()
+        assertEquals(0.0, borrower.score(first, rect, template), 0.0)
+    }
+
+    @Test
     fun `prepared and shared features preserve scores across scale and frame changes`() {
         fun pattern(seed: Int) = PixelImage(96, 72, IntArray(96 * 72) { index ->
             0xff000000.toInt() or ((index * 7919 + seed * 104729) and 0xffffff)

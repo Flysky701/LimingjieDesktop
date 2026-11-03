@@ -54,27 +54,30 @@ internal enum class LabyrinthPostBossStage {
 }
 
 /**
- * Stage to adopt when the final RESULT page is recognized.
- *
- * The final Boss usually completes the route first, which arms BEFORE_SCORE; the RESULT page
- * then arrives on top of that. The old transition only accepted NONE → SCORE_RESULT, so a run
- * that had already armed BEFORE_SCORE never gained a close-button plan for RESULT and spent its
- * whole animation budget tapping blind fallback points instead (2026-09-17 live: 402 taps,
- * "RUN_CLEAR_RESULT：暂不自动处理"). Any pre-score stage may enter SCORE_RESULT; later stages
- * must not regress.
+ * Reconcile settlement progress with the recognized page. A close tap can merely skip the
+ * score animation, so a lingering RESULT must remain retryable. Once a chest or final item
+ * page is recognized, it also proves that RESULT has closed, even if the last RESULT frame
+ * arrived during the tap cooldown. Unknown/map frames are not evidence of that transition.
  */
-internal fun labyrinthPostBossStageOnFinalResult(current: LabyrinthPostBossStage): LabyrinthPostBossStage =
-    when (current) {
-        LabyrinthPostBossStage.NONE,
-        LabyrinthPostBossStage.BEFORE_SCORE,
-        // The first tap on 关闭 only skips the score count-up animation and the RESULT page stays
-        // visible (2026-09-17 02:08 device log: one anchor-centre tap, page unchanged, then no
-        // plan). A visible RESULT page is the score stage by definition; the chest sequence has
-        // not started until RESULT is gone.
-        LabyrinthPostBossStage.CHEST_SEQUENCE,
-        -> LabyrinthPostBossStage.SCORE_RESULT
+internal fun labyrinthPostBossStageOnPage(
+    current: LabyrinthPostBossStage,
+    page: LabyrinthEntryPageState,
+): LabyrinthPostBossStage = when (page) {
+    LabyrinthEntryPageState.RUN_CLEAR_RESULT -> when (current) {
+        LabyrinthPostBossStage.NONE, LabyrinthPostBossStage.BEFORE_SCORE,
+        LabyrinthPostBossStage.CHEST_SEQUENCE -> LabyrinthPostBossStage.SCORE_RESULT
         else -> current
     }
+    LabyrinthEntryPageState.RUN_CLEAR_CHEST_ANIMATION,
+    LabyrinthEntryPageState.RUN_CLEAR_CHEST_RESULT,
+    -> if (current == LabyrinthPostBossStage.SCORE_RESULT) LabyrinthPostBossStage.CHEST_SEQUENCE else current
+    LabyrinthEntryPageState.ITEM_REWARD -> when (current) {
+        LabyrinthPostBossStage.SCORE_RESULT,
+        LabyrinthPostBossStage.CHEST_SEQUENCE -> LabyrinthPostBossStage.FINAL_ITEM_REWARD
+        else -> current
+    }
+    else -> current
+}
 
 /**
  * The chest-result dialog (宝箱开封结果) is a centred modal with one 确认 button at the bottom

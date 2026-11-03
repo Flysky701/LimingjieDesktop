@@ -791,6 +791,7 @@ internal fun LabyrinthEntryRecognitionSession.createShopWorkflow(): LabyrinthSho
 
 internal fun LabyrinthEntryRecognitionSession.createSettlementWorkflow(): LabyrinthSettlementWorkflow =
     LabyrinthSettlementWorkflow(object : LabyrinthSettlementPort {
+        override val clock get() = this@createSettlementWorkflow.clock
         override val _state: MutableStateFlow<LabyrinthEntryRecognitionSessionState>
             get() = this@createSettlementWorkflow._state
         override val actionScope: CoroutineScope
@@ -1868,6 +1869,8 @@ internal fun LabyrinthEntryRecognitionSession.createPageRouterWorkflow(): Labyri
             this@createPageRouterWorkflow.rewardWorkflow.updateRewardPageProgress(sessionId = sessionId, result = result, previousPostEntryState = previousPostEntryState, timestampMillis = timestampMillis)
         override val characterAcquisitionActive: Boolean
             get() = this@createPageRouterWorkflow.rewardWorkflow.isCharacterAcquisitionActive()
+        override fun observeRunScore(result: LabyrinthEntryFrameResult, timestampMillis: Long) =
+            this@createPageRouterWorkflow.settlementWorkflow.observeScore(result, timestampMillis)
         override fun updateRoleRewardJoinedRecognitionGate(result: LabyrinthEntryFrameResult) =
             this@createPageRouterWorkflow.rewardWorkflow.updateRoleRewardJoinedRecognitionGate(result)
         override fun resumeRoleRewardBatch(pageState: LabyrinthEntryPageState, timestampMillis: Long) =

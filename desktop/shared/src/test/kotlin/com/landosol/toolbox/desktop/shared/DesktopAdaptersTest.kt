@@ -16,6 +16,57 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopAdaptersTest {
+    @Test fun hiddenPreviewSkipsItsCopyWhileRecognitionKeepsReceivingFrames() = runBlocking {
+        val enabled = java.util.concurrent.atomic.AtomicBoolean(false)
+        val frames = java.util.concurrent.atomic.AtomicInteger()
+        val previews = java.util.concurrent.atomic.AtomicInteger()
+        val modifiedFrames = java.util.concurrent.atomic.AtomicInteger()
+        val sourceColor = 0xff123456.toInt()
+        val registered = CaptureFrameBus.register("preview-demand-fixture") { frame ->
+            if (frame.bitmap.getPixel(0, 0) != sourceColor) modifiedFrames.incrementAndGet()
+            frames.incrementAndGet(); frame.bitmap.recycle()
+        } as CaptureFrameRegistrationResult.Registered
+        val service = DesktopCaptureService(
+            source = {
+                val sourcePixels = IntArray(16 * 9) { sourceColor }
+                CapturePixels(16, 9, sourcePixels, System.currentTimeMillis(), ownsPixels = true)
+            },
+            preview = {
+                it.pixels[0] = 0
+                previews.incrementAndGet()
+            },
+            previewEnabled = enabled::get,
+        )
+        try {
+            service.start()
+            withTimeout(3_000) { while (frames.get() < 3) delay(10) }
+            assertEquals(0, previews.get())
+            enabled.set(true)
+            withTimeout(2_000) { while (previews.get() == 0) delay(10) }
+            enabled.set(false)
+            // Allow a callback already in flight to finish, then observe new recognition frames.
+            val before = frames.get()
+            withTimeout(2_000) { while (frames.get() <= before) delay(10) }
+            val retained = previews.get()
+            val next = frames.get() + 3
+            withTimeout(2_000) { while (frames.get() < next) delay(10) }
+            assertEquals(retained, previews.get())
+            assertEquals("Preview writes reached recognition", 0, modifiedFrames.get())
+        } finally { service.stopAndJoin("preview test complete"); service.close(); CaptureFrameBus.unregister(registered.lease) }
+    }
+
+    @Test fun recognitionRetainsBorrowedPixelsWhenSourceReusesItsBuffer() {
+        val source = intArrayOf(0xff123456.toInt())
+        val bitmap = CapturePixels(1, 1, source, 0L).recognitionBitmap()
+        val owned = CapturePixels(1, 1, intArrayOf(0), 0L, ownsPixels = true)
+        val copied = owned.copy(pixels = source).recognitionBitmap()
+        source[0] = 0
+        assertEquals(0xff123456.toInt(), bitmap.getPixel(0, 0))
+        assertEquals(0xff123456.toInt(), copied.getPixel(0, 0))
+        bitmap.recycle()
+        copied.recycle()
+    }
+
     @Test fun captureUsesOwnedThreadAndStopsAfterFiveFailures() = runBlocking {
         val received = CompletableDeferred<String>()
         val lost = CompletableDeferred<String>()

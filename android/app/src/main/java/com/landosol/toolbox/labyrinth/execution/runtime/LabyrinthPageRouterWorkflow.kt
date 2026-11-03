@@ -197,6 +197,7 @@ internal interface LabyrinthPageRouterPort {
     fun updateRewardAnimationProgress(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, timestampMillis: Long): Unit
     fun updateRewardPageProgress(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, previousPostEntryState: LabyrinthEntryPageState?, timestampMillis: Long): Unit
     val characterAcquisitionActive: Boolean
+    fun observeRunScore(result: LabyrinthEntryFrameResult, timestampMillis: Long)
     fun updateRoleRewardJoinedRecognitionGate(result: LabyrinthEntryFrameResult)
     fun resumeRoleRewardBatch(pageState: LabyrinthEntryPageState, timestampMillis: Long)
     fun resetRelicSelectionOnPageEntry()
@@ -251,6 +252,7 @@ internal class LabyrinthPageRouterWorkflow(private val port: LabyrinthPageRouter
             ),
         )
         val pageState = result.observation.state
+        if (!current.dryRun) observeRunScore(result, timestampMillis)
         if (clock() < channelPromptVisibleUntil) {
             // The channel prompt poll owns the screen; nothing behind the dialog may be tapped.
             channelPromptMessage?.let { message -> _state.value = _state.value.copy(message = message) }

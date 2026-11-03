@@ -71,8 +71,21 @@ val generateBuildConfig by tasks.registering {
     }
 }
 kotlin.sourceSets.main { kotlin.srcDir(prepareUpstreamMain); kotlin.srcDir(generateBuildConfig) }
-kotlin.sourceSets.test { kotlin.srcDir(prepareUpstreamTest) }
-sourceSets.main { resources.srcDir(prepareUpstreamAssets) }
+kotlin.sourceSets.test {
+    if (providers.gradleProperty("full").isPresent) kotlin.srcDir(prepareUpstreamTest)
+}
+val compileCharacterIcons by tasks.registering(JavaExec::class) {
+    val compiler = layout.projectDirectory.file("src/iconCompiler/CompileCharacterIcons.java")
+    val output = layout.buildDirectory.dir("generated/character-icons")
+    inputs.file(compiler)
+    outputs.dir(output)
+    // Use compiled classes and the raw assets directly. The main jar/resources consume this task.
+    classpath(sourceSets.main.get().output.classesDirs, configurations.runtimeClasspath, prepareUpstreamAssets)
+    javaLauncher.set(javaToolchains.launcherFor { languageVersion.set(JavaLanguageVersion.of(21)) })
+    mainClass.set(compiler.asFile.absolutePath)
+    args(output.get().asFile.absolutePath, temporaryDir.absolutePath)
+}
+sourceSets.main { resources.srcDir(prepareUpstreamAssets); resources.srcDir(compileCharacterIcons) }
 sourceSets.test { resources.srcDir(upstream.resolve("src/test/resources")); resources.srcDir(upstream.resolve("../test-fixtures/protocol")) }
 dependencies {
     api(compose.desktop.currentOs); api(compose.material3)

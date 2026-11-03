@@ -107,7 +107,6 @@ internal fun runSetupBlock(dirty: Boolean, fullConfiguration: Boolean): String? 
             Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
                 Column(Modifier.weight(1f)) {
                     Text(selected.title,style=MaterialTheme.typography.titleLarge)
-                    Text(selected.summary,style=MaterialTheme.typography.bodySmall,color=Muted)
                 }
                 TextButton(onClick=configure,enabled=enabled) { Text("高级配置");Symbol("expand_more",modifier=Modifier.size(16.dp)) }
             }
@@ -123,7 +122,6 @@ internal fun runSetupBlock(dirty: Boolean, fullConfiguration: Boolean): String? 
                 } else {
                     RunChoice("本次公会",state.guildOptions.firstOrNull{it.guildId==standaloneGuild}?.name ?: "请选择",state.guildOptions,
                         {it.name},enabled,Modifier.fillMaxWidth()) {selectGuild(it.guildId)}
-                    Text("公会仅用于本次刷取，不改变批量目标。",style=MaterialTheme.typography.bodySmall,color=Muted)
                 }
                 Row(horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=Alignment.Top) {
                     RunChoice("难度",draft.settings.difficulty.toString(),state.availableDifficulties,{it.toString()},
@@ -152,23 +150,23 @@ internal fun runSetupBlock(dirty: Boolean, fullConfiguration: Boolean): String? 
                     Text("1–${LabyrinthRerollOptions.MAX_ATTEMPTS}",style=MaterialTheme.typography.bodySmall,color=Muted)
                 }
                 if (state.selectedAccount == null || !state.settingsReady) {
-                    Text("公会目标可先保存；选择账号后自动恢复该账号的难度和路线。",style=MaterialTheme.typography.bodySmall,color=Muted)
-                } else Text("${draft.settings.routeEvaluationMode.label} · ${draft.settings.thirdBlockChoice.label} · Boss 沿用高级配置",style=MaterialTheme.typography.bodySmall,color=Muted)
+                    Text(if(state.selectedAccount==null) "未选择账号" else "正在加载账号配置…",style=MaterialTheme.typography.bodySmall,color=Muted)
+                } else Text("${draft.settings.routeEvaluationMode.label} · ${draft.settings.thirdBlockChoice.label}",style=MaterialTheme.typography.bodySmall,color=Muted)
                 if(selected==DesktopTask.REROLL) Text(if(draft.settings.retireExisting)"允许彻底撤退当前开局，开始前会再次确认。" else "不允许彻底撤退当前开局。",style=MaterialTheme.typography.bodySmall,color=Muted)
             } else {
                 Text(when(selected) {
-                    DesktopTask.READ -> "读取当前账号在服务端的开局，不会替换模拟器里的游戏账号。"
-                    DesktopTask.RECOGNIZE -> "分析模拟器当前画面，不点击、不登录。可用于检查当前页面。"
-                    else -> "按已保存策略操作当前游戏画面，请先进入游戏并确认设备已就绪。"
+                    DesktopTask.READ -> "读取服务端开局"
+                    DesktopTask.RECOGNIZE -> "只读识别 · 不执行操作"
+                    else -> "按当前策略执行"
                 },style=MaterialTheme.typography.bodyMedium)
                 TextButton(onClick=strategies,enabled=enabled){Text("查看当前策略 →")}
             }
             if (draft.dirty) {
-                Text("有未保存更改 · 请在底部保存或取消",color=LocalDesktopColors.current.warn,style=MaterialTheme.typography.bodySmall)
+                Text("未保存",color=LocalDesktopColors.current.warn,style=MaterialTheme.typography.bodySmall)
             } else Row(verticalAlignment=Alignment.CenterVertically) {
                 Symbol("check_circle",tint=LocalDesktopColors.current.ok,modifier=Modifier.size(15.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(message ?: if(selected==DesktopTask.BATCH&&draft.savedGoals().isEmpty())"填写并保存公会目标后开始" else if(selected==DesktopTask.BATCH) "已恢复上次保存的目标与配置" else "使用已保存配置",style=MaterialTheme.typography.bodySmall,color=Muted)
+                Text(message ?: if(selected==DesktopTask.BATCH&&draft.savedGoals().isEmpty())"未设置公会目标" else "已保存",style=MaterialTheme.typography.bodySmall,color=Muted)
                 Spacer(Modifier.weight(1f))
                 if(selected==DesktopTask.BATCH) Text("${draft.savedGoals().size} 个公会 · 共 ${draft.savedGoals().sumOf{it.count}} 次",style=MaterialTheme.typography.bodySmall,color=Muted)
             }

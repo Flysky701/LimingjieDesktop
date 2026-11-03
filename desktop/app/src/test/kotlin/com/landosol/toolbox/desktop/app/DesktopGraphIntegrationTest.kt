@@ -47,9 +47,9 @@ class DesktopGraphIntegrationTest {
         var debugPort: Int? = null
         var captchaPort = 0
         try {
+            graph.connectDevice("fixture-only")
             val ocr = withTimeout(60_000) { graph.ocr.status.first { it is OcrEngineStatus.Ready || it is OcrEngineStatus.Failed } }
             assertTrue("real OCR failed to initialize: $ocr", ocr is OcrEngineStatus.Ready)
-            graph.connectDevice("fixture-only")
             assertEquals(GameServer.CN_BILIBILI, graph.selectedGameServer)
             val id = graph.database.accountDao().insert(AccountEntity(alias = "offline-integration", serverId = GameServer.CN_BILIBILI.storageId,
                 gameUid = null, credentialKey = "synthetic-unused", isSelected = false, createdAt = 1, updatedAt = 1))
@@ -65,6 +65,13 @@ class DesktopGraphIntegrationTest {
             assertTrue(recognized.running); assertTrue(recognized.dryRun)
             assertEquals(LabyrinthEntryPageState.SHOP, recognized.lastResult?.observation?.state)
             assertNotNull(graph.preview.value); assertNotNull(CaptureFrameBus.currentOwner())
+            val previewBeforeHide = graph.preview.value!!.timestampMillis
+            graph.setPreviewRequested(false)
+            assertNull(graph.preview.value)
+            withTimeout(5_000) { graph.labyrinthEntryRecognitionSession.state.first { it.frameCount > recognized.frameCount } }
+            assertNull("Recognition must not repopulate a hidden preview", graph.preview.value)
+            graph.setPreviewRequested(true)
+            withTimeout(3_000) { graph.preview.first { it != null && it.timestampMillis > previewBeforeHide } }
             withTimeout(3000) { while (powerMode(graph) != PowerMode.VISUAL) delay(10) }
             assertEquals(0, fake.acceptedActions.get())
             val sessionId = checkNotNull(recognized.sessionId)
@@ -187,9 +194,9 @@ class DesktopGraphIntegrationTest {
             assertEquals(2L, graph.labyrinthRouteStore.loadLatest(accountId)?.enterId)
             assertEquals(LabyrinthRouteVerdict.TARGET, RoomLabyrinthRerollCheckpointStore(graph.database).load(accountId)?.verdict)
 
+            graph.connectDevice("fixture-only")
             val ocr = withTimeout(60_000) { graph.ocr.status.first { it is OcrEngineStatus.Ready || it is OcrEngineStatus.Failed } }
             assertTrue(ocr.toString(), ocr is OcrEngineStatus.Ready)
-            graph.connectDevice("fixture-only")
             withTimeout(5000) { graph.labyrinthController.uiState.first { it.selectedAccount?.id == accountId } }
             withTimeout(30_000) { graph.startRecognition(dryRun = false).join() }
             assertTrue(graph.log.text(), graph.labyrinthEntryRecognitionSession.state.value.running)

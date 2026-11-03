@@ -62,7 +62,8 @@ class RunHomeUiTest {
             compose.waitUntil(5000){graph.labyrinthController.uiState.value.selectedDifficulty==2}
             compose.onNodeWithText("返回运行台 · Esc").performClick()
             compose.runOnIdle{assertFalse(ControlOps.START in port.requests);assertNull(port.error.value)}
-            compose.onNodeWithText("2").assertExists()
+            // The saved difficulty reaches the form on the next control snapshot.
+            compose.waitUntil(5_000) { compose.onAllNodesWithText("2").fetchSemanticsNodes().size == 1 }
             compose.onNodeWithContentDescription("美食殿堂 次数").assertTextEquals("3")
             compose.onNodeWithText("刷开局").performClick()
             compose.waitUntil(5000){graph.ux.preferences.state.value.selectedTask=="REROLL"}

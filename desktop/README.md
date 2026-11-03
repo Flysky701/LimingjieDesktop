@@ -1,6 +1,6 @@
 # 桌面开发与构建
 
-**当前版本：1.0.18+desktop.7.logic.2**（业务逻辑拆解开发版）。独立 Gradle 多模块工程，使用 x64 JDK 21，桌面构建无需 Android SDK。
+当前业务逻辑解耦测试版为 **1.0.18+desktop.13.logic.3**。独立 Gradle 多模块工程，使用 x64 JDK 21，桌面构建无需 Android SDK。
 
 业务模块位置、兼容接线和本次构建范围见 [逻辑拆解记录](../docs/desktop/registers/LOGIC_DECOMPOSITION.md)。
 
@@ -18,7 +18,7 @@ desktop\gradlew.bat -p desktop :app:run
 desktop\gradlew.bat -p desktop :app:packagePortableZip
 
 # 完整检查
-desktop\gradlew.bat -p desktop check
+desktop\gradlew.bat -p desktop -Pfull check
 ```
 
 | 输出 | 位置 |

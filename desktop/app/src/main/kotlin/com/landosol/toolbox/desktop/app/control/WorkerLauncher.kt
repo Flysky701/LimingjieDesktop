@@ -32,7 +32,8 @@ class WorkerLauncher(
         fun applicationCommand(): List<String> {
             System.getProperty("jpackage.app-path")?.takeIf { Files.isRegularFile(Path.of(it)) }?.let { return listOf(it) }
             val java = Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "java.exe" else "java")
-            return listOf(java.toString(), "-cp", System.getProperty("java.class.path"), "com.landosol.toolbox.desktop.app.MainKt")
+            return listOf(java.toString()) + DesktopJvmOptions.arguments +
+                listOf("-cp", System.getProperty("java.class.path"), "com.landosol.toolbox.desktop.app.MainKt")
         }
     }
 }
@@ -61,11 +62,12 @@ private class ProcessWorkerLink(
     private val closed = CompletableDeferred<Unit>()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonObject>>()
     private val selected = AtomicBoolean(true)
+    private val previewVisible = AtomicBoolean(false)
     @Volatile private var wire: WorkerWire? = null
     @Volatile private var server: ServerSocket? = null
     @Volatile private var process: Process? = null
     @Volatile private var containment: AutoCloseable? = null
-    private var lastSequence = 0L
+    private val states = WorkerStateReceiver()
 
     private val launchJob = work.launch(Dispatchers.IO) {
         try {
@@ -101,6 +103,7 @@ private class ProcessWorkerLink(
             peer.socket.soTimeout = receiveTimeoutMillis
             peer.write(wireMessage("selected", instanceId, workerRunId) { put("value", selected.get()) })
             mutableConnection.value = WorkerConnectionStatus.CONNECTED
+            writePreviewVisibility()
             ready.complete(Unit)
             work.launch(Dispatchers.IO) {
                 while (isActive && !intentionalClose.get() && mutableConnection.value == WorkerConnectionStatus.CONNECTED) {
@@ -113,10 +116,7 @@ private class ProcessWorkerLink(
                 val incoming = peer.read()
                 if (incoming.wireString("profileId") != instanceId || incoming.wireString("runId") != workerRunId) continue
                 when (incoming.wireString("kind")) {
-                    "state" -> {
-                        val seq = (incoming["sequence"] as? JsonPrimitive)?.longOrNull ?: continue
-                        if (seq > lastSequence) { lastSequence = seq; mutableSnapshots.value = incoming.wireObject("state") }
-                    }
+                    "state" -> states.accept(incoming, peer.lastReadBytes)?.let { mutableSnapshots.value = it }
                     "reply" -> incoming.wireString("requestId")?.let { id ->
                         pending.remove(id)?.let { reply ->
                             incoming.wireString("error")?.let { reply.completeExceptionally(IllegalStateException(it)) }
@@ -168,6 +168,19 @@ private class ProcessWorkerLink(
             runCatching { wire?.write(wireMessage("selected", instanceId, workerRunId) { put("value", selected) }) }
                 .onFailure { lose("预览连接已中断") }
         }
+    }
+
+    override fun setPreviewVisible(visible: Boolean) {
+        if (previewVisible.getAndSet(visible) == visible) return
+        if (!intentionalClose.get() && mutableConnection.value == WorkerConnectionStatus.CONNECTED) work.launch(Dispatchers.IO) {
+            // Read the latest value when writing so rapid tab/collapse changes cannot replay an old request.
+            runCatching { writePreviewVisibility() }
+                .onFailure { lose("预览连接已中断") }
+        }
+    }
+
+    private fun writePreviewVisibility() = synchronized(previewVisible) {
+        wire?.write(wireMessage("preview.visible", instanceId, workerRunId) { put("value", previewVisible.get()) })
     }
 
     override suspend fun shutdown(): Unit = withContext(NonCancellable + Dispatchers.IO) {

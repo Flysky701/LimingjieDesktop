@@ -20,11 +20,18 @@ tasks.processResources {
     from("licenses") { into("META-INF/licenses") }
 }
 
-// Explicit opt-in manual L1 probe; ordinary test/check never contacts a device.
+val probe = sourceSets.create("probe") {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+configurations[probe.implementationConfigurationName].extendsFrom(configurations.implementation.get())
+kotlin.target.compilations.getByName("probe").associateWith(kotlin.target.compilations.getByName("main"))
+
+// Explicit opt-in manual probe; ordinary test/check never contacts a device.
 tasks.register<JavaExec>("probeDevice") {
     group = "verification"
-    dependsOn(tasks.testClasses)
-    classpath = sourceSets.test.get().runtimeClasspath
+    dependsOn(probe.classesTaskName)
+    classpath = probe.runtimeClasspath
     mainClass.set("com.landosol.toolbox.desktop.device.LiveDeviceProbeKt")
     systemProperty("file.encoding", "UTF-8")
     systemProperty("stdout.encoding", "UTF-8")

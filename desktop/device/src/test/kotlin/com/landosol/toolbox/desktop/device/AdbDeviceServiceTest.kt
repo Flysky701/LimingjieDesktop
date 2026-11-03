@@ -65,6 +65,24 @@ class AdbDeviceServiceTest {
         }
     }
 
+    @Test fun offlineTransportIsDiagnosedWithoutBecomingUsableAndClearsOnNextDiscovery() = runBlocking {
+        val adb = FakeAdb()
+        val endpoint = "127.0.0.1:16384"
+        var state = "offline"
+        adb.handler = { call ->
+            if (call.arguments == listOf("devices", "-l")) FakeAdb.success("$endpoint $state model:MuMu")
+            else adb.default(call)
+        }
+        service(adb).use { device ->
+            assertTrue(device.discover().isEmpty())
+            assertTrue(device.discoveryNotice.orEmpty().contains("$endpoint（offline）"))
+            assertFalse(adb.calls.any { it.serial == endpoint })
+            state = "device"
+            assertEquals(endpoint, device.discover().single().serial)
+            assertNull(device.discoveryNotice)
+        }
+    }
+
     @Test fun differentBootsWithSameModelAndSerialAreNotMergedAndMissingIdentityIsConservative() = runBlocking {
         val adb = FakeAdb(); var readable = true
         adb.handler = { call -> when (call.arguments) {
@@ -111,6 +129,107 @@ class AdbDeviceServiceTest {
             assertNull(device.foregroundPackage)
             device.disconnect()
             assertEquals(DeviceConnectionState.Disconnected, device.state.value)
+        }
+    }
+
+    @Test fun screenshotTimeoutVerifiesBootAndUsesBenchmarkedAlternateWithoutSendingInput() = runBlocking {
+        val adb = FakeAdb()
+        val events = CopyOnWriteArrayList<String>()
+        val lost = CopyOnWriteArrayList<String>()
+        val touch = RecordingTouch()
+        service(adb, touch, events, lost).use { device ->
+            device.connect("fixture")
+            val primary = (device.state.value as DeviceConnectionState.Ready).device.selectedMode
+            val alternate = CaptureMode.entries.single { it != primary }
+            val pending = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            adb.calls.clear()
+            adb.handler = { call ->
+                if (!call.screenshot) adb.default(call)
+                else if (("-p" in call.arguments) == (primary == CaptureMode.Png))
+                    AdbResult.Failure(AdbFailureKind.Timeout, "synthetic timeout")
+                else {
+                    pending.complete(Unit)
+                    release.await()
+                    adb.default(call)
+                }
+            }
+            val capture = async { device.capture() }
+            withTimeout(3000) { pending.await() }
+            val calls = adb.calls.toList()
+            val probes = calls.subList(calls.indexOfFirst { it.screenshot } + 1, calls.indexOfLast { it.screenshot })
+            val state = probes.indexOfFirst { it.arguments == listOf("get-state") && it.serial == "fixture" }
+            assertTrue(state >= 0)
+            assertTrue(probes.drop(state + 1).any { it.arguments == listOf("cat", "/proc/sys/kernel/random/boot_id") && it.serial == "fixture" })
+            try {
+                assertTrue(withTimeout(1000) { device.tap(1f, 1f, FakeAdb.GAME) } is TouchResult.Rejected)
+            } finally { release.complete(Unit) }
+            assertEquals(2, capture.await().width)
+            assertEquals(alternate, (device.state.value as DeviceConnectionState.Ready).device.selectedMode)
+            device.capture()
+            assertEquals(3, adb.calls.count { it.screenshot })
+            assertTrue(lost.isEmpty())
+            assertTrue(touch.gestures.isEmpty())
+            assertTrue(events.any { it.contains("synthetic timeout") && it.contains(primary.name) && it.contains("ms") })
+            assertTrue(events.any { it.contains("截图已恢复") && it.contains(alternate.name) })
+        }
+    }
+
+    @Test fun rebootDuringBackupDiscardsFrameAndRequiresNewSession() = runBlocking {
+        val adb = FakeAdb()
+        val lost = CopyOnWriteArrayList<String>()
+        service(adb, lost = lost).use { device ->
+            device.connect("fixture")
+            val attempts = AtomicInteger()
+            adb.handler = { call -> when {
+                call.screenshot && attempts.incrementAndGet() == 1 -> AdbResult.Failure(AdbFailureKind.Timeout, "timeout")
+                call.arguments == listOf("cat", "/proc/sys/kernel/random/boot_id") && attempts.get() == 2 ->
+                    FakeAdb.success("20000000-1111-2222-3333-444444444444")
+                else -> adb.default(call)
+            } }
+            assertTrue(runCatching { device.capture() }.exceptionOrNull() is DeviceOperationException)
+            assertEquals(2, attempts.get())
+            assertTrue(device.state.value is DeviceConnectionState.Failed)
+            assertTrue(lost.single().contains("启动身份已变化"))
+        }
+    }
+
+    @Test fun timedOutCaptureCannotUseBackupOnUnverifiedDevice() = runBlocking {
+        val adb = FakeAdb()
+        val lost = CopyOnWriteArrayList<String>()
+        service(adb, lost = lost).use { device ->
+            device.connect("fixture")
+            val attempts = AtomicInteger()
+            adb.handler = { call -> when {
+                call.screenshot -> { attempts.incrementAndGet(); AdbResult.Failure(AdbFailureKind.Timeout, "timeout") }
+                call.arguments == listOf("cat", "/proc/sys/kernel/random/boot_id") && attempts.get() > 0 ->
+                    AdbResult.Failure(AdbFailureKind.DeviceOffline, "fixture offline")
+                else -> adb.default(call)
+            } }
+            assertTrue(runCatching { device.capture() }.exceptionOrNull() is DeviceOperationException)
+            assertEquals(1, attempts.get())
+            assertTrue(lost.single().contains("fixture offline"))
+        }
+    }
+
+    @Test fun noBenchmarkedBackupRetriesOnlyOriginalAndReportsBothErrors() = runBlocking {
+        val adb = FakeAdb()
+        val lost = CopyOnWriteArrayList<String>()
+        adb.handler = { call -> if (call.screenshot && "-p" in call.arguments) FakeAdb.success(byteArrayOf())
+            else adb.default(call) }
+        service(adb, lost = lost).use { device ->
+            device.connect("fixture")
+            val attempts = AtomicInteger()
+            adb.calls.clear()
+            adb.handler = { call -> if (call.screenshot) {
+                if (attempts.incrementAndGet() == 1) AdbResult.Failure(AdbFailureKind.Timeout, "first timeout")
+                else FakeAdb.success(byteArrayOf())
+            } else adb.default(call) }
+            assertTrue(runCatching { device.capture() }.exceptionOrNull() is DeviceOperationException)
+            assertEquals(2, attempts.get())
+            assertFalse(adb.calls.any { it.screenshot && "-p" in it.arguments })
+            assertTrue(lost.single().contains("first timeout"))
+            assertTrue(lost.single().contains("Raw 截图头部不完整"))
         }
     }
     @Test fun compatibilityIsExplicitAndRefusesHold() = runBlocking {

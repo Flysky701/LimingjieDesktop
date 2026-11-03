@@ -28,6 +28,7 @@ internal class DiscoveryOnlyDevice(private val delegate: DeviceService) : Device
     override val foregroundPackage: String? = null
     private fun forbidden(): Nothing = error("全局数据服务不执行设备任务，请使用设备运行会话")
     override suspend fun discover() = delegate.discover()
+    override val discoveryNotice get() = delegate.discoveryNotice
     override suspend fun resolveDevice(serial: String) = delegate.resolveDevice(serial)
     override suspend fun connect(serial: String, touchMode: TouchMode): Unit = forbidden()
     override suspend fun disconnect() = delegate.disconnect()

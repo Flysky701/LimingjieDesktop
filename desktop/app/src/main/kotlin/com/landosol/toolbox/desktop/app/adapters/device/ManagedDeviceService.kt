@@ -33,6 +33,7 @@ class ManagedDeviceService(
     private val current = MutableStateFlow<DeviceConnectionState>(DeviceConnectionState.Disconnected)
     override val state = current.asStateFlow()
     override val foregroundPackage get() = delegate?.foregroundPackage
+    override val discoveryNotice get() = delegate?.discoveryNotice
     private suspend fun service(refresh: Boolean = false): DeviceService = mutex.withLock {
         check(!closed) { "设备服务已关闭" }
         val selectedPath = configuredPath()?.trim()?.takeIf { it.isNotEmpty() }

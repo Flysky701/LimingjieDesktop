@@ -3,9 +3,13 @@ package com.landosol.toolbox.labyrinth.vision
 import android.graphics.Bitmap
 
 /** Read-only support for the manually opened series panel. Never swipes, opens or closes it. */
-class AndroidLabyrinthRelicDetailResolver(
-    submitTextRead: (Bitmap, (String?) -> Unit) -> Unit = AndroidChineseRoleNameOcr::readAsync,
+class AndroidLabyrinthRelicDetailResolver private constructor(
+    submitTextRead: (Bitmap, (String?) -> Unit) -> Unit,
+    private val readSeriesColumn: (Bitmap, (String?) -> Unit) -> Unit,
 ) {
+    constructor() : this(AndroidChineseRoleNameOcr::readAsync, AndroidChineseRoleNameOcr::readSeriesAsync)
+    constructor(submitTextRead: (Bitmap, (String?) -> Unit) -> Unit) : this(submitTextRead, submitTextRead)
+
     private val ocr = AndroidRelicRoiOcr(submitTextRead)
 
     fun resolve(bitmap: Bitmap, result: LabyrinthEntryFrameResult): LabyrinthEntryFrameResult {
@@ -27,7 +31,7 @@ class AndroidLabyrinthRelicDetailResolver(
         if (title?.text == null) return holdModal(result, LabyrinthRelicDetailObservation(false))
         if (!LabyrinthRelicDetailText.isSeriesTitle(title.text)) return result
         val listRect = map(bitmap, EntryReferenceRect(532, 150, 120, 713)) ?: return result
-        val read = ocr.read(bitmap, "series-visible", listRect, scale = 2)
+        val read = ocr.read(bitmap, "series-visible", listRect, scale = 2, readText = readSeriesColumn)
         return holdModal(result, LabyrinthRelicDetailObservation(
             titleConfirmed = true,
             entries = read?.text?.let(LabyrinthRelicDetailText::parseVisibleSeries).orEmpty(),
@@ -46,8 +50,8 @@ class AndroidLabyrinthRelicDetailResolver(
         ReferenceFitMapper.map(bitmap.width, bitmap.height, EntryReferenceSize(1920, 1080), rect)
 
     private fun looksLikeSeriesPanel(bitmap: Bitmap): Boolean {
-        // Validate narrow white panel sides and white footer; do not OCR a loading animation.
-        return listOf(EntryReferenceRect(500, 160, 8, 8), EntryReferenceRect(1400, 160, 8, 8),
+        // Sample both white sides outside the list. The blue scrollbar at x=1400 is inside the right edge.
+        return listOf(EntryReferenceRect(500, 160, 8, 8), EntryReferenceRect(1420, 160, 8, 8),
             EntryReferenceRect(520, 880, 8, 8), EntryReferenceRect(1395, 880, 8, 8)).all { reference ->
             val rect = map(bitmap, reference) ?: return@all false
             val color = bitmap.getPixel(rect.left, rect.top)

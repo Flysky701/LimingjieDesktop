@@ -29,6 +29,20 @@ class ProcessAdbExecutorTest {
             withTimeout(3000) { while (ProcessHandle.of(pid).orElse(null)?.isAlive == true) delay(20) }
         }
     }
+    @Test fun completedStartupLeavesSharedDaemonAliveAfterExecutorCloses() = runBlocking {
+        val pidFile = folder.root.toPath().resolve("daemon.pid")
+        try {
+            ProcessAdbExecutor("fake", AdbProcessFactory { ProcessFixture.start("daemon", pidFile.toString()) }).use { runner ->
+                assertTrue(runner.execute(listOf("start-server")) is AdbResult.Success)
+            }
+            val daemon = ProcessHandle.of(Files.readString(pidFile).toLong()).orElse(null)
+            assertTrue("Closing a completed adb client must not kill its shared daemon", daemon?.isAlive == true)
+        } finally {
+            if (Files.exists(pidFile)) ProcessHandle.of(Files.readString(pidFile).toLong()).orElse(null)?.let {
+                if (it.isAlive) { it.destroyForcibly(); it.onExit().get(3, java.util.concurrent.TimeUnit.SECONDS) }
+            }
+        }
+    }
     @Test fun argvSupportsChineseSpacesAndShellQuotes() = runBlocking {
         val calls = CopyOnWriteArrayList<List<String>>()
         val path = "C:/中文 模拟器/adb.exe"

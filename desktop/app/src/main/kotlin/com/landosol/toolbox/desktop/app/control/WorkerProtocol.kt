@@ -14,7 +14,7 @@ interface WorkerDomain {
 enum class WorkerConnectionStatus { STARTING, CONNECTED, LOST, CLOSED }
 
 internal object WorkerProtocol {
-    const val VERSION = 1
+    const val VERSION = 2
     const val MAX_FRAME_BYTES = 16 * 1024 * 1024
     const val HEARTBEAT_MILLIS = 1_000L
     const val LEASE_MILLIS = 8_000L

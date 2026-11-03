@@ -12,6 +12,7 @@ interface ControlSessionPort {
     val error: StateFlow<String?>
     suspend fun request(op: String, args: JsonObject = JsonObject(emptyMap())): JsonObject
     fun setSelected(selected: Boolean)
+    fun setPreviewVisible(visible: Boolean) = Unit
     suspend fun shutdown()
 }
 
@@ -32,6 +33,11 @@ object ControlOps {
     const val ACCOUNT_DELETE="account.delete" // id:Long (UI has already shown deletion confirmation)
     const val ACCOUNT_DISMISS="account.dismiss"
     const val STRATEGY_SAVE="strategy.save" // value:LabyrinthStrategySettings
+    const val STRATEGY_ADD="strategy.add"
+    const val STRATEGY_EDIT="strategy.edit"
+    const val STRATEGY_ACTIVATE="strategy.activate"
+    const val STRATEGY_DELETE="strategy.delete"
+    const val STRATEGY_IMPORT="strategy.import"
     const val CATALOG="catalog.load" // reply items:[LabyrinthRoleRatingItem]
     const val DEVICE_DISCOVER="device.discover" // force:Boolean
     const val DEVICE_CONNECT="device.connect" // serial:String,reconnect:Boolean
@@ -47,6 +53,9 @@ object ControlOps {
     const val DATABASE_UPDATE="database.update" // reply message:String
     const val NETWORK_TEST="network.test" // reply message:String
     const val ENCRYPTION_TEST="encryption.test" // reply message:String
+    const val HISTORY_LOAD="history.load" // complete retained records, requested by the records page
+    const val LOG_LOAD="log.load" // complete retained logs, requested by diagnostics or copy
+    const val CRASHES_LOAD="crashes.load" // directory scan only when diagnostics is opened
     const val LOG_CLEAR="log.clear"
     const val LOG_ADD="log.add" // text:String,kind:UserLogKind.name
     const val DIAGNOSTICS_EXPORT="diagnostics.export" // path:String (chosen by UI); worker writes its own diagnostic ZIP

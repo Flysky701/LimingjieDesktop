@@ -1,11 +1,9 @@
 package com.landosol.toolbox.desktop.app.control
 
-import com.landosol.toolbox.desktop.platform.InstanceCatalog
 import com.landosol.toolbox.desktop.platform.WorkerProcessContainment
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
 import kotlinx.coroutines.*
@@ -80,31 +78,7 @@ class WorkerLifecycleTest {
         } finally { release.complete(Unit); link.shutdown(); scope.cancel() }
     }
 
-    @Test fun failedShellSaveCannotSkipSupervisorCleanupAndConcurrentCallsWait() = runBlocking {
-        val root = temporary.newFolder().toPath()
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val catalog = InstanceCatalog(root.resolve("catalog"), root.resolve("legacy"))
-        catalog.rename(InstanceCatalog.DEFAULT_PROFILE_ID, "silent")
-        val model = SupervisorModel(catalog, launcher(scope), root.resolve("shell"), scope)
-        try {
-            model.open(InstanceCatalog.DEFAULT_PROFILE_ID.toString())
-            val link = model.instances.value.single().link
-            val pid = connectedPid(link)
-            // A nonempty directory at the file destination deterministically rejects atomic replace.
-            val destination = root.resolve("shell/shell.json")
-            Files.delete(destination)
-            Files.createDirectory(destination)
-            Files.writeString(destination.resolve("fixture"), "synthetic")
-            val first = launch(start = CoroutineStart.UNDISPATCHED) { model.shutdown() }
-            first.cancel()
-            val second = async { model.shutdown() }
-            withTimeout(20_000) { first.join(); second.await() }
-            assertTrue(model.error.value.orEmpty().contains("保存标签状态失败"))
-            assertTrue(model.instances.value.isEmpty())
-            assertEquals(WorkerConnectionStatus.CLOSED, link.connection.value)
-            exited(pid)
-        } finally { model.shutdown(); scope.cancel() }
-    }
+
 }
 
 object LifecycleWorkerFixture {

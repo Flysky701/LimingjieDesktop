@@ -1,6 +1,8 @@
 package com.landosol.toolbox.desktop.ocr.evaluation
 
 import com.landosol.toolbox.desktop.ocr.OnnxOcrEngine
+import com.landosol.toolbox.desktop.shared.OcrPort
+import com.landosol.toolbox.desktop.shared.readSeriesColumn
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
 import com.landosol.toolbox.clanbattle.recognition.PixelImage
 import com.landosol.toolbox.gamedata.EventResource
@@ -56,7 +58,7 @@ fun main(args: Array<String>) = runBlocking {
             if (sample.optBoolean("tightenInk")) crop = tighten(crop)
             val scale = sample.optInt("scale", 1)
             if (scale > 1) crop = scaleNearest(crop, scale)
-            val (text, elapsed) = recognize(engine, crop)
+            val (text, elapsed) = recognize(engine, crop, seriesColumn = sample.getString("matcher") == "series-visible")
             val parsed = if (text == null) null else when (sample.getString("matcher")) {
                 "shop-imprint" -> LabyrinthShopItemText.roleImprintLabel(text)
                 "series-title" -> internalDetail("isSeriesTitle", text).toString()
@@ -112,12 +114,16 @@ fun main(args: Array<String>) = runBlocking {
     check(selfTest.optBoolean("passed")) { "Packaged real-image OCR self-test did not match its source transcription" }
 }
 
-private fun recognize(engine: OnnxOcrEngine, image: BufferedImage): Pair<String?, Double> {
+private suspend fun recognize(engine: OnnxOcrEngine, image: BufferedImage, seriesColumn: Boolean = false): Pair<String?, Double> {
     val start = System.nanoTime()
     val pixels = image.getRGB(0, 0, image.width, image.height, null, 0, image.width)
-    val pending = CompletableFuture<String?>()
-    engine.submit(image.width, image.height, pixels) { pending.complete(it) }
-    val text = pending.get(30, TimeUnit.SECONDS)
+    val text = if (seriesColumn) {
+        withTimeout(30_000) { readSeriesColumn(PixelImage(image.width, image.height, pixels), OcrPort(engine::submit)) }
+    } else {
+        val pending = CompletableFuture<String?>()
+        engine.submit(image.width, image.height, pixels) { pending.complete(it) }
+        pending.get(30, TimeUnit.SECONDS)
+    }
     return text to (System.nanoTime() - start) / 1_000_000.0
 }
 

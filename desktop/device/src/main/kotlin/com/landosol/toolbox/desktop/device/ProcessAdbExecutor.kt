@@ -24,15 +24,26 @@ class ProcessAdbExecutor(
     private val closed = AtomicBoolean()
     private val serverStartAttempted = AtomicBoolean()
 
-    override suspend fun execute(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean): AdbResult {
+    internal suspend fun captureRaw(serial: String): DeviceFrame {
+        var payload: RawCapturePayload? = null
+        val result = executeCommand(listOf("exec-out", "screencap"), serial, 10_000, true) { payload = it }.requireSuccess()
+        val timestamp = System.currentTimeMillis()
+        return payload?.decode(timestamp) ?: ScreenCapturer.decodeRaw(result.stdout, timestamp)
+    }
+
+    override suspend fun execute(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean): AdbResult =
+        executeCommand(arguments, serial, timeoutMillis, screenshot, null)
+
+    private suspend fun executeCommand(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean,
+        acceptRaw: ((RawCapturePayload) -> Unit)?): AdbResult {
         require(timeoutMillis > 0)
-        val result = (if (screenshot) screenshots else ordinary).withPermit { executeOnce(arguments, serial, timeoutMillis, screenshot) }
+        val result = (if (screenshot) screenshots else ordinary).withPermit { executeOnce(arguments, serial, timeoutMillis, screenshot, acceptRaw) }
         // FB-06 applies to the ADB daemon, not a refused emulator TCP port.
         if (result is AdbResult.Failure && result.kind == AdbFailureKind.ConnectionRefused &&
             Regex("daemon|server.*not running|cannot connect to.*5037", RegexOption.IGNORE_CASE).containsMatchIn(result.detail) &&
             arguments.firstOrNull() != "start-server" && serverStartAttempted.compareAndSet(false, true)) {
             val start = ordinary.withPermit { executeOnce(listOf("start-server"), null, 10_000, false) }
-            if (start is AdbResult.Success) return (if (screenshot) screenshots else ordinary).withPermit { executeOnce(arguments, serial, timeoutMillis, screenshot) }
+            if (start is AdbResult.Success) return (if (screenshot) screenshots else ordinary).withPermit { executeOnce(arguments, serial, timeoutMillis, screenshot, acceptRaw) }
         }
         return result
     }
@@ -40,9 +51,10 @@ class ProcessAdbExecutor(
     override suspend fun shell(serial: String, arguments: List<String>, timeoutMillis: Long): AdbResult =
         execute(listOf("shell", arguments.joinToString(" ", transform = ::shellQuote)), serial, timeoutMillis)
 
-    private suspend fun executeOnce(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean): AdbResult =
+    private suspend fun executeOnce(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean,
+        acceptRaw: ((RawCapturePayload) -> Unit)? = null): AdbResult =
         if (closed.get()) AdbResult.Failure(AdbFailureKind.LaunchFailed, "ADB 执行器已关闭")
-        else server?.execute(arguments, serial, timeoutMillis) ?: executeProcess(arguments, serial, timeoutMillis, screenshot)
+        else server?.execute(arguments, serial, timeoutMillis, acceptRaw) ?: executeProcess(arguments, serial, timeoutMillis, screenshot)
 
     private suspend fun executeProcess(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean): AdbResult = withContext(Dispatchers.IO) {
         if (closed.get()) return@withContext AdbResult.Failure(AdbFailureKind.LaunchFailed, "ADB 执行器已关闭")
@@ -91,8 +103,13 @@ class ProcessAdbExecutor(
     companion object {
         fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
         internal fun terminate(process: Process) {
-            process.descendants().use { children -> children.toList().asReversed().forEach { if (it.isAlive) it.destroyForcibly() } }
-            if (process.isAlive) process.destroyForcibly()
+            // Windows can still enumerate a completed client's descendants. The ADB daemon
+            // deliberately outlives start-server (and other CLI commands that start it).
+            // Only terminate a process tree while its owned command is still running.
+            if (process.isAlive) {
+                process.descendants().use { children -> children.toList().asReversed().forEach { if (it.isAlive) it.destroyForcibly() } }
+                process.destroyForcibly()
+            }
             try { process.outputStream.close() } catch (_: IOException) { }
             try { process.inputStream.close() } catch (_: IOException) { }
             try { process.errorStream.close() } catch (_: IOException) { }

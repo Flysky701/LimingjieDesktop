@@ -783,9 +783,11 @@ class LabyrinthEntryRecognitionSession(
         channelPrompts?.reset()
         stopRequested.set(false)
         initializeRunBusinessState(dryRun, initialRunSnapshot)
+        settlementWorkflow.beginRun()
         _state.value = LabyrinthEntryRecognitionSessionState(
             status = LabyrinthEntryRecognitionStatus.RUNNING,
             sessionId = session.id,
+            runId = currentRunId,
             dryRun = dryRun,
             joinedCharacters = initialRunSnapshot?.joinedCharacters.orEmpty(),
             observedRelics = initialRunSnapshot?.observedRelics.orEmpty(),

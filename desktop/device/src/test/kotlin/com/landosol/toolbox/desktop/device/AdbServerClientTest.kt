@@ -61,6 +61,8 @@ class AdbServerClientTest {
                 server.accept().use { socket ->
                     socket.request(); socket.send("OKAY"); socket.request(); socket.send("OKAY")
                     socket.getInputStream().readNBytes(5)
+                    // A failing shell can write a partial frame before reporting the real error.
+                    socket.packet(1, byteArrayOf(1, 2))
                     socket.packet(2, "screencap failed".toByteArray()); socket.packet(3, byteArrayOf(1))
                 }
             }
@@ -68,7 +70,66 @@ class AdbServerClientTest {
                 val capturer = ScreenCapturer(adb, "fixture")
                 assertEquals(2, capturer.capture(CaptureMode.Raw).width)
                 assertEquals(2, capturer.capture(CaptureMode.Png).width)
-                assertEquals(AdbFailureKind.NonZeroExit, (adb.execute(listOf("exec-out", "screencap"), "fixture", screenshot = true) as AdbResult.Failure).kind)
+                val failure = runCatching { capturer.capture(CaptureMode.Raw) }.exceptionOrNull() as DeviceOperationException
+                assertEquals(AdbFailureKind.NonZeroExit, failure.adbFailure)
+                assertTrue(failure.message.orEmpty().contains("screencap failed"))
+            }
+            peer.await()
+        }
+    }
+
+    @Test fun rawPixelsCrossPageAndUnalignedShellPacketBoundaries() = runBlocking {
+        val width = 257
+        val height = 71
+        val expected = IntArray(width * height) { it * 16_777_619 }
+        val frame = ByteBuffer.allocate(16 + expected.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+        frame.putInt(width).putInt(height).putInt(5).putInt(0x07060504)
+        for (color in expected) frame.putInt(color)
+        ServerSocket(0).use { server ->
+            val peer = async(Dispatchers.IO) {
+                server.accept().use { socket ->
+                    socket.request(); socket.send("OKAY"); socket.request(); socket.send("OKAY")
+                    socket.getInputStream().readNBytes(5)
+                    val lengths = listOf(3, 9, 0, 5, 65_511, frame.capacity() - 65_528)
+                    var offset = 0
+                    val output = socket.getOutputStream()
+                    for (length in lengths) {
+                        val header = ByteBuffer.allocate(5).order(ByteOrder.LITTLE_ENDIAN).put(1.toByte()).putInt(length)
+                        output.write(header.array())
+                        output.write(frame.array(), offset, length)
+                        offset += length
+                        if (offset == 3) socket.packet(2, "note\r\n".toByteArray())
+                    }
+                    socket.packet(3, byteArrayOf(0))
+                }
+            }
+            ProcessAdbExecutor("unused", AdbProcessFactory { error("unexpected process") }, client(server)).use { adb ->
+                val result = ScreenCapturer(adb, "fixture").capture(CaptureMode.Raw)
+                assertEquals(width, result.width); assertEquals(height, result.height)
+                assertArrayEquals(expected, result.pixels)
+            }
+            peer.await()
+        }
+    }
+
+    @Test fun truncatedAndOversizedRawPacketsRemainTransportErrors() = runBlocking {
+        ServerSocket(0).use { server ->
+            val peer = async(Dispatchers.IO) {
+                for (length in listOf(32, 16 * 1024 * 1024 + 1)) server.accept().use { socket ->
+                    socket.request(); socket.send("OKAY"); socket.request(); socket.send("OKAY")
+                    socket.getInputStream().readNBytes(5)
+                    val header = ByteBuffer.allocate(5).order(ByteOrder.LITTLE_ENDIAN).put(1.toByte()).putInt(length)
+                    socket.getOutputStream().write(header.array())
+                    if (length == 32) socket.getOutputStream().write(byteArrayOf(1, 2))
+                }
+            }
+            ProcessAdbExecutor("unused", AdbProcessFactory { error("unexpected process") }, client(server)).use { adb ->
+                val capturer = ScreenCapturer(adb, "fixture")
+                for (expected in listOf("数据帧不完整", "数据帧长度无效")) {
+                    val error = runCatching { capturer.capture(CaptureMode.Raw) }.exceptionOrNull() as DeviceOperationException
+                    assertEquals(AdbFailureKind.ConnectionRefused, error.adbFailure)
+                    assertTrue(error.message.orEmpty().contains(expected))
+                }
             }
             peer.await()
         }

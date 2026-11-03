@@ -29,8 +29,9 @@ internal object ScoreEdits {
     fun restore(id:String,personal:Int?,change:(String,Int?)->Unit){if(personal!=null)change(id,null)}
 }
 
-@Composable internal fun RoleRatingsPage(graph:ControlSessionUi,onClose:()->Unit) {
-    val saved by graph.labyrinthStrategySettings.state.collectAsState()
+@Composable internal fun RoleRatingsPage(graph:ControlSessionUi,profile:com.landosol.toolbox.desktop.app.adapters.storage.StrategyProfile,onClose:()->Unit) {
+    var baseline by remember(profile.id) { mutableStateOf(profile) }
+    val saved = baseline.settings
     val preferences by graph.ux.preferences.state.collectAsState()
     val catalog by graph.ux.catalog.collectAsState()
     var draft by remember {mutableStateOf(saved.personalRoleScores)}
@@ -76,7 +77,7 @@ internal object ScoreEdits {
             }
         }
         Message(actions.message)
-        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("${shown.size} 人 · 0–100 整数 · Enter 应用到草稿 · ↑↓ 移动",style=MaterialTheme.typography.bodySmall,color=Muted);Text(if(draft==saved.personalRoleScores)"配置已保存；下次启动生效" else "有未保存的修改",style=MaterialTheme.typography.bodySmall)};OutlinedButton(shape=MaterialTheme.shapes.small,onClick=::close,enabled=!actions.working){Text("取消")};Spacer(Modifier.width(8.dp));Button(shape=MaterialTheme.shapes.small,onClick={actions.run{graph.labyrinthStrategySettings.save(saved.copy(personalRoleScores=draft));graph.log.add("角色评分已保存，下次启动生效",kind=com.landosol.toolbox.desktop.app.UserLogKind.KEY)}},enabled=draft!=saved.personalRoleScores&&!actions.working){Text("保存配置")}}
+        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("${shown.size} 人 · 0–100 整数 · Enter 应用到草稿 · ↑↓ 移动",style=MaterialTheme.typography.bodySmall,color=Muted);Text(if(draft==saved.personalRoleScores)"配置已保存；下次启动生效" else "有未保存的修改",style=MaterialTheme.typography.bodySmall)};OutlinedButton(shape=MaterialTheme.shapes.small,onClick=::close,enabled=!actions.working){Text("取消")};Spacer(Modifier.width(8.dp));Button(shape=MaterialTheme.shapes.small,onClick={actions.run{baseline=graph.labyrinthStrategySettings.edit(baseline,saved.copy(personalRoleScores=draft));graph.log.add("角色评分已保存，下次启动生效",kind=com.landosol.toolbox.desktop.app.UserLogKind.KEY)}},enabled=draft!=saved.personalRoleScores&&!actions.working){Text("保存配置")}}
     }
     if(original)BoundStrategyDialog{LabyrinthRoleRatingsScreen(draft,graph::loadLabyrinthRoleRatings,change,{original=false})}
     if(confirmDiscard&&LocalControlVisible.current)AlertDialog(onDismissRequest={confirmDiscard=false;pendingExit=null},title={Text("放弃未保存的修改？")},text={Text("个人评分修改尚未保存。")},confirmButton={TextButton(onClick={confirmDiscard=false;val next=pendingExit;pendingExit=null;next?.invoke() ?: onClose()}){Text("放弃修改")}},dismissButton={TextButton(onClick={confirmDiscard=false;pendingExit=null}){Text("继续编辑")}})

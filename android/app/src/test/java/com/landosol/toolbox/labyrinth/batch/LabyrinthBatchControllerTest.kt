@@ -9,6 +9,22 @@ import org.junit.Test
 
 /** Covers the ten JVM cases enumerated in labyrinth-full-automation.md §16.1. */
 class LabyrinthBatchControllerTest {
+    @Test
+    fun `result summary survives next cycle and duplicate terminal does not count twice`() = runTest {
+        val batch = controller(FakePorts())
+        batch.start("summary", 7L, listOf(goal(1, 2)), difficulty = 1)
+        val first = currentRunId(batch)
+        val summary = com.landosol.toolbox.labyrinth.LabyrinthRunSummary(1_000, 61_000, 46_000)
+        val event = LabyrinthRunTerminalEvent.Cleared(first, summary)
+        batch.onRunTerminal(event)
+        batch.onRunTerminal(event)
+        assertEquals(1, batch.state.value!!.goals.single().completedCount)
+        assertEquals(summary, batch.state.value!!.lastRunSummary)
+        assertEquals(LabyrinthRunOutcome.CLEARED, batch.state.value!!.lastRecordedOutcome)
+        assertEquals(LabyrinthBatchStage.RUNNING_LABYRINTH, batch.state.value!!.stage)
+        batch.onRunTerminal(LabyrinthRunTerminalEvent.Cleared(currentRunId(batch)))
+        assertEquals(LabyrinthBatchStage.COMPLETED, batch.state.value!!.stage)
+    }
 
     private class FakePorts : LabyrinthBatchPorts {
         val log = mutableListOf<String>()

@@ -1,7 +1,10 @@
 package com.landosol.toolbox.data.local
 
 import android.content.Context
+import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.migration.Migration
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -10,6 +13,26 @@ import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import kotlinx.coroutines.Dispatchers
+
+@Dao
+interface DesktopAccountDao : AccountDao {
+    @Query("SELECT * FROM accounts WHERE server_id = :serverId AND alias = :alias")
+    suspend fun findByAlias(serverId: String, alias: String): AccountEntity?
+
+    /** Only used in the device database. Keep old IDs and their dependent rows when an alias is reused. */
+    @Transaction
+    suspend fun bindSharedProjection(row: AccountEntity) {
+        val previousOwner = findByAlias(row.serverId, row.alias)
+        if (previousOwner != null && previousOwner.id != row.id) {
+            var cachedAlias = "${previousOwner.alias}（旧绑定 #${previousOwner.id}）"
+            while (findByAlias(row.serverId, cachedAlias) != null) cachedAlias += "·"
+            update(previousOwner.copy(alias = cachedAlias))
+        }
+        val existing = getById(row.id)
+        clearSelection()
+        if (existing == null) insert(row) else update(row.copy(createdAt = existing.createdAt))
+    }
+}
 
 @Database(
     entities = [
@@ -27,7 +50,7 @@ import kotlinx.coroutines.Dispatchers
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
-    abstract fun accountDao(): AccountDao
+    abstract fun accountDao(): DesktopAccountDao
     abstract fun featureProfileDao(): FeatureProfileDao
     abstract fun automationRunDao(): AutomationRunDao
     abstract fun labyrinthRouteDao(): LabyrinthRouteDao

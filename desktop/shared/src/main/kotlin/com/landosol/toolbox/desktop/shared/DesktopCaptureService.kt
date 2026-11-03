@@ -2,12 +2,36 @@ package com.landosol.toolbox.desktop.shared
 
 import android.graphics.Bitmap
 import com.landosol.toolbox.automation.capture.*
+import com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthEntryFrameProcessor
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import java.util.concurrent.Executors
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-data class CapturePixels(val width: Int, val height: Int, val pixels: IntArray, val timestampMillis: Long)
+data class CapturePixels(
+    val width: Int,
+    val height: Int,
+    val pixels: IntArray,
+    val timestampMillis: Long,
+) {
+    // A data-class copy can substitute a borrowed buffer, so each copy starts borrowed.
+    private var ownsPixels = false
+
+    /** Transfer only a fresh, exact-sized array the source will never mutate or reuse. */
+    constructor(width: Int, height: Int, pixels: IntArray, timestampMillis: Long, ownsPixels: Boolean) :
+        this(width, height, pixels, timestampMillis) {
+        this.ownsPixels = ownsPixels
+    }
+
+    internal fun recognitionBitmap(): Bitmap =
+        if (ownsPixels) Bitmap.fromOwnedPixels(pixels, width, height)
+        else Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+}
+
+/** Desktop capture owns its bitmap; keep its storage inside the concrete page reader. */
+fun AndroidLabyrinthEntryFrameProcessor.processDesktopFrame(frame: CapturedFrame): LabyrinthEntryFrameResult =
+    Bitmap.recognizeLabyrinthFrame(this, frame)
 
 /** Owns the capture thread; upstream owns each Bitmap after bus dispatch. */
 class DesktopCaptureService(
@@ -17,6 +41,8 @@ class DesktopCaptureService(
     private val onLost: (String) -> Unit = {},
     /** A controlled client restart may temporarily show the portrait launcher; never dispatch it. */
     private val deferFrame: (CapturePixels) -> Boolean = { false },
+    /** Controls only the UI copy; recognition must continue while the preview is hidden. */
+    private val previewEnabled: () -> Boolean = { true },
 ) : AutoCloseable {
     private val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "desktop-capture").apply { isDaemon = true } }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -59,11 +85,11 @@ class DesktopCaptureService(
                             android.os.SystemClock.elapsedRealtime(), CaptureRotationPolicy.toleratesTransientRotation())
                         if (decision is CaptureRotationDecision.Stop) throw IllegalStateException(decision.reason)
                         if (decision.deliversFrame) {
-                            if (lastPreview == Long.MIN_VALUE || frame.timestampMillis - lastPreview >= 500) {
+                            if (previewEnabled() && (lastPreview == Long.MIN_VALUE || frame.timestampMillis - lastPreview >= 500)) {
                                 preview(frame.copy(pixels = frame.pixels.copyOf()))
                                 lastPreview = frame.timestampMillis
                             }
-                            val bitmap = Bitmap.createBitmap(frame.pixels, frame.width, frame.height, Bitmap.Config.ARGB_8888)
+                            val bitmap = frame.recognitionBitmap()
                             CaptureFrameBus.dispatch(CapturedFrame(bitmap, frame.timestampMillis))
                         }
                     }

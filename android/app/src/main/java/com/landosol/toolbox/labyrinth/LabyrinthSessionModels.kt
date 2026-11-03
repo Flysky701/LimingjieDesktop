@@ -28,6 +28,8 @@ data class LabyrinthEntryRecognitionSessionState(
     val message: String? = null,
     /** Diagnostic trace for the frame that produced [lastResult]; never read for decisions. */
     val frameTrace: LabyrinthFrameTrace = LabyrinthFrameTrace(),
+    val runSummary: LabyrinthRunSummary? = null,
+    val runId: String? = null,
 ) {
     val running: Boolean get() = status == LabyrinthEntryRecognitionStatus.RUNNING
 }
