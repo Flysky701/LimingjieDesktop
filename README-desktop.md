@@ -1,6 +1,6 @@
 # Windows 桌面版使用指南
 
-本指南适用于业务逻辑解耦测试版 **1.0.18+desktop.13.logic.5**。
+本指南适用于业务逻辑解耦测试版 **1.0.18+desktop.13.logic.6**。
 
 助手在 Windows 中提供运行、账号、策略、设备、记录和设置六个页面。模拟器只需运行游戏。
 
@@ -11,7 +11,7 @@
 1. 下载 Windows ZIP 和同名 `.sha256` 文件，核对校验值：
 
    ```powershell
-   Get-FileHash .\LimingjieAssistant-desktop-1.0.18+desktop.13.logic.5-win-x64.zip -Algorithm SHA256
+   Get-FileHash .\LimingjieAssistant-desktop-1.0.18+desktop.13.logic.6-win-x64.zip -Algorithm SHA256
    ```
 
 2. 将整个 `LimingjieAssistant` 文件夹解压到可写目录，例如 `D:\Tools\LimingjieAssistant`。
@@ -23,6 +23,8 @@
 2. 进入「设备」页会自动检测。MuMu 的运行端口会自动补齐，同一设备的多个地址合并显示。若稍后才启动模拟器，点「重新检测」。检测失败会显示原因并保留原记录，也可以填写 `127.0.0.1:端口` 后点「添加并连接」。
 3. 找不到 ADB 时，展开「高级：ADB 工具与路径」，选择模拟器自带的 `adb.exe`，或下载官方 Platform Tools。更换路径前先断开设备。
 4. 等待安装信息核验、截图测速和触控准备完成，进入「设备详情」查看结果。
+
+运行中若 ADB 短暂离线或身份查询超时，助手会用最多 12 秒重新确认同一设备的启动身份。确认后保留当前任务。模拟器已经重启或持续失联时，助手会停止任务并记录原因。
 
 MaaTouch 是默认触控方式；有兼容问题时可切换为 ADB 输入并重新连接。「测试点击」用于在非游戏页面中央点击一次。
 

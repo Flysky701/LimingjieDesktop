@@ -59,11 +59,17 @@ class ScreenCapturer(private val adb: AdbExecutor, private val serial: String) {
                 measurements += CaptureTiming(mode, sorted[2], sorted.last())
             } catch (_: IOException) { /* FB-02: a mode with any failed sample is ineligible. */ }
         }
-        val best = measurements.minByOrNull { it.p50Millis } ?: throw DeviceOperationException("Raw 和 PNG 截图均失败，请检查模拟器的 ADB 与渲染设置")
+        val best = selectCaptureTiming(measurements) ?: throw DeviceOperationException("Raw 和 PNG 截图均失败，请检查模拟器的 ADB 与渲染设置")
         return measurements to best.mode
     }
 
     companion object {
+        internal const val SLOW_CAPTURE_MILLIS = 600L
+
+        internal fun selectCaptureTiming(measurements: List<CaptureTiming>): CaptureTiming? =
+            measurements.filter { it.p95Millis <= SLOW_CAPTURE_MILLIS }.minByOrNull { it.p50Millis }
+                ?: measurements.minByOrNull { it.p95Millis }
+
         fun decodeRaw(bytes: ByteArray, timestampMillis: Long = System.currentTimeMillis()): DeviceFrame =
             decodeRaw(listOf(bytes), bytes.size, timestampMillis)
 
