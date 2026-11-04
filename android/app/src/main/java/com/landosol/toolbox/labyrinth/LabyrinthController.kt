@@ -221,6 +221,8 @@ class LabyrinthController(
     private val afterStandaloneReroll: suspend (accountId: Long) -> Unit = {},
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
     private val strategySettings: () -> LabyrinthStrategySettings = { LabyrinthStrategySettings() },
+    private val beforeRunReplacement: suspend (Long) -> String? = beforeRerollLogin,
+    private val resumeAfterRunReplacement: (suspend (Long) -> Unit)? = null,
 ) {
     // 缺少国服游戏包时，首页构造本 Controller 不应触发 BilibiliSDK 的包查询。
     // 协调器改为按需解析：仅在登录/验证码等真实操作走到时才求值。
@@ -423,6 +425,7 @@ class LabyrinthController(
         accountId: Long,
         guildId: Int,
         difficulty: Int,
+        replacingActiveRun: Boolean,
     ): com.landosol.toolbox.labyrinth.batch.LabyrinthBatchRerollResult {
         val failure = { message: String -> com.landosol.toolbox.labyrinth.batch.LabyrinthBatchRerollResult.Failure(message) }
         if (chrome.value.isWorking || chrome.value.captcha != null || !chrome.value.settingsReady) {
@@ -438,7 +441,8 @@ class LabyrinthController(
         val config = labyrinthBatchRerollConfig(base, guildId, difficulty)
         chrome.update { it.copy(isWorking = true, message = null, progress = "批量：正在刷取 $guildId", routeBlockIds = emptyList()) }
         try {
-            beforeRerollLogin(account.id)?.let { reason -> return failure(reason) }
+            val prepareClient = if (replacingActiveRun) beforeRunReplacement else beforeRerollLogin
+            prepareClient(account.id)?.let { reason -> return failure(reason) }
             var sessionResets = 0
             while (true) {
                 val session = ensureGameSession(account, PendingLoginAction.START)
@@ -556,7 +560,8 @@ class LabyrinthController(
         runningJob = scope.launch {
             chrome.update { it.copy(isWorking = true, message = null, routeBlockIds = emptyList()) }
             try {
-                beforeRerollLogin(account.id)?.let { reason ->
+                val prepareClient = if (config.abandonExisting) beforeRunReplacement else beforeRerollLogin
+                prepareClient(account.id)?.let { reason ->
                     chrome.update { it.copy(message = reason) }
                     return@launch
                 }
@@ -588,6 +593,7 @@ class LabyrinthController(
                                 },
                             )
                             }
+                            if (config.abandonExisting) resumeAfterRunReplacement?.invoke(account.id)
                             return@launch
                         }
                         is LabyrinthRerollResult.NeedsExistingRunDecision -> {

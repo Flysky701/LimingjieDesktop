@@ -36,7 +36,7 @@ sealed interface LabyrinthBatchReusableOpeningCheck {
  */
 interface LabyrinthBatchPorts {
     /** Runs the network reroll for [guildId] / [difficulty] and returns the new enterId. */
-    suspend fun reroll(accountId: Long, guildId: Int, difficulty: Int): LabyrinthBatchRerollResult
+    suspend fun reroll(accountId: Long, guildId: Int, difficulty: Int, replacingActiveRun: Boolean): LabyrinthBatchRerollResult
 
     /** Re-reads the server immediately before a previously read opening is consumed. */
     suspend fun verifyReusableOpening(
@@ -49,7 +49,7 @@ interface LabyrinthBatchPorts {
      * home ready for a fresh entry. [accountId] is the batch's account, so state the reroll left
      * behind for another account is never acted on.
      */
-    suspend fun invalidateClientSessionAndReturn(accountId: Long): LabyrinthBatchInvalidationResult
+    suspend fun invalidateClientSessionAndReturn(accountId: Long, replacingActiveRun: Boolean): LabyrinthBatchInvalidationResult
 
     /** Starts one labyrinth run. Returns a stable run id, or null if the run could not start. */
     suspend fun startRun(accountId: Long, guildId: Int, runId: String): Boolean
@@ -257,7 +257,11 @@ class LabyrinthBatchController(
             updatedAt = clock(),
         )
         persist(checkpoint)
-        val reroll = ports.reroll(checkpoint.accountId, goal.guildId, checkpoint.currentDifficulty)
+        // Read the terminal outcome before the new cycle clears it. These clients still
+        // show the previous event or battle instead of the settled labyrinth home.
+        val replacingActiveRun = start.currentRunOutcome == LabyrinthRunOutcome.SCORE_OPENING_SKIPPED ||
+            start.currentRunOutcome == LabyrinthRunOutcome.FAILED_MAX_RETRY
+        val reroll = ports.reroll(checkpoint.accountId, goal.guildId, checkpoint.currentDifficulty, replacingActiveRun)
         checkpoint = when (reroll) {
             is LabyrinthBatchRerollResult.Failure -> {
                 halt(checkpoint, LabyrinthBatchHaltReason.REROLL_FAILED, reroll.message)
@@ -279,7 +283,7 @@ class LabyrinthBatchController(
             updatedAt = clock(),
         )
         persist(checkpoint)
-        val invalidationAction = when (val invalidation = ports.invalidateClientSessionAndReturn(checkpoint.accountId)) {
+        val invalidationAction = when (val invalidation = ports.invalidateClientSessionAndReturn(checkpoint.accountId, replacingActiveRun)) {
             is LabyrinthBatchInvalidationResult.Failure -> {
                 halt(
                     checkpoint,
@@ -334,7 +338,7 @@ class LabyrinthBatchController(
             updatedAt = clock(),
         )
         persist(checkpoint)
-        val synchronizationAction = when (val sync = ports.invalidateClientSessionAndReturn(checkpoint.accountId)) {
+        val synchronizationAction = when (val sync = ports.invalidateClientSessionAndReturn(checkpoint.accountId, replacingActiveRun = false)) {
             is LabyrinthBatchInvalidationResult.Failure -> {
                 halt(
                     checkpoint,

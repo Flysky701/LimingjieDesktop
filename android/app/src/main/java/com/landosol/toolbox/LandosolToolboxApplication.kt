@@ -584,15 +584,15 @@ class LandosolToolboxApplication : Application() {
     val labyrinthBatchController by lazy {
         com.landosol.toolbox.labyrinth.batch.LabyrinthBatchController(
             ports = object : com.landosol.toolbox.labyrinth.batch.LabyrinthBatchPorts {
-                override suspend fun reroll(accountId: Long, guildId: Int, difficulty: Int) =
-                    labyrinthController.rerollForBatch(accountId, guildId, difficulty)
+                override suspend fun reroll(accountId: Long, guildId: Int, difficulty: Int, replacingActiveRun: Boolean) =
+                    labyrinthController.rerollForBatch(accountId, guildId, difficulty, replacingActiveRun)
 
                 override suspend fun verifyReusableOpening(
                     accountId: Long,
                     opening: com.landosol.toolbox.labyrinth.batch.LabyrinthBatchReusableOpening,
                 ) = labyrinthController.verifyReusableOpeningForBatch(accountId, opening)
 
-                override suspend fun invalidateClientSessionAndReturn(accountId: Long):
+                override suspend fun invalidateClientSessionAndReturn(accountId: Long, replacingActiveRun: Boolean):
                     com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult {
                     // AnchorTriggerSessionExpiryTerminator taps the recognised trigger, expects the
                     // "session expired" popup, taps 返回标题, then the entry planner navigates

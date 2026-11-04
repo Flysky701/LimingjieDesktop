@@ -192,7 +192,7 @@ internal class LabyrinthSettlementWorkflow(private val port: LabyrinthSettlement
                     else LabyrinthRunTerminalOutcome.FAILED_MAX_RETRY
                 // stop() publishes the terminal event and clears currentRunId. The batch
                 // owns its next attempt; do not race its listener with a standalone restart.
-                val batchWillRestart = scoreEvent && currentRunId != null && runTerminalListener != null
+                val batchWillRestart = currentRunId != null && runTerminalListener != null
                 val stopped = stop("$reason；正在切换到刷开局", releaseCapture = false)
                 if (batchWillRestart) return@launchGuardedAction
                 if (stopped && accountId != null) {

@@ -656,6 +656,8 @@ class DesktopAppGraph(
             launchForeground = ::startRerollHost,
             scope = mainScope,
             beforeRerollLogin = { accountId -> withContext(Dispatchers.IO) { hardCloseChannelClientBeforeReroll(accountId) } },
+            beforeRunReplacement = { accountId -> withContext(Dispatchers.IO) { prepareClientForRunReplacement(accountId) } },
+            resumeAfterRunReplacement = ::resumeReplacedRun,
             afterStandaloneReroll = { accountId -> coldStartChannelClientAfterReroll(accountId) },
         )
     }
@@ -716,6 +718,20 @@ class DesktopAppGraph(
         autoRunScope.launch {
             if (actionDevice.launch(target)) log.add("刷开局结束，已启动游戏") else log.add("刷开局结束后启动游戏失败", true)
         }
+    }
+
+    private suspend fun prepareClientForRunReplacement(accountId: Long): String? {
+        gameClientHardCloseLedger.clear()
+        val target = accountRepository.loadLoginMaterial(accountId).server.packageName
+        if (labyrinthController.uiState.value.selectedAccount?.id != accountId || gamePackageName != target) {
+            return "自动重刷前账号或游戏客户端已变化，请重新确认绑定"
+        }
+        resolutionGuard.beforeClientReset()?.let { return it }
+        prepareBatchClient(actionDevice, target)
+        currentCoroutineContext().ensureActive()
+        gameClientHardCloseLedger.issue(accountId, target)
+        log.add("自动重刷前已确认游戏退出，刷取完成后将冷启动游戏", kind = UserLogKind.KEY)
+        return null
     }
 
     private fun consumeGameClientHardClosed(accountId: Long?, packageName: String?): Boolean {
@@ -826,54 +842,77 @@ class DesktopAppGraph(
         com.landosol.toolbox.labyrinth.batch.AndroidLabyrinthBatchCheckpointStore(context)
     }
 
+    private suspend fun synchronizeRerolledClient(accountId: Long, replacingActiveRun: Boolean):
+        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult {
+        // AnchorTriggerSessionExpiryTerminator taps the recognised trigger, expects the
+        // "session expired" popup, taps 返回标题, then the entry planner navigates
+        // title → home → adventure → labyrinth home. READY means the stale local
+        // state is gone and the new server entry is what the client sees.
+        // Spent before anything can fail, so it never outlives this sync.
+        val hardClosed = consumeGameClientHardClosed(accountId, gamePackageName)
+        if (replacingActiveRun && (!hardClosed || stoppingState.value || labyrinthController.uiState.value.selectedAccount?.id != accountId)) {
+            return com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(
+                "新开局已保留，但当前账号的客户端退出状态无法确认，已停止接续")
+        }
+        if (!CaptureStateRegistry.isActive()) {
+            return com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(
+                "屏幕捕获已停止" + (CaptureStateRegistry.lastStopReason()?.let { "（$it）" } ?: ""),
+            )
+        }
+        return when (val started = gameSessionResetWorkflow.start(clientHardClosed = hardClosed)) {
+            is GameSessionResetStartResult.Started -> {
+                val final = gameSessionResetWorkflow.state.first { !it.running }
+                val ok = final.status == GameSessionResetStatus.STOPPED &&
+                    final.stage == com.landosol.toolbox.automation.session.GameSessionResetStage.READY_FOR_NEXT_ROUND &&
+                    final.lastBlock == SessionBlockKind.NONE
+                if (ok) {
+                    com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Success(
+                        if (hardClosed) "hard-close-cold-start" else "home-tab-session-expiry",
+                    )
+                } else {
+                    com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(
+                        "重置流程 ${final.stage.name}/${final.status.name}" +
+                            (final.message?.let { "：$it" } ?: "") +
+                            (final.lastBlock.takeIf { it != SessionBlockKind.NONE }?.let { "，阻塞 $it" } ?: ""),
+                    )
+                }
+            }
+            is GameSessionResetStartResult.Blocked ->
+                com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(started.reason)
+            is GameSessionResetStartResult.AlreadyRunning ->
+                com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure("会话重置已在运行")
+        }
+    }
+
+    private suspend fun resumeReplacedRun(accountId: Long) {
+        when (val result = synchronizeRerolledClient(accountId, replacingActiveRun = true)) {
+            is com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure -> error(result.message)
+            is com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Success -> Unit
+        }
+        currentCoroutineContext().ensureActive()
+        check(!stoppingState.value && labyrinthController.uiState.value.selectedAccount?.id == accountId) {
+            "自动重刷接续已取消或账号已变化"
+        }
+        when (val start = labyrinthEntryRecognitionSession.startAutomation(accountId)) {
+            is LabyrinthEntryRecognitionStartResult.Started -> log.add("已按新开局接续原自动执行", kind = UserLogKind.KEY)
+            is LabyrinthEntryRecognitionStartResult.Blocked -> error(start.reason)
+            is LabyrinthEntryRecognitionStartResult.AlreadyRunning -> error("已有单局正在执行")
+        }
+    }
+
     val labyrinthBatchController by lazy {
         com.landosol.toolbox.labyrinth.batch.LabyrinthBatchController(
             ports = object : com.landosol.toolbox.labyrinth.batch.LabyrinthBatchPorts {
-                override suspend fun reroll(accountId: Long, guildId: Int, difficulty: Int) =
-                    labyrinthController.rerollForBatch(accountId, guildId, difficulty)
+                override suspend fun reroll(accountId: Long, guildId: Int, difficulty: Int, replacingActiveRun: Boolean) =
+                    labyrinthController.rerollForBatch(accountId, guildId, difficulty, replacingActiveRun)
 
                 override suspend fun verifyReusableOpening(
                     accountId: Long,
                     opening: com.landosol.toolbox.labyrinth.batch.LabyrinthBatchReusableOpening,
                 ) = labyrinthController.verifyReusableOpeningForBatch(accountId, opening)
 
-                override suspend fun invalidateClientSessionAndReturn(accountId: Long):
-                    com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult {
-                    // AnchorTriggerSessionExpiryTerminator taps the recognised trigger, expects the
-                    // "session expired" popup, taps 返回标题, then the entry planner navigates
-                    // title → home → adventure → labyrinth home. READY means the stale local
-                    // state is gone and the new server entry is what the client sees.
-                    // Spent before anything can fail, so it never outlives this sync.
-                    val hardClosed = consumeGameClientHardClosed(accountId, gamePackageName)
-                    if (!CaptureStateRegistry.isActive()) {
-                        return com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(
-                            "屏幕捕获已停止" + (CaptureStateRegistry.lastStopReason()?.let { "（$it）" } ?: ""),
-                        )
-                    }
-                    return when (val started = gameSessionResetWorkflow.start(clientHardClosed = hardClosed)) {
-                        is GameSessionResetStartResult.Started -> {
-                            val final = gameSessionResetWorkflow.state.first { !it.running }
-                            val ok = final.status == GameSessionResetStatus.STOPPED &&
-                                final.stage == com.landosol.toolbox.automation.session.GameSessionResetStage.READY_FOR_NEXT_ROUND &&
-                                final.lastBlock == SessionBlockKind.NONE
-                            if (ok) {
-                                com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Success(
-                                    if (hardClosed) "hard-close-cold-start" else "home-tab-session-expiry",
-                                )
-                            } else {
-                                com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(
-                                    "重置流程 ${final.stage.name}/${final.status.name}" +
-                                        (final.message?.let { "：$it" } ?: "") +
-                                        (final.lastBlock.takeIf { it != SessionBlockKind.NONE }?.let { "，阻塞 $it" } ?: ""),
-                                )
-                            }
-                        }
-                        is GameSessionResetStartResult.Blocked ->
-                            com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(started.reason)
-                        is GameSessionResetStartResult.AlreadyRunning ->
-                            com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure("会话重置已在运行")
-                    }
-                }
+                override suspend fun invalidateClientSessionAndReturn(accountId: Long, replacingActiveRun: Boolean) =
+                    synchronizeRerolledClient(accountId, replacingActiveRun)
 
                 override suspend fun startRun(accountId: Long, guildId: Int, runId: String): Boolean =
                     labyrinthEntryRecognitionSession.startAutomation(accountId, runId) is

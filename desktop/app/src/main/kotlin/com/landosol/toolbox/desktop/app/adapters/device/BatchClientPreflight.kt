@@ -5,7 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Only the external batch-start boundary calls this, after device/resolution checks pass. */
+/** Confirm the selected game is absent before a new batch or a mid-run replacement opening. */
 internal suspend fun prepareBatchClient(device: DeviceService, packageName: String): Boolean {
     try {
         if (!device.isPackageRunning(packageName)) return false
@@ -19,6 +19,6 @@ internal suspend fun prepareBatchClient(device: DeviceService, packageName: Stri
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (failure: Exception) {
-        throw IllegalStateException("批量任务未启动：PCR 启动前清理（$packageName）失败：${failure.message ?: "未知错误"}", failure)
+        throw IllegalStateException("刷开局前无法确认游戏已退出（$packageName）：${failure.message ?: "未知错误"}", failure)
     }
 }

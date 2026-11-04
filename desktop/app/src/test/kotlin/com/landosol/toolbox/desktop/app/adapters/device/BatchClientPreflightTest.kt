@@ -22,7 +22,7 @@ class BatchClientPreflightTest {
             val failure=runCatching { prepareBatchClient(fake,"pcr.selected") }.exceptionOrNull()
             assertNotNull(mode,failure)
             if(mode=="cancel") assertTrue(failure is CancellationException)
-            else assertTrue(failure!!.message.orEmpty().contains("批量任务未启动"))
+            else assertTrue(failure!!.message.orEmpty().contains("无法确认游戏已退出"))
             assertTrue(fake.calls.count { it.startsWith("stop:") }<=1)
             if(mode=="query") assertEquals(listOf("query:pcr.selected"),fake.calls)
         }

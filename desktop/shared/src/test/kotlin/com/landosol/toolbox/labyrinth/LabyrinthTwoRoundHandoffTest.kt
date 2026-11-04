@@ -44,11 +44,18 @@ class LabyrinthTwoRoundHandoffTest {
     @Test fun `winning opening survives a minute of title data loading and starts the run`() =
         replay(false, slowColdStart = true)
 
+    @Test fun `off-target event hands the next opening to the batch once`() =
+        replay(false, replacement = LabyrinthRunOutcome.SCORE_OPENING_SKIPPED)
+
+    @Test fun `battle retry limit hands the next opening to the batch once`() =
+        replay(false, replacement = LabyrinthRunOutcome.FAILED_MAX_RETRY)
+
     private fun replay(
         unexpectedResultAfterTitle: Boolean,
         lateScoreFrame: Boolean = false,
         chestObserved: Boolean = true,
         slowColdStart: Boolean = false,
+        replacement: LabyrinthRunOutcome? = null,
     ) = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val manager = AutomationSessionManager()
@@ -71,25 +78,31 @@ class LabyrinthTwoRoundHandoffTest {
             perfectStart = false, thirdBlockChoice = "", area3BossIds = emptyList(), area5BossIds = emptyList(),
             nodes = emptyList(),
         )
+        val standaloneRequests = AtomicLong()
         val session = LabyrinthEntryRecognitionSession(
             sessionManager = manager, captureActive = { true }, captureStop = {}, clock = now::get,
             processorFactory = { { visible.get() } }, actionScope = scope, actionTargetReady = { true },
             actionExecutor = SessionBoundActionExecutor(manager) { runTaps += it; AutomationBackendResult.Completed },
             actionsAvailable = { true }, runTerminalListener = { events += it },
+            rerollRequester = { standaloneRequests.incrementAndGet(); true },
             routeLoader = { route },
             nodeTemplateLoader = { com.landosol.toolbox.labyrinth.node.NodeTemplateSet(emptyMap()) },
             routeExecutionGate = { LabyrinthExecutionGateResult.Allowed(route, "offline fixture") },
         )
         var resets = 0
         var readyCallbacks = 0
+        val closedClient = GameClientHardCloseLedger()
         val ports = object : LabyrinthBatchPorts {
             override suspend fun verifyReusableOpening(accountId: Long, opening: LabyrinthBatchReusableOpening):
                 LabyrinthBatchReusableOpeningCheck = error("This replay never reuses an opening")
-            override suspend fun reroll(accountId: Long, guildId: Int, difficulty: Int) =
-                LabyrinthBatchRerollResult.Success(100L + resets)
-            override suspend fun invalidateClientSessionAndReturn(accountId: Long): LabyrinthBatchInvalidationResult {
+            override suspend fun reroll(accountId: Long, guildId: Int, difficulty: Int, replacingActiveRun: Boolean): LabyrinthBatchRerollResult {
+                if (replacingActiveRun) closedClient.issue(accountId, "fixture.game")
+                return LabyrinthBatchRerollResult.Success(100L + resets)
+            }
+            override suspend fun invalidateClientSessionAndReturn(accountId: Long, replacingActiveRun: Boolean): LabyrinthBatchInvalidationResult {
                 resets++
-                val cold = slowColdStart && resets == 1
+                val cold = closedClient.consume(accountId, "fixture.game") || (slowColdStart && resets == 1)
+                if (replacingActiveRun) assertTrue("Replacement must have verified the cold start", cold)
                 val resetTime = AtomicLong(1_000)
                 val loading = page(EntryAnchorId.TITLE_LOGO, EntryAnchorId.LOADING_PROGRESS)
                     .copy(matchedFeatures = listOf(EntryAnchorId.TITLE_LOGO, EntryAnchorId.LOADING_PROGRESS))
@@ -115,7 +128,7 @@ class LabyrinthTwoRoundHandoffTest {
                     sessionManager = manager,
                     backend = CompositeSessionResetBackend(terminator, Relauncher {
                         check(cold)
-                        visible.set(loading)
+                        visible.set(if (slowColdStart) loading else title)
                         GameClientRelaunchResult.LAUNCH_REQUESTED
                     }),
                     captureActive = { true }, processorFactory = { { captured ->
@@ -160,7 +173,7 @@ class LabyrinthTwoRoundHandoffTest {
                     }
                     return if (end.status == GameSessionResetStatus.STOPPED &&
                         end.stage == GameSessionResetStage.READY_FOR_NEXT_ROUND && end.lastBlock == SessionBlockKind.NONE) {
-                        LabyrinthBatchInvalidationResult.Success("verified-reset-ready")
+                        LabyrinthBatchInvalidationResult.Success(if (cold) "hard-close-cold-start" else "home-tab-session-expiry")
                     } else LabyrinthBatchInvalidationResult.Failure("${end.stage}: ${end.message}")
                 } finally { replay.cancelAndJoin(); reset.stop() }
             }
@@ -178,6 +191,29 @@ class LabyrinthTwoRoundHandoffTest {
         try {
             assertTrue(batch.start("recorded-two-rounds", 1, listOf(LabyrinthBatchGoal(1, 2, LabyrinthBatchGoalMode.CLEARS)), 1))
             assertEquals(batch.state.value?.message, 1, readyCallbacks)
+            if (replacement != null) {
+                val eventSkip = replacement == LabyrinthRunOutcome.SCORE_OPENING_SKIPPED
+                val oldPage = home.copy(observation = home.observation.copy(state =
+                    if (eventSkip) LabyrinthEntryPageState.EVENT_CHOICE else LabyrinthEntryPageState.BATTLE_FAILED))
+                visible.set(oldPage)
+                session.settlementWorkflow.finishFromPlannerAndRequestReroll(
+                    requireNotNull(session.state.value.sessionId), "fixture replacement", scoreEvent = eventSkip)
+                withTimeout(3_000) { while (events.isEmpty()) delay(10) }
+                assertEquals(replacement, events.single().outcome)
+                batch.onRunTerminal(events.single())
+                batch.onRunTerminal(events.single())
+                val checkpoint = requireNotNull(batch.state.value)
+                assertEquals(checkpoint.message, LabyrinthBatchStage.RUNNING_LABYRINTH, checkpoint.stage)
+                assertEquals("hard-close-cold-start", checkpoint.lastSessionInvalidationAction)
+                assertEquals(101L, checkpoint.currentEnterId)
+                assertEquals(2, checkpoint.runsStarted)
+                assertEquals(2, readyCallbacks)
+                assertEquals(0, checkpoint.goals.single().completedCount)
+                assertEquals(if (eventSkip) 0 else 1, checkpoint.goals.single().failedCount)
+                assertTrue(resetTaps.isEmpty())
+                assertEquals(0L, standaloneRequests.get())
+                return@runBlocking
+            }
             // Ordinary battle results do not produce a whole-run terminal outcome.
             val ordinary = page(EntryAnchorId.BATTLE_RESULT_NEXT_BUTTON)
             val collector = LabyrinthRunScoreCollector()

@@ -248,7 +248,7 @@ class DesktopGraphIntegrationTest {
     }
 
     @Test fun batchProcessPreflightPrecedesRealBusinessAndDoesNotRepeatOnReusableFallback() = runBlocking {
-        for (mode in listOf("query-failure","stop-failure","user-stop","running","absent","reuse-stale")) {
+        for (mode in listOf("query-failure","stop-failure","user-stop","running","absent","reuse-stale","replace-active")) {
             val fake=FixtureDevice(1920,1080,IntArray(1920*1080)).apply {
                 packageRunning=mode!="absent"
                 processQueryFails=mode=="query-failure"
@@ -277,6 +277,18 @@ class DesktopGraphIntegrationTest {
                         else com.landosol.toolbox.protocol.bilibili.GameSessionResult.NetworkFailure("offline test stops here")
                     }
                 })
+                if (mode == "replace-active") {
+                    graph.resolutionGuard.checkForStart()
+                    // The B client normally uses the home tab. From a live event/battle its process
+                    // must already be gone before the first server request for a replacement map.
+                    val result = graph.labyrinthController.rerollForBatch(accountId, 1, ui.selectedDifficulty, replacingActiveRun = true)
+                    assertTrue(result is com.landosol.toolbox.labyrinth.batch.LabyrinthBatchRerollResult.Failure)
+                    val pkg = GameServer.CN_BILIBILI.packageName
+                    assertEquals(listOf("query:$pkg", "stop:$pkg", "query:$pkg"), fake.processEvents.takeWhile { !it.startsWith("business:") })
+                    assertTrue(businessCalls > 0)
+                    assertEquals(0, fake.acceptedActions.get())
+                    continue
+                }
                 val candidateField=graph.labyrinthController.javaClass.getDeclaredField("explicitlyReadInitialOpening").apply { isAccessible=true }
                 val candidate=com.landosol.toolbox.labyrinth.batch.LabyrinthBatchReusableOpening(1,1,ui.selectedDifficulty)
                 if(mode.endsWith("failure") || mode=="user-stop" || mode=="reuse-stale") candidateField.set(graph.labyrinthController,candidate)

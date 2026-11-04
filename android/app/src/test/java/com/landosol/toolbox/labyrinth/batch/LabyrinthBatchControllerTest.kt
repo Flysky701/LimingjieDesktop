@@ -36,14 +36,16 @@ class LabyrinthBatchControllerTest {
         var reusableOpeningCheck: LabyrinthBatchReusableOpeningCheck = LabyrinthBatchReusableOpeningCheck.Valid
         val startedRuns = mutableListOf<Triple<Long, Int, String>>()
         val stoppedRuns = mutableListOf<String>()
+        val replacements = mutableListOf<Boolean>()
 
-        override suspend fun reroll(accountId: Long, guildId: Int, difficulty: Int): LabyrinthBatchRerollResult {
+        override suspend fun reroll(accountId: Long, guildId: Int, difficulty: Int, replacingActiveRun: Boolean): LabyrinthBatchRerollResult {
+            replacements += replacingActiveRun
             log += "reroll:$guildId"
             if (rerollFails) return LabyrinthBatchRerollResult.Failure("reroll failed")
             return LabyrinthBatchRerollResult.Success(nextEnterId++)
         }
 
-        override suspend fun invalidateClientSessionAndReturn(accountId: Long): LabyrinthBatchInvalidationResult {
+        override suspend fun invalidateClientSessionAndReturn(accountId: Long, replacingActiveRun: Boolean): LabyrinthBatchInvalidationResult {
             log += "invalidate"
             return if (invalidationFails) {
                 LabyrinthBatchInvalidationResult.Failure("capture stopped")
@@ -105,6 +107,7 @@ class LabyrinthBatchControllerTest {
         assertEquals(LabyrinthBatchStage.RUNNING_LABYRINTH, batch.state.value?.stage)
         assertEquals(1, batch.state.value?.activeGoal?.completedCount)
         assertEquals("tap-home-tab", batch.state.value?.lastSessionInvalidationAction)
+        assertEquals(listOf(false, false), ports.replacements)
     }
 
     // 2. FailedMaxRetry -> reroll -> invalidate -> title -> next run
@@ -119,6 +122,7 @@ class LabyrinthBatchControllerTest {
 
         assertEquals(6, ports.log.size)
         assertEquals("start:b1-run002", ports.log.last())
+        assertEquals(listOf(false, true), ports.replacements)
         assertEquals(1, batch.state.value?.activeGoal?.failedCount)
         assertEquals(0, batch.state.value?.activeGoal?.completedCount)
     }
