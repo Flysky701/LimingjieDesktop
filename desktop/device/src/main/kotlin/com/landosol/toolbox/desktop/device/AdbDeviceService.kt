@@ -512,9 +512,9 @@ class AdbDeviceService(
             error
         }
         value.checkingTransport = true
-        emit("ADB 通信暂时中断，正在复核原设备：${failure.message}")
+        emit("ADB 通信暂时中断，最多等待 ${TRANSPORT_RECOVERY_MILLIS / 1000} 秒复核原设备：${failure.message}")
         var requestedConnection = false
-        val recovered = withTimeoutOrNull(12_000) {
+        val recovered = withTimeoutOrNull(TRANSPORT_RECOVERY_MILLIS) {
             while (true) {
                 delay(1_000)
                 try {
@@ -565,6 +565,7 @@ class AdbDeviceService(
     private fun emit(message: String) { try { onEvent(message) } catch (_: Exception) { /* Observers cannot break device cleanup. */ } }
     private fun notifyLost(reason: String) { try { onLost(reason) } catch (_: Exception) { emit("任务停止通知失败") } }
     private companion object {
+        const val TRANSPORT_RECOVERY_MILLIS = 30_000L
         val transientTransportFailures = setOf(AdbFailureKind.Timeout, AdbFailureKind.DeviceOffline,
             AdbFailureKind.DeviceNotFound, AdbFailureKind.ConnectionRefused)
     }

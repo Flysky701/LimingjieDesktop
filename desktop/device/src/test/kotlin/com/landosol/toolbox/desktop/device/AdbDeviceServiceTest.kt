@@ -175,30 +175,33 @@ class AdbDeviceServiceTest {
         }
     }
 
-    @Test fun truncatedScreenshotAndBriefOfflineRecoverOnTheSameTcpEndpoint() = runBlocking {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun truncatedScreenshotAndTwentySecondOutageRecoverOnTheSameTcpEndpoint() = kotlinx.coroutines.test.runTest {
         val adb = FakeAdb()
         val touch = RecordingTouch()
         val events = CopyOnWriteArrayList<String>()
         val lost = CopyOnWriteArrayList<String>()
         val serial = "127.0.0.1:16416"
         val captures = AtomicInteger()
-        val offline = java.util.concurrent.atomic.AtomicBoolean(false)
+        // Isolate the capture recovery; the monitor's independent probe has its own test.
+        adb.handler = { call -> if (call.arguments == listOf("dumpsys", "window")) awaitCancellation() else adb.default(call) }
         service(adb, touch, events, lost).use { device ->
             device.connect(serial)
             adb.calls.clear()
+            val started = testScheduler.currentTime
             adb.handler = { call -> when {
+                call.arguments == listOf("dumpsys", "window") -> awaitCancellation()
                 call.screenshot && captures.incrementAndGet() == 1 -> {
-                    offline.set(true)
                     AdbResult.Failure(AdbFailureKind.ConnectionRefused, "ADB 数据帧不完整")
                 }
                 call.arguments == listOf("connect", serial) -> {
-                    offline.set(false)
                     FakeAdb.success("connected to $serial")
                 }
-                offline.get() -> AdbResult.Failure(AdbFailureKind.DeviceOffline, "device offline")
+                testScheduler.currentTime - started < 20_000 -> AdbResult.Failure(AdbFailureKind.DeviceOffline, "device offline")
                 else -> adb.default(call)
             } }
             assertEquals(2, device.capture().width)
+            assertEquals(20_000L, testScheduler.currentTime - started)
             assertEquals(1, adb.calls.count { it.arguments == listOf("connect", serial) })
             assertFalse(adb.calls.any { it.arguments == listOf("getprop", "sys.boot_completed") })
             assertTrue(lost.isEmpty() && device.state.value is DeviceConnectionState.Ready)
