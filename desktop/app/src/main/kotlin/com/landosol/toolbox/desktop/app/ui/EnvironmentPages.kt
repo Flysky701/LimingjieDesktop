@@ -240,10 +240,9 @@ import javax.swing.filechooser.FileNameExtensionFilter
         }
         if(group=="关于") Panel("关于") {
             Text("黎明界助手 ${AppVersion.name} · Windows 社区移植")
-            Text("原项目：wbero/limingjie-assistant。业务识别、策略与协议继续使用上游实现。", color = Muted)
+            ProjectOriginsPanel()
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(shape=MaterialTheme.shapes.small,onClick = openWizard) { Text("重新打开使用向导") }
-                TextButton(onClick = { BrowserLauncher.open("https://github.com/wbero/limingjie-assistant") }) { Text("上游项目") }
                 TextButton(onClick = { BrowserLauncher.open("https://github.com/wbero/limingjie-assistant/blob/main/LICENSE") }) { Text("许可证") }
                 TextButton(onClick = { BrowserLauncher.open("https://github.com/wbero/limingjie-assistant/blob/main/THIRD_PARTY_NOTICES.md") }) { Text("第三方声明") }
             }
@@ -315,18 +314,19 @@ internal fun chooseFile(save: Boolean, title: String, extension: String, suggest
 }
 
 @Composable internal fun SetupWizard(graph: ControlSessionUi,shared:Boolean=false,deviceContent:(@Composable ()->Unit)?=null,onFinished: () -> Unit) {
+    val steps = listOf("项目介绍", "使用须知", "连接模拟器", "添加账号")
     var step by remember { mutableStateOf(0) }
     var accepted by remember { mutableStateOf(false) }
-    var prepared by remember { mutableStateOf(false) }
     val actions = rememberActions(graph)
     if(LocalControlVisible.current)Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
         Surface(Modifier.width(800.dp).fillMaxHeight(.9f), shape = RoundedCornerShape(16.dp)) {
             Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("欢迎使用黎明界助手", style = MaterialTheme.typography.titleLarge)
-                Text("${step + 1} / 3  ·  ${listOf("使用风险", "连接模拟器", "添加账号")[step]}", color = Accent)
-                Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("${step + 1} / ${steps.size}  ·  ${steps[step]}", color = Accent)
+                Column(Modifier.weight(1f).verticalScroll(remember(step) { ScrollState(0) }), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     when (step) {
-                        0 -> {
+                        0 -> ProjectOriginsPanel()
+                        1 -> {
                             Text("使用助手和模拟器时，请勿同时使用 VPN 或其他网络代理。", style = MaterialTheme.typography.titleMedium)
                             Text("这是 Windows 社区移植版。以下使用风险沿用上游说明：", color = Muted)
                             Text("当前为测试版本，流程可能卡死、停在未知页面、误识别或误操作，不保证自动完成。仅测试过 MuMu 模拟器（B 服）与雷电模拟器 9（小米、华为、vivo 渠道服）、1920 × 1080 分辨率，手机及其他环境暂未测试。请留意运行状态，出现异常及时暂停，不建议无人值守运行。")
@@ -336,12 +336,12 @@ internal fun chooseFile(save: Boolean, title: String, extension: String, suggest
                             Text("请勿公开账号密码、访问令牌、验证码、未脱敏日志或包含个人信息的截图。交流群不是账号托管渠道。")
                             Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(accepted, { accepted = it }); Text("我已阅读并理解") }
                         }
-                        1 -> {
+                        2 -> {
                             Text("推荐 MuMu 12 或雷电模拟器 9，使用 1920 × 1080 横屏并打开 ADB 调试。")
                             Text("游戏内黎明界设置请关闭“播放角色加入动画”。连接也可以稍后在设备页完成。",color=Muted)
                             if(deviceContent!=null)Box(Modifier.height(400.dp)){deviceContent()} else DeviceConnectionPanel(graph,autoDetect=true)
                         }
-                        2 -> {
+                        3 -> {
                             Text(if(shared)"添加一次账号，之后在设备管理页选择绑定。此操作不会切换模拟器里的游戏账号。" else "添加并选择助手使用的账号。此操作不会切换模拟器里的游戏账号。",color=Muted)
                             Box(Modifier.heightIn(min=280.dp,max=480.dp)) { AccountsPage(graph,shared=shared) }
                         }
@@ -351,9 +351,9 @@ internal fun chooseFile(save: Boolean, title: String, extension: String, suggest
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     if (step > 0) OutlinedButton(shape=MaterialTheme.shapes.small,onClick = { step-- }, enabled = !actions.working) { Text("上一步") }
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick={if(step<2)step++ else actions.run {withContext(Dispatchers.IO){graph.settings.update{it.copy(wizardCompleted=true)}};onFinished()}},enabled=!actions.working){Text("稍后设置 / 跳过")}
-                    Button(shape=MaterialTheme.shapes.small,onClick = { if (step < 2) step++ else actions.run { withContext(Dispatchers.IO) { graph.settings.update { it.copy(wizardCompleted = true) } }; onFinished() } },
-                        enabled = !actions.working && (step != 0 || accepted)) { Text(if (step == 2) "进入运行台" else "继续") }
+                    TextButton(onClick={if(step<steps.lastIndex)step++ else actions.run {withContext(Dispatchers.IO){graph.settings.update{it.copy(wizardCompleted=true)}};onFinished()}},enabled=!actions.working){Text("稍后设置 / 跳过")}
+                    Button(shape=MaterialTheme.shapes.small,onClick = { if (step < steps.lastIndex) step++ else actions.run { withContext(Dispatchers.IO) { graph.settings.update { it.copy(wizardCompleted = true) } }; onFinished() } },
+                        enabled = !actions.working && (step != 1 || accepted)) { Text(if (step == steps.lastIndex) "进入运行台" else "继续") }
                 }
             }
         }

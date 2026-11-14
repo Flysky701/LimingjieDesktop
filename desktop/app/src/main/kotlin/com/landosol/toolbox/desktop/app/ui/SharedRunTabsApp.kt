@@ -158,10 +158,11 @@ private data class PendingSessionAction(val title:String,val message:String,val 
                                     TextButton(onClick={page=Page.Devices}){Text("＋ 连接设备")}
                                 }
                                 Surface(Modifier.weight(1f).fillMaxWidth().padding(start=12.dp,end=12.dp,bottom=12.dp),shape=DesktopCorners.lg,border=BorderStroke(1.dp,Line)){
-                                    if(sessions.isEmpty())Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){Column(horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(10.dp)){
+                                    if(sessions.isEmpty())Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),horizontalAlignment=Alignment.CenterHorizontally,verticalArrangement=Arrangement.spacedBy(10.dp)){
                                         Text("连接设备后打开运行页",style=MaterialTheme.typography.titleLarge)
                                         Text("账号和策略由所有设备共用，在设备页选择绑定账号。",color=Muted)
                                         Button(onClick={page=Page.Devices}){Text("前往设备管理")}
+                                        ProjectOriginsPanel()
                                     }} else Box(Modifier.fillMaxSize()){
                                         sessions.forEach{tab->key(tab.id){
                                             val visible=windowVisible&&page==Page.Run&&selected?.id==tab.id
