@@ -290,6 +290,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
             nodeScanConsumable: () -> Boolean = { true },
             rosterCharacterIds: () -> Set<String> = { emptySet() },
             readResultScore: Boolean = true,
+            allowInitial1088GeometryRefinement: () -> Boolean = { false },
         ): AndroidLabyrinthEntryFrameProcessor {
             val relicTemplates = AndroidLabyrinthRelicTemplateLoader(context).load()
             val characterIconMatcher = AndroidLabyrinthBattleTeamTemplateLoader(context).loadMatcher(characterAttributes)
@@ -303,6 +304,7 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                     nodeScanRequested = nodeScanRequested,
                     nodeScanConsumable = nodeScanConsumable,
                     rosterCharacterIds = rosterCharacterIds,
+                    allowInitial1088GeometryRefinement = allowInitial1088GeometryRefinement,
                     characterRecognizer = characterRecognizer,
                     battleTeamRecognizer = LabyrinthBattleTeamRecognizer(iconMatcher = characterIconMatcher),
                     linkChoiceRecognizer = LabyrinthLinkChoiceRecognizer(

@@ -44,6 +44,12 @@ data class LabyrinthShopItemMatch(
     val titleEvidenceId: Long? = null,
     val categoryState: LabyrinthShopCategoryState = LabyrinthShopCategoryState.READY,
     val categoryAttempt: Int = 0,
+    /**
+     * A READY role imprint whose role name did not survive OCR, while the remaining title crop
+     * variants still get a bounded grace window to recover it. The role name is what authorizes
+     * spending coins, so the shop policy waits on this good instead of ending the visit.
+     */
+    val imprintLabelPending: Boolean = false,
 ) {
     val purchasable: Boolean get() = status == LabyrinthShopItemStatus.AVAILABLE
 }

@@ -440,6 +440,37 @@ class LabyrinthPageRuntimePolicyTest {
     }
 
     @Test
+    fun `1088 recovery requires first start evidence and rejects route owned pickers`() {
+        val start = LabyrinthNodeJson(1, 1, 1, 10101L, LabyrinthNodeTypes.START, null, emptyList(), false)
+        val state = NodeSessionState(1, 10101L, listOf(10101L))
+        fun allowed(
+            route: NodeSessionState? = state,
+            node: LabyrinthNodeJson? = start,
+            transition: Boolean = false,
+            activeType: Int? = null,
+            imprintPending: Boolean = false,
+        ) = labyrinthAllowsInitial1088GeometryRefinement(route, node, transition, activeType, imprintPending)
+        assertTrue(allowed())
+        assertTrue(allowed(route = null))
+        assertTrue(allowed(node = null))
+        assertFalse(allowed(route = null, node = null))
+        assertTrue(labyrinthAllowsInitial1088GeometryRefinement(null, null, false, null, false, initialStartExecuted = true))
+        assertFalse(labyrinthAllowsInitial1088GeometryRefinement(null, null, true, null, false, initialStartExecuted = true))
+        assertFalse(labyrinthAllowsInitial1088GeometryRefinement(null, null, false, LabyrinthNodeTypes.EVENT, false, initialStartExecuted = true))
+        assertFalse(allowed(transition = true))
+        assertFalse(allowed(imprintPending = true))
+        assertFalse(allowed(activeType = LabyrinthNodeTypes.EVENT))
+        assertFalse(allowed(activeType = LabyrinthNodeTypes.SHOP))
+        assertFalse(allowed(node = start.copy(blockType = LabyrinthNodeTypes.EVENT)))
+        assertFalse(allowed(node = start.copy(blockType = LabyrinthNodeTypes.SHOP)))
+        assertFalse(allowed(node = start.copy(area = 2)))
+        assertFalse(allowed(route = state.copy(currentArea = 2)))
+        assertFalse(allowed(route = state.copy(visitedNodes = listOf(10101L, 10102L))))
+        assertFalse(allowed(route = state.copy(currentNodeId = 10102L)))
+        assertFalse(allowed(route = state.copy(isComplete = true)))
+    }
+
+    @Test
     fun `opening roster reclaims premature route handoff but reward choices do not`() {
         val opening = result(
             LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION,

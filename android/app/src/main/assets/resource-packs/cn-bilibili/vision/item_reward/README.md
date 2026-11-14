@@ -8,4 +8,6 @@
 
 本组弹窗联合标题、说明和关闭按钮确认。`ITEM_REWARD` 分类还包含「迷宫遗物效果」与「遗物效果结果」的锚点分支。
 
+`relic_effect_instruction.png` 对应当前客户端“凭借拉比林斯之主的效果”的说明，避免旧称呼导致遗物效果弹窗无法关闭。
+
 `LabyrinthEntryActionPlanner` 在页面稳定后生成 `CLOSE_ITEM_REWARD` 动作，由会话跟进关闭结果。

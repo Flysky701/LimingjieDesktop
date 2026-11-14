@@ -109,6 +109,28 @@ class LabyrinthShopCategoryResolutionTest {
         assertTrue(decide(listOf(skipped), area = 5) is LabyrinthShopDecision.Close)
     }
 
+    /**
+     * 2026-11-09: a shop title read as "职能印记" with no role name. That is a READY imprint, so
+     * the policy used to end the visit; the recovery window below is what keeps the remaining crop
+     * variants (and therefore the purchase) alive without letting a run park forever.
+     */
+    @Test fun `a nameless imprint keeps a bounded grace window for the remaining crops`() {
+        val nameless = resolver.resolve(item(), "职能印记", 1, 0)
+        assertEquals(LabyrinthShopItemKind.ROLE_IMPRINT, nameless.kind)
+        assertNull(nameless.roleImprintLabel)
+        assertTrue(resolver.needsRoleName(nameless))
+
+        assertTrue(resolver.labelGraceOpen("3", 1_000))
+        // The window starts on the first nameless read, so later frames do not extend it.
+        assertTrue(resolver.labelGraceOpen("3", 12_999))
+        assertFalse(resolver.labelGraceOpen("3", 13_000))
+        // A named imprint never asks for a retry.
+        assertFalse(resolver.needsRoleName(resolver.resolve(item(), "增益型职能的随机印记", 2, 0)))
+        // A new shop visit restarts the window.
+        resolver.clear()
+        assertTrue(resolver.labelGraceOpen("3", 20_000))
+    }
+
     @Test fun `remaining titles finish bounded reading after third relic purchase`() {
         assertTrue(decide(listOf(resolver.resolve(item(), null, null, 0)), purchased = 3) is LabyrinthShopDecision.Wait)
         assertTrue(decide(listOf(resolver.resolve(item(), null, null, 3)), purchased = 3) is LabyrinthShopDecision.Close)

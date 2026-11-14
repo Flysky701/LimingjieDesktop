@@ -20,6 +20,34 @@ class LabyrinthMemberGeometryTest {
         )
     }
 
+    @Test fun `opening recovery accepts only an allowed fully visible failed 1088`() {
+        fun allowed(
+            enabled: Boolean = true,
+            trusted: Boolean = false,
+            id: String? = "1088",
+            screenVisible: Boolean = true,
+            recognitionVisible: Boolean = true,
+        ) = labyrinthShouldRefineInitial1088Card(enabled, trusted, id, screenVisible, recognitionVisible)
+        assertTrue(allowed())
+        assertFalse(allowed(enabled = false))
+        assertFalse(allowed(trusted = true))
+        assertFalse(allowed(id = "1089"))
+        assertFalse(allowed(id = null))
+        assertFalse(allowed(screenVisible = false))
+        assertFalse(allowed(recognitionVisible = false))
+    }
+
+    @Test fun `1088 recovery still rejects a stronger competing identity and low margins`() {
+        val initial = match("1088" to 0.319, "other" to 0.266)
+        assertSame(initial, matcher.reconcileGeometryMatches(initial, listOf(match("1088" to 0.349))))
+        assertSame(initial, matcher.reconcileGeometryMatches(initial, listOf(
+            match("1088" to 0.58, "other" to 0.56),
+        )))
+        val recovered = matcher.reconcileGeometryMatches(initial, listOf(match("1088" to 0.58, "other" to 0.30)))
+        assertTrue(recovered.trusted)
+        assertEquals("1088", recovered.characterId)
+    }
+
     @Test fun `a different role from another crop still blocks an ambiguous recovery`() {
         val initial = match("wrong" to 0.31, "target" to 0.30)
         val result = matcher.reconcileGeometryMatches(initial, listOf(

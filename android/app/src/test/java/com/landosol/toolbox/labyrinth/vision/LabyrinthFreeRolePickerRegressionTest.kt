@@ -55,6 +55,68 @@ class LabyrinthFreeRolePickerRegressionTest {
         assertFalse(labyrinthRoleRewardOwnsInitialSelection(result.observation.anchorScores))
     }
 
+    @Test fun `real opening 1088 recovery keeps other identities and separates picker caches`() {
+        val resource = File(root, "android/app/src/main/assets/resource-packs/cn-bilibili")
+        val index = Json { ignoreUnknownKeys = true }.decodeFromString<GameIconPackDocument>(
+            File(resource, "icons.json").readText(),
+        )
+        val templates = index.characterIcons.filter { it.format == "png" }.map {
+            LabyrinthBattleCharacterTemplate(it.ownerId, it.ownerId, it.variant, readImage(File(resource, it.file)))
+        }
+        val runtime = (com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionDataParser.parse(
+            File(resource, "labyrinth-role-decision.json").readText(),
+        ) as com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionDataResult.Ready).runtime
+        val openingTemplates = templates.map { it.copy(attribute = runtime.profiles[it.characterId]?.attribute) }
+        val frame = readImage(File(root, "android/app/src/test/resources/labyrinth/opening-dawn-star-1088-20261107.jpg"))
+        val recognizer = LabyrinthBattleTeamRecognizer(openingTemplates, requiredStableFrames = 1)
+        val original = recognizer.recognizeOpening(frame)
+        val originalTarget = original.visibleCharacters.single { it.suspectedCharacterId == "1088" }
+        assertFalse(originalTarget.trusted)
+        assertNull(originalTarget.characterId)
+        val refined = recognizer.recognizeOpening(frame, allowInitial1088GeometryRefinement = true)
+        val target = refined.visibleCharacters.single { it.slotId == originalTarget.slotId }
+        assertTrue("1088 score=${target.confidence} margin=${target.rivalMargin}", target.trusted)
+        assertEquals("1088", target.characterId)
+        assertTrue(target.confidence >= LABYRINTH_CHARACTER_ICON_SAFE_CONFIDENCE)
+        assertTrue(target.rivalMargin >= LABYRINTH_CHARACTER_ICON_SAFE_RIVAL_MARGIN)
+        assertEquals(originalTarget.screenRect, target.screenRect)
+        println("1088 original=${originalTarget.confidence}/${originalTarget.rivalMargin} refined=${target.confidence}/${target.rivalMargin}")
+        assertEquals(original.visibleCharacters.filter { it.slotId != target.slotId },
+            refined.visibleCharacters.filter { it.slotId != target.slotId })
+        assertEquals(refined, recognizer.recognizeOpening(frame, allowInitial1088GeometryRefinement = true))
+        // Switching back to event/shop mode must not inherit the recovered identity.
+        val freePicker = recognizer.recognizeOpening(frame)
+        assertEquals(original.visibleCharacters, freePicker.visibleCharacters)
+        assertTrue(refined.viewportRevision > original.viewportRevision)
+        assertTrue(freePicker.viewportRevision > refined.viewportRevision)
+        recognizer.reset()
+        assertEquals(original.visibleCharacters, recognizer.recognizeOpening(frame).visibleCharacters)
+        val stableRecognizer = LabyrinthBattleTeamRecognizer(openingTemplates)
+        val stable = stableRecognizer.recognizeOpening(frame, allowInitial1088GeometryRefinement = true)
+        assertTrue(stable.visibleCharacters.single { it.slotId == target.slotId }.trusted)
+        repeat(3) {
+            assertEquals(stable, stableRecognizer.recognizeOpening(frame, allowInitial1088GeometryRefinement = true))
+        }
+
+        val assetRoot = File(root, "android/app/src/main/assets")
+        val paths = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS + AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+        val entryTemplates = LabyrinthEntryTemplateSet(paths.mapNotNull { (id, path) ->
+            File(assetRoot, path).takeIf(File::isFile)?.let { id to readImage(it) }
+        }.toMap())
+        for (enabled in listOf(false, true)) {
+            val processor = LabyrinthEntryFrameProcessor(
+                entryTemplates,
+                battleTeamRecognizer = LabyrinthBattleTeamRecognizer(openingTemplates, requiredStableFrames = 1),
+                allowInitial1088GeometryRefinement = { enabled },
+            )
+            val result = processor.process(frame)
+            assertEquals(LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION, result.observation.state)
+            val actual = result.openingCharacterMatches.single { it.slotId == originalTarget.slotId }
+            assertEquals(enabled, actual.trusted)
+            assertEquals(if (enabled) "1088" else null, actual.characterId)
+        }
+    }
+
     private fun readImage(file: File): PixelImage = pixels(requireNotNull(
         Class.forName("javax.imageio.ImageIO").getMethod("read", File::class.java).invoke(null, file),
     ))

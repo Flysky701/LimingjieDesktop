@@ -83,6 +83,15 @@ class LabyrinthShopPolicy(
             }
             .minWithOrNull(compareBy({ it.choiceRoleImprint }, { it.slotId }))
 
+        val pendingRoleImprint = items.firstOrNull { item ->
+            item.categoryState == LabyrinthShopCategoryState.READY && item.purchasable &&
+                item.kind == LabyrinthShopItemKind.ROLE_IMPRINT &&
+                item.roleImprintLabel.isNullOrBlank() && item.imprintLabelPending
+        }
+        fun waitForPendingImprint(reason: String): LabyrinthShopDecision = pendingRoleImprint?.let {
+            LabyrinthShopDecision.Wait("${it.slotId}已确认是职能印记，职能名尚未读出，等待重新识别后再决定")
+        } ?: LabyrinthShopDecision.Close(reason)
+
         // The game exposes exactly three relic goods per stock cycle. In a continuous session the
         // counter below reaches 3 from purchase-complete commits. If the app is restarted while
         // still inside the shop, that volatile counter is lost; when all three active goods have
@@ -120,7 +129,7 @@ class LabyrinthShopPolicy(
             if (items.any { it.purchasable && it.categoryState == LabyrinthShopCategoryState.READING }) {
                 return LabyrinthShopDecision.Wait("遗物已买完，正在有限重试确认剩余商品类别")
             }
-            return LabyrinthShopDecision.Close(
+            return waitForPendingImprint(
                 if ((currentArea ?: 0) >= finalArea) {
                     "本轮前三个遗物已买完且无法刷新，也没有可购买印记，结束商店"
                 } else {
@@ -193,7 +202,7 @@ class LabyrinthShopPolicy(
             )
         }
 
-        return LabyrinthShopDecision.Close(
+        return waitForPendingImprint(
             when {
                 items.any { it.categoryState == LabyrinthShopCategoryState.EXHAUSTED } ->
                     "未确认商品已完成三轮识别并跳过；没有可确认购买项，退出商店"

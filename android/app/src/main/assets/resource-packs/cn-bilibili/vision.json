@@ -880,7 +880,7 @@
       "kind": "template",
       "width": 420,
       "height": 75,
-      "sha256": "705f3ca1422317415a649dca750a648f974419d0459ff5e4c7f43a5440c2d76e",
+      "sha256": "3899c3e79c3474f5b34768103ba50e0db24dfbb1bf79a4aa411626feda288337",
       "anchor": "shop_purchase_complete"
     },
     {
@@ -941,9 +941,9 @@
       "id": "session.error.title",
       "file": "vision/session_error_title.bmp",
       "kind": "template",
-      "width": 948,
-      "height": 66,
-      "sha256": "6aeb03cf8c4820533c6417aea4a00fa0486e3962775680a1b4e8f0ed031c8f3e",
+      "width": 200,
+      "height": 44,
+      "sha256": "48e738b81f9758c2dc4a919b52349b7e57886985a0ba2704b6327ef888895107",
       "anchor": "session_error"
     },
     {

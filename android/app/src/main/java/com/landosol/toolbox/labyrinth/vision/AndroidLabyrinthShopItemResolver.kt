@@ -24,10 +24,15 @@ class AndroidLabyrinthShopItemResolver(
             val titleRect = ReferenceFitMapper.map(bitmap.width, bitmap.height, STANDARD_REFERENCE, referenceRect)
                 ?: return@map item
             val fingerprint = relicRoiFingerprint(bitmap, titleRect)
-            accepted[item.slotId]?.takeIf { it.first == fingerprint }?.let { (_, read) ->
-                return@map categories.resolve(item, read.text, read.id, 0)
+            val acceptedRead = accepted[item.slotId]?.takeIf { it.first == fingerprint }?.second
+            if (acceptedRead != null) {
+                val settled = categories.resolve(item, acceptedRead.text, acceptedRead.id, 0)
+                // A nameless imprint must not freeze its accepted read: the role name is what
+                // authorizes spending coins on it, so the remaining crop variants keep their
+                // chance instead of ending the visit with the good still on the shelf.
+                if (!categories.needsRoleName(settled)) return@map settled
+                accepted.remove(item.slotId)
             }
-            accepted.remove(item.slotId)
             val now = android.os.SystemClock.elapsedRealtime()
             val attempt = categories.attempt(item.slotId, fingerprint, now)
             val variant = minOf(attempt, 2)
@@ -38,7 +43,9 @@ class AndroidLabyrinthShopItemResolver(
             val read = ocr.read(bitmap, "shop-title-${item.slotId}-$variant", rect,
                 scale = if (variant == 0) 2 else 3)
             val resolved = categories.resolve(item, read?.text, read?.id, attempt)
-            if (resolved.categoryState == LabyrinthShopCategoryState.READY && read != null) {
+            val labelPending = categories.needsRoleName(resolved) &&
+                categories.labelGraceOpen(item.slotId, now)
+            if (resolved.categoryState == LabyrinthShopCategoryState.READY && read != null && !labelPending) {
                 accepted[item.slotId] = fingerprint to read
             } else {
                 // Retire this crop variant only once its OCR actually completed (read != null),
@@ -54,7 +61,7 @@ class AndroidLabyrinthShopItemResolver(
                     now = now,
                 )
             }
-            resolved
+            if (labelPending) resolved.copy(imprintLabelPending = true) else resolved
         }
         return result.copy(shopObservation = shop.copy(items = items))
     }

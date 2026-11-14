@@ -462,6 +462,31 @@ internal fun labyrinthRouteHasPassedOpening(
 ): Boolean = hasNodeTransition ||
     (state != null && (state.currentArea > 1 || state.visitedNodes.size > 1))
 
+/** A picker title alone cannot authorize the 1088-only opening geometry recovery. */
+internal fun labyrinthAllowsInitial1088GeometryRefinement(
+    routeState: NodeSessionState?,
+    persistedNode: LabyrinthNodeJson?,
+    hasNodeTransition: Boolean,
+    activeNodeType: Int?,
+    shopChoiceImprintPending: Boolean,
+    initialStartExecuted: Boolean = false,
+): Boolean {
+    if (hasNodeTransition || shopChoiceImprintPending) return false
+    if (activeNodeType != null && activeNodeType != LabyrinthNodeTypes.START) return false
+    if (persistedNode != null &&
+        (persistedNode.area != 1 || persistedNode.blockType != LabyrinthNodeTypes.START)
+    ) return false
+    if (routeState != null &&
+        (routeState.isComplete || labyrinthRouteHasPassedOpening(routeState) ||
+            (routeState.currentNodeId != null && routeState.currentNodeId !in routeState.visitedNodes))
+    ) return false
+    // Require a successful fresh start or positive first-start route evidence. Unknown cold
+    // restarts stay off rather than treating an event/shop picker as a new opening.
+    return initialStartExecuted || persistedNode != null ||
+        (routeState != null && routeState.currentArea == 1 && routeState.visitedNodes.size == 1 &&
+            routeState.currentNodeId == routeState.visitedNodes.single())
+}
+
 /** A real opening roster must reclaim the entry flow even after a premature map handoff. */
 internal fun labyrinthShouldResumeOpeningSelection(
     entryPhaseComplete: Boolean,

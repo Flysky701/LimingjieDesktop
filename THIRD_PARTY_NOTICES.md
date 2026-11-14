@@ -5,6 +5,13 @@ Project author: **wbero**. QQ discussion group: **1065226139**.
 The root CC BY-NC-SA 4.0 license applies to this project's own contributions,
 not to third-party works under different terms.
 
+## Labyrinth assistant upstreams
+
+Shared Kotlin business logic originates from <https://github.com/wbero/limingjie-assistant>.
+Selected client-compatibility fixes also come from
+<https://github.com/SatenRuiko10032/limingjie-assistant>, including contributions by
+SatenRuiko10032 and quickgk. Original attribution and the CC BY-NC-SA 4.0 license are retained.
+
 ## AutoPCR
 
 The upstream AutoPCR project (Python) is a behavioral, protocol, and

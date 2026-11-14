@@ -140,7 +140,7 @@ class ResourcePackValidatorTest {
             assertTrue(tankEvent.translatedEffect.contains("掩护者职阶角色随机"))
             val icons = loaded.data.icons
             assertTrue(icons != null)
-            assertEquals(801, icons!!.characterIcons.size)
+            assertEquals(800, icons!!.characterIcons.size)
             assertEquals(369, icons.coverage.coveredCharacters)
             assertEquals(109, icons.relicIcons.size)
             assertEquals(109, icons.coverage.coveredRelics)

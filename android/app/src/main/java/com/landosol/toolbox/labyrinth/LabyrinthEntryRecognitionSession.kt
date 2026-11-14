@@ -457,6 +457,10 @@ internal const val POST_ENTRY_STALL_TIMEOUT_MILLIS = 120_000L
  */
 internal const val BATTLE_TEAM_ACTION_INTERVAL_MILLIS = 600L
 
+/** 任意节点编号 → 它所属的区域（1~5）；万位不合法时返回 null。 */
+internal fun labyrinthNodeAreaOf(blockId: Long?): Int? =
+    blockId?.let { (it / 10_000).toInt().takeIf { area -> area in 1..5 } }
+
 internal enum class LabyrinthEventFreeRoleBlockedAction { WAIT, STOP }
 
 /**
@@ -1231,6 +1235,21 @@ class LabyrinthEntryRecognitionSession(
         .map(LabyrinthJoinedCharacter::characterId)
         .toSet()
 
+    fun allowInitial1088GeometryRefinement(): Boolean {
+        val routeState = nodeSession?.getState()
+        val route = validatedRoute
+        return labyrinthAllowsInitial1088GeometryRefinement(
+            routeState = routeState,
+            persistedNode = labyrinthPersistedCurrentNode(route) ?: routeState?.currentNodeId?.let { id ->
+                route?.nodes?.firstOrNull { it.blockId == id }
+            },
+            hasNodeTransition = pendingNodeTransition != null || confirmedNodeEntryReceipt != null,
+            activeNodeType = activeNodeType,
+            shopChoiceImprintPending = shopChoiceImprintRolePending,
+            initialStartExecuted = initialStartExecuted && !entryPhaseComplete,
+        )
+    }
+
     fun currentNodeSearchHint(): NodeSearchHint? {
         val session = nodeSession ?: return null
         val target = session.currentRouteTarget() ?: return null
@@ -1511,6 +1530,16 @@ class LabyrinthEntryRecognitionSession(
     /** A single OCR read is evidence, not truth; require repeated/same-frame corroboration. */
     @Volatile
     private var lastShopDialogState: LabyrinthShopDialogState = LabyrinthShopDialogState.NONE
+
+    /**
+     * 确认弹窗关闭后，连续看到「商店 + 无弹窗」的帧数，以及第一帧的时间。
+     *
+     * 购买成功后游戏会先闪一帧商店（弹窗=NONE）再弹「购买完成」，那一帧不是取消；
+     * 只有帧数和时间都超过门槛才当成真的取消（见 [SHOP_CONFIRM_CANCEL_FRAMES] /
+     * [SHOP_CONFIRM_CANCEL_GRACE_MILLIS]）。
+     */
+    private var shopConfirmClosedFrames = 0
+    private var shopConfirmClosedAt = Long.MIN_VALUE
     private val nodeConflictRecovery = com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecovery()
     @Volatile
     private var nodeSession: LabyrinthNodeSession? = null
@@ -1521,6 +1550,8 @@ class LabyrinthEntryRecognitionSession(
     private var finalBossLocalizationStartedAt = Long.MIN_VALUE
     @Volatile
     private var entryPhaseComplete = false
+    @Volatile
+    private var initialStartExecuted = false
     @Volatile
     private var pendingNodeClickBlockId: Long = Long.MIN_VALUE
     @Volatile
@@ -2764,6 +2795,8 @@ class LabyrinthEntryRecognitionSession(
         plannedShopRoleImprintLabel = null
         plannedShopPurchaseStartedAt = Long.MIN_VALUE
         plannedShopPurchaseCounted = false
+        shopConfirmClosedFrames = 0
+        shopConfirmClosedAt = Long.MIN_VALUE
     }
 
     private fun clearPlannedShopRefresh() {
@@ -3061,6 +3094,8 @@ class LabyrinthEntryRecognitionSession(
         val shopDialogState = result.shopObservation?.dialogState
         val purchasedRelic = when (shopDialogState) {
             LabyrinthShopDialogState.PURCHASE_CONFIRMATION -> {
+                shopConfirmClosedFrames = 0
+                shopConfirmClosedAt = Long.MIN_VALUE
                 // Only a transaction explicitly planned as a relic is eligible for relic
                 // persistence. Role-imprint icons can resemble relic templates and must never be
                 // written into the relic ledger after their purchase-complete modal.
@@ -3071,23 +3106,44 @@ class LabyrinthEntryRecognitionSession(
             }
 
             LabyrinthShopDialogState.PURCHASE_COMPLETE -> {
+                // 购买完成弹窗出现即证明这次确认不是取消，状态全部归零。
+                shopConfirmClosedFrames = 0
+                shopConfirmClosedAt = Long.MIN_VALUE
                 pendingShopPurchase.also { pendingShopPurchase = null }
             }
 
             LabyrinthShopDialogState.NONE -> {
                 if (lastShopDialogState == LabyrinthShopDialogState.PURCHASE_CONFIRMATION) {
-                    // Returning directly to the shop means the confirmation was cancelled.
-                    pendingShopPurchase = null
-                    clearPlannedShopPurchase()
+                    // 买到东西后游戏常常先闪一帧「商店 + 无弹窗」，紧接着才弹「购买完成」。
+                    // 这一帧只记账，不清计划；否则随后的完成弹窗会被当成人工购买而永远不关
+                    // （2026-11-05 实测：卡在 SHOP_PURCHASE_COMPLETE 76 帧）。
+                    shopConfirmClosedFrames = 1
+                    shopConfirmClosedAt = clock()
+                } else if (shopConfirmClosedFrames > 0) {
+                    shopConfirmClosedFrames++
+                    if (
+                        shopConfirmClosedFrames >= SHOP_CONFIRM_CANCEL_FRAMES &&
+                        clock() - shopConfirmClosedAt >= SHOP_CONFIRM_CANCEL_GRACE_MILLIS
+                    ) {
+                        // 连续多帧、且超过时间窗都回到「商店 + 无弹窗」：这次确认确实被取消了。
+                        pendingShopPurchase = null
+                        clearPlannedShopPurchase()
+                        shopConfirmClosedFrames = 0
+                        shopConfirmClosedAt = Long.MIN_VALUE
+                    }
                 }
                 null
             }
 
             LabyrinthShopDialogState.EXIT_CONFIRMATION -> {
+                shopConfirmClosedFrames = 0
+                shopConfirmClosedAt = Long.MIN_VALUE
                 pendingShopPurchase = null
                 null
             }
             null -> {
+                shopConfirmClosedFrames = 0
+                shopConfirmClosedAt = Long.MIN_VALUE
                 pendingShopPurchase = null
                 null
             }
@@ -4055,6 +4111,9 @@ class LabyrinthEntryRecognitionSession(
             }
             when (result) {
                 is AutomationActionResult.Executed -> {
+                    if (activeSessionId == sessionId && decision.kind == LabyrinthEntryActionKind.START_DAWN_REALM) {
+                        initialStartExecuted = true
+                    }
                     if (decision.kind == LabyrinthEntryActionKind.RESUME_DAWN_REALM) {
                         // The next page may be the node map, a choice page, or an unfinished
                         // CHARACTER_JOINED reward from before the app/session was restarted.
@@ -7170,6 +7229,8 @@ class LabyrinthEntryRecognitionSession(
 
     private fun resetNodeExecutionState() {
         battleWait.reset()
+        shopConfirmClosedFrames = 0
+        shopConfirmClosedAt = Long.MIN_VALUE
         eventFreeRoleSelectedCharacterIds.clear()
         eventFreeRoleLastSelectAt = Long.MIN_VALUE
         eventFreeRoleObservedSelectedCount = 0
@@ -7179,6 +7240,7 @@ class LabyrinthEntryRecognitionSession(
         nodeInitFailedReason = null
         finalBossLocalizationStartedAt = Long.MIN_VALUE
         entryPhaseComplete = false
+        initialStartExecuted = false
         resetPendingNodeClickStability()
         resetStrongRouteTargetBinding()
         pendingNodeTransition = null
@@ -7839,6 +7901,8 @@ class LabyrinthEntryRecognitionSession(
                         ?.nextNode
                         ?.takeIf { it.blockId == action.blockId }
                         ?.area
+                        // 区域号以节点编号为准：routeProgress 在区域边界会提前翻页，编号不会。
+                        ?: labyrinthNodeAreaOf(action.blockId)
                         ?: _state.value.routeProgress?.currentArea
                     prepareNodeTransitionContext(action.blockType, targetArea)
                     pendingNodeTransition = PendingNodeTransition(
@@ -9670,6 +9734,14 @@ class LabyrinthEntryRecognitionSession(
         /** Lost-tap retries allowed on a single-pick choice page before the run stops. */
         const val MAX_SELECTION_COMMIT_ATTEMPTS = 3
         const val SHOP_PURCHASE_TRANSITION_TIMEOUT_MILLIS = 8_000L
+        /**
+         * 确认弹窗关闭后，要连续看到这么多帧「商店 + 无弹窗」才认定是用户取消。
+         * 买到东西时游戏会先闪一帧商店再弹「购买完成」，设成 1 会误判并把购买计划清掉。
+         */
+        const val SHOP_CONFIRM_CANCEL_FRAMES = 2
+
+        /** 确认弹窗关闭后至少等这么久，才允许把「商店 + 无弹窗」当成取消（购买完成弹窗可能晚到）。 */
+        const val SHOP_CONFIRM_CANCEL_GRACE_MILLIS = 2_000L
         const val SHOP_REFRESH_TRANSITION_TIMEOUT_MILLIS = 8_000L
         const val SHOP_REFRESH_SETTLE_MILLIS = 500L
         const val CHARACTER_ACQUISITION_ACTION_INTERVAL_MILLIS = 650L

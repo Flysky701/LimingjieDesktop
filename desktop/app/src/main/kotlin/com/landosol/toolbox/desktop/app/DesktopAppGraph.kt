@@ -499,6 +499,7 @@ class DesktopAppGraph(
                     nodeScanConsumable = { labyrinthEntryRecognitionSession.nodeScanConsumable() },
                     rosterCharacterIds = { labyrinthEntryRecognitionSession.rosterCharacterIds() },
                     readResultScore = false,
+                    allowInitial1088GeometryRefinement = labyrinthEntryRecognitionSession::allowInitial1088GeometryRefinement,
                 )::processDesktopFrame
             },
             captureStop = { captureService.stop() },

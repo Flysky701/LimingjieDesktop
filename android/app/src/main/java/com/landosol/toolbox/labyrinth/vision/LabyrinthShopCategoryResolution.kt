@@ -13,7 +13,29 @@ internal class LabyrinthShopCategoryResolution {
     private data class State(val fingerprint: Long, var attempt: Int = 0, var variantStartedAt: Long)
     private val slots = mutableMapOf<String, State>()
 
-    fun clear() = slots.clear()
+    /** When each slot first showed a nameless imprint; see [labelGraceOpen]. */
+    private val labelGraceStartedAt = mutableMapOf<String, Long>()
+
+    fun clear() {
+        slots.clear()
+        labelGraceStartedAt.clear()
+    }
+
+    /** A role imprint whose role name OCR did not recover, so it cannot be bought yet. */
+    fun needsRoleName(item: LabyrinthShopItemMatch): Boolean =
+        item.kind == LabyrinthShopItemKind.ROLE_IMPRINT && item.roleImprintLabel.isNullOrBlank()
+
+    /**
+     * A nameless imprint is not yet "unidentifiable": the remaining crop variants get one bounded
+     * grace window to read its role name before the shop policy may end the visit.
+     *
+     * Timed on the wall clock rather than on [attempt] because a changing title fingerprint
+     * resets the variant counter, which would otherwise keep a visit parked for ever.
+     */
+    fun labelGraceOpen(slot: String, now: Long): Boolean {
+        val startedAt = labelGraceStartedAt.getOrPut(slot) { now }
+        return now - startedAt < LABEL_GRACE_MILLIS
+    }
 
     /** The current crop-variant index (0..[MAX_ATTEMPTS]) for this slot. Does not advance itself. */
     fun attempt(slot: String, fingerprint: Long, now: Long): Int {
@@ -83,5 +105,12 @@ internal class LabyrinthShopCategoryResolution {
          * device (6.4 s), so only a genuinely stalled engine trips it.
          */
         const val ENGINE_SILENT_BACKSTOP_MILLIS = 20_000L
+        /**
+         * How long a nameless imprint keeps its crop variants in play. Two banner reads (2-5 s
+         * each) plus the queue wait have to fit, but a visit must never park on a title the OCR
+         * simply cannot read: the 2026-11-09 bundle showed 职能印记 with no role name, which used
+         * to close the shop with coins and a purchasable imprint still on the shelf.
+         */
+        const val LABEL_GRACE_MILLIS = 12_000L
     }
 }

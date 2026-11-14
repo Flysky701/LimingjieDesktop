@@ -8,7 +8,7 @@
   "coverage": {
     "catalogCharacters": 373,
     "coveredCharacters": 369,
-    "characterIconFiles": 801,
+    "characterIconFiles": 800,
     "unmatchedCharacterSourceFiles": 7,
     "catalogRelics": 109,
     "coveredRelics": 109,
@@ -6881,15 +6881,6 @@
       "width": 128,
       "height": 128,
       "sha256": "67b9382a6c3ae2c4a9149d4ef2fa51a37e6e4b036cf31b21bb77d3cf40100409"
-    },
-    {
-      "ownerId": "1701",
-      "variant": "61",
-      "file": "icons/characters/icon_unit_170161.png",
-      "format": "png",
-      "width": 128,
-      "height": 128,
-      "sha256": "4c567f67e4f9d0e0bb221ba094445ad6d4b06ced48c5a1bff8c0a254dc26f091"
     },
     {
       "ownerId": "1702",

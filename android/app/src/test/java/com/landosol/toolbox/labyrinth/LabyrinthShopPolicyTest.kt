@@ -425,6 +425,25 @@ class LabyrinthShopPolicyTest {
         assertEquals("speed", choose(5))
     }
 
+    @Test
+    fun `unnamed imprint waits for OCR but cannot keep a visit open after the grace window`() {
+        val policy = LabyrinthShopPolicy()
+        for (area in listOf(3, 5)) {
+            for (purchased in listOf(0, 3)) {
+                val imprint = item("imprint", null, null, false,
+                    kind = LabyrinthShopItemKind.ROLE_IMPRINT).copy(imprintLabelPending = true)
+                fun decide(value: LabyrinthShopItemMatch) = policy.decide(
+                    area, listOf(value), emptyList(), refreshAvailable = false,
+                    relicPurchasesInCycle = purchased,
+                )
+                assertTrue(decide(imprint) is LabyrinthShopDecision.Wait)
+                assertTrue(decide(imprint.copy(imprintLabelPending = false)) is LabyrinthShopDecision.Close)
+                val named = imprint.copy(roleImprintLabel = "治疗型职能印记", imprintLabelPending = false)
+                assertEquals("imprint", (decide(named) as LabyrinthShopDecision.BuyRoleImprint).item.slotId)
+            }
+        }
+    }
+
     private fun item(
         id: String,
         mark: String?,

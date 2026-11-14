@@ -23,8 +23,11 @@ class LabyrinthOpeningPopupFixtureTest {
     @Test
     fun `relic effect popup classifies as item reward with the shared close button`() {
         assumeTrue(fixtureRoot?.isDirectory == true)
+        // 2026-10-31 live: the opening relic popup now reads 凭借拉比林斯之主的效果 (was 迷宫大师),
+        // so the instruction template was re-cut from the live popup and the fixture follows.
+        // The 20260917 迷宫大师 fixture stays in resources for reference but no longer matches.
         val processor = LabyrinthEntryFrameProcessor(templates = loadShippedTemplates())
-        val result = processor.process(readImage(File(fixtureRoot, "relic-effect-popup-20260917.png")))
+        val result = processor.process(readImage(File(fixtureRoot, "relic-effect-popup-live-20261031.png")))
         assertEquals(result.observation.stateScores.toString(), LabyrinthEntryPageState.ITEM_REWARD, result.observation.state)
         val close = requireNotNull(result.anchorMatches[EntryAnchorId.ITEM_REWARD_CLOSE])
         assertTrue("close ${close.score}", close.score >= 0.90)
