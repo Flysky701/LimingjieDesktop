@@ -40,6 +40,11 @@
   - **已确认缺陷**：[LabyrinthBattleTeamRecommendation.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthBattleTeamRecommendation.kt) 的 `initialRecommendation` 使用 `minOf(5, resolved.size)` 接受不足五人的队伍，而 `retryRecommendation` 直接拒绝不足五人的角色池，并在规划结果处再次要求完整五人。两条路径的人数规则不一致；[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 最后由编组页的 120 秒停滞保护收尾。
   - **修复与验证**：统一首次与重试的合法人数规则，检查失败队伍记录、重试搜索和执行器对不足五人队伍的支持；无法继续时沿用批次策略明确结束或交接。补充三人、四人、正常五人及无可用角色的定向离线回放，保留重试次数与点击守卫，并与 FIX-01 的失败计数问题分别验证。
 
+- [ ] **FIX-08：普通战编组提示一号位生存资格不足后停滞（下一轮核对）**
+  - **现象**：2026-11-14 15:55:33 进入普通战斗节点 `10402`；15:55:35 起持续提示“自动战斗要求实际一号位满足生存资格；当前角色池无法组成满足条件的队伍”，没有派发编组动作，15:57:35 因连续 120 秒无进展停止，单局记为 `ABORTED_UNKNOWN`。此前同局普通战斗节点 `10202` 曾成功生成三人推荐，随后经过连结节点 `10302`。
+  - **已定位路径**：[LabyrinthRoleDecisionPolicy.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthRoleDecisionPolicy.kt) 的 `LabyrinthTeamPlanSearcher.initialSearch` 在特定前排约束下返回空方案；`vanguardlessPlan` 无法生成补充队伍时也使用同一句原因。日志不能区分两条路径，尚未确认是实际站位冲突、资格规则、角色池变化还是角色资料不足。
+  - **核对与验证**：核对进入 `10402` 时的可用角色、站位与生存资格，以及连结节点前后的角色池变化；区分拒绝原因并明确编组不可用时的后续处理。补充角色池跨过五人、前排站位冲突及资料不足的定向离线回放，保留现有资格判定与点击守卫，并与 FIX-07 的重试人数门槛分别跟踪。
+
 ## 平台与运行限制
 
 | 范围 | 限制说明 | 处理或规避 |
