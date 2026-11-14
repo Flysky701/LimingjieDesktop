@@ -17,7 +17,12 @@ class AdbDeviceServiceTest {
         override val header = MaaTouchHeader(10, 1920, 1080, 255, 123)
         override var alive = true
         val gestures = CopyOnWriteArrayList<String>()
+        var beforeGuardedSend: () -> Unit = {}
         override suspend fun send(commands: String, durationMillis: Long) { gestures += commands }
+        override suspend fun sendGuarded(commands: String, durationMillis: Long, permit: () -> Boolean): Boolean {
+            beforeGuardedSend()
+            return super.sendGuarded(commands, durationMillis, permit)
+        }
         override fun close() { alive = false }
     }
     private fun service(fake: FakeAdb, touch: RecordingTouch = RecordingTouch(), events: MutableList<String> = CopyOnWriteArrayList(), lost: MutableList<String> = CopyOnWriteArrayList()) =
@@ -137,6 +142,18 @@ class AdbDeviceServiceTest {
             }
         }
     }
+    @Test fun nativeWriterSuppressionReturnsRejectedWithoutSendingInput() = runBlocking {
+        val adb = FakeAdb(); val touch = RecordingTouch()
+        service(adb, touch).use { device ->
+            device.connect("fixture")
+            var permitted = true
+            touch.beforeGuardedSend = { permitted = false }
+            val result = withContext(DeviceDispatchPermit { permitted }) { device.tap(10f, 20f, FakeAdb.GAME) }
+            assertEquals(TouchResult.Rejected(DEVICE_DISPATCH_SUPPRESSED), result)
+            assertTrue(touch.gestures.isEmpty())
+        }
+    }
+
     @Test fun fiveFailedCapturesNotifyLostBeforeReconnectAndNeverResumeTasks() = runBlocking {
         val adb = FakeAdb(); val lost = CopyOnWriteArrayList<String>()
         service(adb, lost = lost).use { device ->

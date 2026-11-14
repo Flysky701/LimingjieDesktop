@@ -17,6 +17,11 @@ interface TouchConnection : AutoCloseable {
     val header: MaaTouchHeader
     val alive: Boolean
     suspend fun send(commands: String, durationMillis: Long)
+    suspend fun sendGuarded(commands: String, durationMillis: Long, permit: () -> Boolean): Boolean {
+        if (!permit()) return false
+        send(commands, durationMillis)
+        return true
+    }
 }
 
 fun interface TouchConnectionFactory {
@@ -71,7 +76,7 @@ class MaaTouchConnection private constructor(
     override val header: MaaTouchHeader,
     private val scope: CoroutineScope,
 ) : TouchConnection {
-    private data class Request(val commands: String, val durationMillis: Long, val completion: CompletableDeferred<Unit>)
+    private data class Request(val commands: String, val durationMillis: Long, val permit: () -> Boolean, val completion: CompletableDeferred<Boolean>)
     private val queue = Channel<Request>(64)
     private val closed = AtomicBoolean()
     override val alive: Boolean get() = !closed.get() && process.isAlive
@@ -81,11 +86,15 @@ class MaaTouchConnection private constructor(
                 if (!request.completion.isActive) continue
                 try {
                     if (!alive) throw DeviceOperationException("触控服务已断开")
+                    if (!request.permit()) {
+                        request.completion.complete(false)
+                        continue
+                    }
                     process.outputStream.write(request.commands.toByteArray(Charsets.UTF_8))
                     process.outputStream.flush()
                     if (request.durationMillis > 0) delay(request.durationMillis + 20)
                     if (!alive) throw DeviceOperationException("触控服务已断开")
-                    request.completion.complete(Unit)
+                    request.completion.complete(true)
                 } catch (cancelled: CancellationException) { request.completion.cancel(cancelled); throw cancelled }
                 catch (error: IOException) { request.completion.completeExceptionally(error) }
             }
@@ -97,10 +106,13 @@ class MaaTouchConnection private constructor(
         }
     }
     override suspend fun send(commands: String, durationMillis: Long) {
+        sendGuarded(commands, durationMillis) { true }
+    }
+    override suspend fun sendGuarded(commands: String, durationMillis: Long, permit: () -> Boolean): Boolean {
         if (!alive) throw DeviceOperationException("触控服务已断开")
-        val completion = CompletableDeferred<Unit>(currentCoroutineContext()[Job])
-        queue.send(Request(commands, durationMillis, completion))
-        completion.await()
+        val completion = CompletableDeferred<Boolean>(currentCoroutineContext()[Job])
+        queue.send(Request(commands, durationMillis, permit, completion))
+        return completion.await()
     }
     override fun close() {
         if (closed.compareAndSet(false, true)) {

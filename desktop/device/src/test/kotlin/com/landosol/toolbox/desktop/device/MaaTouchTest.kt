@@ -7,6 +7,9 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.IOException
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MaaTouchTest {
     @get:Rule val folder = TemporaryFolder()
@@ -25,6 +28,42 @@ class MaaTouchTest {
         assertEquals("k 4 o\nc\n", MaaTouchProtocol.key(4))
         assertThrows(IllegalArgumentException::class.java) { MaaTouchProtocol.swipe(0f, 0f, 1f, 1f, 5000, 1) }
     }
+    @Test fun queuedGestureRechecksPermitBeforeWritingToProcess() = runBlocking {
+        val output = folder.root.toPath().resolve("guarded-touch.txt")
+        val runner = ProcessAdbExecutor("synthetic-adb", AdbProcessFactory { args ->
+            if (args.any { "app_process" in it }) ProcessFixture.start("touch", output.toString())
+            else if (args.any { "/proc/sys/kernel/random/boot_id" in it }) ProcessFixture.start("echo", "10000000-1111-2222-3333-444444444444")
+            else ProcessFixture.start("echo")
+        })
+        runner.use {
+            val touch = MaaTouchConnection.open(runner, "synthetic", folder.root.toPath())
+            val releaseWriter = CountDownLatch(1)
+            try {
+                val writerEntered = CompletableDeferred<Unit>()
+                val firstCommand = MaaTouchProtocol.tap(1f, 2f)
+                val first = async(start = CoroutineStart.UNDISPATCHED) {
+                    touch.sendGuarded(firstCommand, 0) {
+                        writerEntered.complete(Unit)
+                        check(releaseWriter.await(5, TimeUnit.SECONDS)) { "fixture writer was not released" }
+                        true
+                    }
+                }
+                withTimeout(3_000) { writerEntered.await() }
+                val allowed = AtomicBoolean(true)
+                val queued = async(start = CoroutineStart.UNDISPATCHED) {
+                    touch.sendGuarded(MaaTouchProtocol.tap(3f, 4f), 0, allowed::get)
+                }
+                allowed.set(false)
+                releaseWriter.countDown()
+                assertTrue(withTimeout(3_000) { first.await() })
+                assertFalse(withTimeout(3_000) { queued.await() })
+                touch.send("EXIT\n", 0)
+                withTimeout(3_000) { while (touch.alive) delay(10) }
+                assertEquals(firstCommand, Files.readString(output))
+            } finally { releaseWriter.countDown(); touch.close() }
+        }
+    }
+
     @Test fun persistentActorSerializesGesturesAndDetectsProcessExit() = runBlocking {
         val output = folder.root.toPath().resolve("touch.txt")
         val runner = ProcessAdbExecutor("C:/中文 模拟器/adb.exe", AdbProcessFactory { args ->

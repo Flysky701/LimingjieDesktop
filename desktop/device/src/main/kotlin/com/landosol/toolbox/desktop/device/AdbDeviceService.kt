@@ -390,7 +390,8 @@ class AdbDeviceService(
                 val touch = value.touch ?: return@withLock TouchResult.Rejected("触控服务未连接")
                 if (!touch.alive) return@withLock TouchResult.Rejected("触控服务已断开")
                 if (!MaaTouchProtocol.matchesDimensions(touch.header, value.frameSize.first, value.frameSize.second)) return@withLock TouchResult.Rejected("触控坐标系与截图尺寸不一致")
-                touch.send(commands, durationMillis)
+                if (permit == null) touch.send(commands, durationMillis)
+                else if (!touch.sendGuarded(commands, durationMillis, permit.allowed)) return@withLock TouchResult.Rejected(DEVICE_DISPATCH_SUPPRESSED)
             }
             TouchResult.Completed
         } catch (_: IOException) { TouchResult.Rejected("触控服务已断开") }

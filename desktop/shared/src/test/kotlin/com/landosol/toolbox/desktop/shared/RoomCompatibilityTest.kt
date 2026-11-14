@@ -38,6 +38,26 @@ class RoomCompatibilityTest {
             assertEquals(0, db.labyrinthRouteDao().countForAccount(id))
         } finally { db.close() }
     }
+    @Test fun failedSharedProjectionLeavesAliasesSelectionAndRecordsIntact() = runBlocking {
+        val context = DesktopContext(Files.createTempDirectory("shared-projection-rollback").toFile())
+        val db = AppDatabase.create(context)
+        try {
+            val dao = db.accountDao()
+            val original = account("复用别名").copy(id = 5, isSelected = true)
+            dao.insert(original)
+            dao.insert(account("其他账号").copy(id = 9))
+            db.seedRelatedRecordsForTest(5)
+            val rejected = original.copy(id = 6, credentialKey = "test-其他账号")
+            assertTrue(runCatching { dao.bindSharedProjection(rejected) }.isFailure)
+            assertEquals(original, dao.getById(5))
+            assertEquals(5L, dao.getSelected()!!.id)
+            assertNull(dao.getById(6))
+            assertEquals(2, dao.count())
+            assertEquals(1, db.labyrinthRouteDao().countForAccount(5))
+            assertEquals(1, db.featureProfileDao().countForAccount(5))
+        } finally { db.close() }
+    }
+
     @Test fun oldSchemasMigrateWithIdentityAndPreserveAccounts() = runBlocking {
         val schemas = File("schemas/com.landosol.toolbox.data.local.AppDatabase")
         val expectedIdentity = JSONObject(File(schemas, "5.json").readText()).getJSONObject("database").getString("identityHash")

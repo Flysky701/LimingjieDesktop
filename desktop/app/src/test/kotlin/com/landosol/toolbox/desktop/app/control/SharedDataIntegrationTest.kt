@@ -125,16 +125,45 @@ class SharedDataIntegrationTest {
         } finally { service.shutdown() }
     }
 
+    @Test fun runtimeRebindsReusedAliasWithoutLosingAccountRecords() = runBlocking {
+        val shared = SyntheticSharedData()
+        val graph = DesktopAppGraph(directory.root.toPath(), suppliedDevice = UiTestNoIoDevice(),
+            startupUpdates = false, sharedData = shared)
+        try {
+            graph.prepareSharedAccount(5)
+            val dao = graph.database.accountDao()
+            val original = dao.getById(5)!!
+            graph.database.seedRelatedRecordsForTest(5)
+            dao.insert(original.copy(id = 9, alias = "synthetic（旧绑定 #5）", credentialKey = "synthetic-unused-9", isSelected = false))
+            graph.clearSharedBinding()
+            shared.updatedAt = 2
+            graph.prepareSharedAccount(6)
+            assertEquals(6L, dao.getSelected()!!.id)
+            assertEquals("synthetic", dao.getSelected()!!.alias)
+            assertEquals("synthetic（旧绑定 #5）·", dao.getById(5)!!.alias)
+            assertEquals(1, graph.database.labyrinthRouteDao().countForAccount(5))
+            assertEquals(1, graph.database.featureProfileDao().countForAccount(5))
+            assertEquals(0, graph.database.labyrinthRouteDao().countForAccount(6))
+
+            graph.prepareSharedAccount(5)
+            assertEquals(5L, dao.getSelected()!!.id)
+            assertEquals("synthetic", dao.getSelected()!!.alias)
+            assertEquals(original.createdAt, dao.getSelected()!!.createdAt)
+            assertEquals(1, graph.database.labyrinthRouteDao().countForAccount(5))
+        } finally { graph.shutdown() }
+    }
+
     private class SyntheticSharedData : SharedDataAccess {
         override val authorityId = "synthetic-authority"
         var currentStrategy = LabyrinthStrategySettings(playerWeight = 63)
         var revision = 1L
+        var updatedAt = 1L
         var verifiedUid: Long? = null
         var options = LabyrinthRerollSettings()
         var defaults = DesktopPreferences(goals = listOf(DesktopGoal(1, 3)), selectedTask = "REROLL")
         val records = CopyOnWriteArrayList<DesktopRunRecord>()
         override suspend fun taskData(accountId: Long) = SharedTaskData(
-            SharedAccountMetadata(accountId, "synthetic", GameServer.CN_XIAOMI.storageId, null, 1), "unused-uid", "unused-memory-secret",
+            SharedAccountMetadata(accountId, "synthetic", GameServer.CN_XIAOMI.storageId, null, updatedAt), "unused-uid", "unused-memory-secret",
             options, currentStrategy, revision, DesktopSettings(), verifiedUid, defaults)
         override suspend fun settings() = DesktopSettings()
         override suspend fun updateGameUid(accountId: Long, uid: String) { verifiedUid = uid.toLong() }

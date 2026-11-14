@@ -68,12 +68,13 @@ class DesktopAdaptersTest {
     }
 
     @Test fun captureUsesOwnedThreadAndStopsAfterFiveFailures() = runBlocking {
-        val received = CompletableDeferred<String>()
+        val received = CompletableDeferred<Pair<String, CapturedFrame>>()
         val lost = CompletableDeferred<String>()
+        val before = CaptureTelemetry.snapshot()
         var calls = 0
         var failing = false
         val registered = CaptureFrameBus.register("desktop-fixture") { frame ->
-            received.complete(Thread.currentThread().name)
+            received.complete(Thread.currentThread().name to frame)
             frame.bitmap.recycle()
         } as CaptureFrameRegistrationResult.Registered
         val service = DesktopCaptureService(source = {
@@ -83,7 +84,15 @@ class DesktopAdaptersTest {
         }, onLost = { lost.complete(it) })
         try {
             withTimeout(4000) { service.start() }
-            assertEquals("desktop-capture", withTimeout(1000) { received.await() }.substringBefore(" @coroutine"))
+            val (thread, frame) = withTimeout(1000) { received.await() }
+            assertEquals("desktop-capture", thread.substringBefore(" @coroutine"))
+            assertTrue(frame.frameSequence > 0)
+            assertTrue(requireNotNull(frame.captureConvertMillis) >= 0)
+            assertTrue(requireNotNull(frame.enqueuedAtElapsedRealtimeMillis) >= requireNotNull(frame.capturedAtElapsedRealtimeMillis))
+            val after = CaptureTelemetry.snapshot()
+            assertTrue(after.callbacks > before.callbacks)
+            assertTrue(after.acquiredImages > before.acquiredImages)
+            assertTrue(after.convertedFrames > before.convertedFrames)
             assertTrue(CaptureStateRegistry.isActive())
             failing = true
             assertTrue(withTimeout(4000) { lost.await() }.contains("连续 5 次截图失败"))

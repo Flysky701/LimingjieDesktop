@@ -21,11 +21,13 @@ class Bitmap private constructor(val width: Int, val height: Int, private var pi
     val byteCount: Int get() = allocationByteCount
     fun recycle() { pixels = null }
     /** The frame owns this immutable bitmap until all recognition leases have closed. */
-    internal fun capturedFrame(timestampMillis: Long, sequence: Long): CapturedFrame = CapturedFrame(
+    internal fun capturedFrame(timestampMillis: Long, sequence: Long, capturedAtElapsedRealtimeMillis: Long,
+        captureConvertMillis: Long): CapturedFrame = CapturedFrame(
         bitmap = this,
         timestampMillis = timestampMillis,
         frameSequence = sequence,
-        capturedAtElapsedRealtimeMillis = android.os.SystemClock.elapsedRealtime(),
+        captureConvertMillis = captureConvertMillis,
+        capturedAtElapsedRealtimeMillis = capturedAtElapsedRealtimeMillis,
         enqueuedAtElapsedRealtimeMillis = android.os.SystemClock.elapsedRealtime(),
         argbPixels = data(),
     )

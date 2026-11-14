@@ -129,7 +129,7 @@ internal fun runSetupBlock(dirty: Boolean, fullConfiguration: Boolean): String? 
                     if (draft.settings.routeEvaluationMode == LabyrinthRouteEvaluationMode.VALUE_ROUTE) {
                         RunChoice("每区允许少拿", "${draft.settings.valueAllowance} 格",(0..LabyrinthRerollOptions.MAX_VALUE_ALLOWANCE).toList(),{"$it 格"},
                             enabled&&state.settingsReady&&state.selectedAccount!=null,Modifier.weight(1f)) {draft.settings=draft.settings.copy(valueAllowance=it)}
-                    } else {
+                    } else if (draft.settings.routeEvaluationMode == LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE) {
                         Column(Modifier.weight(1f)) {
                             Text("旧版路线要求",style=MaterialTheme.typography.bodySmall,color=Muted)
                             Row(verticalAlignment=Alignment.CenterVertically) {
@@ -151,7 +151,13 @@ internal fun runSetupBlock(dirty: Boolean, fullConfiguration: Boolean): String? 
                 }
                 if (state.selectedAccount == null || !state.settingsReady) {
                     Text(if(state.selectedAccount==null) "未选择账号" else "正在加载账号配置…",style=MaterialTheme.typography.bodySmall,color=Muted)
-                } else Text("${draft.settings.routeEvaluationMode.label} · ${draft.settings.thirdBlockChoice.label}",style=MaterialTheme.typography.bodySmall,color=Muted)
+                } else {
+                    val settings = draft.settings
+                    val thirdBlock = if (settings.routeEvaluationMode == LabyrinthRouteEvaluationMode.CUSTOM_NODES) {
+                        settings.customNodePlan.thirdBlockChoice
+                    } else settings.thirdBlockChoice
+                    Text("${settings.routeEvaluationMode.label} · ${thirdBlock.label}",style=MaterialTheme.typography.bodySmall,color=Muted)
+                }
                 if(selected==DesktopTask.REROLL) Text(if(draft.settings.retireExisting)"允许彻底撤退当前开局，开始前会再次确认。" else "不允许彻底撤退当前开局。",style=MaterialTheme.typography.bodySmall,color=Muted)
             } else {
                 Text(when(selected) {

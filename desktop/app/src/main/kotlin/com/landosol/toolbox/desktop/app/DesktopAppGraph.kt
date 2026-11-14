@@ -215,11 +215,9 @@ class DesktopAppGraph(
         cachedMaterial = material
         sharedRerollCache.save(accountId, snapshot.reroll)
         withContext(Dispatchers.IO) {
-            val existing = database.accountDao().getById(accountId)
             val row = AccountEntity(id = accountId, alias = account.alias, serverId = account.serverId, gameUid = account.gameUid,
-                credentialKey = key, isSelected = true, createdAt = existing?.createdAt ?: account.updatedAt, updatedAt = account.updatedAt)
-            if (existing == null) database.accountDao().insert(row) else database.accountDao().update(row)
-            database.accountDao().selectAccount(accountId)
+                credentialKey = key, isSelected = true, createdAt = account.updatedAt, updatedAt = account.updatedAt)
+            database.accountDao().bindSharedProjection(row)
             settings.save(snapshot.settings.copy(lastDevice = settings.state.value.lastDevice))
         }
         withTimeout(10_000) { labyrinthController.uiState.first { it.selectedAccount?.id == accountId && it.settingsReady } }

@@ -64,7 +64,9 @@ class DesktopCaptureService(
             try {
                 while (isActive) {
                     val started = System.nanoTime()
-                    val frame = try { source().also { failures = 0 } }
+                    val capturedAt = android.os.SystemClock.elapsedRealtime()
+                    CaptureTelemetry.callback()
+                    val frame = try { source().also { failures = 0; CaptureTelemetry.acquired() } }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: Exception) {
                         failures++
@@ -90,8 +92,12 @@ class DesktopCaptureService(
                                 preview(frame.copy(pixels = frame.pixels.copyOf()))
                                 lastPreview = frame.timestampMillis
                             }
+                            val conversionStarted = System.nanoTime()
                             val bitmap = frame.recognitionBitmap()
-                            CaptureFrameBus.dispatch(bitmap.capturedFrame(frame.timestampMillis, ++frameSequence))
+                            val conversionMillis = (System.nanoTime() - conversionStarted) / 1_000_000
+                            CaptureTelemetry.converted()
+                            CaptureFrameBus.dispatch(bitmap.capturedFrame(frame.timestampMillis, ++frameSequence,
+                                capturedAtElapsedRealtimeMillis = capturedAt, captureConvertMillis = conversionMillis))
                         }
                     }
                     if (frame.pixels.all { it and 0xffffff == 0 }) {
