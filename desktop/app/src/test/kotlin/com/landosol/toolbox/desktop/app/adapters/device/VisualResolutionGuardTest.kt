@@ -9,81 +9,86 @@ import org.junit.Test
 
 class VisualResolutionGuardTest {
     @Test fun `unsupported frame rejects startup and every device action`() = runBlocking {
-        val fake = FakeDevice(1280, 720)
+        val fake = FakeDevice(960, 540)
         val guard = VisualResolutionGuard(fake)
         val actions = ResolutionGuardedDevice(fake, guard)
         val failure = runCatching { guard.checkForStart() }.exceptionOrNull()
-        assertTrue(failure?.message.orEmpty().contains("1280 × 720"))
+        assertTrue(failure?.message.orEmpty().contains("960 × 540"))
         assertTrue(actions.tap(1f, 2f, "game") is TouchResult.Rejected)
         assertTrue(actions.swipe(1f, 2f, 3f, 4f, 100, 0, "game") is TouchResult.Rejected)
         assertTrue(actions.back("game") is TouchResult.Rejected)
         assertFalse(actions.home()); assertFalse(actions.forceStop("game")); assertFalse(actions.launch("game"))
         assertEquals(0, fake.actions)
-        assertEquals("1280×720", guard.status.value.dimensionsLabel)
+        assertEquals("960×540", guard.status.value.dimensionsLabel)
         assertEquals(guard.status.value.message, startMissing(DesktopTask.ENTRY, RunConsoleState(device=fake.state.value), true, true, resolution=guard.status.value))
         assertEquals("Devices", explainStop(null, guard.status.value.message).destination)
     }
 
     @Test fun `real landscape passes even when wm reports portrait and labels use frame dimensions`() = runBlocking {
-        val fake = FakeDevice(1920, 1080)
+        for ((width, height) in listOf(1920 to 1080, 1280 to 720)) {
+            val fake = FakeDevice(width, height)
+            val guard = VisualResolutionGuard(fake)
+            assertTrue(deviceLabel(fake.state.value).contains("待检查"))
+            guard.checkForStart()
+            assertTrue(guard.status.value.supported)
+            assertTrue(deviceLabel(fake.state.value,guard.status.value.dimensionsLabel).contains("${width}×${height}"))
+            assertEquals(TouchResult.Completed, ResolutionGuardedDevice(fake,guard).tap(1f,2f,"game"))
+            assertEquals(1, fake.actions)
+            assertEquals(1, fake.captures)
+        }
+    }
+
+    @Test fun `all actions reuse startup permission without another capture`() = runBlocking {
+        val fake = FakeDevice(1280,720)
         val guard = VisualResolutionGuard(fake)
-        assertTrue(deviceLabel(fake.state.value).contains("待检查"))
-        guard.checkForStart()
-        assertTrue(guard.status.value.supported)
-        assertTrue(deviceLabel(fake.state.value,guard.status.value.dimensionsLabel).contains("1920×1080"))
-        assertEquals(TouchResult.Completed, ResolutionGuardedDevice(fake,guard).tap(1f,2f,"game"))
-        assertEquals(1, fake.actions)
-    }
-
-    @Test fun `a new size immediately revokes clicks and rechecking never resumes`() = runBlocking {
-        val fake = FakeDevice(1920,1080)
-        var stopped = 0
-        val guard = VisualResolutionGuard(fake) { stopped++ }
         val actions = ResolutionGuardedDevice(fake,guard)
         guard.checkForStart()
-        fake.width = 1280; fake.height = 720
-        // No periodic capture has delivered the new size yet: the action boundary must catch it.
-        assertTrue(actions.tap(1f,2f,"game") is TouchResult.Rejected)
-        assertEquals(1,stopped); assertEquals(0,fake.actions)
-        fake.width = 1920; fake.height = 1080
-        guard.recheck()
-        assertTrue(actions.tap(1f,2f,"game") is TouchResult.Rejected)
-        guard.checkForStart()
+        fake.onCapture = { error("actions must not request a screenshot") }
         assertEquals(TouchResult.Completed,actions.tap(1f,2f,"game"))
-    }
-
-    @Test fun `controlled close portrait launcher and relaunch stay possible without portrait taps`() = runBlocking {
-        val fake = FakeDevice(1920,1080)
-        var stopped = 0
-        val guard = VisualResolutionGuard(fake) { stopped++ }
-        val actions = ResolutionGuardedDevice(fake,guard)
-        guard.checkForStart()
+        assertEquals(TouchResult.Completed,actions.swipe(1f,2f,3f,4f,100,0,"game"))
+        assertEquals(TouchResult.Completed,actions.back("game"))
         assertTrue(actions.home())
-        fake.width=1080;fake.height=1920
-        guard.observe(1080,1920)
-        assertTrue(guard.deferTransitionFrame(1080,1920))
         assertTrue(actions.forceStop("game"))
         assertTrue(actions.launch("game"))
-        assertEquals(0,stopped)
-        fake.width=1920;fake.height=1080
-        guard.observe(1920,1080)
-        assertEquals(TouchResult.Completed,actions.tap(1f,2f,"game"))
-        assertEquals(4,fake.actions)
-        // An ordinary unexpected rotation is still fatal.
-        fake.width=1080;fake.height=1920
-        guard.observe(1080,1920)
-        assertEquals(1,stopped)
+        assertEquals(6,fake.actions)
+        assertEquals(1,fake.captures)
+        guard.disarm()
         assertTrue(actions.tap(1f,2f,"game") is TouchResult.Rejected)
+        assertEquals(6,fake.actions)
+        assertEquals(1,fake.captures)
     }
 
-    @Test fun `even a controlled portrait transition never permits an automatic tap`() = runBlocking {
-        val fake=FakeDevice(1920,1080)
-        val guard=VisualResolutionGuard(fake)
-        val actions=ResolutionGuardedDevice(fake,guard)
-        guard.checkForStart(); actions.home()
-        fake.width=1080;fake.height=1920
+    @Test fun `manual recheck does not grant or restore task permission`() = runBlocking {
+        val fake = FakeDevice(1920,1080)
+        val guard = VisualResolutionGuard(fake)
+        val actions = ResolutionGuardedDevice(fake,guard)
+        assertTrue(guard.recheck().supported)
+        assertTrue(actions.tap(1f,2f,"game") is TouchResult.Rejected)
+        guard.checkForStart()
+        assertEquals(TouchResult.Completed,actions.tap(1f,2f,"game"))
+        guard.disarm()
+        guard.recheck()
         assertTrue(actions.tap(1f,2f,"game") is TouchResult.Rejected)
         assertEquals(1,fake.actions)
+    }
+
+    @Test fun `both supported sizes can restart through portrait without portrait taps or extra captures`() = runBlocking {
+        for ((width,height) in listOf(1920 to 1080,1280 to 720)) {
+            val fake=FakeDevice(width,height)
+            val guard=VisualResolutionGuard(fake)
+            val actions=ResolutionGuardedDevice(fake,guard)
+            guard.checkForStart()
+            assertTrue(actions.home())
+            assertTrue(guard.deferTransitionFrame(height,width))
+            assertTrue(actions.tap(1f,2f,"game") is TouchResult.Rejected)
+            assertTrue(actions.forceStop("game"))
+            assertTrue(actions.launch("game"))
+            assertFalse(guard.deferTransitionFrame(width,height))
+            assertEquals(TouchResult.Completed,actions.tap(1f,2f,"game"))
+            assertFalse(guard.deferTransitionFrame(height,width))
+            assertEquals(4,fake.actions)
+            assertEquals(1,fake.captures)
+        }
     }
 
     @Test fun `stop during screenshot check cannot grant a late action permit`() = runBlocking {
@@ -102,8 +107,9 @@ class VisualResolutionGuardTest {
         override val state=MutableStateFlow<DeviceConnectionState>(DeviceConnectionState.Ready(DeviceReady("fake","fake",1080,1920,emptyList(),CaptureMode.Raw,true,true,identity)))
         override val foregroundPackage="game"
         var actions=0
+        var captures=0
         var onCapture:suspend()->Unit={}
-        override suspend fun capture():DeviceFrame {onCapture();return DeviceFrame(width,height,IntArray(0),0)}
+        override suspend fun capture():DeviceFrame {captures++;onCapture();return DeviceFrame(width,height,IntArray(0),0)}
         override suspend fun discover()=emptyList<DeviceDescriptor>()
         override suspend fun connect(serial:String,touchMode:TouchMode) {}
         override suspend fun disconnect() {}

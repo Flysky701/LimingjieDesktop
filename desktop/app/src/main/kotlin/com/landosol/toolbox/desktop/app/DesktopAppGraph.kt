@@ -242,12 +242,7 @@ class DesktopAppGraph(
         taskStrategy = null
         strategyRevisionState.value = null
     }
-    val resolutionGuard = VisualResolutionGuard(device) { reason ->
-        autoRunScope.launch {
-            labyrinthController.reportMessage(reason)
-            stopAll(reason)
-        }
-    }
+    val resolutionGuard = VisualResolutionGuard(device)
     private val actionDevice: DeviceService = ResolutionGuardedDevice(device, resolutionGuard)
     val deviceConnection = DeviceConnectionActions(device, { settings.state.value.adbPath }, { log.add(it, true) })
     private val previewState = MutableStateFlow<CapturePixels?>(null)
@@ -257,7 +252,6 @@ class DesktopAppGraph(
     val preview = previewState.asStateFlow()
     val captureService = DesktopCaptureService(
         source = { device.capture().let {
-            resolutionGuard.observe(it.width, it.height)
             lastCapturedFrameMillis = it.timestampMillis
             // The built-in Raw and PNG decoders allocate each frame; injected devices may reuse buffers.
             CapturePixels(it.width, it.height, it.pixels, it.timestampMillis, ownsPixels = suppliedDevice == null)

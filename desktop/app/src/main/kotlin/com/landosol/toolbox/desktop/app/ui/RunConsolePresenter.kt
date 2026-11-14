@@ -24,7 +24,7 @@ data class StopExplanation(val title:String,val reason:String,val advice:String,
 fun explainStop(halt:LabyrinthBatchHaltReason?,raw:String):StopExplanation {
     if(halt==null) {
         val rules=listOf(
-            listOf("1920 × 1080","画面尺寸不符合要求","请在模拟器中设置 1920 × 1080 横屏，再到设备页重新检查。","Devices","检查画面尺寸"),
+            listOf("1920 × 1080","画面尺寸不符合要求","请在模拟器中设置 1920 × 1080 或 1280 × 720 横屏，再重新启动任务。","Devices","检查画面尺寸"),
             listOf("请先在设备页连接","模拟器未连接","连接模拟器后，再开始画面任务。","Devices","连接设备"),
             listOf("休眠","模拟器屏幕正在休眠","请先手动唤醒模拟器，再重新检查。","Devices","检查设备"),
             listOf("无法确定游戏客户端","游戏客户端未就绪","核对账号服务器，并确认模拟器中安装了对应游戏。","Devices","检查客户端"),

@@ -145,7 +145,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
             if (message != null && address.isNotBlank()) TextButton(onClick = { actions.run { graph.connectDevice(address.trim()) } }, enabled = canConnect) { Text("重试连接") }
         }
         Detail("实际画面", if (ready == null) "等待连接" else resolution.dimensionsLabel)
-        Text("自动执行要求 1920 × 1080 横屏。调整模拟器后请重新检查。", color = Muted, fontSize = 12.5.sp)
+        Text("自动执行支持 1920 × 1080 或 1280 × 720 横屏，任务启动时检查；720p 已开放测试。", color = Muted, fontSize = 12.5.sp)
         OutlinedButton(onClick = { actions.run { graph.recheckResolution() } }, enabled = ready != null && canConnect) { Text("重新检查画面尺寸") }
         if(devices.isEmpty() && !connecting && message == null)Text("启动模拟器后点击“重新检测”，或展开手动地址。",color=Muted,style=MaterialTheme.typography.bodySmall)
         devices.forEach { device -> Surface(onClick = { address = device.serial;actions.run {graph.connectDevice(device.serial)} },enabled=canConnect && ready?.serial != device.serial,color = Background, shape = RoundedCornerShape(8.dp)) {
@@ -192,7 +192,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
             Detail("模拟器连接", deviceLabel(device, resolution.dimensionsLabel))
             Detail("截图", ready?.timing?.firstOrNull { it.mode == ready.selectedMode }?.let { "p95 ${it.p95Millis} ms${if (it.p95Millis > 600) "，偏慢" else ""}" } ?: "未完成测速")
             Detail("实际画面", if (ready == null) "等待连接" else resolution.dimensionsLabel)
-            Text("自动执行要求 1920 × 1080 横屏。调整模拟器后请重新检查。", color = Muted, fontSize = 12.5.sp)
+            Text("自动执行支持 1920 × 1080 或 1280 × 720 横屏，任务启动时检查；720p 已开放测试。", color = Muted, fontSize = 12.5.sp)
             OutlinedButton(onClick = { actions.run { graph.recheckResolution() } }, enabled = ready != null && !busy && !actions.working) { Text("重新检查画面尺寸") }
             Detail("触控", if (ready?.touchReady == true) if (saved.touchMode == PreferredTouchMode.COMPATIBILITY) "兼容模式（速度较慢）" else "MaaTouch 就绪" else "未就绪")
             Detail("屏幕", if (ready == null) "未读取" else if (ready.awake) "已唤醒" else "未唤醒")

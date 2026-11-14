@@ -171,8 +171,8 @@ class DesktopGraphIntegrationTest {
         val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }
             .first { Files.exists(it.resolve("android/app/src/test/resources/shop/exit_confirmation.png")) }
         val original = ImageIO.read(root.resolve("android/app/src/test/resources/shop/exit_confirmation.png").toFile())
-        val fixture = java.awt.image.BufferedImage(1920,1080,java.awt.image.BufferedImage.TYPE_INT_RGB).apply {
-            createGraphics().apply { drawImage(original,0,0,1920,1080,null);dispose() }
+        val fixture = java.awt.image.BufferedImage(1280,720,java.awt.image.BufferedImage.TYPE_INT_RGB).apply {
+            createGraphics().apply { drawImage(original,0,0,1280,720,null);dispose() }
         }
         val fake = FixtureDevice(fixture.width, fixture.height, fixture.getRGB(0, 0, fixture.width, fixture.height, null, 0, fixture.width))
         val data = directory.root.toPath().resolve("reroll")
@@ -201,14 +201,14 @@ class DesktopGraphIntegrationTest {
             withTimeout(30_000) { graph.startRecognition(dryRun = false).join() }
             assertTrue(graph.log.text(), graph.labyrinthEntryRecognitionSession.state.value.running)
             withTimeout(15_000) { while (fake.actions.isEmpty()) delay(20) }
-            // The capture worker must revoke actions and stop asynchronously, without self-joining.
-            fake.nextSize = 1280 to 720
+            // The capture stream still stops inconsistent frame geometry, without an action-time screenshot.
+            fake.nextSize = 1920 to 1080
             withTimeout(5000) { while (graph.busy || CaptureStateRegistry.isActive()) delay(10) }
-            assertTrue(graph.log.text().contains("1280 × 720"))
+            assertTrue(graph.log.text().contains("1920x1080"))
             // Real fixture classification: LabyrinthEntryFrameProcessorTest:1035.
-            // SHOP_EXIT_CONFIRM_BUTTON rect (980,706,400,80), FrameProcessor:851, at 1920x1080.
-            // Session:5771-5776 taps this matched anchor's centre; no handwritten action is submitted.
-            assertEquals(listOf(AutomationAction.Tap(ScreenPoint(1180f, 746f))), fake.actions.toList())
+            // The 1080p reference rect (980,706,400,80) maps to (653,471,267,53) at 720p.
+            // The session taps the recognized anchor's centre; no handwritten action is submitted.
+            assertEquals(listOf(AutomationAction.Tap(ScreenPoint(786.5f, 497.5f))), fake.actions.toList())
         } finally { withTimeout(15_000) { graph.shutdown() } }
         val reopened = DesktopAppGraph(data, suppliedDevice = FixtureDevice(480, 270, intArrayOf()), startupUpdates = false)
         try {
@@ -221,7 +221,7 @@ class DesktopGraphIntegrationTest {
     }
 
     @Test fun unsupportedResolutionBlocksRealGraphBeforeBatchMutationAndEntryActions() = runBlocking {
-        val fake = FixtureDevice(1280,720,IntArray(1280*720))
+        val fake = FixtureDevice(960,540,IntArray(960*540))
         val graph = DesktopAppGraph(directory.root.toPath().resolve("resolution"),suppliedDevice=fake,startupUpdates=false)
         try {
             val accountId=graph.database.accountDao().insert(AccountEntity(alias="resolution-test",serverId=GameServer.CN_BILIBILI.storageId,
@@ -237,7 +237,7 @@ class DesktopGraphIntegrationTest {
             withTimeout(5000) { graph.taskStarting.first { !it } }
             assertNull("batch controller was never started",graph.labyrinthBatchController.state.value)
             assertTrue("rejected startup must not clear the ledger",ledger.consume(accountId,GameServer.CN_BILIBILI.packageName))
-            assertTrue(graph.log.text().contains("1280 × 720"))
+            assertTrue(graph.log.text().contains("960 × 540"))
             assertFalse(graph.labyrinthController.uiState.value.isWorking)
             graph.startRecognition(dryRun=false).join()
             assertFalse(graph.labyrinthEntryRecognitionSession.state.value.running)
