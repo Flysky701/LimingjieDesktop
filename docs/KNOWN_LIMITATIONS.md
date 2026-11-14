@@ -35,6 +35,11 @@
   - **待确认部分**：日志能确认点击未生效和视角恢复过程，但缺少对应画面，尚不能确定是节点错绑、坐标偏移、动画遮挡还是点击未落地。
   - **核对与验证**：核对节点身份、可达集合与屏幕位置的绑定，重点检查低置信语义补全与拓扑匹配切换。取得对应画面后建立定向离线回放，确认问题再修复，保留现有点击守卫及有界重试。
 
+- [ ] **FIX-07：不足五人的 EX 战首次编组可用，失败重试却被人数门槛阻断（下一轮修复）**
+  - **现象**：2026-11-14 15:47:50 首次推荐为三人队伍；15:50:15 起重复提示“战斗失败后可用角色不足5名，无法生成完整重试队伍”，编组页未再派发动作，15:52:15 因连续 120 秒无进展停止，单局结果记为 `ABORTED_UNKNOWN`。
+  - **已确认缺陷**：[LabyrinthBattleTeamRecommendation.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthBattleTeamRecommendation.kt) 的 `initialRecommendation` 使用 `minOf(5, resolved.size)` 接受不足五人的队伍，而 `retryRecommendation` 直接拒绝不足五人的角色池，并在规划结果处再次要求完整五人。两条路径的人数规则不一致；[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 最后由编组页的 120 秒停滞保护收尾。
+  - **修复与验证**：统一首次与重试的合法人数规则，检查失败队伍记录、重试搜索和执行器对不足五人队伍的支持；无法继续时沿用批次策略明确结束或交接。补充三人、四人、正常五人及无可用角色的定向离线回放，保留重试次数与点击守卫，并与 FIX-01 的失败计数问题分别验证。
+
 ## 平台与运行限制
 
 | 范围 | 限制说明 | 处理或规避 |
