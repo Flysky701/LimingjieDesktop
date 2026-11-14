@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.labyrinth.LabyrinthRoleRatingItem
 import com.landosol.toolbox.ui.labyrinth.LabyrinthRoleRatingsScreen
+import com.landosol.toolbox.ui.labyrinth.LabyrinthPersonalScoreFilter
 import kotlinx.coroutines.*
 import kotlin.math.roundToInt
 
@@ -29,6 +30,7 @@ internal object ScoreEdits {
     fun restore(id:String,personal:Int?,change:(String,Int?)->Unit){if(personal!=null)change(id,null)}
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable internal fun RoleRatingsPage(graph:ControlSessionUi,profile:com.landosol.toolbox.desktop.app.adapters.storage.StrategyProfile,onClose:()->Unit) {
     var baseline by remember(profile.id) { mutableStateOf(profile) }
     val saved = baseline.settings
@@ -36,7 +38,7 @@ internal object ScoreEdits {
     val catalog by graph.ux.catalog.collectAsState()
     var draft by remember {mutableStateOf(saved.personalRoleScores)}
     ReportControlDirty("ratings",draft!=saved.personalRoleScores)
-    var query by remember{mutableStateOf("")};var modified by remember{mutableStateOf(false)}
+    var query by remember{mutableStateOf("")};var scoreFilter by remember{mutableStateOf(LabyrinthPersonalScoreFilter.ALL)}
     var attribute by remember{mutableStateOf("")};var position by remember{mutableStateOf("")};var sort by remember{mutableStateOf("已修改优先")}
     var original by remember{mutableStateOf(preferences.originalRatings)}
     var confirmDiscard by remember{mutableStateOf(false)}
@@ -51,18 +53,29 @@ internal object ScoreEdits {
     fun positionOf(role:LabyrinthRoleRatingItem)=role.detail.split(" · ").firstOrNull{it !in setOf("火","水","风","光","暗")}.orEmpty()
     val attributes=catalog.map(::attributeOf).filter{it.isNotBlank()}.distinct().sorted()
     val positions=catalog.map(::positionOf).filter{it.isNotBlank()}.distinct().sorted()
-    val shown=remember(catalog,query,modified,attribute,position,sort,draft){catalog.filter{
-        (query.isBlank()||it.name.contains(query,true)||it.id.contains(query))&&(!modified||it.id in draft)&&
+    val shown=remember(catalog,query,scoreFilter,attribute,position,sort,draft){catalog.filter{
+        (query.isBlank()||it.name.contains(query,true)||it.id.contains(query))&&scoreFilter.includes(it.id in draft)&&
             (attribute.isBlank()||attributeOf(it)==attribute)&&(position.isBlank()||positionOf(it)==position)
     }.let{rows->when(sort){"原评分降序"->rows.sortedByDescending{it.originalScore?:-1.0};"名称"->rows.sortedBy{it.name};"ID"->rows.sortedBy{it.id};else->rows.sortedByDescending{it.id in draft}}}}
     val focus=remember(shown.map{it.id}){shown.associate{it.id to FocusRequester()}}
     Column(Modifier.fillMaxSize().padding(24.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("角色个人评分",style=MaterialTheme.typography.titleLarge);Text("个人评分优先用于选人和编组。不会补全缺失角色资料或覆盖数据库。",color=Muted,style=MaterialTheme.typography.bodySmall)};OutlinedButton(shape=MaterialTheme.shapes.small,onClick={original=true}){Text("原版表单")};TextButton(onClick=::close){Text("返回策略")}}
-        Row(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically){OutlinedTextField(query,{query=it},placeholder={Text("搜索角色名、版本或 ID")},singleLine=true,modifier=Modifier.weight(1f));ChoiceMenu("全部属性",attribute,attributes){attribute=it};ChoiceMenu("全部定位",position,positions){position=it};FilterChip(modified,{modified=!modified},label={Text("仅看已修改")});ChoiceMenu("排序",sort,listOf("已修改优先","原评分降序","名称","ID"),false){sort=it}}
+        HorizontalDivider(color=Line)
+        Surface(Modifier.fillMaxWidth(),color=MaterialTheme.colorScheme.surface,shape=MaterialTheme.shapes.medium,border=BorderStroke(1.dp,Line)) {
+            Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(query,{query=it},placeholder={Text("搜索角色名、版本或 ID")},singleLine=true,modifier=Modifier.fillMaxWidth())
+                FlowRow(horizontalArrangement=Arrangement.spacedBy(8.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                    ChoiceMenu("全部属性",attribute,attributes){attribute=it}
+                    ChoiceMenu("全部定位",position,positions){position=it}
+                    ChoiceMenu("评分状态",scoreFilter.label,LabyrinthPersonalScoreFilter.entries.map{it.label},false){value->scoreFilter=LabyrinthPersonalScoreFilter.entries.first{it.label==value}}
+                    ChoiceMenu("排序",sort,listOf("已修改优先","原评分降序","名称","ID"),false){sort=it}
+                }
+            }
+        }
         Surface(Modifier.weight(1f).fillMaxWidth(),color=MaterialTheme.colorScheme.surface,shape=MaterialTheme.shapes.medium,border=BorderStroke(1.dp,Line)) {
             Column {
                 Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerLow).padding(horizontal=12.dp,vertical=10.dp)){Text("角色",Modifier.weight(1f));Text("属性 / 定位",Modifier.width(138.dp));Text("ID",Modifier.width(62.dp));Text("原评分",Modifier.width(65.dp));Text("我的评分",Modifier.width(116.dp));Text("操作",Modifier.width(124.dp))}
-                if(shown.isEmpty())Column(Modifier.fillMaxWidth().padding(28.dp),horizontalAlignment=Alignment.CenterHorizontally){Text(if(catalog.isEmpty())"角色资料尚未加载" else "没有符合条件的角色");TextButton(onClick={query="";modified=false;attribute="";position=""}){Text("清除筛选")}}
+                if(shown.isEmpty())Column(Modifier.fillMaxWidth().padding(28.dp),horizontalAlignment=Alignment.CenterHorizontally){Text(if(catalog.isEmpty())"角色资料尚未加载" else "没有符合条件的角色");TextButton(onClick={query="";scoreFilter=LabyrinthPersonalScoreFilter.ALL;attribute="";position=""}){Text("清除筛选")}}
                 LazyColumn {itemsIndexed(shown,key={_,r->r.id}){index,role->var input by remember(role.id,draft[role.id]){mutableStateOf(ScoreEdits.initial(draft[role.id],role.originalScore))}
                     Row(Modifier.fillMaxWidth().padding(horizontal=12.dp,vertical=5.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(0.dp)) {
                         Row(Modifier.weight(1f),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(9.dp)){Portrait(graph,role,role.name);Text(role.name,style=MaterialTheme.typography.bodySmall)}

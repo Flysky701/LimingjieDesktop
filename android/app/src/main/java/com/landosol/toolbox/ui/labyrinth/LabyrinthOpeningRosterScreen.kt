@@ -1,5 +1,6 @@
 package com.landosol.toolbox.ui.labyrinth
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -71,6 +72,7 @@ fun LabyrinthOpeningRosterScreen(
                         }
                     }
                 }
+                if (wideLayout) VerticalDivider()
             val contentScroll = key(if (wideLayout) selectedGuild else 0) { rememberScrollState() }
             Column(
                 Modifier.weight(1f).fillMaxHeight().verticalScroll(contentScroll).padding(16.dp),
@@ -80,6 +82,7 @@ fun LabyrinthOpeningRosterScreen(
                     "每个公会固定选 3 名角色。同一槽位可以放多个候选，程序按顺序取第一个在列表里找到的；" +
                         "全部槽位都找不到候选时会停下来，不会随机补人。",
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (loading) {
                     Text("正在读取角色资料…", style = MaterialTheme.typography.bodySmall)
@@ -87,14 +90,19 @@ fun LabyrinthOpeningRosterScreen(
                 LabyrinthOpeningRosterCatalog.guilds.filter { !wideLayout || it.guildId == selectedGuild }.forEach { guild ->
                     val custom = rosters[guild.guildId]
                     val slots = custom ?: guild.slots.map { slot -> slot.candidates.map { it.characterId } }
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Card(
+                        Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
                                     Text(guild.guildName, style = MaterialTheme.typography.titleMedium)
                                     Text(
                                         if (custom == null) "使用内置方案" else "已自定义",
                                         style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                                 if (custom != null) {
@@ -105,6 +113,7 @@ fun LabyrinthOpeningRosterScreen(
                                 Text(
                                     "公会附赠（不可编辑）：${granted.joinToString("、") { it.displayName }}",
                                     style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                             slots.forEachIndexed { slotIndex, candidates ->
@@ -157,25 +166,35 @@ private fun OpeningSlotRow(
     onAdd: () -> Unit,
     onRemove: (String) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("第 $slotNumber 槽", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-            TextButton(onClick = onAdd) { Text("添加候选") }
-        }
-        if (candidates.isEmpty()) {
-            Text("尚未选择角色", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-        candidates.forEachIndexed { index, id ->
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    "${index + 1}. ${nameOf(id)}",
-                    Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                TextButton(onClick = { onRemove(id) }) { Text("移除") }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("第 $slotNumber 槽", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                TextButton(onClick = onAdd) { Text("添加候选") }
+            }
+            HorizontalDivider(Modifier.padding(bottom = 4.dp))
+            if (candidates.isEmpty()) {
+                Text("尚未选择角色", Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            candidates.forEachIndexed { index, id ->
+                if (index > 0) HorizontalDivider()
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 40.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("${index + 1}", Modifier.widthIn(min = 20.dp), style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(nameOf(id), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { onRemove(id) },
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) { Text("移除") }
+                }
             }
         }
     }

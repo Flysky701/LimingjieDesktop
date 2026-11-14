@@ -15,6 +15,7 @@ import com.landosol.toolbox.desktop.app.adapters.storage.DesktopSettingsStore
 import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.desktop.app.ui.*
 import com.landosol.toolbox.desktop.app.ui.theme.DesktopTheme
+import com.landosol.toolbox.desktop.app.ui.theme.NativeWindowTheme
 import com.landosol.toolbox.desktop.platform.*
 import com.landosol.toolbox.desktop.shared.DesktopLog
 import java.awt.Dimension
@@ -143,6 +144,7 @@ fun main(args: Array<String>) {
         Window(onCloseRequest = ::closeRequested, state = windowState, visible = visible, title = "黎明界助手 ${AppVersion.name}", icon = icon) {
             window.minimumSize = Dimension(1100, 700)
             DesktopTheme(preferences) {
+                NativeWindowTheme(window)
                 // Keep the tray in the same resolved theme (including system changes) as the window.
                 if (trayAvailable) DesktopTray(icon, state = trayState, tooltip = "黎明界助手 · ${instances.size} 台设备", onAction = { visible = true; windowState.isMinimized = false }) {
                     Item("显示主窗口", onClick = { visible = true; windowState.isMinimized = false })

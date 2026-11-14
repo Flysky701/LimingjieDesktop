@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -37,6 +38,16 @@ import kotlin.math.roundToInt
 
 private data class RatingCatalogState(val rows: List<LabyrinthRoleRatingItem> = emptyList(), val loading: Boolean = true, val error: String? = null)
 
+enum class LabyrinthPersonalScoreFilter(val label: String) {
+    ALL("全部评分"), RATED("仅看已修改"), UNRATED("未设个人评分");
+
+    fun includes(hasPersonalScore: Boolean): Boolean = when (this) {
+        ALL -> true
+        RATED -> hasPersonalScore
+        UNRATED -> !hasPersonalScore
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LabyrinthRoleRatingsScreen(
@@ -46,7 +57,8 @@ fun LabyrinthRoleRatingsScreen(
     onClose: () -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
-    var modifiedOnly by rememberSaveable { mutableStateOf(false) }
+    var scoreFilter by rememberSaveable { mutableStateOf(LabyrinthPersonalScoreFilter.ALL) }
+    var choosingScoreFilter by remember { mutableStateOf(false) }
     var editingId by rememberSaveable { mutableStateOf<String?>(null) }
     var retry by remember { mutableIntStateOf(0) }
     val catalog by produceState(RatingCatalogState(), retry) {
@@ -57,10 +69,10 @@ fun LabyrinthRoleRatingsScreen(
     }
     val assets = LocalContext.current.applicationContext.assets
     val portraits = remember(assets) { RolePortraitLoader(assets) }
-    val filtered = remember(catalog.rows, query, modifiedOnly, scores) {
+    val filtered = remember(catalog.rows, query, scoreFilter, scores) {
         val needle = query.trim().replace('（', '(').replace('）', ')')
         catalog.rows.filter { role ->
-            (!modifiedOnly || role.id in scores) && (needle.isBlank() ||
+            scoreFilter.includes(role.id in scores) && (needle.isBlank() ||
                 role.name.replace('（', '(').replace('）', ')').contains(needle, ignoreCase = true) || role.id.contains(needle))
         }
     }
@@ -75,35 +87,45 @@ fun LabyrinthRoleRatingsScreen(
                     Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp), style = MaterialTheme.typography.bodySmall)
             }
         }) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
+            Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(value = query, onValueChange = { query = it }, label = { Text("搜索角色名、版本或 ID") },
                     singleLine = true, modifier = Modifier.fillMaxWidth(), trailingIcon = {
                         if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("清除") }
                     })
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    FilterChip(selected = modifiedOnly, onClick = { modifiedOnly = !modifiedOnly }, label = { Text("仅看已修改") })
-                    Text("${filtered.size} 人", style = MaterialTheme.typography.bodySmall)
+                    Box {
+                        OutlinedButton(onClick = { choosingScoreFilter = true }, shape = MaterialTheme.shapes.small) { Text(scoreFilter.label) }
+                        DropdownMenu(choosingScoreFilter, onDismissRequest = { choosingScoreFilter = false }) {
+                            LabyrinthPersonalScoreFilter.entries.forEach { filter ->
+                                DropdownMenuItem(text = { Text(filter.label) }, onClick = { scoreFilter = filter; choosingScoreFilter = false })
+                            }
+                        }
+                    }
+                    Text("${filtered.size} 人", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                HorizontalDivider()
                 when {
                     catalog.loading -> CircularProgressIndicator(Modifier.padding(16.dp))
                     catalog.error != null -> {
                         Text(catalog.error.orEmpty(), color = MaterialTheme.colorScheme.error)
                         TextButton(onClick = { retry++ }) { Text("重试") }
                     }
-                    filtered.isEmpty() -> Text(if (modifiedOnly) "没有符合条件的个人评分" else "没有找到角色")
+                    filtered.isEmpty() -> Text("没有符合条件的角色")
                 }
                 LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
                     items(filtered, key = { it.id }) { role ->
                         val personal = scores[role.id]
-                        Card(Modifier.fillMaxWidth().clickable { editingId = role.id }) {
+                        Card(Modifier.fillMaxWidth().clickable { editingId = role.id },
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
                             Row(Modifier.fillMaxWidth().padding(12.dp).heightIn(min = 64.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 RolePortrait(role, personal != null, portraits)
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(role.name, style = MaterialTheme.typography.titleSmall)
-                                    Text("${role.detail} · ${role.id}", style = MaterialTheme.typography.bodySmall)
-                                    Text("原评分：${role.originalScore?.toString() ?: "暂无"}", style = MaterialTheme.typography.bodySmall)
+                                    Text("${role.detail} · ${role.id}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("原评分：${role.originalScore?.toString() ?: "暂无"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Text(if (personal == null) "我的评分：未设置（沿用原评分）" else "我的评分：$personal",
                                         color = if (personal == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                                         style = MaterialTheme.typography.bodyMedium)
