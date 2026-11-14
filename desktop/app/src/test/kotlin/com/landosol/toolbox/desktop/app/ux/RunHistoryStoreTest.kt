@@ -42,6 +42,29 @@ class RunHistoryStoreTest {
     }
     @get:Rule val directory=TemporaryFolder()
     private val day=86_400_000L
+    @Test fun delayedRecoveryDoesNotFinishRunsCreatedAfterStartupOrOverwriteCompletedRuns() {
+        val root = directory.root.toPath()
+        val clock = 200 * day
+        val original = RunHistoryStore(root, {}, { clock })
+        original.put(DesktopRunRecord("interrupted", clock - 2, "样例", "任务", "目标"))
+        original.put(DesktopRunRecord("completed", clock - 1, "样例", "任务", "目标"))
+        val restarted = RunHistoryStore(root, {}, { clock })
+        val active = DesktopRunRecord("active", clock, "样例", "任务", "目标")
+        restarted.put(active)
+        restarted.finish("completed", "完成", "正常结束")
+        val completed = restarted.records.value.first { it.id == "completed" }
+
+        restarted.recoverInterrupted()
+        val recovered = restarted.records.value.associateBy { it.id }
+        assertEquals("未正常结束", recovered.getValue("interrupted").result)
+        assertEquals(clock, recovered.getValue("interrupted").endedAt)
+        assertEquals(completed, recovered.getValue("completed"))
+        assertEquals(active, recovered.getValue("active"))
+        val journal = Files.readString(root.resolve("runs.jsonl"))
+        restarted.recoverInterrupted()
+        assertEquals(journal, Files.readString(root.resolve("runs.jsonl")))
+        assertEquals(recovered, RunHistoryStore(root, {}, { clock }).records.value.associateBy { it.id })
+    }
     @Test fun appendIsCompleteUnderConcurrentWritersAndPersistsTerminalUpdates() {
         val root=directory.root.toPath();val clock=200*day;val store=RunHistoryStore(root,{}, {clock})
         val pool=Executors.newFixedThreadPool(4)

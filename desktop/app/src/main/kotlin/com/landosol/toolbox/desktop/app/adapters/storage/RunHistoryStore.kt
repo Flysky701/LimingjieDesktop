@@ -28,6 +28,8 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
     private val file = directory.resolve("runs.jsonl")
     private var needsCompaction = false
     private val mutable = MutableStateFlow(load())
+    // Recovery runs asynchronously; only records loaded from the previous process qualify.
+    private var interruptedIds = mutable.value.filter { it.endedAt == null }.map { it.id }.toSet()
     val records = mutable.asStateFlow()
     private val pendingScores = linkedMapOf<String, Long>()
     private fun encode(r: DesktopRunRecord) = JSONObject().put("id",r.id).put("startedAt",r.startedAt).put("alias",r.alias)
@@ -93,7 +95,13 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
         write(row.copy(score = score), scoreOnly = true)
         return true
     }
-    @Synchronized fun recoverInterrupted() { if(needsCompaction){compact();needsCompaction=false};mutable.value.filter { it.endedAt==null }.forEach { put(it.copy(endedAt=now(),result="未正常结束",reason="上次进程退出前未记录终态，请检查游戏当前状态。")) } }
+    @Synchronized fun recoverInterrupted() {
+        if (needsCompaction) { compact(); needsCompaction = false }
+        mutable.value.filter { it.id in interruptedIds && it.endedAt == null }.forEach {
+            put(it.copy(endedAt=now(),result="未正常结束",reason="上次进程退出前未记录终态，请检查游戏当前状态。"))
+        }
+        interruptedIds = emptySet()
+    }
     @Synchronized fun compact() { AtomicFiles.write(file,mutable.value.joinToString("\n",postfix=if(mutable.value.isEmpty()) "" else "\n",transform=::encode).toByteArray(Charsets.UTF_8)) }
     @Synchronized fun finish(id:String,result:String,reason:String,cleared:Int=0,score:Long?=null,endedAt:Long?=null) { mutable.value.firstOrNull { it.id==id && it.endedAt==null }?.let { put(it.copy(endedAt=endedAt ?: now(),result=result,reason=reason,cleared=cleared,score=score)) } }
 }
