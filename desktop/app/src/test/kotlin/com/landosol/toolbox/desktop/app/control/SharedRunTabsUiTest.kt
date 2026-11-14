@@ -40,7 +40,7 @@ class SharedRunTabsUiTest {
         compose.onAllNodesWithText("共享甲").onFirst().assertIsDisplayed()
         compose.onNodeWithText("设为当前").assertDoesNotExist()
         compose.onNodeWithText("策略").performClick()
-        compose.onNodeWithText("37%").assertIsDisplayed()
+        compose.onNodeWithText("玩家评分 37%", substring = true).assertIsDisplayed()
         compose.onNodeWithText("设备").performClick()
         compose.onNodeWithText("暂无可连接的设备").assertIsDisplayed()
         compose.runOnIdle{assertTrue(global.commands.isEmpty())}
@@ -102,7 +102,7 @@ class SharedRunTabsUiTest {
         compose.onAllNodesWithText("共享乙").onFirst().assertIsDisplayed()
         compose.onRoot().performKeyInput{pressKey(Key.F7)}
         compose.onNodeWithText("策略").performClick()
-        compose.onNodeWithText("37%").assertIsDisplayed()
+        compose.onNodeWithText("玩家评分 37%", substring = true).assertIsDisplayed()
         compose.onNodeWithText("停止全部").performClick()
         compose.runOnIdle{
             assertEquals(1,stopAll)

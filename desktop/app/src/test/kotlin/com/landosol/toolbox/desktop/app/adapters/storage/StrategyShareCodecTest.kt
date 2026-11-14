@@ -93,9 +93,27 @@ class StrategyShareCodecTest {
         val backups = Files.list(file.parent).use { it.filter { p -> p.fileName.toString().startsWith("strategies.damaged-") }.toList() }
         assertEquals("{broken", Files.readString(backups.single()))
         assertEquals(1, notices.size)
-        val newer = "{\"version\":2,\"library\":{}}"
+        val newer = "{\"version\":3,\"library\":{}}"
         Files.writeString(file, newer)
         rejects { DesktopStrategyStore(root, { LabyrinthStrategySettings() }, {}) }
         assertEquals(newer, Files.readString(file))
+    }
+
+    @Test fun legacySharesDefaultOnlyNewEventFieldsAndModernSharesPreserveTenGuilds() {
+        val card = LabyrinthCustomEventCatalog.cards.first()
+        val settings = LabyrinthStrategySettings(eventCustomizationEnabled = true,
+            eventChoiceOverrides = mapOf(card.runtimeName to card.choices.last().runtimeName),
+            openingRosters = LabyrinthOpeningRosterCatalog.configs.mapValues { (_, config) ->
+                config.slots.map { slot -> slot.candidates.map { it.characterId } }
+            })
+        assertEquals((1..10).toSet(), settings.openingRosters.keys)
+        val encoded = StrategyShareCodec.encode(StrategyProfile("fixture", "十公会", settings = settings))
+        assertEquals(settings, StrategyShareCodec.decode(encoded).settings)
+        val root = document(encoded)
+        val oldSettings = JsonObject(root.getValue("settings").jsonObject - setOf("eventCustomizationEnabled", "eventChoiceOverrides"))
+        val legacy = StrategyShareCodec.decode(code(JsonObject(root + ("settings" to oldSettings)).toString())).settings
+        assertFalse(legacy.eventCustomizationEnabled)
+        assertEquals(LabyrinthStrategySettings().eventChoiceOverrides, legacy.eventChoiceOverrides)
+        assertEquals(settings.openingRosters, legacy.openingRosters)
     }
 }

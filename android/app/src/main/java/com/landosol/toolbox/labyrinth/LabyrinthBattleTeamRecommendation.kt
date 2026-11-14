@@ -58,8 +58,10 @@ data class LabyrinthBattleTeamRecommendation(
         append(defenseMarkStacks)
         append(" | 目标数=")
         append(if (targetCount >= 3) "3+" else targetCount)
-        append(" | Boss安全队数=")
+        append(" | Boss计划队数=")
         append(plannedBossTeamCount)
+        append(" | Boss安全队数=")
+        append(safeBossTeamCount)
         if (excludedIncompleteCharacterIds.isNotEmpty()) {
             append(" | 严格资料排除=")
             append(excludedIncompleteCharacterIds.joinToString())
@@ -112,7 +114,11 @@ class LabyrinthBattleTeamRecommendationPlanner(
         // rather than blocking 编组 (2026-09-19, by request). The planner still never promotes a
         // 掩护者 who fails the survival line into a "safe" lead; it just says so and plays on.
         val poolHasVanguard = resolved.any { it.isEligibleBattleVanguard(context) }
-        val supplementLead = allowSupplementLead || !poolHasVanguard
+        // A pool that cannot fill one team has no second line-up to fall back on, so leading
+        // without a qualified vanguard is the only way to play it. Same boundary as the plan
+        // searcher; larger pools keep the strict refusal below.
+        val supplementLead = allowSupplementLead || !poolHasVanguard ||
+            resolved.size <= TEAM_SIZE
 
         val plan = if (requestedBossTeamCount > 1 || allowSupplementLead) {
             teamPlanSearcher.bossMultiTeamSearch(

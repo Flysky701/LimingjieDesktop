@@ -90,6 +90,35 @@ class LabyrinthOpeningRosterOverrideTest {
         assertEquals(settings.openingRosters, restored.openingRosters)
     }
 
+    @Test fun `new guilds keep their configured three picks and do not grant extra characters`() {
+        val expected = mapOf(
+            6 to listOf(listOf("1348"), listOf("1344"), listOf("1054", "1116")),
+            7 to listOf(listOf("1082"), listOf("1117"), listOf("1138")),
+            8 to listOf(listOf("1033"), listOf("1026"), listOf("1038")),
+            9 to listOf(listOf("1079"), listOf("1168"), listOf("1251")),
+            10 to listOf(listOf("1056"), listOf("1299"), listOf("1051")),
+        )
+        for ((guild, slots) in expected) {
+            val config = requireNotNull(LabyrinthOpeningRosterCatalog.configFor(guild))
+            assertEquals("guild $guild", slots, config.slots.map { slot -> slot.candidates.map { it.characterId } })
+            assertEquals(emptyList<LabyrinthOpeningCharacter>(), config.grantedCharacters)
+            val decision = LabyrinthOpeningRosterPolicy(config).choose(slots.flatten().toSet())
+            assertEquals(slots.map { it.first() },
+                (decision as LabyrinthOpeningRosterDecision.Ready).characters.map { it.characterId })
+        }
+    }
+
+    @Test fun `carmina uses official names and only its configured fallback`() {
+        val config = requireNotNull(LabyrinthOpeningRosterCatalog.configFor(6))
+        assertEquals(listOf("纺希（吉奥·矶汉拿）", "千歌（礼服）"),
+            config.slots.take(2).map { it.candidates.single().displayName })
+        val policy = LabyrinthOpeningRosterPolicy(config)
+        val fallback = policy.choose(setOf("1348", "1344", "1116", "9999")) as LabyrinthOpeningRosterDecision.Ready
+        assertEquals(listOf("1348", "1344", "1116"), fallback.characters.map { it.characterId })
+        val missing = policy.choose(setOf("1348", "1344", "9999")) as LabyrinthOpeningRosterDecision.Missing
+        assertEquals(listOf(3), missing.missingSlotNumbers)
+    }
+
     private companion object {
         const val SAREN = 3
         const val LABYRINTHISTA = 5

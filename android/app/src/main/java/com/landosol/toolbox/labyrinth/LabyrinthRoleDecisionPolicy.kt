@@ -1,10 +1,10 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.concurrent.LabyrinthFourThreadRuntime
 import kotlinx.serialization.Serializable
 import java.util.PriorityQueue
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import kotlin.math.max
 
 @Serializable
@@ -21,20 +21,14 @@ enum class LabyrinthCharacterAttribute(val label: String) {
 private val ATTRIBUTE_SLOTS = LabyrinthCharacterAttribute.values()
 private val ATTRIBUTE_SLOT_COUNT = ATTRIBUTE_SLOTS.size
 
-/**
- * Worker threads for the formation search. Not the CPU count on purpose: the game shares the
- * virtual machine, and the fork this was ported from measured 4 threads at 0.58x wall-clock and
- * 8 at 0.45x, i.e. more threads made the whole run slower, not faster.
- */
-private const val ROLE_SEARCH_THREADS = 4
+/** Default shard budget; explicitly requesting four shards still uses the same two workers. */
+private const val ROLE_SEARCH_THREADS = 2
 
 /** Below this many combinations the thread hand-off costs more than it saves. */
 private const val PARALLEL_MIN_COMBINATIONS = 512
 
-/** One process-wide pool: a run calls the search many times and must not spin threads up each time. */
-private val ROLE_SEARCH_EXECUTOR: ExecutorService = Executors.newFixedThreadPool(ROLE_SEARCH_THREADS) { runnable ->
-    Thread(runnable, "labyrinth-role-search").apply { isDaemon = true }
-}
+/** Alias, not a second pool. Helping joins permit this synchronous API on a CPU parent. */
+private val ROLE_SEARCH_EXECUTOR: ExecutorService = LabyrinthFourThreadRuntime.computeExecutor
 
 /**
  * A role can join either physical or magic cores only when its combat contribution is genuinely
@@ -1242,6 +1236,24 @@ class LabyrinthTeamOptimizer(
     val scoringConfig: LabyrinthTeamScoringConfig
         get() = scorer.config
 
+    /** Captured per search; null on the production path. Never a global/TL metrics collector. */
+    internal var searchWorkObserver: ((LabyrinthSearchWorkReport) -> Unit)? = null
+
+    internal fun prepareSearchScoring(
+        roles: Collection<LabyrinthRoleProfile>, context: LabyrinthRoleDecisionContext,
+    ) = LabyrinthPreparedSearchScorer(scorer.config, context, roles)
+
+    internal fun bestPreparedSystemFormation(
+        roster: Collection<LabyrinthRoleProfile>, context: LabyrinthRoleDecisionContext,
+        requiredCharacterId: String?, prepared: LabyrinthPreparedSearchScorer,
+    ): LabyrinthTeamEvaluation? {
+        prepared.requireCompatible(scorer.config, context)
+        return rankedFormationsInternal(
+            roster, context, requiredCharacterId, systemOnly = true, limit = 1,
+            requireFrontmostTank = false, preparedScoring = prepared,
+        ).firstOrNull()
+    }
+
     fun bestFormation(
         roster: Collection<LabyrinthRoleProfile>,
         context: LabyrinthRoleDecisionContext,
@@ -1372,7 +1384,9 @@ class LabyrinthTeamOptimizer(
         requireFrontmostTank: Boolean,
         forbidMixedDamageSystem: Boolean = false,
         requiredCharacterIds: Set<String> = emptySet(),
+        preparedScoring: LabyrinthPreparedSearchScorer? = null,
     ): List<LabyrinthTeamEvaluation> {
+        LabyrinthFourThreadRuntime.cooperate()
         val unique = roster.distinctBy(LabyrinthRoleProfile::characterId)
         if (unique.isEmpty()) return emptyList()
         if (requiredCharacterId != null && unique.none { it.characterId == requiredCharacterId }) return emptyList()
@@ -1401,7 +1415,13 @@ class LabyrinthTeamOptimizer(
         // the old stable full sort, without retaining tens of thousands of evaluations.
         val order = compareByDescending<RankedCandidate> { it.formationRisk }
             .thenBy { it.score }.thenByDescending { it.ordinal }
-        val comboCount = binomialCount(searchPool.size, size)
+        val requiredIndex = requiredCharacterId?.let { id -> searchPool.indexOfFirst { it.characterId == id } } ?: -1
+        val combinationPool = if (requiredIndex < 0) searchPool else searchPool.filterIndexed { index, _ -> index != requiredIndex }
+        val combinationSize = if (requiredIndex < 0) size else size - 1
+        val comboCount = binomialCount(combinationPool.size, combinationSize)
+        val numeric = preparedScoring ?: prepareSearchScoring(searchPool, context)
+        val observer = searchWorkObserver
+        val shardCounts = if (observer == null) null else ArrayList<LabyrinthSearchWorkCounts>()
         val filter = CombinationFilter(
             context = context,
             requiredCharacterId = requiredCharacterId,
@@ -1409,17 +1429,46 @@ class LabyrinthTeamOptimizer(
             vanguardGate = if (requireFrontmostTank) scorer.config.vanguardGate(context) else null,
             forbidMixedDamageSystem = forbidMixedDamageSystem,
             systemOnly = systemOnly,
+            numeric = numeric,
         )
         val ranked = if (searchThreads > 1 && comboCount >= PARALLEL_MIN_COMBINATIONS) {
-            searchFormationsParallel(searchPool, size, comboCount.toInt(), filter, limit, order)
+            searchFormationsParallel(searchPool, combinationPool, combinationSize, requiredIndex,
+                comboCount.toInt(), filter, limit, order, shardCounts)
         } else {
             val best = PriorityQueue(order)
+            val scratch = numeric.newScratch()
+            val counts = if (observer == null) null else LabyrinthSearchWorkCounts().also { shardCounts!!.add(it) }
+            val working = if (requiredIndex < 0) null else ArrayList<LabyrinthRoleProfile>(size)
+            val combinationIndices = if (requiredIndex < 0) null else (combinationPool.indices).toList()
             var ordinal = 0L
-            visitCombinations(searchPool, size) { team ->
-                val candidate = filter.evaluate(team, ordinal++) ?: return@visitCombinations
-                offer(best, candidate, limit)
+            if (requiredIndex < 0) {
+                visitCombinations(combinationPool, combinationSize) { team ->
+                    if ((ordinal and 31L) == 0L) LabyrinthFourThreadRuntime.cooperate()
+                    filter.offer(team, ordinal++, best, limit, scratch, counts)
+                }
+            } else {
+                visitCombinations(checkNotNull(combinationIndices), combinationSize) { indices ->
+                    if ((ordinal and 31L) == 0L) LabyrinthFourThreadRuntime.cooperate()
+                    val team = checkNotNull(working)
+                    team.clear()
+                    var inserted = false
+                    for (index in indices) {
+                        if (!inserted && index >= requiredIndex) {
+                            team.add(searchPool[requiredIndex]); inserted = true
+                        }
+                        team.add(combinationPool[index])
+                    }
+                    if (!inserted) team.add(searchPool[requiredIndex])
+                    filter.offer(team, ordinal++, best, limit, scratch, counts)
+                }
             }
             best.sortedWith(order.reversed())
+        }
+        if (observer != null) {
+            val counts = checkNotNull(shardCounts)
+            observer(LabyrinthSearchWorkReport(searchPool.size, size, requiredIndex,
+                binomialCount(searchPool.size, size), counts.sumOf { it.visited }, counts.sumOf { it.scored },
+                counts.sumOf { it.retained }, counts.map { it.visited }))
         }
         return ranked.map { scorer.evaluate(it.members, context) }
     }
@@ -1432,67 +1481,91 @@ class LabyrinthTeamOptimizer(
         private val vanguardGate: Double?,
         private val forbidMixedDamageSystem: Boolean,
         private val systemOnly: Boolean,
+        val numeric: LabyrinthPreparedSearchScorer,
     ) {
-        fun evaluate(team: List<LabyrinthRoleProfile>, ordinal: Long): RankedCandidate? {
-            if (requiredCharacterId != null && team.none { it.characterId == requiredCharacterId }) return null
-            if (requiredCharacterIds.isNotEmpty() && !requiredCharacterIds.all { id -> team.any { it.characterId == id } }) return null
-            if (vanguardGate != null && !team.hasEligibleVanguardAtActualFront(context, vanguardGate)) return null
-            val evaluation = scorer.evaluateForSearch(team, context)
+        fun offer(team: List<LabyrinthRoleProfile>, ordinal: Long, best: PriorityQueue<RankedCandidate>, limit: Int,
+            scratch: LabyrinthPreparedSearchScorer.Scratch, counts: LabyrinthSearchWorkCounts?) {
+            if (counts != null) counts.visited++
+            if (requiredCharacterId != null && team.none { it.characterId == requiredCharacterId }) return
+            if (requiredCharacterIds.isNotEmpty() && !requiredCharacterIds.all { id -> team.any { it.characterId == id } }) return
+            if (vanguardGate != null && !team.hasEligibleVanguardAtActualFront(context, vanguardGate)) return
+            if (counts != null) counts.scored++
+            numeric.score(team, scratch)
             if (forbidMixedDamageSystem &&
-                evaluation.damageType != LabyrinthTeamDamageType.PHYSICAL &&
-                evaluation.damageType != LabyrinthTeamDamageType.MAGIC
+                scratch.damageType != LabyrinthTeamDamageType.PHYSICAL &&
+                scratch.damageType != LabyrinthTeamDamageType.MAGIC
             ) {
-                return null
+                return
             }
-            val score = if (systemOnly) evaluation.systemScore else evaluation.score
-            return RankedCandidate(evaluation.members, score, ordinal,
-                labyrinthEncounterFormationRisk(team, context))
+            val score = if (systemOnly) scratch.systemScore else scratch.score
+            val formationRisk = labyrinthEncounterFormationRisk(team, context)
+            val worst = best.peek()
+            // Same lexicographic comparison as `order`, including Double.compare for signed
+            // zero/NaN. Constrained ordinals preserve the original filtered lexicographic order.
+            val improves = worst != null && isBetter(score, formationRisk, ordinal, worst)
+            if (best.size < limit || improves) {
+                if (best.size == limit) best.poll()
+                if (counts != null) counts.retained++
+                // A shard owns its reusable work list; only retained candidates need a copy.
+                best.add(RankedCandidate(team.toList(), score, ordinal, formationRisk))
+            }
         }
     }
 
-    private fun offer(best: PriorityQueue<RankedCandidate>, candidate: RankedCandidate, limit: Int) {
-        val worst = best.peek()
-        if (best.size < limit || (worst != null && requireNotNull(best.comparator()).compare(candidate, worst) > 0)) {
-            if (best.size == limit) best.poll()
-            best.add(candidate)
-        }
+    private fun isBetter(score: Double, formationRisk: Int, ordinal: Long, worst: RankedCandidate): Boolean {
+        val riskComparison = worst.formationRisk.compareTo(formationRisk)
+        if (riskComparison != 0) return riskComparison > 0
+        val scoreComparison = java.lang.Double.compare(score, worst.score)
+        if (scoreComparison != 0) return scoreComparison > 0
+        return worst.ordinal.compareTo(ordinal) > 0
     }
 
     /**
-     * Splits the [comboCount] lexicographic combinations into [searchThreads] contiguous ranges,
-     * ranks each range to its local top [limit], then merges. The merge order is (score desc,
-     * enumeration index asc), which is the serial path's order: the serial ordinal counts only
-     * teams that passed the gate, this one counts every enumerated combination, but both are
-     * strictly increasing along the same enumeration, so every tie resolves to the same team.
+     * Splits only feasible lexicographic combinations. Inserting the same required index
+     * into ordered (n-1,k-1) tuples preserves the full walk's filtered order, so compressed
+     * ordinals are order-preserving tie keys. No valid team or scoring term is removed.
      */
     private fun searchFormationsParallel(
         searchPool: List<LabyrinthRoleProfile>,
-        size: Int,
+        combinationPool: List<LabyrinthRoleProfile>,
+        combinationSize: Int,
+        requiredIndex: Int,
         comboCount: Int,
         filter: CombinationFilter,
         limit: Int,
         order: Comparator<RankedCandidate>,
+        shardCounts: MutableList<LabyrinthSearchWorkCounts>?,
     ): List<RankedCandidate> {
-        // One flat index buffer for every combination (C(24,5) x 5 = 212,520 ints, ~850 KB)
-        // instead of tens of thousands of small arrays, which would be a single-threaded
-        // allocation storm that eats the parallel gain.
-        val flat = IntArray(comboCount * size)
-        fillCombinationIndices(searchPool.size, size, flat)
+        // Reuse the existing bounded shape-only cache. No role identity is retained by it.
+        val flat = LabyrinthCombinationIndexCache.shared.get(combinationPool.size, combinationSize, comboCount)
         val chunkCount = minOf(searchThreads, comboCount)
         val chunkSize = (comboCount + chunkCount - 1) / chunkCount
         val tasks = (0 until chunkCount).map { chunk ->
+            val counts = shardCounts?.let { LabyrinthSearchWorkCounts().also(it::add) }
             Callable {
                 val best = PriorityQueue(order)
-                val team = ArrayList<LabyrinthRoleProfile>(size)
+                val team = ArrayList<LabyrinthRoleProfile>(combinationSize + if (requiredIndex >= 0) 1 else 0)
+                val scratch = filter.numeric.newScratch()
                 val from = chunk * chunkSize
                 val until = minOf(comboCount, from + chunkSize)
                 for (index in from until until) {
+                    if ((index and 31) == 0) LabyrinthFourThreadRuntime.cooperate()
                     team.clear()
-                    val base = index * size
-                    for (slot in 0 until size) team.add(searchPool[flat[base + slot]])
-                    val candidate = filter.evaluate(team, index.toLong()) ?: continue
-                    // The candidate keeps evaluation.members, a fresh list, so reusing `team` is safe.
-                    offer(best, candidate, limit)
+                    val base = index * combinationSize
+                    if (requiredIndex < 0) {
+                        for (slot in 0 until combinationSize) team.add(combinationPool[flat[base + slot]])
+                    } else {
+                        var inserted = false
+                        for (slot in 0 until combinationSize) {
+                            val memberIndex = flat[base + slot]
+                            if (!inserted && memberIndex >= requiredIndex) {
+                                team.add(searchPool[requiredIndex]); inserted = true
+                            }
+                            team.add(combinationPool[memberIndex])
+                        }
+                        if (!inserted) team.add(searchPool[requiredIndex])
+                    }
+                    filter.offer(team, index.toLong(), best, limit, scratch, counts)
                 }
                 best.toList()
             }
@@ -1510,26 +1583,6 @@ class LabyrinthTeamOptimizer(
         var result = 1L
         for (index in 0 until k) result = result * (n - index) / (index + 1)
         return result
-    }
-
-    /** Writes every k-combination of 0 until n in the same lexicographic order as [visitCombinations]. */
-    private fun fillCombinationIndices(n: Int, k: Int, target: IntArray) {
-        val working = IntArray(k)
-        var position = 0
-        fun visit(start: Int, depth: Int) {
-            if (depth == k) {
-                val base = position * k
-                for (slot in 0 until k) target[base + slot] = working[slot]
-                position++
-                return
-            }
-            val remaining = k - depth
-            for (index in start..n - remaining) {
-                working[depth] = index
-                visit(index + 1, depth + 1)
-            }
-        }
-        visit(0, 0)
     }
 
     /**
@@ -1589,6 +1642,7 @@ class LabyrinthTeamOptimizer(
     )
 
     private fun individualSearchPriority(role: LabyrinthRoleProfile, context: LabyrinthRoleDecisionContext): Double {
+        LabyrinthFourThreadRuntime.checkpoint()
         val targetCount = context.targetCount
         val physical = when (targetCount.coerceAtMost(3)) {
             1 -> role.physicalDamage1Target
@@ -1767,10 +1821,16 @@ class LabyrinthRoleChoicePolicy(
             )
         }
         val acquired = scoringAcquiredIds.map(profiles::getValue)
+        // Immutable per-invocation role facts, shared by sequential sub-searches; shard scratch
+        // remains local to each search task. No previous round, score cache, or UI evidence lives here.
+        val preparedScoring = optimizer.prepareSearchScoring(requiredIds.map(profiles::getValue), context)
+        // Context, optimizer and config stay fixed only within this invocation. Share repeated
+        // sub-searches (including the candidates' common preceding teams), never across calls.
+        val systemFormationCache = mutableMapOf<SystemFormationKey, LabyrinthTeamEvaluation?>()
         val rankings = candidateIds.map { candidateId ->
             val candidate = profiles.getValue(candidateId)
             val pool = acquired + candidate
-            val placement = requireNotNull(bestCandidatePlacementPlan(pool, candidate, context))
+            val placement = requireNotNull(bestCandidatePlacementPlan(pool, candidate, context, systemFormationCache, preparedScoring))
             val playerScore = candidate.effectiveUserScore
             val playerWeight = optimizer.scoringConfig.playerWeight
             LabyrinthRoleCandidateRanking(
@@ -1822,13 +1882,15 @@ class LabyrinthRoleChoicePolicy(
         pool: List<LabyrinthRoleProfile>,
         candidate: LabyrinthRoleProfile,
         context: LabyrinthRoleDecisionContext,
+        systemFormationCache: MutableMap<SystemFormationKey, LabyrinthTeamEvaluation?>,
+        preparedScoring: LabyrinthPreparedSearchScorer,
     ): CandidatePlacementPlan? {
         val plans = buildList {
             config.effectiveCandidateTeamWeights().indices.forEach { candidateLayer ->
                 if (pool.distinctBy(LabyrinthRoleProfile::characterId).size - 1 < candidateLayer * TEAM_SIZE) {
                     return@forEach
                 }
-                candidatePlacementPlan(pool, candidate, context, candidateLayer)?.let(::add)
+                candidatePlacementPlan(pool, candidate, context, candidateLayer, systemFormationCache, preparedScoring)?.let(::add)
             }
         }
         return plans.maxWithOrNull(
@@ -1842,6 +1904,8 @@ class LabyrinthRoleChoicePolicy(
         candidate: LabyrinthRoleProfile,
         context: LabyrinthRoleDecisionContext,
         candidateLayer: Int,
+        systemFormationCache: MutableMap<SystemFormationKey, LabyrinthTeamEvaluation?>,
+        preparedScoring: LabyrinthPreparedSearchScorer,
     ): CandidatePlacementPlan? {
         var remaining = pool.distinctBy(LabyrinthRoleProfile::characterId)
         val teams = mutableListOf<LabyrinthTeamEvaluation>()
@@ -1865,7 +1929,16 @@ class LabyrinthRoleChoicePolicy(
                     requiredId = null
                 }
             }
-            val team = optimizer.bestSystemFormation(teamPool, context, requiredId) ?: return null
+            // Snapshot the ordered pool, not sorted ids: stable enumeration breaks score ties.
+            val searchKey = SystemFormationKey(teamPool.toList(), requiredId)
+            val team = (if (systemFormationCache.containsKey(searchKey)) {
+                systemFormationCache[searchKey]
+            } else {
+                optimizer.bestPreparedSystemFormation(teamPool, context, requiredId, preparedScoring).also {
+                    // containsKey above also reuses a cached null (no valid formation).
+                    systemFormationCache[searchKey] = it
+                }
+            }) ?: return null
             teams += team
             val used = team.members.map(LabyrinthRoleProfile::characterId).toSet()
             remaining = remaining.filterNot { it.characterId in used }
@@ -1878,6 +1951,11 @@ class LabyrinthRoleChoicePolicy(
         val systemScore = teams.indices.sumOf { teams[it].systemScore * weights[it] } / weightSum
         return CandidatePlacementPlan(candidateLayer, teams, candidateTeam, systemScore)
     }
+
+    private data class SystemFormationKey(
+        val orderedPool: List<LabyrinthRoleProfile>,
+        val requiredId: String?,
+    )
 
     private data class CandidatePlacementPlan(
         val candidateLayer: Int,
@@ -1988,8 +2066,15 @@ class LabyrinthTeamPlanSearcher(
             //
             // Deliberately narrow: a pool that *does* hold a qualified vanguard but still cannot
             // form a team has a different problem (unknown 站位, too few roles), and its specific
-            // reason below is what tells the user which. Only a genuinely tankless pool falls back.
-            ?: return if (hasAnyEligibleVanguard(roster, context)) {
+            // reason below is what tells the user which. But a pool that cannot even fill one team
+            // has no alternative line-up at all: the frontmost role is fixed by position data and
+            // cannot be swapped, so the gate can never be satisfied and the run would idle on this
+            // page until the stall watchdog ends it. Those two cases fall back; only a pool large
+            // enough to have chosen a different front keeps the refusal and its diagnosis.
+            ?: return if (
+                roster.distinctBy(LabyrinthRoleProfile::characterId).size > TEAM_SIZE &&
+                hasAnyEligibleVanguard(roster, context)
+            ) {
                 LabyrinthTeamPlan(
                     LabyrinthTeamPlanKind.INSUFFICIENT_ROLES,
                     emptyList(),

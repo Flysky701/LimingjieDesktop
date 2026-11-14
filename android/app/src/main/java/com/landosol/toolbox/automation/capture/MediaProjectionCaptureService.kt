@@ -319,8 +319,12 @@ class MediaProjectionCaptureService : Service() {
     }
 
     private fun onImageAvailable(source: ImageReader) {
+        CaptureTelemetry.callback()
+        val capturedAtElapsed = SystemClock.elapsedRealtime()
+        var conversionMillis: Long? = null
         val now = System.currentTimeMillis()
         var bitmap: Bitmap? = null
+        var argbPixels: IntArray? = null
         var conversionError: Throwable? = null
         // Orientation is judged only for frames the interval would convert, so a rotated display
         // costs one metrics read per FRAME_INTERVAL_MILLIS rather than one per mirrored frame.
@@ -339,17 +343,37 @@ class MediaProjectionCaptureService : Service() {
         }
         synchronized(captureLock) {
             val image = runCatching { source.acquireLatestImage() }.getOrNull() ?: return
+            CaptureTelemetry.acquired()
             if (rotation == null) {
+                CaptureTelemetry.intervalDropped()
                 runCatching { image.close() }
             } else if (!rotation.deliversFrame) {
+                CaptureTelemetry.orientationDropped()
                 // A rotated mirror is letterboxed portrait content; never hand it to a recognizer.
                 lastFrameAt = now
                 runCatching { image.close() }
             } else {
                 lastFrameAt = now
                 try {
-                    bitmap = imageToBitmap(image)
+                    val conversionStarted = System.nanoTime()
+                    val converted = imageToBitmap(image)
+                    try {
+                        if (CaptureFrameBus.currentWantsArgbSnapshot()) {
+                            // getPixels matches the legacy adapter, including Android's alpha /
+                            // premultiplication round trip. Never publish reusable RGBA scratch.
+                            val snapshot = IntArray(converted.width * converted.height)
+                            converted.getPixels(snapshot, 0, converted.width, 0, 0,
+                                converted.width, converted.height)
+                            argbPixels = snapshot
+                        }
+                        bitmap = converted
+                    } catch (error: Throwable) {
+                        converted.recycle()
+                        throw error
+                    }
+                    conversionMillis = (System.nanoTime() - conversionStarted) / 1_000_000
                 } catch (error: Throwable) {
+                    CaptureTelemetry.conversionError()
                     conversionError = error
                 } finally {
                     // Close the acquired image before another thread can close/rebuild the reader.
@@ -357,7 +381,13 @@ class MediaProjectionCaptureService : Service() {
                 }
             }
         }
-        bitmap?.let { CaptureFrameBus.dispatch(CapturedFrame(it, now)) }
+        bitmap?.let {
+            CaptureFrameBus.dispatch(CapturedFrame(it, now,
+                frameSequence = CaptureTelemetry.converted(),
+                captureConvertMillis = conversionMillis,
+                capturedAtElapsedRealtimeMillis = capturedAtElapsed,
+                argbPixels = argbPixels))
+        }
         conversionError?.let { error ->
             stopCapture("读取屏幕帧失败：${error.message ?: "未知错误"}")
         }

@@ -126,10 +126,11 @@ class LabyrinthBattleTeamRecommendationTest {
         assertEquals(2, decision.recommendation.members.size)
         assertEquals(null, tank.physicalDamagePotential)
         val unknownPosition = profiles + ("rear" to rear.copy(position = null))
-        val blocked = recommendationPlanner(unknownPosition).initialRecommendation(unknownPosition.keys,
-            LabyrinthRoleDecisionContext(defenseMarkStacks = 4)) as LabyrinthBattleTeamRecommendationResult.Unavailable
-        assertTrue(blocked.reason.contains("一号位"))
-        assertTrue(blocked.reason.contains("站位"))
+        val fallback = recommendationPlanner(unknownPosition).initialRecommendation(unknownPosition.keys,
+            LabyrinthRoleDecisionContext(defenseMarkStacks = 4)) as LabyrinthBattleTeamRecommendationResult.Ready
+        assertEquals(setOf("T", "rear"), fallback.recommendation.members.map { it.characterId }.toSet())
+        assertEquals(0, fallback.recommendation.safeBossTeamCount)
+        assertEquals(null, unknownPosition.getValue("rear").position)
     }
 
     @Test fun `one missing profile does not block a known five member T team`() {

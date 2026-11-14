@@ -10,6 +10,8 @@ data class LabyrinthRelicTemplate(
     val attributeBonus: String,
     val effect: String,
     val image: PixelImage,
+    /** Workbook rarity (1-4). 0 means the pack entry carried no rarity. */
+    val rarity: Int = 0,
 )
 
 data class LabyrinthRelicMatch(
@@ -23,6 +25,8 @@ data class LabyrinthRelicMatch(
     val screenRect: EntryPixelRect,
     val selectionButtonRect: EntryPixelRect = screenRect,
     val iconRect: EntryPixelRect,
+    /** Rarity of the matched template; 0 when unrecognized. */
+    val rarity: Int = 0,
     val suspectedRelicId: String? = relicId,
     val suspectedDisplayName: String? = displayName,
     val suspectedAttribute: String? = attribute,
@@ -31,6 +35,8 @@ data class LabyrinthRelicMatch(
     val currentMarkStacks: Int? = null,
     val currentMarkStacksEvidenceText: String? = null,
     val currentMarkStacksEvidenceId: Long? = null,
+    val currentMarkStacksConfirmations: Int = 0,
+    val currentMarkStacksCapturedAtMillis: Long = Long.MIN_VALUE,
 ) {
     val recognized: Boolean get() = relicId != null
 }
@@ -50,6 +56,7 @@ data class LabyrinthNodeRelicMarkStack(
     val evidenceText: String? = null,
     /** Repeated cached OCR reads share an ID and must not count as new confirmations. */
     val evidenceId: Long? = null,
+    val capturedAtMillis: Long = Long.MIN_VALUE,
 ) {
     val recognized: Boolean get() = !attribute.isNullOrBlank() && stacks != null
 }
@@ -137,6 +144,7 @@ class LabyrinthRelicRecognizer(
             attribute = template?.attribute,
             attributeBonus = template?.attributeBonus,
             effect = template?.effect,
+            rarity = template?.rarity ?: 0,
             confidence = score,
             screenRect = screenRect,
             selectionButtonRect = selectionButtonRect,

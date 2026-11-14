@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">黎明界助手</string>
-    <string name="accessibility_service_name">黎明界助手操作服务</string>
+    <string name="app_name">黎明界助手（魔改）</string>
+    <string name="accessibility_service_name">黎明界助手（魔改）操作服务</string>
     <string name="accessibility_service_description">仅在用户启动自动化会话后，为公主连结执行点击、滑动和返回操作。支持 Dry Run，停止会话后不会继续操作。</string>
     <string name="capture_notification_channel">屏幕捕获</string>
     <string name="capture_notification_title">自动化屏幕捕获正在运行</string>

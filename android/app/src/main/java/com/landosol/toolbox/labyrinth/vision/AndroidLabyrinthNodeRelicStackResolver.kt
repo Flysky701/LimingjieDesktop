@@ -19,15 +19,22 @@ import kotlin.math.roundToInt
 class AndroidLabyrinthNodeRelicStackResolver(
     submitTextRead: (Bitmap, (String?) -> Unit) -> Unit = AndroidChineseRoleNameOcr::readAsync,
 ) {
-    private val ocr = AndroidRelicRoiOcr(submitTextRead)
+    private val ocr = AndroidRelicRoiOcr(submitTextRead, maximumAttempts = 3)
     private val templateCache = mutableMapOf<String, Pair<Long, DigitMatchResult?>>()
+    private var evidenceVersion = Long.MIN_VALUE
     private val slotMarks = mutableMapOf<String, String>()
 
     @Synchronized
     fun resolve(
         bitmap: Bitmap,
         result: LabyrinthEntryFrameResult,
+        capturedAtMillis: Long = Long.MIN_VALUE,
+        version: Long = 0,
+        priorityMarks: Set<String> = emptySet(),
     ): LabyrinthEntryFrameResult {
+        if (evidenceVersion != version) {
+            ocr.clear(); templateCache.clear(); slotMarks.clear(); evidenceVersion = version
+        }
         if (result.observation.state != LabyrinthEntryPageState.NODE_SELECTION) {
             ocr.clear()
             templateCache.clear()
@@ -46,6 +53,7 @@ class AndroidLabyrinthNodeRelicStackResolver(
             if (panelSupport < MIN_PANEL_SUPPORT) return@mapIndexedNotNull null
 
             val mark = classifyIcon(bitmap, iconRect) ?: return@mapIndexedNotNull null
+            if (priorityMarks.isNotEmpty() && mark.label !in priorityMarks) return@mapIndexedNotNull null
             val ocrDigitRect = ReferenceFitMapper.map(
                 frameWidth = bitmap.width,
                 frameHeight = bitmap.height,
@@ -54,7 +62,7 @@ class AndroidLabyrinthNodeRelicStackResolver(
             ) ?: return@mapIndexedNotNull null
             val slotId = "node_relic_mark_${index + 1}"
             if (slotMarks.put(slotId, mark.label) != mark.label) ocr.clear()
-            val read = ocr.read(bitmap, slotId, ocrDigitRect, OCR_SCALE)
+            val read = ocr.read(bitmap, slotId, ocrDigitRect, OCR_SCALE, capturedAtMillis)
             val text = read?.text
             val parsedOcr = text?.let(::parseStacks)
             val templateMatch = run {
@@ -80,6 +88,7 @@ class AndroidLabyrinthNodeRelicStackResolver(
                 stacks = resolvedStack,
                 iconConfidence = mark.confidence,
                 evidenceId = read?.id,
+                capturedAtMillis = read?.capturedAtMillis ?: Long.MIN_VALUE,
                 evidenceText = when {
                     parsedOcr != null && templateStack != null && resolvedStack == null ->
                         "数字冲突：OCR=$parsedOcr，模板=$templateStack"

@@ -121,6 +121,15 @@ interface LabyrinthRunStateDao {
 
     @Query("DELETE FROM labyrinth_run_relics WHERE run_key = :runKey")
     suspend fun deleteRelics(runKey: String)
+
+    @Query("SELECT * FROM labyrinth_run_relic_stacks WHERE run_key = :runKey")
+    suspend fun getRelicStacks(runKey: String): List<LabyrinthRunRelicStackEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRelicStacks(stacks: List<LabyrinthRunRelicStackEntity>)
+
+    @Query("DELETE FROM labyrinth_run_relic_stacks WHERE run_key = :runKey")
+    suspend fun deleteRelicStacks(runKey: String)
 }
 
 @Dao

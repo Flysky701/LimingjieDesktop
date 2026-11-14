@@ -6,10 +6,12 @@ import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.automation.overlay.AutomationOverlayPresentation
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSessionState
 import com.landosol.toolbox.labyrinth.LabyrinthEventChoiceDecision
+import com.landosol.toolbox.labyrinth.LabyrinthRoutePreviewCache
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import com.landosol.toolbox.automation.capture.CaptureTelemetry
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.InetAddress
@@ -34,6 +36,8 @@ import org.json.JSONObject
  * http://127.0.0.1:8765/ directly. For a browser on the host PC, expose it with
  * `adb forward tcp:8765 tcp:8765` first.
  */
+internal const val LABYRINTH_DEBUG_HISTORY_LIMIT = 600
+
 class LabyrinthDebugDashboardServer(
     private val port: Int = DEFAULT_PORT,
     /** Directory for the optional per-frame archive; null disables the feature entirely. */
@@ -73,6 +77,28 @@ class LabyrinthDebugDashboardServer(
     private var latestJpegMillis = Long.MIN_VALUE
     @Volatile
     private var lastJpegAt = Long.MIN_VALUE
+    private val fastHistoryLock = Any()
+    private val recentFastStates = ArrayDeque<ByteArray>()
+    private val latestFast = AtomicReference("{\"available\":false}".toByteArray(Charsets.UTF_8))
+
+    fun publishFast(
+        observation: com.landosol.toolbox.labyrinth.vision.LabyrinthFastFrameObservation,
+        state: LabyrinthEntryRecognitionSessionState,
+    ) {
+        val json = JSONObject(labyrinthFastDiagnosticPayload(
+            observation, state, System.currentTimeMillis(), AppVersion.name, AppVersion.code,
+        )).toString().toByteArray(Charsets.UTF_8)
+        latestFast.set(json)
+        synchronized(fastHistoryLock) {
+            recentFastStates.addLast(json)
+            while (recentFastStates.size > MAX_STATE_HISTORY_ENTRIES) recentFastStates.removeFirst()
+        }
+    }
+
+    /** HTTP-side merge: detailed timestamp/boxes stay untouched; fast evidence is nested separately. */
+    private fun stateResponse(): ByteArray = JSONObject(String(latest.get().json, Charsets.UTF_8)).apply {
+        put("fastObservation", JSONObject(String(latestFast.get(), Charsets.UTF_8)))
+    }.toString().toByteArray(Charsets.UTF_8)
 
     @Synchronized fun start() {
         if (!running.compareAndSet(false, true)) return
@@ -227,7 +253,13 @@ class LabyrinthDebugDashboardServer(
             val path = requestLine.split(' ').getOrNull(1)?.substringBefore('?') ?: "/"
             when (path) {
                 "/", "/index.html" -> respond(output, "text/html; charset=utf-8", DASHBOARD_HTML)
-                "/api/state" -> respond(output, "application/json; charset=utf-8", latest.get().json)
+                "/api/state" -> respond(output, "application/json; charset=utf-8", stateResponse())
+                "/api/fast-state" -> respond(output, "application/json; charset=utf-8", latestFast.get())
+                "/api/route-preview" -> respond(
+                    output,
+                    "application/json; charset=utf-8",
+                    LabyrinthRoutePreviewCache.payload(),
+                )
                 "/api/archive/on" -> {
                     setFrameArchiveEnabled(frameArchiveDirectory != null)
                     respond(output, "application/json; charset=utf-8", archiveStatusJson())
@@ -329,8 +361,9 @@ class LabyrinthDebugDashboardServer(
                     appendLine("服务地址: http://$IPV4_LOOPBACK:${boundPort ?: port}/")
                     appendLine("environment.json: 导出时的 Android 版本、设备、显示器、DPI、权限与运行状态")
                     appendLine("runtime/history.ndjson: 每 10 秒后台采样的进程 CPU/内存与捕获状态，最多保留约 1 小时；不包含电脑端负载")
-                    appendLine("state/latest.json: 下载瞬间的结构化识别状态")
-                    appendLine("state/history.ndjson: 最近 ${history.size} 条结构化状态历史")
+                    appendLine("state/latest.json: 最近已发布的详细识别快照；不等于最新快观察")
+                    appendLine("state/history.ndjson: 最近 ${history.size} 条详细识别状态历史")
+                    appendLine("fast/latest.json 与 fast/history.ndjson: 独立快观察/控制状态，最多${LABYRINTH_DEBUG_HISTORY_LIMIT}条；先核对两个流的frameSequence与timestamp，不能拿快页面给旧详细框背书；未启用时available=false")
                     appendLine(
                         "frame/latest.jpg: 最近一帧截图（若已有）；对应 frameVersion=" +
                             "${snapshot.frameVersion}，拍摄于 ${snapshot.jpegMillis}。" +
@@ -343,6 +376,11 @@ class LabyrinthDebugDashboardServer(
                 }.toByteArray(Charsets.UTF_8),
             )
             entry("state/latest.json", snapshot.json)
+            entry("fast/latest.json", latestFast.get())
+            val fastHistory = synchronized(fastHistoryLock) { recentFastStates.toList() }
+            entry("fast/history.ndjson", fastHistory.fold(ByteArrayOutputStream()) { out, json ->
+                out.apply { write(json); write(10) }
+            }.toByteArray())
             runtimeDiagnostics?.let { diagnostics ->
                 entry("environment.json", diagnostics.environmentJson())
                 entry("runtime/history.ndjson", diagnostics.historyNdjson())
@@ -387,6 +425,68 @@ class LabyrinthDebugDashboardServer(
         put("timestamp", nowMillis)
         put("elapsedRealtimeMillis", android.os.SystemClock.elapsedRealtime())
         put("frameVersion", frameVersion)
+        put("historyLimit", LABYRINTH_DEBUG_HISTORY_LIMIT)
+        val capture = CaptureTelemetry.snapshot()
+        put("captureCounters", JSONObject().apply {
+            put("scope", "process_lifetime")
+            put("callbacks", capture.callbacks)
+            put("acquiredImages", capture.acquiredImages)
+            put("convertedFrames", capture.convertedFrames)
+            put("captureIntervalDropped", capture.intervalDropped)
+            put("orientationDropped", capture.orientationDropped)
+            put("noConsumerDropped", capture.noConsumerDropped)
+            put("conversionErrors", capture.conversionErrors)
+        })
+        val roiOcr = com.landosol.toolbox.labyrinth.vision.RelicRoiOcrTelemetry.snapshot()
+        put("relicRoiOcr", JSONObject().apply {
+            put("scope", "process_lifetime")
+            put("durationScope", "roi_prepare_to_engine_callback_not_business_ack")
+            put("requests", roiOcr.requests)
+            put("completions", roiOcr.completions)
+            put("inFlight", roiOcr.inFlight)
+            put("last", roiOcr.last?.let { last -> JSONObject().apply {
+                put("id", last.id)
+                put("slot", last.slot)
+                put("capturedAtMillis", last.capturedAtMillis)
+                put("durationMillis", last.durationMillis)
+                put("textLength", last.textLength ?: JSONObject.NULL)
+            } } ?: JSONObject.NULL)
+        })
+        put("balancedDiagnostics", state.balancedDiagnostics?.let { JSONObject(labyrinthBalancedDiagnosticPayload(it)) } ?: JSONObject.NULL)
+        put("frameTiming", state.frameTiming?.let { timing -> JSONObject().apply {
+            put("frameSequence", timing.frameSequence)
+            put("captureConvertMillis", timing.captureConvertMillis ?: JSONObject.NULL)
+            put("captureToWorkerMillis", timing.captureToWorkerMillis ?: JSONObject.NULL)
+            put("queueWaitMillis", timing.queueWaitMillis ?: JSONObject.NULL)
+            put("visionMillis", timing.visionMillis)
+            put("sessionHandlingMillis", timing.sessionHandlingMillis)
+            put("responseIntervalMillis", timing.responseIntervalMillis)
+            put("queueSeen", timing.queue.seen)
+            put("queueAccepted", timing.queue.accepted)
+            put("queueIntervalDropped", timing.queue.intervalDropped)
+            put("queueInvalidDropped", timing.queue.invalidDropped)
+            put("queueReplaced", timing.queue.replaced)
+            put("nodeScanHoldReason", timing.nodeScanHoldReason ?: JSONObject.NULL)
+            put("nodeScanQueryTimestampMillis", timing.nodeScanQueryTimestampMillis ?: JSONObject.NULL)
+            put("nodeScanTimeBasis", if (timing.nodeScanQueryTimestampMillis != null) "captured_frame_timestamp" else JSONObject.NULL)
+            put("discardedRoleDecisionResults", timing.discardedRoleDecisionResults)
+            put("roleRound", timing.roleRound?.let { r -> JSONObject().apply {
+                put("generation", r.generation); put("phase", r.phase)
+                put("selectedId", r.selectedId ?: JSONObject.NULL); put("token", r.token ?: JSONObject.NULL)
+                put("dispatchedAtMillis", r.dispatchedAtMillis ?: JSONObject.NULL)
+                put("feedbackAfterMillis", r.feedbackAfterMillis ?: JSONObject.NULL)
+                put("newRoundEvidenceFrames", r.newRoundEvidenceFrames)
+            } } ?: JSONObject.NULL)
+            put("bossTabAction", timing.bossTabAction?.let { r -> JSONObject().apply {
+                put("sourceIndex", r.sourceIndex); put("expectedIndex", r.expectedIndex)
+                put("phase", r.phase); put("active", r.active)
+                put("dispatchedAtMillis", r.dispatchedAtMillis)
+                put("feedbackAfterMillis", r.feedbackAfterMillis ?: JSONObject.NULL)
+                put("ackFrames", r.ackFrames); put("lastEvidenceAtMillis", r.lastEvidenceAtMillis ?: JSONObject.NULL)
+            } } ?: JSONObject.NULL)
+        } } ?: JSONObject.NULL)
+        // 路线预览的缓存键：包含当前节点，推进到下一格才会让页面重新取一次。
+        put("routePreviewKey", LabyrinthRoutePreviewCache.key() ?: JSONObject.NULL)
         // The stored JPEG is refreshed at most every JPEG_REFRESH_INTERVAL_MILLIS, so several
         // consecutive rows share one picture and only the first of them was actually taken from
         // it. Say when the picture was taken, otherwise a reader pairs these scores with an image
@@ -761,7 +861,7 @@ class LabyrinthDebugDashboardServer(
         const val FRAME_ARCHIVE_JPEG_QUALITY = 60
         const val SOCKET_TIMEOUT_MILLIS = 3_000
         const val MAX_HEADER_LINE_BYTES = 8_192
-        const val MAX_STATE_HISTORY_ENTRIES = 600
+        const val MAX_STATE_HISTORY_ENTRIES = LABYRINTH_DEBUG_HISTORY_LIMIT
         const val LOGCAT_LINE_LIMIT = 2_000
         const val MAX_LOGCAT_BYTES = 2 * 1024 * 1024
 
@@ -778,7 +878,7 @@ class LabyrinthDebugDashboardServer(
                 .pill{padding:5px 9px;border:1px solid #34415f;border-radius:999px;font-size:13px}.grid{display:grid;grid-template-columns:minmax(620px,1.6fr) minmax(360px,1fr);gap:14px;padding:14px}
                 a.action{color:#e8edf8;text-decoration:none;background:#1b2948;border-color:#4f6fa8}a.action:hover{background:#263a63}
                 .card{background:#121a2f;border:1px solid #27314d;border-radius:12px;padding:12px;overflow:hidden}.frameWrap{position:relative;width:100%;line-height:0}.frameWrap img{width:100%;height:auto;display:block;border-radius:8px}.box{position:absolute;border:2px solid #57d3ff;pointer-events:none}.box.sel{border-color:#ffd166}.box.bad{border-color:#ff6b6b}.box span{position:absolute;left:0;top:0;transform:translateY(-100%);background:#07101dcc;color:#fff;font:12px/1.25 monospace;padding:2px 4px;white-space:nowrap;max-width:360px;overflow:hidden;text-overflow:ellipsis}
-                h2{font-size:15px;margin:0 0 8px}.kv{display:grid;grid-template-columns:120px 1fr;gap:4px 9px;font-size:13px}.kv b{color:#9eb0d3;font-weight:500}pre{white-space:pre-wrap;word-break:break-word;margin:0;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;color:#d7e2ff}.stack{display:grid;gap:14px}.json{max-height:380px;overflow:auto}.muted{color:#8292b5;font-size:12px}@media(max-width:1050px){.grid{grid-template-columns:1fr}}
+                h2{font-size:15px;margin:0 0 8px}.kv{display:grid;grid-template-columns:120px 1fr;gap:4px 9px;font-size:13px}.kv b{color:#9eb0d3;font-weight:500}pre{white-space:pre-wrap;word-break:break-word;margin:0;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;color:#d7e2ff}.stack{display:grid;gap:14px}.json{max-height:380px;overflow:auto}.muted{color:#8292b5;font-size:12px}.routeMeta{font-size:12px;color:#9eb0d3;margin-bottom:2px}.floors{display:grid;gap:2px}.floorTitle{font-size:12px;color:#8292b5;margin:7px 0 3px}.nodes{display:grid;gap:4px}.node{border:1px solid #27314d;border-radius:4px;padding:2px 1px;text-align:center;font-size:11px;line-height:1.35;color:#d7e2ff}.node .col{font-size:10px;color:#8292b5}.node.spec{border-color:#4f6fa8;background:#1b2948}.node.current{outline:1px solid #ffd166}@media(max-width:1050px){.grid{grid-template-columns:1fr}}
               </style>
             </head>
             <body>
@@ -787,6 +887,7 @@ class LabyrinthDebugDashboardServer(
                 <section class="card"><div class="frameWrap" id="frameWrap"><img id="frame" alt="latest frame"></div></section>
                 <section class="stack">
                   <div class="card"><h2>会话</h2><div class="kv" id="summary"></div></div>
+                  <div class="card"><h2>路线预览 · 每层节点</h2><div class="routeMeta" id="routeMeta">等待已验证路线</div><div class="floors" id="routeFloors"></div><div class="muted" id="routeNote"></div></div>
                   <div class="card"><h2>完整分析</h2><pre id="detail"></pre></div>
                   <div class="card"><h2>结构化结果</h2><pre class="json" id="json"></pre></div>
                 </section>
@@ -798,11 +899,27 @@ class LabyrinthDebugDashboardServer(
                 function setTextStable(el,value){const next=String(value??'');if(el.textContent===next||hasSelectionInside(el))return;el.textContent=next}
                 function setHtmlStable(el,value){const next=String(value??'');if(el.innerHTML===next||hasSelectionInside(el))return;el.innerHTML=next}
                 function drawBoxes(boxes){const wrap=document.getElementById('frameWrap');wrap.querySelectorAll('.box').forEach(x=>x.remove());for(const b of boxes||[]){const d=document.createElement('div');d.className='box '+(b.selected?'sel':(!b.recognized?'bad':''));d.style.left=(b.left*100)+'%';d.style.top=(b.top*100)+'%';d.style.width=(b.width*100)+'%';d.style.height=(b.height*100)+'%';const s=document.createElement('span');s.textContent=b.label;d.appendChild(s);wrap.appendChild(d)}}
+                let routeKey=null;
+                async function refreshRoute(d){
+                  const key=d.routePreviewKey??null;if(key===routeKey)return;routeKey=key;
+                  const meta=document.getElementById('routeMeta'),floors=document.getElementById('routeFloors'),note=document.getElementById('routeNote');
+                  if(key===null){setTextStable(meta,'等待已验证路线');setHtmlStable(floors,'');setTextStable(note,'');return}
+                  try{const r=await fetch('/api/route-preview',{cache:'no-store'});const p=await r.json();if(routeKey!==key)return;
+                    if(!p){setTextStable(meta,'尚无路线预览');setHtmlStable(floors,'');setTextStable(note,'');return}
+                    setTextStable(meta,'开局 '+p.enterId+' · '+(p.modeLabel||p.mode)+' · 难度 '+p.difficulty+' · '+(p.topologyVerified?'校验通过':'校验异常'));
+                    let html='';
+                    for(const f of p.floors||[]){html+='<div class="floorTitle">第 '+f.area+' 区域 · '+f.columnCount+' 列</div><div class="nodes" style="grid-template-columns:repeat('+f.columnCount+',minmax(0,1fr))">';
+                      for(const n of f.nodes){const cls='node'+(n.specified?' spec':'')+((p.currentBlockId===n.blockId)?' current':'');html+='<div class="'+cls+'"><div class="col">'+n.column+'</div><div>'+esc(n.label)+'</div></div>'}
+                      html+='</div>'}
+                    if((p.issues||[]).length)html+='<div class="muted" style="margin-top:6px">'+p.issues.map(esc).join('；')+'</div>';
+                    setHtmlStable(floors,html);setTextStable(note,p.note||'');
+                  }catch(e){routeKey=null;setTextStable(meta,'路线预览读取失败，等待重试')}
+                }
                 let archiveOn=false;
                 async function refreshArchive(){try{const r=await fetch('/api/archive',{cache:'no-store'});const a=await r.json();archiveOn=!!a.enabled;const t=document.getElementById('archiveToggle');t.textContent=a.supported?('逐帧归档：'+(a.enabled?'开('+a.frames+')':'关')):'逐帧归档：不可用';}catch(e){}}
                 document.getElementById('archiveToggle').addEventListener('click',async ev=>{ev.preventDefault();try{await fetch(archiveOn?'/api/archive/off':'/api/archive/on',{cache:'no-store'});}catch(e){}refreshArchive();});
                 refreshArchive();setInterval(refreshArchive,3000);
-                async function tick(){try{const r=await fetch('/api/state',{cache:'no-store'});const d=await r.json();setTextStable(document.getElementById('status'),d.status||'-');setTextStable(document.getElementById('page'),(d.page||'-')+' '+Number(d.pageConfidence||0).toFixed(3));setTextStable(document.getElementById('stamp'),new Date(d.timestamp||Date.now()).toLocaleTimeString());setTextStable(document.getElementById('detail'),d.detail||'');const frameSize=(d.frameWidth??0)+' × '+(d.frameHeight??0);setHtmlStable(document.getElementById('summary'),'<b>原始帧</b><span>'+(d.receivedFrameCount??0)+'</span><b>识别帧</b><span>'+(d.recognizedFrameCount??0)+'</span><b>捕获尺寸</b><span>'+frameSize+'</span><b>宽高比</b><span>'+Number(d.frameAspectRatio||0).toFixed(3)+'</span><b>耗时</b><span>'+(d.elapsedMillis??0)+' ms</span><b>动作</b><span>'+(d.actionCount??0)+'</span><b>消息</b><span>'+esc(d.message??'')+'</span>');const compact={trace:d.trace,stageMillis:d.stageMillis,nodeSearchMode:d.nodeSearchMode,nodeSearchWindowCount:d.nodeSearchWindowCount,finalBossPlatforms:d.finalBossPlatforms,finalBossPlatformCandidates:d.finalBossPlatformCandidates,frame:{width:d.frameWidth,height:d.frameHeight,aspectRatio:d.frameAspectRatio},openingViewport:d.openingViewport,nodeRelicStacks:d.nodeRelicStacks,relicChoices:d.relicChoices,characters:d.characters,nodes:d.nodes,pageScores:d.pageScores,anchorScores:d.anchorScores,matchedFeatures:d.matchedFeatures};setTextStable(document.getElementById('json'),JSON.stringify(compact,null,2));drawBoxes(d.boxes);if(d.frameVersion!==frameVersion){frameVersion=d.frameVersion;document.getElementById('frame').src='/frame.jpg?v='+frameVersion}}catch(e){setTextStable(document.getElementById('status'),'连接失败')}finally{setTimeout(tick,500)}}tick();
+                async function tick(){try{const r=await fetch('/api/state',{cache:'no-store'});const d=await r.json();setTextStable(document.getElementById('status'),d.status||'-');setTextStable(document.getElementById('page'),(d.page||'-')+' '+Number(d.pageConfidence||0).toFixed(3));setTextStable(document.getElementById('stamp'),new Date(d.timestamp||Date.now()).toLocaleTimeString());setTextStable(document.getElementById('detail'),d.detail||'');void refreshRoute(d);const frameSize=(d.frameWidth??0)+' × '+(d.frameHeight??0);setHtmlStable(document.getElementById('summary'),'<b>进入处理帧</b><span>'+(d.receivedFrameCount??0)+'</span><b>识别帧</b><span>'+(d.recognizedFrameCount??0)+'</span><b>捕获尺寸</b><span>'+frameSize+'</span><b>宽高比</b><span>'+Number(d.frameAspectRatio||0).toFixed(3)+'</span><b>耗时</b><span>'+(d.elapsedMillis??0)+' ms</span><b>动作</b><span>'+(d.actionCount??0)+'</span><b>消息</b><span>'+esc(d.message??'')+'</span>');const compact={frameTiming:d.frameTiming,captureCounters:d.captureCounters,historyLimit:d.historyLimit,trace:d.trace,stageMillis:d.stageMillis,nodeSearchMode:d.nodeSearchMode,nodeSearchWindowCount:d.nodeSearchWindowCount,finalBossPlatforms:d.finalBossPlatforms,finalBossPlatformCandidates:d.finalBossPlatformCandidates,frame:{width:d.frameWidth,height:d.frameHeight,aspectRatio:d.frameAspectRatio},openingViewport:d.openingViewport,nodeRelicStacks:d.nodeRelicStacks,relicChoices:d.relicChoices,characters:d.characters,nodes:d.nodes,pageScores:d.pageScores,anchorScores:d.anchorScores,matchedFeatures:d.matchedFeatures};setTextStable(document.getElementById('json'),JSON.stringify(compact,null,2));drawBoxes(d.boxes);if(d.frameVersion!==frameVersion){frameVersion=d.frameVersion;document.getElementById('frame').src='/frame.jpg?v='+frameVersion}}catch(e){setTextStable(document.getElementById('status'),'连接失败')}finally{setTimeout(tick,500)}}tick();
               </script>
             </body>
             </html>

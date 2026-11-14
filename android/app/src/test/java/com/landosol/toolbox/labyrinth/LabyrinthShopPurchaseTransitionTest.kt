@@ -8,6 +8,12 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
+import java.lang.reflect.InvocationTargetException
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
 
 class LabyrinthShopPurchaseTransitionTest {
     @Test fun `brief shop frame preserves the planned purchase until its completion receipt`() = replay(true)
@@ -25,7 +31,9 @@ class LabyrinthShopPurchaseTransitionTest {
             override suspend fun load(accountId: Long?) = snapshot
             override suspend fun recordPage(accountId: Long?, page: String,
                 characters: List<LabyrinthCharacterMatch>, nowMillis: Long,
-                relics: List<LabyrinthRelicMatch>, replaceCharacters: Boolean): LabyrinthRunSnapshot {
+                relics: List<LabyrinthRelicMatch>, replaceCharacters: Boolean,
+                expectedStartedAt: Long?, relicStacks: Map<LabyrinthRelicMark, LabyrinthRelicStackRecord>?,
+                openingRelicReceipt: LabyrinthOpeningRelicReceipt?): LabyrinthRunSnapshot {
                 recorded += relics.map { it.relicId }
                 return snapshot
             }
@@ -49,7 +57,7 @@ class LabyrinthShopPurchaseTransitionTest {
             val persist = session.javaClass.declaredMethods.single {
                 it.name.startsWith("persistObservation-")
             }.apply { isAccessible = true }
-            fun feed(dialog: LabyrinthShopDialogState, time: Long) {
+            suspend fun feed(dialog: LabyrinthShopDialogState, time: Long) {
                 now = time
                 val page = when (dialog) {
                     LabyrinthShopDialogState.PURCHASE_CONFIRMATION -> LabyrinthEntryPageState.SHOP_PURCHASE_CONFIRMATION
@@ -62,9 +70,21 @@ class LabyrinthShopPurchaseTransitionTest {
                     matchedFeatures = emptyList(), elapsedMillis = 0, frameWidth = 1920, frameHeight = 1080,
                     shopObservation = LabyrinthShopObservation(emptyList(), dialog, purchaseCandidate = relic),
                 )
-                persist.invoke(session, sessionId.value, result, now)
+                session.javaClass.declaredMethods.single { it.name == "observeRelicIdentities" }
+                    .apply { isAccessible = true }.invoke(session, result, now)
+                val ledger = field("relicStackLedger").get(session) as LabyrinthRelicStackLedger
+                val committed = suspendCoroutine { continuation: Continuation<Boolean> ->
+                    try {
+                        val value = persist.invoke(session, sessionId.value, result, now, ledger.fork(), continuation)
+                        if (value !== COROUTINE_SUSPENDED) continuation.resume(value as Boolean)
+                    } catch (failure: InvocationTargetException) {
+                        continuation.resumeWithException(failure.targetException)
+                    }
+                }
+                assertTrue(committed)
             }
             feed(LabyrinthShopDialogState.PURCHASE_CONFIRMATION, 1_000)
+            feed(LabyrinthShopDialogState.PURCHASE_CONFIRMATION, 1_300)
             feed(LabyrinthShopDialogState.NONE, 1_400)
             assertEquals("relic-1", field("plannedShopPurchaseRelicId").get(session))
             assertTrue(recorded.isEmpty())

@@ -20,6 +20,15 @@ class Bitmap private constructor(val width: Int, val height: Int, private var pi
     val allocationByteCount: Int get() = data().size * 4
     val byteCount: Int get() = allocationByteCount
     fun recycle() { pixels = null }
+    /** The frame owns this immutable bitmap until all recognition leases have closed. */
+    internal fun capturedFrame(timestampMillis: Long, sequence: Long): CapturedFrame = CapturedFrame(
+        bitmap = this,
+        timestampMillis = timestampMillis,
+        frameSequence = sequence,
+        capturedAtElapsedRealtimeMillis = android.os.SystemClock.elapsedRealtime(),
+        enqueuedAtElapsedRealtimeMillis = android.os.SystemClock.elapsedRealtime(),
+        argbPixels = data(),
+    )
     private fun data(): IntArray = checkNotNull(pixels) { "Cannot access a recycled bitmap" }
     fun getPixel(x: Int, y: Int): Int { checkRect(x, y, 1, 1); return data()[y * width + x] }
     fun getPixels(destination: IntArray, offset: Int, stride: Int, x: Int, y: Int, width: Int, height: Int) {

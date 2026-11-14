@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth
 import com.landosol.toolbox.gamedata.EventChoiceResource
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEventChoiceObservation
+import com.landosol.toolbox.labyrinth.vision.LabyrinthArenaEvent
 import kotlin.math.max
 
 sealed interface LabyrinthEventChoiceDecision {
@@ -28,6 +29,7 @@ class LabyrinthEventChoicePlanner(
     private val strategy: LabyrinthStrategySettings = LabyrinthStrategySettings(),
 ) {
     private val evaluationCache = linkedMapOf<String, List<EvaluatedChoice>>()
+    private val effectiveOverrides = strategy.effectiveEventChoiceOverrides()
 
     fun decide(
         observation: LabyrinthEventChoiceObservation,
@@ -43,6 +45,103 @@ class LabyrinthEventChoicePlanner(
         rejectedChoiceIds: Set<String> = emptySet(),
     ): LabyrinthEventChoiceDecision {
         val event = observation.event
+        if (event.id == "1107") {
+            // Independent fixed policy: retain upstream OCR, never choose the paid branches.
+            // This rule applies regardless of the event-customization switch.
+            if (event.name != "发现了不可思议的石板！要怎么办？") {
+                return LabyrinthEventChoiceDecision.Wait("石板事件名称与目录不一致")
+            }
+            val visual = observation.choices.singleOrNull {
+                it.choice.id == "11073" && it.choice.slot == 1 &&
+                    it.choice.name == "摸一下 应该没关系吧？"
+            } ?: return LabyrinthEventChoiceDecision.Wait("石板固定左分支没有有效按钮映射")
+            if (!observation.trusted || observation.stableFrames < 2) {
+                return LabyrinthEventChoiceDecision.Wait("石板事件尚未连续稳定确认")
+            }
+            if (visual.choice.id in rejectedChoiceIds) {
+                return LabyrinthEventChoiceDecision.Wait("石板左分支已点击且页面未变化，不改选其他分支")
+            }
+            if (!(visual.enabledConfidence >= MINIMUM_ENABLED_BUTTON_CONFIDENCE)) {
+                return LabyrinthEventChoiceDecision.Wait("石板左按钮当前不可用，不改选其他分支")
+            }
+            return LabyrinthEventChoiceDecision.Select(
+                eventId = event.id,
+                choiceId = visual.choice.id,
+                label = visual.choice.name,
+                buttonRect = visual.buttonRect,
+                utility = 0.0,
+                explanation = "石板固定选择左分支，不比较收益，不选择消费2000的分支",
+                actionSafe = true,
+            )
+        }
+        val fixedGuildChoice = when (event.id) {
+            "1101" -> Triple("11012", 2, "想要治疗型 成为伙伴！")
+            "1102" -> Triple("11021", 1, "想要强化型 成为伙伴！")
+            "1103" -> Triple("11031", 1, "想要减益型 成为伙伴！")
+            "1104" -> Triple("11042", 2, "想要破防型 成为伙伴！")
+            else -> null
+        }
+        if (fixedGuildChoice != null) {
+            // Retain upstream full OCR to distinguish the four identically titled guild events.
+            // Fixed choices are independent of customization and never use role-pool ranking.
+            if (event.name != "这里是公会管理协会！请问要找什么样的伙伴？") {
+                return LabyrinthEventChoiceDecision.Wait("公会事件名称与目录不一致")
+            }
+            val (choiceId, slot, name) = fixedGuildChoice
+            val visual = observation.choices.singleOrNull {
+                it.choice.id == choiceId && it.choice.slot == slot && it.choice.name == name
+            } ?: return LabyrinthEventChoiceDecision.Wait("公会固定分支没有有效按钮映射")
+            if (!observation.trusted || observation.stableFrames < 2) {
+                return LabyrinthEventChoiceDecision.Wait("公会事件尚未连续稳定确认")
+            }
+            if (choiceId in rejectedChoiceIds) {
+                return LabyrinthEventChoiceDecision.Wait("公会固定分支已点击且页面未变化，不改选其他分支")
+            }
+            if (!(visual.enabledConfidence >= MINIMUM_ENABLED_BUTTON_CONFIDENCE)) {
+                return LabyrinthEventChoiceDecision.Wait("公会固定分支按钮当前不可用，不改选其他分支")
+            }
+            return LabyrinthEventChoiceDecision.Select(
+                eventId = event.id,
+                choiceId = choiceId,
+                label = name,
+                buttonRect = visual.buttonRect,
+                utility = 0.0,
+                explanation = "公会固定选择：$name；不比较角色收益",
+                actionSafe = true,
+            )
+        }
+        if (event.id == LabyrinthArenaEvent.ID) {
+            // Title OCR establishes the family, not a numeric reward variant. Never estimate
+            // rewards using an invented regional id; select the saved branch directly.
+            val name = effectiveOverrides[LabyrinthArenaEvent.NAME]
+                ?: return LabyrinthEventChoiceDecision.Wait("斗技场自定义未配置，等待完整事件识别")
+            if (name !in setOf(LabyrinthArenaEvent.NORMAL, LabyrinthArenaEvent.EXTREME)) {
+                return LabyrinthEventChoiceDecision.Wait("斗技场自定义分支无效")
+            }
+            val available = observation.choices.filter {
+                it.choice.id !in rejectedChoiceIds &&
+                    it.enabledConfidence >= MINIMUM_ENABLED_BUTTON_CONFIDENCE
+            }
+            val visual = available.firstOrNull { it.choice.name == name }
+                ?: available.minByOrNull { it.choice.slot }
+                ?: return LabyrinthEventChoiceDecision.Wait("斗技场没有当前可用且未拒绝的按钮")
+            val configured = visual.choice.name == name
+            return LabyrinthEventChoiceDecision.Select(
+                eventId = LabyrinthArenaEvent.ID,
+                choiceId = visual.choice.id,
+                label = visual.choice.name,
+                buttonRect = visual.buttonRect,
+                utility = 0.0,
+                explanation = if (configured) "按事件自定义选择（四区域统一）"
+                    else "自定义按钮不可用，回退到可用分支（不估计区域奖励）",
+                actionSafe = observation.trusted && observation.stableFrames >= 2 &&
+                    observation.choices.size == 2 &&
+                    observation.choices.all { it.buttonConfidence >= 0.12 } &&
+                    observation.choices.map { it.choice.id }.toSet() ==
+                        LabyrinthArenaEvent.event.choices.map { it.id }.toSet(),
+                safetyNote = if (!observation.trusted) "斗技场标题尚未连续稳定确认" else null,
+            )
+        }
         if (event.choices.isEmpty()) return LabyrinthEventChoiceDecision.Wait("事件${event.id}没有可选项")
         if (rejectedChoiceIds.isNotEmpty() && event.choices.all { it.id in rejectedChoiceIds }) {
             return LabyrinthEventChoiceDecision.Wait(
@@ -76,11 +175,20 @@ class LabyrinthEventChoicePlanner(
             }
         }
         val visualsByChoiceId = observation.choices.associateBy { it.choice.id }
+        // 事件自定义覆盖：命中时把用户指定的分支排到最前，按钮当前可用则优先选它，否则回退自动。
+        // 只改排序、不提前返回，utility/detail/actionSafe 仍走原路径，空覆盖时输出与之前逐位一致。
+        val overrideChoice = effectiveOverrides[event.name]
+            ?.let { name -> event.choices.firstOrNull { it.name == name } }
+        val ordered = if (overrideChoice == null) {
+            ranked
+        } else {
+            ranked.sortedByDescending { it.choice.id == overrideChoice.id }
+        }
         // Some event options are condition-gated and rendered disabled.  Ranking the whole
         // catalog first and only then checking the winning button used to pin the workflow on a
         // grey high-utility option forever.  Prefer the best option that is *currently* blue; if
         // none is actionable, keep the global recommendation visible but unsafe for diagnostics.
-        val selectable = ranked.filterNot { it.choice.id in rejectedChoiceIds }.ifEmpty { ranked }
+        val selectable = ordered.filterNot { it.choice.id in rejectedChoiceIds }.ifEmpty { ordered }
         // "Currently usable" means the bright blue, not merely blue: the game dims an option the
         // player cannot afford but keeps it blue, so the dimmed fill used to pass this filter and
         // the run tapped a 消耗2000 option holding 1,550 coins until it gave up.
@@ -113,7 +221,9 @@ class LabyrinthEventChoicePlanner(
             label = best.choice.name,
             buttonRect = visual.buttonRect,
             utility = best.utility,
-            explanation = best.detail,
+            explanation = if (overrideChoice?.id == best.choice.id) {
+                "按事件自定义选择；${best.detail}"
+            } else best.detail,
             actionSafe = actionSafe,
             safetyNote = safetyNote,
         )

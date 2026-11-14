@@ -20,11 +20,15 @@ android {
 
     defaultConfig {
         applicationId = "com.landosol.toolbox"
+        // Debug/test builds can install next to a shipped package via -PcoexistSuffix=.mod.test.
+        (project.findProperty("coexistSuffix") as String?)?.takeIf { it.isNotBlank() }?.let {
+            applicationIdSuffix = it
+        }
         minSdk = 26
         targetSdk = 35
         // major*10000 + minor*100 + patch, so the code stays monotonic as the name moves.
-        versionCode = 10018
-        versionName = "1.0.18"
+        versionCode = 10087
+        versionName = "1.0.18-mod.V10.6-batch6-r1-rolelean-log3000"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

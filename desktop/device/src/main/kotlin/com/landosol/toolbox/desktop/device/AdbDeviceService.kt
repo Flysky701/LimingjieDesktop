@@ -378,9 +378,12 @@ class AdbDeviceService(
     }
 
     private suspend fun action(expectedPackage: String, commands: String, durationMillis: Long, compatibility: List<String>): TouchResult = lifecycle.withLock {
+        val permit = currentCoroutineContext()[DeviceDispatchPermit]
+        if (permit?.allowed?.invoke() == false) return@withLock TouchResult.Rejected(DEVICE_DISPATCH_SUPPRESSED)
         val value = controlSession() ?: return@withLock TouchResult.Rejected("触控服务未连接")
         if (queryForeground() != expectedPackage) return@withLock TouchResult.Rejected("游戏不在前台")
         if (session !== value || value.capturePaused) return@withLock TouchResult.Rejected("设备或画面尚未就绪")
+        if (permit?.allowed?.invoke() == false) return@withLock TouchResult.Rejected(DEVICE_DISPATCH_SUPPRESSED)
         try {
             if (value.touchMode == TouchMode.Compatibility) adb.shell(value.serial, listOf("input") + compatibility, durationMillis + 10_000).requireSuccess()
             else {

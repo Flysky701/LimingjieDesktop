@@ -111,6 +111,46 @@ class LabyrinthEventRecognitionTest {
         assertEquals(null, count)
     }
 
+    @Test
+    fun `arena title ignores reward variants but still compares other event titles`() {
+        val recognizer = LabyrinthEventTextRecognizer(arenaEvents() + guildEvents())
+        for (text in listOf(LabyrinthArenaEvent.NAME, "发现了魔物们聚集的斗枝场！", "发现了魔物们聚集的斗技！")) {
+            val match = recognizer.recognizeArenaTitle(text)
+            assertEquals(text, LabyrinthArenaEvent.ID, match.event?.id)
+            assertTrue(text, match.trusted)
+            assertTrue(match.margin >= 0.10)
+            assertEquals(0, match.event?.area)
+        }
+        assertEquals(null, recognizer.recognizeArenaTitle("这里是公会管理协会！请问要找什么样的伙伴？").event)
+        assertEquals(null, recognizer.recognizeArenaTitle("斗技场").event)
+    }
+
+    @Test
+    fun `arena title rejects an ambiguous distinct title and incompatible branch order`() {
+        val rival = EventResource(id = "rival", name = "发现了魔物们聚集的斗技场吗")
+        assertEquals(null, LabyrinthEventTextRecognizer(arenaEvents() + rival)
+            .recognizeArenaTitle(LabyrinthArenaEvent.NAME).event)
+        val incompatible = arenaEvents().map { event ->
+            if (event.id != "1117") event else event.copy(choices = event.choices.map { it.copy(slot = 3 - it.slot) })
+        }
+        assertEquals(null, LabyrinthEventTextRecognizer(incompatible).recognizeArenaTitle(LabyrinthArenaEvent.NAME).event)
+        assertTrue(LabyrinthArenaEvent.configured(mapOf(LabyrinthArenaEvent.NAME to LabyrinthArenaEvent.NORMAL)))
+        assertTrue(!LabyrinthArenaEvent.configured(emptyMap()))
+    }
+
+    @Test
+    fun `title crop uses existing calibration and is smaller than full text crop`() {
+        val mapper = LabyrinthEventLayoutMapper(listOf(EventLayoutTemplateResource(
+            id = "two", optionCount = 2,
+            titleRoi = NormalizedOcrRect(0.22, 0.10, 0.78, 0.22),
+            optionTextRois = listOf(NormalizedOcrRect(0.17, 0.20, 0.49, 0.78),
+                NormalizedOcrRect(0.51, 0.20, 0.83, 0.78)),
+            calibrationRequired = false,
+        )))
+        assertEquals(EntryPixelRect(281, 72, 717, 86), mapper.titleBounds(2, 1280, 720))
+        assertEquals(EntryPixelRect(217, 72, 845, 489), mapper.ocrBounds(2, 1280, 720))
+    }
+
     private fun guildEvents(): List<EventResource> = listOf(
         guild("1101", "11011", "坦克", "11012", "治疗"),
         guild("1102", "11021", "强化", "11022", "增益"),

@@ -12,8 +12,8 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
      * page: a cached read is the result of the same physical work, and a per-visit counter cannot
      * tell that apart from a first look.
      */
-    data class Read(val text: String?, val id: Long, val confirmations: Int = 1)
-    data class Ticket(val slot: String, val fingerprint: Long, val epoch: Long, val id: Long)
+    data class Read(val text: String?, val id: Long, val confirmations: Int = 1, val capturedAtMillis: Long = Long.MIN_VALUE)
+    data class Ticket(val slot: String, val fingerprint: Long, val epoch: Long, val id: Long, val capturedAtMillis: Long = Long.MIN_VALUE)
     private data class Slot(
         val fingerprint: Long,
         var attempts: Int = 0,
@@ -49,7 +49,7 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
         return null
     }
 
-    @Synchronized fun request(slot: String, fingerprint: Long): Ticket? {
+    @Synchronized fun request(slot: String, fingerprint: Long, capturedAtMillis: Long = Long.MIN_VALUE): Ticket? {
         cached(slot, fingerprint)
         val state = slots.getValue(slot)
         if (pending != null || state.attempts >= maximumAttempts || clock() < nextStart) return null
@@ -70,7 +70,7 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
         ) return null
         state.attempts++
         nextStart = now + spacingMillis
-        return Ticket(slot, fingerprint, epoch, ++sequence).also { pending = it }
+        return Ticket(slot, fingerprint, epoch, ++sequence, capturedAtMillis).also { pending = it }
     }
 
     @Synchronized fun complete(ticket: Ticket, text: String?) {
@@ -84,10 +84,10 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
         val trimmed = text?.trim()
         val previous = state.read
         if (previous != null && previous.text == trimmed) {
-            state.read = Read(trimmed, ticket.id, previous.confirmations + 1)
+            state.read = Read(trimmed, ticket.id, previous.confirmations + 1, ticket.capturedAtMillis)
             return
         }
-        state.read = Read(trimmed, ticket.id)
+        state.read = Read(trimmed, ticket.id, capturedAtMillis = ticket.capturedAtMillis)
         // Two looks at the same pixels disagreed, so neither is confirmed and the budget is spent.
         // Buy exactly one more read rather than leaving a caller that waits for agreement waiting
         // for something that can no longer arrive.

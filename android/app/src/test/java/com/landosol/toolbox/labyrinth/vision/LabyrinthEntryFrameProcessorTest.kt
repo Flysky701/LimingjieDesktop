@@ -49,7 +49,9 @@ class LabyrinthEntryFrameProcessorTest {
 
         assertTrue("dateTitle=$dateTitle", dateTitle >= 0.90)
         assertTrue("dateConfirm=$dateConfirm", dateConfirm >= 0.90)
-        assertTrue("genericError=$genericError", genericError >= 0.70)
+        // 「错误提示」模板已裁到四个字（200x44），不再覆盖任意蓝标题，因此这里不再得高分。
+        // 这条断言同时守住"别的蓝标题弹窗不会再被误判成账号会话失效"。
+        assertTrue("genericError=$genericError", genericError <= 0.50)
 
         val block = labyrinthSessionBlockObservation(result)
         assertEquals(SessionBlockKind.RELOGIN_REQUIRED, block.kind)

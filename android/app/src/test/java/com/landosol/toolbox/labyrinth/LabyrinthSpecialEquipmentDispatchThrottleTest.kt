@@ -260,6 +260,43 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
         assertEquals(pastInterval, lastSessionActionAt(session))
     }
 
+    @Test
+    fun `an escape decided on popup 1 is never replayed on popup 2 that appears afterwards`() {
+        val session = session(LabyrinthCombatKind.NORMAL, settingsFor(LabyrinthCombatKind.NORMAL))
+        setFlowStage(session, LabyrinthSpecialEquipmentFlowStage.AWAIT_SECOND_MAIN_DIALOG)
+        setField(session, "specialEquipmentStepAttempts", MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS)
+        setLastSessionActionAt(session, lastClick)
+
+        // 超限帧是弹窗1，而且动作间隔未到 ⇒ 逃生「取消」记成待办，绑定**弹窗1**。
+        assertTrue(flowFrame(session, teamFrame(mainDialogObservation(enabled = false)), insideInterval))
+        assertNull(frameActionLabel(session))
+        assertEquals(LabyrinthSpecialEquipmentTap.CANCEL, pendingEscape(session))
+        assertEquals(LabyrinthSpecialEquipmentStage.MAIN_DIALOG, pendingEscapeStage(session))
+
+        // 还没补发出去，画面已经换成弹窗2：同一个「取消」不得重放到弹窗2 的按钮上；
+        // 待办改绑弹窗2，先关掉这一层（关掉弹窗2 不会退回编组页）。
+        assertTrue(flowFrame(session, teamFrame(autoDialogObservation()), pastInterval))
+        assertEquals("特别装备：点击「取消」", frameActionLabel(session))
+        assertEquals(setOf(LabyrinthSpecialEquipmentStage.AUTO_DIALOG), spentEscapeStages(session))
+        assertEquals(pastInterval, lastSessionActionAt(session))
+        releaseActionLatch(session)
+
+        // 弹窗2 关掉后弹窗1 还开着：同一轮里按弹窗1 再挂一次，把它也关掉才能回到编组页。
+        val secondClose = pastInterval + BATTLE_TEAM_ACTION_INTERVAL_MILLIS + 100L
+        assertTrue(flowFrame(session, teamFrame(mainDialogObservation(enabled = false)), secondClose))
+        assertEquals("特别装备：点击「取消」", frameActionLabel(session))
+        assertEquals(
+            setOf(LabyrinthSpecialEquipmentStage.AUTO_DIALOG, LabyrinthSpecialEquipmentStage.MAIN_DIALOG),
+            spentEscapeStages(session),
+        )
+        assertEquals(secondClose, lastSessionActionAt(session))
+        releaseActionLatch(session)
+
+        // 两层都点过之后回到编组页：帧交还给编组/开战路径，不再有任何点击。
+        assertFalse(flowFrame(session, teamFrame(teamPageObservation()), secondClose + 100L))
+        assertNull(frameActionLabel(session))
+    }
+
     // ---- 被挡期间仍然有界：3 次 / 8s 两个既有上限照常收尾 ----
 
     @Test
@@ -592,8 +629,22 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
     private fun stepAttempts(session: Any): Int =
         field(session, "specialEquipmentStepAttempts").get(session) as Int
 
-    private fun pendingEscape(session: Any): LabyrinthSpecialEquipmentTap? =
-        field(session, "specialEquipmentPendingEscape").get(session) as LabyrinthSpecialEquipmentTap?
+    private fun pendingEscape(session: Any): LabyrinthSpecialEquipmentTap? {
+        val pending = field(session, "specialEquipmentPendingEscape").get(session) ?: return null
+        return field(pending, "tap").get(pending) as LabyrinthSpecialEquipmentTap
+    }
+
+    /** 待办逃生点击绑定的弹窗层（弹窗1 / 弹窗2）。 */
+    private fun pendingEscapeStage(session: Any): LabyrinthSpecialEquipmentStage? {
+        val pending = field(session, "specialEquipmentPendingEscape").get(session) ?: return null
+        return field(pending, "dialogStage").get(pending) as LabyrinthSpecialEquipmentStage
+    }
+
+    /** 本轮已经用掉逃生「取消」的弹窗层（已派发，或等派发的窗口已超期）。 */
+    @Suppress("UNCHECKED_CAST")
+    private fun spentEscapeStages(session: Any): Set<LabyrinthSpecialEquipmentStage> =
+        (field(session, "specialEquipmentEscapeSpentStages").get(session)
+            as MutableSet<LabyrinthSpecialEquipmentStage>).toSet()
 
     private fun lastSessionActionAt(session: Any): Long =
         field(session, "lastSessionActionAt").get(session) as Long

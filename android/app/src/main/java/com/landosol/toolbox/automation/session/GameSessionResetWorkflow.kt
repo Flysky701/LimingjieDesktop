@@ -143,6 +143,7 @@ class GameSessionResetWorkflow(
     /** Channel SDK login dialogs (九游) recognised through accessibility, not frames. */
     private val channelPrompts: ChannelLoginPromptAssistant? = null,
     private val actionScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val configurationGate: com.landosol.toolbox.automation.TaskConfigurationGate = com.landosol.toolbox.automation.TaskConfigurationGate(),
 ) {
     private val mutex = Mutex()
     private val inFlight = AtomicBoolean(false)
@@ -205,6 +206,15 @@ class GameSessionResetWorkflow(
     private suspend fun startLocked(
         saveRoundResult: suspend () -> Unit,
         clientHardClosed: Boolean = false,
+    ): GameSessionResetStartResult {
+        val admission = configurationGate.tryBeginTask()
+            ?: return GameSessionResetStartResult.Blocked(com.landosol.toolbox.automation.TaskConfigurationGate.TRANSFER_MESSAGE)
+        return try { startAdmitted(saveRoundResult, clientHardClosed) } finally { admission.close() }
+    }
+
+    private suspend fun startAdmitted(
+        saveRoundResult: suspend () -> Unit,
+        clientHardClosed: Boolean,
     ): GameSessionResetStartResult {
         activeSessionId?.let { return GameSessionResetStartResult.AlreadyRunning(it) }
         if (!captureActive()) {

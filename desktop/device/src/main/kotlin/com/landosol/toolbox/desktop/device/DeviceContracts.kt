@@ -1,6 +1,15 @@
 package com.landosol.toolbox.desktop.device
 
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+
+const val DEVICE_DISPATCH_SUPPRESSED = "device-dispatch-suppressed"
+
+/** Rechecked after device queries, immediately before native input is dispatched. */
+class DeviceDispatchPermit(val allowed: () -> Boolean) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<DeviceDispatchPermit>
+}
 
 enum class AdbFailureKind { AdbMissing, LaunchFailed, Timeout, DeviceOffline, Unauthorized, DeviceNotFound, ServerVersionConflict, ConnectionRefused, NonZeroExit }
 sealed interface AdbResult {

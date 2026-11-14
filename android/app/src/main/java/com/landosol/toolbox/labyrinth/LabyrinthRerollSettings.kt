@@ -1,6 +1,5 @@
 package com.landosol.toolbox.labyrinth
 
-import android.content.Context
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -17,6 +16,7 @@ data class LabyrinthRerollSettings(
     val maxAttempts: String = "100",
     val rerollUntilFound: Boolean = true,
     val retireExisting: Boolean = true,
+    val customNodePlan: LabyrinthCustomNodePlan = LabyrinthCustomNodePlan(),
 ) {
     fun toConfig(accountId: Long): LabyrinthRerollConfig {
         require(validationError() == null)
@@ -26,7 +26,8 @@ data class LabyrinthRerollSettings(
             routePolicy = LabyrinthRoutePolicy(perfectStart = perfectStart,
                 evaluationMode = routeEvaluationMode, valueAllowance = valueAllowance,
                 thirdBlockChoice = thirdBlockChoice,
-                area3BossIds = area3BossIds.toSet(), area5BossIds = area5BossIds.toSet()))
+                area3BossIds = area3BossIds.toSet(), area5BossIds = area5BossIds.toSet(),
+                customNodePlan = customNodePlan))
     }
 
     fun validationError(): String? = when {
@@ -36,7 +37,7 @@ data class LabyrinthRerollSettings(
         maxAttempts.toIntOrNull() !in 1..LabyrinthRerollOptions.MAX_ATTEMPTS -> "最大尝试次数无效"
         area3BossIds.any { id -> LabyrinthRerollOptions.area3Bosses.none { it.unitId == id } } -> "区域3 Boss无效"
         area5BossIds.any { id -> LabyrinthRerollOptions.area5Bosses.none { it.unitId == id } } -> "区域5 Boss无效"
-        else -> null
+        else -> customNodePlan.validationError()
     }
 }
 
@@ -47,6 +48,7 @@ fun LabyrinthUiState.rerollSettings() = LabyrinthRerollSettings(
     routeEvaluationMode = routeEvaluationMode,
     valueAllowance = valueAllowance,
     thirdBlockChoice = thirdBlockChoice,
+    customNodePlan = customNodePlan,
     area3BossIds = selectedArea3BossIds,
     area5BossIds = selectedArea5BossIds,
     maxAttempts = maxAttempts,
@@ -57,16 +59,6 @@ fun LabyrinthUiState.rerollSettings() = LabyrinthRerollSettings(
 interface LabyrinthRerollSettingsStore {
     fun load(accountId: Long): LabyrinthRerollSettings
     fun save(accountId: Long, settings: LabyrinthRerollSettings)
-}
-
-class AndroidLabyrinthRerollSettingsStore(context: Context) : LabyrinthRerollSettingsStore {
-    private val preferences = context.applicationContext.getSharedPreferences("labyrinth-reroll-settings", Context.MODE_PRIVATE)
-    private val storage = JsonLabyrinthRerollSettingsStore(
-        read = { key -> preferences.getString(key, null) },
-        write = { key, value -> preferences.edit().putString(key, value).apply() },
-    )
-    override fun load(accountId: Long) = storage.load(accountId)
-    override fun save(accountId: Long, settings: LabyrinthRerollSettings) = storage.save(accountId, settings)
 }
 
 internal class JsonLabyrinthRerollSettingsStore(

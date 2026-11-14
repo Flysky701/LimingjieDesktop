@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth.node
 import com.landosol.toolbox.clanbattle.recognition.PixelImage
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import com.landosol.toolbox.labyrinth.vision.GradientTemplateMatcher
+import com.landosol.toolbox.labyrinth.vision.PixelImageScaler
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -30,16 +31,45 @@ class FinalBossPlatformLocator(platform: PixelImage?) {
     }
     private val coarse = GradientTemplateMatcher(maxSamples = 160)
     private val precise = GradientTemplateMatcher(maxSamples = 1_000)
+
+    /** Cached nameplate for the current capture size; a 1080p capture never populates it. */
+    private var scaledLabel: PixelImage? = null
+    private var scaledLabelWidth = -1
+    private var scaledLabelHeight = -1
+
     var lastCandidates: List<FinalBossPlatformMatch> = emptyList()
         private set
+
+    /**
+     * Score the nameplate at the size it actually occupies on this capture.
+     *
+     * The crop is static, so template and rect must be compared 1:1. Handing the matcher a 122x46
+     * crop for an 81x31 rect makes it resample with nearest-neighbour, which drops 41 columns and
+     * 15 rows outright; that single mismatch took a 1280x720 capture from 0.96 down to 0.78, under
+     * the 0.80 gate. A 1080p capture asks for exactly the crop size, so the source object is
+     * returned unchanged and every score stays bit-identical.
+     */
+    private fun templateOf(width: Int, height: Int): PixelImage? {
+        val source = label ?: return null
+        if (source.width == width && source.height == height) return source
+        // Upscaling has no source pixels to average; keep the crop and let the matcher map it.
+        if (width >= source.width || height >= source.height) return source
+        val cached = scaledLabel
+        if (cached != null && scaledLabelWidth == width && scaledLabelHeight == height) return cached
+        return PixelImageScaler.scale(source, width, height).also {
+            scaledLabel = it
+            scaledLabelWidth = width
+            scaledLabelHeight = height
+        }
+    }
 
     /** Fresh pixels on every map frame, independently of the whole-node tracking cache. */
     fun locate(frame: PixelImage): List<FinalBossPlatformMatch> {
         lastCandidates = emptyList()
-        val template = label ?: return emptyList()
         val scale = frame.height / 1080.0
         val width = (122 * scale).roundToInt().coerceAtLeast(3)
         val height = (46 * scale).roundToInt().coerceAtLeast(3)
+        val template = templateOf(width, height) ?: return emptyList()
         val step = (6 * scale).roundToInt().coerceAtLeast(2)
         // One bounded horizontal platform band, never the animated body or bottom HUD.
         val left = (frame.width * 0.18).roundToInt()

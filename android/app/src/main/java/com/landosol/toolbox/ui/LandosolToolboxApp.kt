@@ -23,6 +23,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -69,6 +70,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 enum class AppScreen {
     Accounts,
     Labyrinth,
+    Strategies,
     Permissions,
 }
 private data class TopLevelDestination(
@@ -79,6 +81,7 @@ private data class TopLevelDestination(
 
 private val topLevelDestinations = listOf(
     TopLevelDestination(AppScreen.Labyrinth, "黎明界", "黎"),
+    TopLevelDestination(AppScreen.Strategies, "策略设置", "策"),
     TopLevelDestination(AppScreen.Accounts, "账号库", "号"),
     TopLevelDestination(AppScreen.Permissions, "设置", "设"),
 )
@@ -178,6 +181,24 @@ fun LandosolToolboxApp() {
         topLevelDestinations.any { it.screen == candidate }
     } ?: AppScreen.Labyrinth
 
+    val homeStateHolder = rememberSaveableStateHolder()
+    var strategyLeaveHandler by remember { mutableStateOf<((() -> Unit) -> Unit)?>(null) }
+    val registerStrategyLeaveHandler: (((() -> Unit) -> Unit)?) -> Unit = remember {
+        { handler -> strategyLeaveHandler = handler }
+    }
+    val requestNavigation: (AppScreen) -> Unit = { target ->
+        if (application.taskConfigurationGate.state.value.transferring) {
+            labyrinthViewModel.reportMessage("正在处理配置分享码，请稍后再切换页面")
+        } else if (target != screen) {
+            val navigate = { screenName = target.name }
+            if (screen == AppScreen.Strategies) {
+                strategyLeaveHandler?.invoke(navigate)
+            } else {
+                navigate()
+            }
+        }
+    }
+
     val configuration = LocalConfiguration.current
     val compactLandscape = isCompactLandscape(
         configuration.screenWidthDp,
@@ -192,14 +213,21 @@ fun LandosolToolboxApp() {
             Surface(modifier = modifier.fillMaxSize()) {
                 when (screen) {
                     AppScreen.Accounts -> AccountRoute()
-                    AppScreen.Labyrinth -> LabyrinthRoute(
+                    AppScreen.Labyrinth -> homeStateHolder.SaveableStateProvider(AppScreen.Labyrinth.name) {
+                        LabyrinthRoute(
+                            application = application,
+                            labyrinthViewModel = labyrinthViewModel,
+                            state = labyrinthState,
+                            entryRecognitionState = entryRecognitionState,
+                            batchCheckpoint = batchCheckpoint,
+                            batchHaltReason = batchHaltReason,
+                            onRequestCapture = requestCaptureThen,
+                        )
+                    }
+                    AppScreen.Strategies -> StrategyRoute(
                         application = application,
-                        labyrinthViewModel = labyrinthViewModel,
-                        state = labyrinthState,
-                        entryRecognitionState = entryRecognitionState,
-                        batchCheckpoint = batchCheckpoint,
-                        batchHaltReason = batchHaltReason,
-                        onRequestCapture = requestCaptureThen,
+                        onClose = { screenName = AppScreen.Labyrinth.name },
+                        registerLeaveHandler = registerStrategyLeaveHandler,
                     )
                     AppScreen.Permissions -> PermissionRoute()
                 }
@@ -211,7 +239,7 @@ fun LandosolToolboxApp() {
                     topLevelDestinations.forEach { destination ->
                         NavigationRailItem(
                             selected = screen == destination.screen,
-                            onClick = { screenName = destination.screen.name },
+                            onClick = { requestNavigation(destination.screen) },
                             icon = {
                                 Text(destination.shortLabel, style = MaterialTheme.typography.labelLarge)
                             },
@@ -231,7 +259,7 @@ fun LandosolToolboxApp() {
                         topLevelDestinations.forEach { destination ->
                             NavigationBarItem(
                                 selected = screen == destination.screen,
-                                onClick = { screenName = destination.screen.name },
+                                onClick = { requestNavigation(destination.screen) },
                                 icon = {
                                     Text(destination.shortLabel, style = MaterialTheme.typography.labelLarge)
                                 },
@@ -278,6 +306,24 @@ private const val CAPTURE_START_TIMEOUT_MILLIS = 5_000L
 @Composable
 private fun PermissionRoute() {
     val context = LocalContext.current
+    val application = context.applicationContext as LandosolToolboxApplication
+    var sharing by rememberSaveable { mutableStateOf(false) }
+    val shareGate by application.taskConfigurationGate.state.collectAsStateWithLifecycle()
+    val entry by application.labyrinthEntryRecognitionSession.state.collectAsStateWithLifecycle()
+    val reset by application.gameSessionResetWorkflow.state.collectAsStateWithLifecycle()
+    val clan by application.clanBattleRecognitionSession.state.collectAsStateWithLifecycle()
+    val labyrinth by application.labyrinthController.uiState.collectAsStateWithLifecycle()
+    val batch by application.labyrinthBatchController.state.collectAsStateWithLifecycle()
+    val halt by application.labyrinthBatchController.haltReason.collectAsStateWithLifecycle()
+    val autoRun by application.labyrinthAutoRunWorkflow.progress.collectAsStateWithLifecycle()
+    val sharingReason = remember(shareGate, entry, reset, clan, labyrinth, batch, halt, autoRun) {
+        application.configurationTransferBlockedReason()
+            ?: com.landosol.toolbox.automation.TaskConfigurationGate.BUSY_MESSAGE.takeIf { shareGate.admissions > 0 || shareGate.transferring }
+    }
+    if (sharing) {
+        com.landosol.toolbox.ui.labyrinth.LabyrinthConfigShareScreen(application) { sharing = false }
+        return
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     var refreshToken by remember { mutableIntStateOf(0) }
     val notificationLauncher = rememberLauncherForActivityResult(
@@ -298,6 +344,9 @@ private fun PermissionRoute() {
     PermissionCenterScreen(
         state = state,
         onBack = null,
+        onOpenConfigurationSharing = { sharing = true },
+        configurationSharingEnabled = sharingReason == null,
+        configurationSharingReason = sharingReason,
         onOpenAccessibilitySettings = {
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         },
@@ -333,10 +382,6 @@ private fun LabyrinthRoute(
     var showAccessibilityDialog by rememberSaveable { mutableStateOf(false) }
     var notificationAccount by remember { mutableStateOf<Long?>(null) }
     var notificationGuildId by remember { mutableStateOf<Int?>(null) }
-    var showStrategies by rememberSaveable { mutableStateOf(false) }
-    var strategySaving by remember { mutableStateOf(false) }
-    var strategyMessage by remember { mutableStateOf<String?>(null) }
-    val savedStrategy by application.labyrinthStrategySettings.state.collectAsStateWithLifecycle()
     if (showAccessibilityDialog) {
         AlertDialog(
             onDismissRequest = { showAccessibilityDialog = false },
@@ -358,33 +403,6 @@ private fun LabyrinthRoute(
             },
         )
     }
-    if (showStrategies) {
-        LabyrinthStrategySettingsScreen(
-            loadRoleRatings = application::loadLabyrinthRoleRatings,
-            saved = savedStrategy,
-            saving = strategySaving,
-            message = strategyMessage,
-            onClose = { showStrategies = false; strategyMessage = null },
-            onSave = { settings ->
-                if (!strategySaving) {
-                    strategySaving = true
-                    strategyMessage = null
-                    scope.launch {
-                        try {
-                            application.labyrinthStrategySettings.save(settings)
-                            strategyMessage = null
-                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                            throw cancelled
-                        } catch (failure: Exception) {
-                            strategyMessage = failure.message ?: "保存失败，请重试"
-                        } finally {
-                            strategySaving = false
-                        }
-                    }
-                }
-            },
-        )
-    }
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted && notificationAccount == labyrinthViewModel.uiState.value.selectedAccount?.id) {
             labyrinthViewModel.start(retreatConfirmed = true, guildIdOverride = notificationGuildId)
@@ -395,7 +413,6 @@ private fun LabyrinthRoute(
         notificationGuildId = null
     }
     LabyrinthScreen(
-        onOpenStrategies = { showStrategies = true; strategyMessage = null },
         state = state,
         entryRecognitionState = entryRecognitionState,
         batchCheckpoint = batchCheckpoint,
@@ -459,6 +476,44 @@ private fun LabyrinthRoute(
         onCaptchaSolved = labyrinthViewModel::submitCaptcha,
         onCaptchaError = labyrinthViewModel::reportCaptchaError,
         onCancelCaptcha = labyrinthViewModel::cancelCaptcha,
+    )
+}
+
+@Composable
+private fun StrategyRoute(
+    application: LandosolToolboxApplication,
+    onClose: () -> Unit,
+    registerLeaveHandler: (((() -> Unit) -> Unit)?) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var strategySaving by remember { mutableStateOf(false) }
+    var strategyMessage by remember { mutableStateOf<String?>(null) }
+    val savedStrategy by application.labyrinthStrategySettings.state.collectAsStateWithLifecycle()
+    LabyrinthStrategySettingsScreen(
+        loadRoleRatings = application::loadLabyrinthRoleRatings,
+        saved = savedStrategy,
+        saving = strategySaving,
+        message = strategyMessage,
+        onClose = onClose,
+        registerLeaveHandler = registerLeaveHandler,
+        onSave = { settings ->
+            if (!strategySaving) {
+                strategySaving = true
+                strategyMessage = null
+                scope.launch {
+                    try {
+                        application.labyrinthStrategySettings.save(settings)
+                        strategyMessage = null
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        strategyMessage = failure.message ?: "保存失败，请重试"
+                    } finally {
+                        strategySaving = false
+                    }
+                }
+            }
+        },
     )
 }
 

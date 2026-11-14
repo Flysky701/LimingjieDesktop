@@ -1,7 +1,7 @@
 package com.landosol.toolbox.labyrinth
 
 fun labyrinthRerollStatusText(state: LabyrinthUiState, now: Long = System.currentTimeMillis()): String {
-    val guild = state.guildOptions.firstOrNull { it.guildId == state.selectedGuildId }?.name ?: "未选择公会"
+    val guild = state.guildOptions.firstOrNull { it.guildId == (state.activeGuildId ?: state.selectedGuildId) }?.name ?: "未选择公会"
     val seconds = state.startedAtMillis?.let { ((now - it).coerceAtLeast(0) / 1000) } ?: 0
     val stage = when {
         state.captcha != null -> "需要验证码，请返回应用处理"

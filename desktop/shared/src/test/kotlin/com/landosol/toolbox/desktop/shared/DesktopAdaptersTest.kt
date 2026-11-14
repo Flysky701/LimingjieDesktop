@@ -135,7 +135,7 @@ class DesktopAdaptersTest {
             ZipInputStream(connection.getInputStream()).use { zip ->
                 while (true) { val entry = zip.nextEntry ?: break; entries[entry.name] = zip.readBytes().toString(Charsets.UTF_8) }
             }
-            assertEquals(setOf("README.txt", "state/latest.json", "environment.json", "runtime/history.ndjson", "state/history.ndjson", "logs/logcat.txt"), entries.keys)
+            assertEquals(setOf("README.txt", "state/latest.json", "fast/latest.json", "fast/history.ndjson", "environment.json", "runtime/history.ndjson", "state/history.ndjson", "logs/logcat.txt"), entries.keys)
             val allText = entries.values.joinToString("\n")
             listOf("fixture-password", "fixture-key", "fixture-login", "fixture-token").forEach { assertFalse("Leaked $it", allText.contains(it)) }
             assertTrue(entries.getValue("logs/logcat.txt").contains("<redacted>"))

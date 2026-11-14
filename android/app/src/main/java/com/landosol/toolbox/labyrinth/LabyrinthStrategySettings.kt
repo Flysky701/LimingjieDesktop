@@ -78,6 +78,14 @@ data class LabyrinthStrategySettings(
     val normalWinRate: Int = 95,
     val extremeWinRate: Int = 70,
     val personalRoleScores: Map<String, Int> = emptyMap(),
+    /** 事件自定义总开关；首次使用和旧配置缺字段时均关闭，关闭不会清除已保存分支。 */
+    val eventCustomizationEnabled: Boolean = false,
+    /**
+     * 已保存的事件自定义覆盖：运行事件名 -> 运行分支名，必须与 events.placeholder.json 逐字一致。
+     * 界面通过 configuredEventChoiceOverrides 合并默认分支，运行侧通过 effectiveEventChoiceOverrides
+     * 读取开关生效后的覆盖；选定按钮不可用时仍回退到既有的跨资源效用评分。
+     */
+    val eventChoiceOverrides: Map<String, String> = DEFAULT_EVENT_CHOICE_OVERRIDES,
     /**
      * Per-guild opening picks, replacing the shipped plan: guild id -> three slots, each an
      * ordered candidate list. The first candidate a slot finds on screen wins, so the order is the
@@ -114,6 +122,16 @@ data class LabyrinthStrategySettings(
      */
     val responseIntervalMillis: Int = DEFAULT_RESPONSE_INTERVAL_MILLIS,
 ) {
+    /** 始终以默认分支补齐旧配置，再由用户保存的同名分支覆盖；供设置界面展示。 */
+    fun configuredEventChoiceOverrides(): Map<String, String> =
+        DEFAULT_EVENT_CHOICE_OVERRIDES + eventChoiceOverrides
+
+    /** 总开关仅控制目录内八事件的自定义分支；公会和石板固定规则由决策层独立处理。 */
+    fun effectiveEventChoiceOverrides(): Map<String, String> =
+        if (eventCustomizationEnabled) {
+            configuredEventChoiceOverrides().filterKeys { it in LabyrinthCustomEventCatalog.supportedNames }
+        } else emptyMap()
+
     fun validationError(): String? = when {
         specialEquipmentMode == LabyrinthSpecialEquipmentMode.AUTO_EQUIP && specialEquipmentKinds.isEmpty() ->
             SPECIAL_EQUIPMENT_EMPTY_KINDS_ERROR
@@ -138,6 +156,8 @@ data class LabyrinthStrategySettings(
             "个人角色评分必须使用有效角色 ID，分数在 0–100 之间"
         openingRosterError() != null -> openingRosterError()
         relicMarkPriority.distinct().size != relicMarkPriority.size -> "遗物优先级不能重复"
+        eventChoiceOverrides.any { (event, choice) -> event.isBlank() || choice.isBlank() } ->
+            "事件自定义的事件名和分支名不能为空"
         else -> null
     }
 
@@ -208,6 +228,14 @@ data class LabyrinthStrategySettings(
          */
         const val SPECIAL_EQUIPMENT_EMPTY_KINDS_ERROR =
             "已开启特别装备自动穿戴，请至少勾选一个关卡类型（普通/EX/BOSS）"
+
+        /**
+         * 共享目录的默认分支：斗技场极难、迷路右、箱子弟弟、会场交给我们，
+         * 两阶段料理均 ord 1、两阶段老虎机均 ord 2；公会和石板不属于自定义目录。
+         * 这些配置仅在 eventCustomizationEnabled 为 true 时参与运行选择。
+         */
+        val DEFAULT_EVENT_CHOICE_OVERRIDES: Map<String, String> =
+            LabyrinthCustomEventCatalog.defaultChoiceOverrides
     }
 }
 
@@ -217,7 +245,7 @@ data class LabyrinthStrategySnapshot(
     val roleRuntime: LabyrinthRoleDecisionRuntime?,
 )
 
-internal object LabyrinthStrategySettingsCodec {
+object LabyrinthStrategySettingsCodec {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     fun decode(raw: String?): LabyrinthStrategySettings = runCatching {
         raw?.let { json.decodeFromString<LabyrinthStrategySettings>(it) }

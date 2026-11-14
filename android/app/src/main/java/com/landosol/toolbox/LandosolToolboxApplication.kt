@@ -127,6 +127,7 @@ class LandosolToolboxApplication : Application() {
         )
     }
 
+    val taskConfigurationGate by lazy { com.landosol.toolbox.automation.TaskConfigurationGate() }
     val automationSessionManager by lazy { AutomationSessionManager() }
     val automationOverlayCoordinator by lazy {
         AutomationOverlayCoordinator(AndroidAutomationNotificationHost(this))
@@ -189,13 +190,17 @@ class LandosolToolboxApplication : Application() {
         SessionBoundActionExecutor(automationSessionManager, accessibilityActionBackend)
     }
     val clanBattleRecognitionSession by lazy {
-        ClanBattleRecognitionSession(automationSessionManager, overlayCoordinator = automationOverlayCoordinator)
+        ClanBattleRecognitionSession(automationSessionManager, overlayCoordinator = automationOverlayCoordinator,
+            configurationGate = taskConfigurationGate)
     }
     private val labyrinthRoleDecisionData by lazy {
         AndroidLabyrinthRoleDecisionDataLoader(this).load()
     }
+    val labyrinthConfiguration by lazy {
+        com.landosol.toolbox.labyrinth.AndroidLabyrinthConfigurationStore.create(this)
+    }
     val labyrinthStrategySettings by lazy {
-        com.landosol.toolbox.labyrinth.AndroidLabyrinthStrategySettingsStore(this)
+        com.landosol.toolbox.labyrinth.AndroidLabyrinthStrategySettingsStore(labyrinthConfiguration, taskConfigurationGate)
     }
     suspend fun loadLabyrinthRoleRatings(): List<com.landosol.toolbox.labyrinth.LabyrinthRoleRatingItem> =
         kotlinx.coroutines.withContext(Dispatchers.IO) {
@@ -232,8 +237,9 @@ class LandosolToolboxApplication : Application() {
             ?.mapValues { (_, profile) -> profile.attribute }
             .orEmpty()
         LabyrinthEntryRecognitionSession(
+            configurationGate = taskConfigurationGate,
             strategyProvider = {
-                val settings = labyrinthStrategySettings.state.value
+                val settings = labyrinthConfiguration.state.value.strategy
                 com.landosol.toolbox.labyrinth.LabyrinthStrategySnapshot(
                     settings,
                     roleDecisionRuntime?.document?.let { document ->
@@ -261,14 +267,49 @@ class LandosolToolboxApplication : Application() {
                 AndroidLabyrinthEntryFrameProcessor.create(
                     context = this,
                     characterAttributes = characterAttributes,
-                    finalBossOnly = finalBossOnly,
-                    skipJoinedCharacters = { labyrinthEntryRecognitionSession.skipRoleRewardJoinedRecognition },
-                    nodeSearchHint = { labyrinthEntryRecognitionSession.currentNodeSearchHint() },
+                    finalBossOnly = {
+                        val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
+                        if (snapshot != null) snapshot.finalBossOnly else finalBossOnly()
+                    },
+                    skipJoinedCharacters = {
+                        val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
+                        if (snapshot != null) snapshot.skipJoinedCharacters else labyrinthEntryRecognitionSession.skipRoleRewardJoinedRecognition
+                    },
+                    relicEvidenceVersion = {
+                        val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
+                        if (snapshot != null) snapshot.relicEvidenceVersion else labyrinthEntryRecognitionSession.relicEvidenceVersion
+                    },
+                    relicVerificationMarks = {
+                        val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
+                        if (snapshot != null) snapshot.relicVerificationMarks else labyrinthEntryRecognitionSession.relicVerificationMarks
+                    },
+                    nodeSearchHint = {
+                        val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
+                        if (snapshot != null) snapshot.nodeSearchHint else labyrinthEntryRecognitionSession.currentNodeSearchHint()
+                    },
                     nodeScanRequested = { labyrinthEntryRecognitionSession.nodeScanRequested() },
                     nodeScanConsumable = { labyrinthEntryRecognitionSession.nodeScanConsumable() },
-                    rosterCharacterIds = { labyrinthEntryRecognitionSession.rosterCharacterIds() },
-                    allowInitial1088GeometryRefinement = labyrinthEntryRecognitionSession::allowInitial1088GeometryRefinement,
+                    rosterCharacterIds = {
+                        val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
+                        if (snapshot != null) snapshot.rosterCharacterIds else labyrinthEntryRecognitionSession.rosterCharacterIds()
+                    },
+                    captureFrameSize = CaptureStateRegistry::captureSize,
+                    eventChoiceOverrides = labyrinthEntryRecognitionSession.eventChoiceOverridesSnapshot,
+                    eventCustomizationEnabled = labyrinthEntryRecognitionSession.eventCustomizationEnabledSnapshot,
+                    allowInitial1088GeometryRefinement = {
+                        val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
+                        if (snapshot != null) snapshot.allowInitial1088GeometryRefinement else labyrinthEntryRecognitionSession.allowInitial1088GeometryRefinement()
+                    },
                 )::process
+            },
+            fastProcessorFactory = {
+                val observer = com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthFastFrameObserver.create(
+                    this, CaptureStateRegistry::captureSize,
+                )
+                observer::process
+            },
+            fastFramePublisher = debugDashboard?.let { dashboard ->
+                { fast, state -> dashboard.publishFast(fast, state) }
             },
             captureStop = { MediaProjectionCaptureService.stop(this) },
             overlayCoordinator = automationOverlayCoordinator,
@@ -293,6 +334,9 @@ class LandosolToolboxApplication : Application() {
             battleTeamRecommendationUnavailableReason = roleDecisionUnavailableReason,
             battleTeamSelectionPlanner = roleDecisionRuntime?.battleTeamSelectionPlanner,
             runStateStore = labyrinthRunStateStore,
+            openingRelicCatalog = com.landosol.toolbox.labyrinth.LabyrinthOpeningRelicCatalog(
+                com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthRelicTemplateLoader(this).loadRelics(),
+            ),
             routeLoader = { accountId ->
                 accountId?.let { labyrinthRouteStore.loadLatest(it) }
             },
@@ -388,13 +432,15 @@ class LandosolToolboxApplication : Application() {
             )
         }
     val accountRepository: AccountRepository by lazy {
-        AccountRepository(database, credentialStore, sessionStore, gameSessionRegistry)
+        AccountRepository(database, credentialStore, sessionStore, gameSessionRegistry,
+            configurationGate = taskConfigurationGate)
     }
     val labyrinthController by lazy {
         com.landosol.toolbox.labyrinth.LabyrinthController(
             accountRepository, gameSessionRegistry, database, { bilibiliNativeLoginCoordinator },
-            com.landosol.toolbox.labyrinth.AndroidLabyrinthRerollSettingsStore(this),
+            labyrinthConfiguration,
             launchForeground = { com.landosol.toolbox.labyrinth.LabyrinthRerollService.start(this) },
+            configurationGate = taskConfigurationGate,
             beforeRerollLogin = { accountId -> hardCloseChannelClientBeforeReroll(accountId) },
             afterStandaloneReroll = { accountId -> coldStartChannelClientAfterReroll(accountId) },
         )
@@ -508,6 +554,7 @@ class LandosolToolboxApplication : Application() {
         val resetDashboard = labyrinthDebugDashboard
         GameSessionResetWorkflow(
             sessionManager = automationSessionManager,
+            configurationGate = taskConfigurationGate,
             backend = CompositeSessionResetBackend(
                 terminator = terminator,
                 relauncher = Relauncher {
@@ -526,7 +573,11 @@ class LandosolToolboxApplication : Application() {
                 // The reset only needs page/dialog anchors. 2026-09-18 live: with the default
                 // map-node scan on, one map frame behind the expiry popup took 6.9 s, the frame
                 // tracker saw nothing for 10 s and the terminator timed out on a visible popup.
-                val processor = AndroidLabyrinthEntryFrameProcessor.create(this, nodeScanRequested = { false })
+                val processor = AndroidLabyrinthEntryFrameProcessor.create(
+                    this,
+                    nodeScanRequested = { false },
+                    captureFrameSize = CaptureStateRegistry::captureSize,
+                )
                 val processFrame: (CapturedFrame) -> LabyrinthEntryFrameResult = { frame ->
                     frameTracker.trackFrame(frame.bitmap.width, frame.bitmap.height)
                     processor.process(frame).also(frameTracker::record)
@@ -689,6 +740,29 @@ class LandosolToolboxApplication : Application() {
 
     @Volatile
     private var autoRunJob: Job? = null
+    @Volatile
+    private var autoRunStopJob: Job? = null
+
+    fun configurationTransferBlockedReason(): String? {
+        val batch = labyrinthBatchController.state.value
+        val batchPending = batch?.stage in ACTIVE_BATCH_STAGES ||
+            (batch?.stage == com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.PAUSED &&
+                labyrinthBatchController.haltReason.value != com.landosol.toolbox.labyrinth.batch.LabyrinthBatchHaltReason.USER_STOPPED)
+        return if (labyrinthController.blocksConfigurationTransfer || batchPending ||
+            autoRunJob?.isCompleted == false || autoRunStopJob?.isCompleted == false ||
+            labyrinthEntryRecognitionSession.state.value.running || gameSessionResetWorkflow.state.value.running ||
+            clanBattleRecognitionSession.state.value.running || labyrinthAutoRunWorkflow.progress.value.running) {
+            com.landosol.toolbox.automation.TaskConfigurationGate.BUSY_MESSAGE
+        } else null
+    }
+
+    suspend fun <T> withConfigurationTransfer(action: suspend () -> T): T {
+        val admission = taskConfigurationGate.beginTransfer { configurationTransferBlockedReason() == null }
+        return try {
+            check(automationSessionManager.current() == null) { com.landosol.toolbox.automation.TaskConfigurationGate.BUSY_MESSAGE }
+            action()
+        } finally { admission.close() }
+    }
 
     /**
      * Starts an unattended batch: [targetRuns] cleared runs of the account's currently selected
@@ -698,9 +772,17 @@ class LandosolToolboxApplication : Application() {
         accountId: Long?,
         goals: List<com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoal>,
     ): Boolean {
+        val admission = taskConfigurationGate.tryBeginTask() ?: return false
+        return try { startLabyrinthAutoRunAdmitted(accountId, goals) } finally { admission.close() }
+    }
+
+    private fun startLabyrinthAutoRunAdmitted(
+        accountId: Long?,
+        goals: List<com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoal>,
+    ): Boolean {
         val id = accountId ?: return false
         if (goals.isEmpty()) return false
-        if (autoRunJob?.isActive == true) return false
+        if (autoRunJob?.isCompleted == false || autoRunStopJob?.isCompleted == false) return false
         // The launch job ends after start() hands control to the recognition session. The batch
         // stage remains the authoritative lock for the rest of that run.
         if (labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES) return false
@@ -720,6 +802,7 @@ class LandosolToolboxApplication : Application() {
             .format(java.util.Date())
         // A new batch never inherits a hard close from an earlier task.
         gameClientHardCloseLedger.clear()
+        val launchAdmission = taskConfigurationGate.tryBeginTask() ?: return false
         autoRunJob = autoRunScope.launch {
             labyrinthBatchController.start(
                 batchId = batchId,
@@ -728,20 +811,22 @@ class LandosolToolboxApplication : Application() {
                 difficulty = ui.selectedDifficulty,
                 reusableOpening = reusableOpening,
             )
-        }
+        }.also { job -> job.invokeOnCompletion { launchAdmission.close() } }
         return true
     }
 
     fun stopLabyrinthAutoRun() {
+        if (autoRunStopJob?.isCompleted == false) return
         autoRunJob?.cancel()
-        autoRunJob = null
         gameClientHardCloseLedger.clear()
-        autoRunScope.launch {
+        autoRunStopJob = autoRunScope.launch {
+            autoRunJob?.join()
+            labyrinthController.stop()
             labyrinthBatchController.stop("用户停止自动执行")
             gameSessionResetWorkflow.stop("用户停止自动执行")
             // The batch is over: release the capture session the user authorized for it.
             labyrinthEntryRecognitionSession.stop("用户停止自动执行")
-        }
+        }.also { job -> job.invokeOnCompletion { taskConfigurationGate.refreshAvailability() } }
     }
 
     private companion object {

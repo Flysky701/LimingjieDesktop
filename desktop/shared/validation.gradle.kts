@@ -59,8 +59,8 @@ val checkUpstreamDrift = tasks.register("checkUpstreamDrift") {
         val expected = file("upstream-coupling.txt").readLines().filter { it.isNotBlank() }.toSet()
         val actual = sourceFiles().filter { Regex("(?m)^import (android\\.|androidx\\.|com.google.mlkit\\.)").containsMatchIn(it.readText()) }.map { it.relativeTo(upstreamMain).invariantSeparatorsPath }.toSet()
         check(expected == actual) { "Android coupling changed. Added=${actual - expected}; removed=${expected - actual}" }
-        val original = rootProject.file("../android/app/schemas/com.landosol.toolbox.data.local.AppDatabase/4.json").readText()
-        val desktop = layout.buildDirectory.file("schemas/com.landosol.toolbox.data.local.AppDatabase/4.json").get().asFile.readText()
+        val original = rootProject.file("../android/app/schemas/com.landosol.toolbox.data.local.AppDatabase/5.json").readText()
+        val desktop = layout.buildDirectory.file("schemas/com.landosol.toolbox.data.local.AppDatabase/5.json").get().asFile.readText()
         val identity = Regex("\"identityHash\"\\s*:\\s*\"([^\"]+)\"")
         check(identity.find(original)!!.groupValues[1] == identity.find(desktop)!!.groupValues[1]) { "Room schema identity changed" }
     }

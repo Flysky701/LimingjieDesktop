@@ -146,6 +146,8 @@ data class LabyrinthRunStateEntity(
     @ColumnInfo(name = "account_id") val accountId: Long?,
     val status: String,
     @ColumnInfo(name = "current_page") val currentPage: String?,
+    @ColumnInfo(name = "opening_enter_id") val openingEnterId: Long? = null,
+    @ColumnInfo(name = "opening_relics_complete", defaultValue = "0") val openingRelicsComplete: Boolean = false,
     @ColumnInfo(name = "unrecognized_character_count") val unrecognizedCharacterCount: Int,
     @ColumnInfo(name = "started_at") val startedAt: Long,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
@@ -197,7 +199,23 @@ data class LabyrinthRunRelicEntity(
     val confidence: Double,
     @ColumnInfo(name = "first_seen_at") val firstSeenAt: Long,
     @ColumnInfo(name = "last_seen_at") val lastSeenAt: Long,
-    @ColumnInfo(name = "observation_count") val observationCount: Int,
+)
+
+@Entity(
+    tableName = "labyrinth_run_relic_stacks",
+    primaryKeys = ["run_key", "mark"],
+    foreignKeys = [ForeignKey(
+        entity = LabyrinthRunStateEntity::class,
+        parentColumns = ["run_key"],
+        childColumns = ["run_key"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+)
+data class LabyrinthRunRelicStackEntity(
+    @ColumnInfo(name = "run_key") val runKey: String,
+    val mark: String,
+    val stacks: Int,
+    val source: String,
 )
 
 @Entity(tableName = "migration_checkpoints")

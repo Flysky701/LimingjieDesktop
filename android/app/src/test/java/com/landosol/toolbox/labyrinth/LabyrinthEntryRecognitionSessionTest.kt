@@ -4,6 +4,7 @@ import com.landosol.toolbox.automation.AutomationSessionManager
 import com.landosol.toolbox.automation.AutomationMode
 import com.landosol.toolbox.automation.AutomationBackendResult
 import com.landosol.toolbox.automation.SessionBoundActionExecutor
+import com.landosol.toolbox.automation.TaskConfigurationGate
 import com.landosol.toolbox.automation.capture.CaptureFrameBus
 import com.landosol.toolbox.labyrinth.batch.LabyrinthRunTerminalEvent
 import kotlinx.coroutines.Dispatchers
@@ -12,11 +13,70 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.runCurrent
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.lang.reflect.InvocationTargetException
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
 
 class LabyrinthEntryRecognitionSessionTest {
+    @Test fun `transfer refuses vision startup before capture and strategy reads`() = runTest {
+        val gate = TaskConfigurationGate()
+        val manager = AutomationSessionManager()
+        val held = gate.beginTransfer { true }
+        var captureChecks = 0
+        var strategyCalls = 0
+        val session = LabyrinthEntryRecognitionSession(
+            sessionManager = manager, configurationGate = gate,
+            captureActive = { captureChecks++; true }, captureStop = {},
+            strategyProvider = { strategyCalls++; LabyrinthStrategySnapshot(LabyrinthStrategySettings(), null) },
+            processorFactory = { { error("no frames") } },
+        )
+        try {
+            assertEquals(LabyrinthEntryRecognitionStartResult.Blocked(TaskConfigurationGate.TRANSFER_MESSAGE), session.start())
+            assertEquals(0, captureChecks)
+            assertEquals(0, strategyCalls)
+            assertNull(manager.current())
+            assertFalse(session.state.value.running)
+        } finally {
+            try { session.stop() } finally { held.close() }
+        }
+    }
+
+    @Test fun `startup admission covers synchronous strategy initialization and releases on failure`() = runTest {
+        val gate = TaskConfigurationGate()
+        val manager = AutomationSessionManager()
+        var strategyCalls = 0
+        val session = LabyrinthEntryRecognitionSession(
+            sessionManager = manager, configurationGate = gate,
+            captureActive = { true }, captureStop = {},
+            strategyProvider = {
+                strategyCalls++
+                assertEquals(1, gate.state.value.admissions)
+                assertThrows(IllegalStateException::class.java) { gate.beginTransfer { true }.close() }
+                error("unavailable strategy")
+            },
+            processorFactory = { { error("no frames") } },
+        )
+        try {
+            val result = session.start()
+            assertEquals("strategy initialization must actually run", 1, strategyCalls)
+            assertTrue(result is LabyrinthEntryRecognitionStartResult.Blocked)
+            assertTrue((result as LabyrinthEntryRecognitionStartResult.Blocked).reason.contains("unavailable strategy"))
+            assertNull(manager.current())
+            assertFalse(session.state.value.running)
+            assertEquals(TaskConfigurationGate.State(), gate.state.value)
+            gate.beginTransfer { true }.close()
+        } finally { session.stop() }
+    }
+
     @Test
     fun `result without a route does not end the run even after score timeout`() = runTest {
         val manager = AutomationSessionManager()
@@ -31,16 +91,24 @@ class LabyrinthEntryRecognitionSessionTest {
             actionsAvailable = { true }, runTerminalListener = { events += it }, actionScope = this,
         )
         assertTrue(session.startAutomation(accountId = 1L, runId = "result-run") is LabyrinthEntryRecognitionStartResult.Started)
+        try {
         val sessionId = session.state.value.sessionId!!
         val method = session.javaClass.declaredMethods.single { it.name.startsWith("processFrameResult") }.apply { isAccessible = true }
-        fun feed(page: com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState, time: Long, score: Long? = null) {
+        suspend fun feed(page: com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState, time: Long, score: Long? = null) {
             now = time
             val result = com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult(
                 observation = com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageObservation(
                     page, 1.0, mapOf(page to 1.0), com.landosol.toolbox.labyrinth.vision.LabyrinthAnchorScores(emptyMap())),
                 matchedFeatures = emptyList(), elapsedMillis = 0, frameWidth = 1920, frameHeight = 1080, runResultScore = score,
             )
-            method.invoke(session, sessionId.value, result, 1920, 1080, time)
+            suspendCoroutine { continuation: Continuation<Unit> ->
+                try {
+                    val value = method.invoke(session, sessionId.value, result, 1920, 1080, time, continuation)
+                    if (value !== COROUTINE_SUSPENDED) continuation.resume(Unit)
+                } catch (failure: InvocationTargetException) {
+                    continuation.resumeWithException(failure.targetException)
+                }
+            }
         }
         val resultPage = com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState.RUN_CLEAR_RESULT
         feed(resultPage, 61_000)
@@ -55,7 +123,7 @@ class LabyrinthEntryRecognitionSessionTest {
         org.junit.Assert.assertNull(session.state.value.runSummary)
         org.junit.Assert.assertEquals(0, taps)
         org.junit.Assert.assertEquals(0, captureStops)
-        session.stop()
+        } finally { session.stop() }
     }
     @Test
     fun `starts dry run and releases the shared automation session`() = runTest {

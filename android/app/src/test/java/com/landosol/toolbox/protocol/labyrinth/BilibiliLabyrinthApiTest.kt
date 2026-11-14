@@ -5,6 +5,7 @@ import com.landosol.toolbox.protocol.bilibili.GameAccountProfile
 import com.landosol.toolbox.protocol.bilibili.GameSessionResult
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -17,6 +18,7 @@ class BilibiliLabyrinthApiTest {
                     GameSessionResult.Success(
                         mapOf(
                             "enter_id" to 0L,
+                            "labyrinth_enhance_node_list" to listOf(1L, 31L),
                             "guild_cleared_difficulty_list" to listOf(
                                 mapOf("guild_id" to 101L, "difficulty" to 2L),
                             ),
@@ -69,6 +71,7 @@ class BilibiliLabyrinthApiTest {
 
         assertTrue(top is LabyrinthOperationResult.Success)
         assertEquals(101, (top as LabyrinthOperationResult.Success).value.clearedDifficulties.single().guildId)
+        assertEquals(setOf(1, 31), top.value.enhanceNodeIds)
         assertTrue(enter is LabyrinthOperationResult.Success)
         assertEquals(listOf(20L), (enter as LabyrinthOperationResult.Success).value.map.single().nextBlockIds)
         assertTrue(enter.value.map.single().isAreaLastPoint)
@@ -91,6 +94,27 @@ class BilibiliLabyrinthApiTest {
 
         assertTrue(result is LabyrinthOperationResult.Failure)
         assertEquals(LabyrinthFailureKind.NETWORK, (result as LabyrinthOperationResult.Failure).kind)
+    }
+
+    @Test
+    fun `acquired enhancement nodes distinguish empty from missing and malformed`() = runTest {
+        val cases = listOf(
+            emptyMap<String, Any?>(),
+            mapOf("labyrinth_enhance_node_list" to null),
+            mapOf("labyrinth_enhance_node_list" to "31"),
+            mapOf("labyrinth_enhance_node_list" to listOf(1L, "bad", 31L)),
+            mapOf("labyrinth_enhance_node_list" to listOf(31.9)),
+            mapOf("labyrinth_enhance_node_list" to listOf(31L, null)),
+            mapOf("labyrinth_enhance_node_list" to listOf(0L)),
+            mapOf("labyrinth_enhance_node_list" to listOf(Int.MAX_VALUE.toLong() + 1)),
+        )
+        for (data in cases) {
+            val api = BilibiliLabyrinthApi(FakeSession(ArrayDeque(listOf(GameSessionResult.Success(data)))))
+            assertNull((api.top() as LabyrinthOperationResult.Success).value.enhanceNodeIds)
+        }
+        assertEquals(emptySet<Int>(), parseLabyrinthEnhanceNodeIds(emptyList<Int>()))
+        assertEquals(setOf(1, 31), parseLabyrinthEnhanceNodeIds(listOf(1L, "31", 31)))
+        assertEquals(setOf(30, 32), parseLabyrinthEnhanceNodeIds(listOf(30, 32)))
     }
 
     private class FakeSession(

@@ -18,3 +18,4 @@ com/landosol/toolbox/labyrinth/AndroidLabyrinthCnDatabaseRepository.kt # A | des
 com/landosol/toolbox/permissions/PermissionStatusReader.kt # A | environment page
 com/landosol/toolbox/ui/permissions/PermissionCenterScreen.kt # A | environment page
 com/landosol/toolbox/ui/LandosolToolboxApp.kt # A | desktop navigation
+com/landosol/toolbox/ui/labyrinth/LabyrinthConfigShareScreen.kt # A | desktop strategy and account configuration sharing

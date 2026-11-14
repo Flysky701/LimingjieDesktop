@@ -10,6 +10,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
+import com.landosol.toolbox.automation.AUTOMATION_PRE_DISPATCH_SUPPRESSED_REASON
 import com.landosol.toolbox.automation.AutomationAction
 import com.landosol.toolbox.automation.AutomationActionBackend
 import com.landosol.toolbox.automation.AutomationBackendResult
@@ -122,6 +123,7 @@ class LandosolAccessibilityService : AccessibilityService() {
     internal suspend fun perform(
         action: AutomationAction,
         gestureDisplayId: Int = Display.DEFAULT_DISPLAY,
+        permit: (() -> Boolean)? = null,
     ): AutomationBackendResult = when (action) {
         is AutomationAction.Tap -> {
             Log.i(GESTURE_LOG_TAG, "派发点击 display=$gestureDisplayId x=${action.point.x} y=${action.point.y}")
@@ -130,6 +132,7 @@ class LandosolAccessibilityService : AccessibilityService() {
                 durationMillis = TAP_DURATION_MILLIS,
                 displayId = gestureDisplayId,
                 description = "tap x=${action.point.x} y=${action.point.y}",
+                permit = permit,
             )
         }
         is AutomationAction.Swipe -> {
@@ -150,14 +153,17 @@ class LandosolAccessibilityService : AccessibilityService() {
                     holdX = action.end.x,
                     holdY = action.end.y,
                     description = "swipe from=${action.start.x},${action.start.y} to=${action.end.x},${action.end.y}",
+                    permit = permit,
                 )
             }
         }
-        AutomationAction.Back -> performGlobalBack()
+        AutomationAction.Back -> performGlobalBack(permit)
     }
 
-    private suspend fun performGlobalBack(): AutomationBackendResult = onMainThread {
-        if (performGlobalAction(GLOBAL_ACTION_BACK)) {
+    private suspend fun performGlobalBack(permit: (() -> Boolean)? = null): AutomationBackendResult = onMainThread {
+        if (permit?.invoke() == false) {
+            AutomationBackendResult.Rejected(AUTOMATION_PRE_DISPATCH_SUPPRESSED_REASON)
+        } else if (performGlobalAction(GLOBAL_ACTION_BACK)) {
             AutomationBackendResult.Completed
         } else {
             AutomationBackendResult.Rejected("系统拒绝返回操作")
@@ -174,10 +180,17 @@ class LandosolAccessibilityService : AccessibilityService() {
         description: String = "gesture",
         gestureId: Long = gestureSequence.incrementAndGet(),
         queuedAtMillis: Long = SystemClock.elapsedRealtime(),
+        permit: (() -> Boolean)? = null,
     ): AutomationBackendResult = withTimeoutOrNull(durationMillis + holdMillis + GESTURE_CALLBACK_GRACE_MILLIS) {
         suspendCancellableCoroutine { continuation ->
             mainHandler.post {
                 if (!continuation.isActive) return@post
+                // A pause/stop can be requested after T2 queued this input. Check inside the
+                // Android-main runnable, before dispatch logging and before any native gesture.
+                if (permit?.invoke() == false) {
+                    continuation.resume(AutomationBackendResult.Rejected(AUTOMATION_PRE_DISPATCH_SUPPRESSED_REASON))
+                    return@post
+                }
                 val dispatchedAt = SystemClock.elapsedRealtime()
                 Log.i(GESTURE_LOG_TAG, "gesture-dispatch id=$gestureId $description display=$displayId " +
                     "explicitDisplay=${Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && displayId != Display.DEFAULT_DISPLAY} " +
@@ -215,6 +228,15 @@ class LandosolAccessibilityService : AccessibilityService() {
                 // heap dump, OOM at run 4. The callback holds this clearable slot instead.
                 val pending = AtomicReference(continuation)
                 continuation.invokeOnCancellation { pending.set(null) }
+                // Recheck at the final native boundary as well: pause may arrive while the
+                // description above is built. This never touches an already-submitted gesture.
+                if (permit?.invoke() == false) {
+                    pending.set(null)
+                    if (continuation.isActive) continuation.resume(
+                        AutomationBackendResult.Rejected(AUTOMATION_PRE_DISPATCH_SUPPRESSED_REASON),
+                    )
+                    return@post
+                }
                 val accepted = dispatchGesture(
                     gesture,
                     object : GestureResultCallback() {
@@ -334,7 +356,12 @@ class AndroidAccessibilityActionBackend(
     private val expectedPackageName: () -> String,
 ) : AutomationActionBackend {
 
-    override suspend fun execute(action: AutomationAction): AutomationBackendResult {
+    override suspend fun execute(action: AutomationAction): AutomationBackendResult = executeInternal(action, null)
+
+    override suspend fun executeGuarded(action: AutomationAction, permit: () -> Boolean): AutomationBackendResult =
+        executeInternal(action, permit)
+
+    private suspend fun executeInternal(action: AutomationAction, permit: (() -> Boolean)?): AutomationBackendResult {
         if (!action.hasValidCoordinates()) return AutomationBackendResult.Rejected("动作坐标无效")
         val service = LandosolAccessibilityService.current()
             ?: return AutomationBackendResult.Rejected("无障碍服务未连接")
@@ -345,6 +372,7 @@ class AndroidAccessibilityActionBackend(
         return service.perform(
             action = action,
             gestureDisplayId = CaptureStateRegistry.gestureDisplayId(),
+            permit = permit,
         )
     }
 

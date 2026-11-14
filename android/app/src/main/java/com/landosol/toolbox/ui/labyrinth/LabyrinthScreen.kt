@@ -17,10 +17,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.LaunchedEffect
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.labyrinth.LabyrinthRerollSettings
+import com.landosol.toolbox.labyrinth.LabyrinthCustomNodePlan
 import com.landosol.toolbox.labyrinth.rerollSettings
 import com.landosol.toolbox.labyrinth.labyrinthRerollStatusText
 import kotlinx.coroutines.delay
@@ -43,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -53,6 +56,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import com.landosol.toolbox.labyrinth.batch.LabyrinthBatchCheckpoint
 import com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoal
 import com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoalMode
@@ -95,7 +99,7 @@ fun LabyrinthScreen(
     onCaptchaSolved: (String) -> Unit,
     onCaptchaError: (String) -> Unit,
     onCancelCaptcha: () -> Unit,
-    onOpenStrategies: () -> Unit = {},
+    onOpenStrategies: (() -> Unit)? = null,
 ) {
     val configuration = LocalConfiguration.current
     val compactWidth = configuration.screenWidthDp < 600
@@ -138,18 +142,13 @@ fun LabyrinthScreen(
                 title = "黎明界 · ${AppVersion.display}",
                 onBack = onBack,
                 actions = {
+                    onOpenStrategies?.let { open -> TextButton(onClick = open) { Text("策略与编组") } }
                     TextButton(
                         onClick = { showRerollSettings = true },
                         enabled = state.settingsReady && !state.isWorking && state.captcha == null,
                     ) {
                         Text(
                             if (compactWidth) "刷取" else "刷开局设置",
-                            style = MaterialTheme.typography.labelLarge,
-                        )
-                    }
-                    TextButton(onClick = onOpenStrategies) {
-                        Text(
-                            if (compactWidth) "策略" else "策略设置",
                             style = MaterialTheme.typography.labelLarge,
                         )
                     }
@@ -318,11 +317,20 @@ private fun RerollSettingsDialog(
 ) {
     var draft by remember { mutableStateOf(state.rerollSettings()) }
     var error by remember { mutableStateOf<String?>(null) }
+    // Scrollable chip rows do not contribute intrinsic width, so the dialog has to guarantee just
+    // enough room for the three route-mode chips and then let the content decide the rest.
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp.dp
+    val screenHeightDp = LocalConfiguration.current.screenHeightDp.dp
+    val maxDialogWidth = 400.dp.coerceAtMost(screenWidthDp - 24.dp)
+    val minDialogWidth = 360.dp.coerceAtMost(maxDialogWidth)
+    val contentMaxHeight = (screenHeightDp - 200.dp).coerceIn(160.dp, 520.dp)
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.widthIn(min = minDialogWidth, max = maxDialogWidth),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text("刷开局设置 · 当前账号") },
         text = {
-            Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+            Column(Modifier.heightIn(max = contentMaxHeight).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("保存后下次自动恢复；运行中使用开始时的固定配置。")
                 Text(
@@ -336,7 +344,8 @@ private fun RerollSettingsDialog(
                 RerollSettingsFields(
                     state = state.copy(selectedDifficulty = draft.difficulty, perfectStart = draft.perfectStart,
                         routeEvaluationMode = draft.routeEvaluationMode, valueAllowance = draft.valueAllowance,
-                        thirdBlockChoice = draft.thirdBlockChoice, selectedArea3BossIds = draft.area3BossIds,
+                        thirdBlockChoice = draft.thirdBlockChoice, customNodePlan = draft.customNodePlan,
+                        selectedArea3BossIds = draft.area3BossIds,
                         selectedArea5BossIds = draft.area5BossIds, maxAttempts = draft.maxAttempts,
                         rerollUntilFound = draft.rerollUntilFound, retireExisting = draft.retireExisting),
                     onDifficultySelected = { draft = draft.copy(difficulty = it) },
@@ -344,6 +353,7 @@ private fun RerollSettingsDialog(
                     onRouteEvaluationModeSelected = { draft = draft.copy(routeEvaluationMode = it) },
                     onValueAllowanceSelected = { draft = draft.copy(valueAllowance = it) },
                     onThirdBlockChoiceSelected = { draft = draft.copy(thirdBlockChoice = it) },
+                    onCustomNodePlanChanged = { draft = draft.copy(customNodePlan = it) },
                     onArea3BossToggle = { draft = draft.copy(area3BossIds = if (it in draft.area3BossIds) draft.area3BossIds - it else draft.area3BossIds + it) },
                     onArea5BossToggle = { draft = draft.copy(area5BossIds = if (it in draft.area5BossIds) draft.area5BossIds - it else draft.area5BossIds + it) },
                     onMaxAttemptsChange = { draft = draft.copy(maxAttempts = it) },
@@ -362,6 +372,27 @@ private fun RerollSettingsDialog(
 }
 
 @Composable
+private fun CustomNodeChoiceRow(
+    title: String,
+    selected: Int,
+    options: List<Int>,
+    enabled: Boolean,
+    onSelected: (Int) -> Unit,
+) {
+    Text(title, style = MaterialTheme.typography.labelLarge)
+    ChoiceRow {
+        options.forEach { type ->
+            FilterChip(
+                selected = type == selected,
+                onClick = { onSelected(type) },
+                label = { Text(LabyrinthCustomNodePlan.labelOf(type)) },
+                enabled = enabled,
+            )
+        }
+    }
+}
+
+@Composable
 private fun RerollSettingsFields(
     state: LabyrinthUiState,
     onDifficultySelected: (Int) -> Unit,
@@ -369,6 +400,7 @@ private fun RerollSettingsFields(
     onRouteEvaluationModeSelected: (LabyrinthRouteEvaluationMode) -> Unit,
     onValueAllowanceSelected: (Int) -> Unit,
     onThirdBlockChoiceSelected: (LabyrinthThirdBlockChoice) -> Unit,
+    onCustomNodePlanChanged: (LabyrinthCustomNodePlan) -> Unit,
     onArea3BossToggle: (Int) -> Unit,
     onArea5BossToggle: (Int) -> Unit,
     onMaxAttemptsChange: (String) -> Unit,
@@ -389,7 +421,7 @@ private fun RerollSettingsFields(
     }
     SelectionCard(
         title = "路线要求",
-        description = "价值路线 v2 按当前地图自身上界选最大收益路径；旧版固定模板保留用于 A/B 对照。",
+        description = "保留价值路线与旧版模板；自定义节点按所选列寻找完整连通路线。",
     ) {
         Text("路线判定", style = MaterialTheme.typography.labelLarge)
         ChoiceRow {
@@ -418,20 +450,51 @@ private fun RerollSettingsFields(
                 "0=必须拿到该地图自身可达的全部贵重格；1=每区最多少1格。Boss仍是硬条件，不会用少拿额度换掉。",
                 style = MaterialTheme.typography.bodySmall,
             )
-        } else {
+        } else if (state.routeEvaluationMode == LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE) {
             CheckOption(
                 label = "完美开局（旧版模板）",
                 checked = state.perfectStart,
                 enabled = !state.isWorking,
                 onCheckedChange = onPerfectStartChange,
             )
+        } else {
+            val plan = state.customNodePlan
+            val characterOrEvent = listOf(LabyrinthNodeTypes.LINK, LabyrinthNodeTypes.EVENT)
+            val characterOrRelic = listOf(LabyrinthNodeTypes.LINK, LabyrinthNodeTypes.RELIC)
+            CustomNodeChoiceRow("区域 1 · 第 3 列", plan.area1Column3, characterOrEvent, !state.isWorking) {
+                onCustomNodePlanChanged(plan.copy(area1Column3 = it))
+            }
+            CustomNodeChoiceRow("区域 1 · 第 5 列", plan.area1Column5, characterOrEvent, !state.isWorking) {
+                onCustomNodePlanChanged(plan.copy(area1Column5 = it))
+            }
+            CustomNodeChoiceRow("区域 2 · 第 2、6 列", plan.area2Columns2And6, characterOrEvent, !state.isWorking) {
+                onCustomNodePlanChanged(plan.copy(area2Columns2And6 = it))
+            }
+            CustomNodeChoiceRow("区域 3 · 第 4 列", plan.area3Column4, characterOrEvent, !state.isWorking) {
+                onCustomNodePlanChanged(plan.copy(area3Column4 = it))
+            }
+            val area4Enabled = !state.isWorking && state.selectedDifficulty != 1
+            CustomNodeChoiceRow("区域 4 · 第 2 列", plan.area4Column2, characterOrRelic, area4Enabled) {
+                onCustomNodePlanChanged(plan.copy(area4Column2 = it))
+            }
+            CustomNodeChoiceRow("区域 4 · 第 7 列", plan.area4Column7, characterOrRelic, area4Enabled) {
+                onCustomNodePlanChanged(plan.copy(area4Column7 = it))
+            }
+            Text("区域 4 固定必有一事件。", style = MaterialTheme.typography.bodySmall)
+            if (state.selectedDifficulty == 1) {
+                Text("难度1仅检查区域1–3；区域4–5的设置保留，但本难度不参与。", style = MaterialTheme.typography.bodySmall)
+            }
         }
+        val customMode = state.routeEvaluationMode == LabyrinthRouteEvaluationMode.CUSTOM_NODES
         Text("区域 3 / 5 遗物 vs 事件", style = MaterialTheme.typography.labelLarge)
         ChoiceRow {
             LabyrinthThirdBlockChoice.entries.forEach { choice ->
                 FilterChip(
-                    selected = choice == state.thirdBlockChoice,
-                    onClick = { onThirdBlockChoiceSelected(choice) },
+                    selected = choice == (if (customMode) state.customNodePlan.thirdBlockChoice else state.thirdBlockChoice),
+                    onClick = {
+                        if (customMode) onCustomNodePlanChanged(state.customNodePlan.copy(thirdBlockChoice = choice))
+                        else onThirdBlockChoiceSelected(choice)
+                    },
                     label = { Text(choice.label) },
                     enabled = !state.isWorking,
                 )
@@ -440,6 +503,8 @@ private fun RerollSettingsFields(
         Text(
             if (state.routeEvaluationMode == LabyrinthRouteEvaluationMode.VALUE_ROUTE)
                 "价值路线中该偏好不绑定列号；选择“两者都行”时不会增加刷图门槛，同分路线优先遗物。"
+            else if (customMode)
+                "仅用于区域3/5第3列；自定义设置独立保存，必须有完整连通路线且Boss符合名单。"
             else
                 "旧版模板中该条件仅在勾选完美开局时生效。",
             style = MaterialTheme.typography.bodySmall,
@@ -620,7 +685,7 @@ private fun AuxiliaryToolsSection(
         )
         Text("单独刷开局 · 本次公会", style = MaterialTheme.typography.labelLarge)
         ChoiceRow {
-            state.guildOptions.take(5).forEach { guild ->
+            state.guildOptions.forEach { guild ->
                 FilterChip(
                     selected = standaloneGuildId == guild.guildId,
                     onClick = { onStandaloneGuildSelected(guild.guildId) },
@@ -725,6 +790,27 @@ private fun EntryRecognitionCard(
     }
 }
 
+internal fun encodeBatchTargetCounts(counts: Map<Int, String>): Map<String, Any> =
+    counts.mapKeys { it.key.toString() }
+
+internal fun decodeBatchTargetCounts(saved: Map<String, Any?>): Map<Int, String> =
+    saved.entries.associate { (id, value) -> id.toInt() to value as String }
+
+internal fun encodeBatchTargetModes(modes: Map<Int, LabyrinthBatchGoalMode>): Map<String, Any> =
+    modes.entries.associate { (id, mode) -> id.toString() to mode.name }
+
+internal fun decodeBatchTargetModes(saved: Map<String, Any?>): Map<Int, LabyrinthBatchGoalMode> =
+    saved.entries.associate { (id, value) -> id.toInt() to LabyrinthBatchGoalMode.valueOf(value as String) }
+
+private val BatchTargetCountsSaver = mapSaver(
+    save = { counts: Map<Int, String> -> encodeBatchTargetCounts(counts) },
+    restore = ::decodeBatchTargetCounts,
+)
+private val BatchTargetModesSaver = mapSaver(
+    save = { modes: Map<Int, LabyrinthBatchGoalMode> -> encodeBatchTargetModes(modes) },
+    restore = ::decodeBatchTargetModes,
+)
+
 @Composable
 private fun BatchRunCard(
     state: LabyrinthUiState,
@@ -735,7 +821,7 @@ private fun BatchRunCard(
     onStart: (List<LabyrinthBatchGoal>) -> Unit,
     onStop: () -> Unit,
 ) {
-    val guildOptions = state.guildOptions.take(5)
+    val guildOptions = state.guildOptions
     val selectedDifficulty = state.selectedDifficulty
     val enabled = state.selectedAccount != null &&
         state.settingsReady &&
@@ -748,6 +834,7 @@ private fun BatchRunCard(
         LabyrinthBatchStage.RUNNING_LABYRINTH,
         LabyrinthBatchStage.RECORDING_RESULT,
     )
+    val pausedPending = checkpoint?.stage == LabyrinthBatchStage.PAUSED && haltReason != LabyrinthBatchHaltReason.USER_STOPPED
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
         WorkflowStepHeader(
             number = "2",
@@ -764,11 +851,11 @@ private fun BatchRunCard(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.primary,
         )
-        // Per-guild target text and mode; the guild list itself is fixed (top five).
-        val counts = remember(guildOptions) {
+        // Keep unstarted batch inputs when visiting the independent strategy destination.
+        val counts = rememberSaveable(guildOptions, stateSaver = BatchTargetCountsSaver) {
             mutableStateOf(guildOptions.associate { it.guildId to "" })
         }
-        val modes = remember(guildOptions) {
+        val modes = rememberSaveable(guildOptions, stateSaver = BatchTargetModesSaver) {
             mutableStateOf(guildOptions.associate { it.guildId to LabyrinthBatchGoalMode.CLEARS })
         }
 
@@ -809,8 +896,8 @@ private fun BatchRunCard(
             )
         }
 
-        if (active) {
-            Button(onClick = onStop) { Text("停止批量执行") }
+        if (active || pausedPending) {
+            Button(onClick = onStop) { Text(if (pausedPending) "停止待续批次" else "停止批量执行") }
         } else {
             Text("执行目标（留空 = 跳过该公会）", style = MaterialTheme.typography.titleSmall)
             @Composable

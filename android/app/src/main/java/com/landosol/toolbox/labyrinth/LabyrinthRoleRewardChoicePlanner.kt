@@ -228,8 +228,13 @@ class LabyrinthRoleRewardChoicePlanner(
         )
     }
 
-    private companion object {
-        val STANDARD_REFERENCE = EntryReferenceSize(1920, 1080)
+    internal companion object {
+        fun selectionButtonRect(slotId: String, frameWidth: Int, frameHeight: Int): EntryPixelRect? {
+            val index = SLOT_IDS.indexOf(slotId)
+            if (index < 0) return null
+            return ReferenceFitMapper.map(frameWidth, frameHeight, STANDARD_REFERENCE, BUTTON_RECTS[index])
+        }
+        private val STANDARD_REFERENCE = EntryReferenceSize(1920, 1080)
         val SLOT_IDS = listOf("role_reward_left", "role_reward_center", "role_reward_right")
         val BUTTON_RECTS = listOf(
             EntryReferenceRect(260, 810, 290, 155),

@@ -60,13 +60,14 @@ class RunSetupDraftTest {
     @Test fun preferencesReopenLastTaskAndTargetsWithoutChangingOtherPreferences() {
         val root=directory.root.toPath()
         DesktopPreferencesStore(root){fail(it)}.apply {
-            update{it.copy(theme=DesktopThemeMode.DARK,selectedTask=DesktopTask.REROLL.name,goals=listOf(DesktopGoal(1,99,false),DesktopGoal(5,2)))}
+            update{it.copy(theme=DesktopThemeMode.DARK,selectedTask=DesktopTask.REROLL.name,goals=listOf(DesktopGoal(1,99,false),DesktopGoal(5,2),DesktopGoal(6,3),DesktopGoal(10,4,false)))}
         }
         val loaded=DesktopPreferencesStore(root){fail(it)}.state.value
         assertEquals(DesktopTask.REROLL.name,loaded.selectedTask)
-        assertEquals(listOf(DesktopGoal(1,99,false),DesktopGoal(5,2)),loaded.goals)
+        assertEquals(listOf(DesktopGoal(1,99,false),DesktopGoal(5,2),DesktopGoal(6,3),DesktopGoal(10,4,false)),loaded.goals)
         assertEquals(DesktopThemeMode.DARK,loaded.theme)
         val draft=RunSetupDraft(ready,loaded.goals)
+        assertEquals((1..10).toList(),draft.goals.map { it.guildId })
         assertEquals(loaded.goals,draft.savedGoals())
         assertFalse(draft.dirty)
     }

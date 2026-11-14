@@ -239,16 +239,20 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
     private val relicStackResolver: AndroidLabyrinthRelicStackResolver,
     private val nodeRelicStackResolver: AndroidLabyrinthNodeRelicStackResolver,
     private val relicDetailResolver: AndroidLabyrinthRelicDetailResolver,
+    private val relicRewardResolver: AndroidLabyrinthRelicRewardResolver,
     private val skipJoinedCharacters: () -> Boolean,
     private val readResultScore: Boolean,
+    private val relicEvidenceVersion: () -> Long,
+    private val relicVerificationMarks: () -> Set<String>,
 ) {
     private val resultScoreResolver = AndroidLabyrinthResultScoreResolver()
     fun process(frame: CapturedFrame): LabyrinthEntryFrameResult = process(frame, null)
 
     internal fun process(frame: CapturedFrame, capturePixels: PixelImage?): LabyrinthEntryFrameResult {
         val started = System.nanoTime()
+        val pixels = capturePixels ?: capturedFramePixelImage(frame)
         val result = processor.process(
-            capturePixels ?: AndroidPixelImageAdapter.from(frame.bitmap),
+            pixels,
             deferRoleRewardPortraits = true,
             skipJoinedCharacters = skipJoinedCharacters(),
         )
@@ -259,14 +263,17 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
         val shopResolved = shopItemResolver.resolve(frame.bitmap, eventResolved)
         val roleResolved = roleRewardNameResolver.resolve(frame.bitmap, shopResolved)
         val relicStarted = System.nanoTime()
-        val relicResolved = relicStackResolver.resolve(frame.bitmap, roleResolved)
+        val evidenceVersion = relicEvidenceVersion()
+        val rewardResolved = relicRewardResolver.resolve(frame.bitmap, pixels, roleResolved, frame.timestampMillis)
+        val relicResolved = relicStackResolver.resolve(frame.bitmap, rewardResolved, frame.timestampMillis, evidenceVersion)
         val nodeStarted = System.nanoTime()
-        val nodeResolved = nodeRelicStackResolver.resolve(frame.bitmap, relicResolved)
+        val nodeResolved = nodeRelicStackResolver.resolve(frame.bitmap, relicResolved, frame.timestampMillis, evidenceVersion, relicVerificationMarks())
         val detailStarted = System.nanoTime()
-        val detailResolved = relicDetailResolver.resolve(frame.bitmap, nodeResolved)
+        val detailResolved = relicDetailResolver.resolve(frame.bitmap, nodeResolved, frame.timestampMillis, evidenceVersion)
         val resolved = if (readResultScore) resultScoreResolver.resolve(frame.bitmap, detailResolved) else detailResolved
         val finished = System.nanoTime()
         return resolved.copy(
+            relicEvidenceVersion = evidenceVersion,
             elapsedMillis = (finished - started) / 1_000_000,
             stageMillis = result.stageMillis + mapOf(
                 "exEncounter" to (exResolvedAt - resolvedStarted) / 1_000_000,
@@ -285,19 +292,35 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
             characterAttributes: Map<String, LabyrinthCharacterAttribute?> = emptyMap(),
             finalBossOnly: () -> Boolean = { false },
             skipJoinedCharacters: () -> Boolean = { false },
+            relicEvidenceVersion: () -> Long = { 0 },
+            relicVerificationMarks: () -> Set<String> = { emptySet() },
             nodeSearchHint: () -> NodeSearchHint? = { null },
             nodeScanRequested: () -> Boolean = { true },
             nodeScanConsumable: () -> Boolean = { true },
             rosterCharacterIds: () -> Set<String> = { emptySet() },
             readResultScore: Boolean = true,
+            /**
+             * Actual pixel size of the capture currently feeding this session.
+             *
+             * Non-null and not 1920x1080 means the anchor templates are scaled once, right here,
+             * to the size of their own rect (see [EntryTemplatePrescaler]). Null keeps the
+             * original templates and the per-score mapping.
+             */
+            captureFrameSize: () -> Pair<Int, Int>? = { null },
+            eventChoiceOverrides: Map<String, String> = emptyMap(),
+            eventCustomizationEnabled: Boolean = false,
             allowInitial1088GeometryRefinement: () -> Boolean = { false },
         ): AndroidLabyrinthEntryFrameProcessor {
+            val entryTemplates = AndroidLabyrinthEntryTemplateLoader(context).load()
+            val preScaledTemplates = captureFrameSize()?.let { (width, height) ->
+                EntryTemplatePrescaler.build(entryTemplates, width, height)
+            }
             val relicTemplates = AndroidLabyrinthRelicTemplateLoader(context).load()
             val characterIconMatcher = AndroidLabyrinthBattleTeamTemplateLoader(context).loadMatcher(characterAttributes)
             val characterRecognizer = LabyrinthCharacterRecognizer(characterIconMatcher)
             return AndroidLabyrinthEntryFrameProcessor(
                 processor = LabyrinthEntryFrameProcessor(
-                    templates = AndroidLabyrinthEntryTemplateLoader(context).load(),
+                    templates = entryTemplates,
                     nodeTemplates = AndroidLabyrinthNodeTemplateLoader(context).load(),
                     finalBossOnly = finalBossOnly,
                     nodeSearchHint = nodeSearchHint,
@@ -315,11 +338,14 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                         buyButtonTemplate = AndroidLabyrinthShopTemplateLoader(context).loadBuyButton(),
                         relicTemplates = relicTemplates,
                     ),
+                    preScaledTemplates = preScaledTemplates,
                 ),
                 exEncounterResolver = AndroidLabyrinthExEncounterResolver(),
                 eventChoiceResolver = runCatching {
                     AndroidLabyrinthEventChoiceResolver(
                         AndroidLabyrinthEventRecognitionDataLoader(context).load(),
+                        eventChoiceOverrides = eventChoiceOverrides,
+                        eventCustomizationEnabled = eventCustomizationEnabled,
                     )
                 }.getOrNull(),
                 shopItemResolver = AndroidLabyrinthShopItemResolver(),
@@ -332,8 +358,11 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                 relicStackResolver = AndroidLabyrinthRelicStackResolver(),
                 nodeRelicStackResolver = AndroidLabyrinthNodeRelicStackResolver(),
                 relicDetailResolver = AndroidLabyrinthRelicDetailResolver(),
+                relicRewardResolver = AndroidLabyrinthRelicRewardResolver(LabyrinthRelicRewardRecognizer(relicTemplates)),
                 skipJoinedCharacters = skipJoinedCharacters,
                 readResultScore = readResultScore,
+                relicEvidenceVersion = relicEvidenceVersion,
+                relicVerificationMarks = relicVerificationMarks,
             )
         }
     }

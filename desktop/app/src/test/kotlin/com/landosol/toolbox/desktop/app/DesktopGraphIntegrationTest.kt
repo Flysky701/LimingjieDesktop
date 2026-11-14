@@ -183,7 +183,7 @@ class DesktopGraphIntegrationTest {
         try {
             accountId = graph.database.accountDao().insert(AccountEntity(alias = "offline-reroll", serverId = GameServer.CN_BILIBILI.storageId,
                 gameUid = null, credentialKey = "synthetic-unused", isSelected = true, createdAt = 1, updatedAt = 1))
-            AndroidLabyrinthRerollSettingsStore(graph.context).save(accountId, settings)
+            graph.labyrinthStrategySettings.save(accountId, settings)
             val api = RerollApi()
             // Upstream LabyrinthRerollWorkflowTest: retires unmatched map; reroll-until-found ignores maxAttempts=1.
             val result = LabyrinthRerollWorkflow(api, graph.labyrinthRouteStore,
@@ -212,7 +212,7 @@ class DesktopGraphIntegrationTest {
         } finally { withTimeout(15_000) { graph.shutdown() } }
         val reopened = DesktopAppGraph(data, suppliedDevice = FixtureDevice(480, 270, intArrayOf()), startupUpdates = false)
         try {
-            assertEquals(settings, AndroidLabyrinthRerollSettingsStore(reopened.context).load(accountId))
+            assertEquals(settings, reopened.labyrinthStrategySettings.load(accountId))
             assertEquals(2L, reopened.labyrinthRouteStore.loadLatest(accountId)?.enterId)
             val checkpoint = RoomLabyrinthRerollCheckpointStore(reopened.database).load(accountId)
             assertEquals(2L, checkpoint?.enterId); assertEquals(2, checkpoint?.attempt)

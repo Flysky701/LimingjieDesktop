@@ -27,6 +27,41 @@ class LabyrinthEventChoicePlannerTest {
         assertFalse(decision(20, false).actionSafe)
     }
 
+    @Test
+    fun `logical arena selects configured branch without regional reward id`() {
+        val arena = com.landosol.toolbox.labyrinth.vision.LabyrinthArenaEvent.event
+        fun observe(trusted: Boolean = true, rightEnabled: Double = 0.8) = LabyrinthEventChoiceObservation(
+            arena, arena.choices.map { choice -> LabyrinthEventChoiceVisual(choice,
+                EntryPixelRect((choice.slot - 1) * 200, 500, 100, 100), 0.8,
+                if (choice.slot == 2) rightEnabled else 0.8) }, arena.name, 1.0, 0.5, 2, trusted,
+        )
+        fun decide(settings: LabyrinthStrategySettings, observation: LabyrinthEventChoiceObservation = observe(),
+            rejected: Set<String> = emptySet()): LabyrinthEventChoiceDecision = LabyrinthEventChoicePlanner(
+                emptyMap(), LabyrinthTeamOptimizer(LabyrinthTeamScorer(LabyrinthTeamScoringConfig(
+                    attributeDamageBonus = mapOf(1 to 0.0, 2 to 0.08, 3 to 0.16, 4 to 0.25, 5 to 0.75)))), settings,
+            ).decide(observation, emptySet(), LabyrinthRoleDecisionContext(0), emptyMap(), rejected)
+        val disabled = LabyrinthStrategySettings()
+        assertFalse(disabled.eventCustomizationEnabled)
+        assertTrue(decide(disabled) is LabyrinthEventChoiceDecision.Wait)
+        val defaults = disabled.copy(eventCustomizationEnabled = true)
+        val extreme = decide(defaults) as LabyrinthEventChoiceDecision.Select
+        assertEquals("arena.extreme", extreme.choiceId)
+        assertEquals("arena", extreme.eventId)
+        assertTrue(extreme.actionSafe)
+        val normal = decide(defaults.copy(eventChoiceOverrides = mapOf(arena.name to arena.choices[0].name)))
+            as LabyrinthEventChoiceDecision.Select
+        assertEquals("arena.normal", normal.choiceId)
+        assertTrue(normal.actionSafe)
+        assertFalse((decide(defaults, observe(false)) as LabyrinthEventChoiceDecision.Select).actionSafe)
+        assertFalse((decide(defaults, observe().copy(stableFrames = 1)) as LabyrinthEventChoiceDecision.Select).actionSafe)
+        assertEquals("arena.normal", (decide(defaults, observe(rightEnabled = 0.0)) as LabyrinthEventChoiceDecision.Select).choiceId)
+        assertEquals("arena.normal", (decide(defaults, rejected = setOf("arena.extreme")) as LabyrinthEventChoiceDecision.Select).choiceId)
+        assertTrue(decide(defaults, rejected = setOf("arena.extreme", "arena.normal")) is LabyrinthEventChoiceDecision.Wait)
+        assertEquals("arena.extreme", (decide(defaults.copy(eventChoiceOverrides = emptyMap()))
+            as LabyrinthEventChoiceDecision.Select).choiceId)
+        assertTrue(decide(defaults.copy(eventCustomizationEnabled = false)) is LabyrinthEventChoiceDecision.Wait)
+    }
+
     private val planner = LabyrinthEventChoicePlanner(
         profiles = emptyMap(),
         optimizer = LabyrinthTeamOptimizer(
@@ -141,19 +176,14 @@ class LabyrinthEventChoicePlannerTest {
         )
     }
 
-    /**
-     * 2026-09-21 screenshot: 1,550 alpha coins in hand and two of the three options priced
-     * 消耗2000. The game draws a cost-gated button in the same blue as a free one, so the tap is
-     * dispatched, refused, and the page never moves. Retiring the refused option must hand the
-     * run the next-best choice instead of retrying the same dead button until the run stops.
-     */
+    /** Independent slate policy must never fall back to either paid branch. */
     @Test
-    fun `an option the game refused is retired so the next best one runs`() {
+    fun `slate always selects left and waits when that branch cannot safely run`() {
         val event = EventResource(
             id = "1107",
             name = "发现了不可思议的石板！要怎么办？",
             choices = listOf(
-                EventChoiceResource(id = "11073", slot = 1, name = "摸一下", description = "阿尔法金币"),
+                EventChoiceResource(id = "11073", slot = 1, name = "摸一下 应该没关系吧？", description = "阿尔法金币"),
                 EventChoiceResource(
                     id = "11072", slot = 2, name = "全力挥击", description = "选择印记",
                     conditionType = 1, conditionValue = 2000,
@@ -179,32 +209,33 @@ class LabyrinthEventChoicePlannerTest {
             stableFrames = 3,
             trusted = true,
         )
-        val planner = LabyrinthEventChoicePlanner(emptyMap(), LabyrinthTeamOptimizer(LabyrinthTeamScorer(
-            LabyrinthTeamScoringConfig(attributeDamageBonus = (1..5).associateWith { 0.0 }),
-        )))
-        fun decide(rejected: Set<String>) = planner.decide(
-            observation = observation,
-            acquiredCharacterIds = emptySet(),
-            context = LabyrinthRoleDecisionContext(0),
-            relicStacks = emptyMap(),
-            rejectedChoiceIds = rejected,
-        )
+        fun decide(
+            customizationEnabled: Boolean,
+            rejected: Set<String> = emptySet(),
+            observed: LabyrinthEventChoiceObservation = observation,
+        ): LabyrinthEventChoiceDecision = LabyrinthEventChoicePlanner(
+            emptyMap(), LabyrinthTeamOptimizer(LabyrinthTeamScorer(
+                LabyrinthTeamScoringConfig(attributeDamageBonus = (1..5).associateWith { 0.0 }),
+            )), LabyrinthStrategySettings(eventCustomizationEnabled = customizationEnabled),
+        ).decide(observed, emptySet(), LabyrinthRoleDecisionContext(0), emptyMap(), rejected)
 
-        val first = decide(emptySet()) as LabyrinthEventChoiceDecision.Select
-        assertTrue(first.actionSafe)
-
-        // The winner was refused: it must not be recommended for action again, and the decision
-        // must move to a different option rather than repeating the dead one.
-        val second = decide(setOf(first.choiceId)) as LabyrinthEventChoiceDecision.Select
-        assertTrue(second.choiceId != first.choiceId)
-        assertTrue(second.actionSafe)
-
-        val third = decide(setOf(first.choiceId, second.choiceId)) as LabyrinthEventChoiceDecision.Select
-        assertTrue(third.choiceId !in setOf(first.choiceId, second.choiceId))
-        assertTrue(third.actionSafe)
-
-        // Every option refused: stop recommending taps and say so, instead of looping.
-        val exhausted = decide(event.choices.mapTo(mutableSetOf()) { it.id })
-        assertTrue(exhausted is LabyrinthEventChoiceDecision.Wait)
+        for (enabled in listOf(false, true)) {
+            val first = decide(enabled) as LabyrinthEventChoiceDecision.Select
+            assertEquals("11073", first.choiceId)
+            assertTrue(first.actionSafe)
+            assertEquals(observation.choices[0].buttonRect, first.buttonRect)
+            assertTrue(decide(enabled, setOf("11073")) is LabyrinthEventChoiceDecision.Wait)
+            assertTrue(decide(enabled, setOf("11072", "11071")) is LabyrinthEventChoiceDecision.Select)
+            assertTrue(decide(enabled, observed = observation.copy(trusted = false)) is LabyrinthEventChoiceDecision.Wait)
+            assertTrue(decide(enabled, observed = observation.copy(stableFrames = 1)) is LabyrinthEventChoiceDecision.Wait)
+            val disabledLeft = observation.copy(choices = observation.choices.map {
+                if (it.choice.id == "11073") it.copy(enabledConfidence = 0.0) else it
+            })
+            assertTrue(decide(enabled, observed = disabledLeft) is LabyrinthEventChoiceDecision.Wait)
+            val wrongIdentity = observation.copy(choices = observation.choices.map {
+                if (it.choice.id == "11073") it.copy(choice = it.choice.copy(name = "错误分支")) else it
+            })
+            assertTrue(decide(enabled, observed = wrongIdentity) is LabyrinthEventChoiceDecision.Wait)
+        }
     }
 }

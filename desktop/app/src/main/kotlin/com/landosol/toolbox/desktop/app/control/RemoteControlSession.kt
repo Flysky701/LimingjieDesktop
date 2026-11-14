@@ -204,6 +204,18 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
             awaitSnapshot{it.model("strategyLibrary",StrategyLibrary()).profiles.any{p->p.id==id}}
             return id
         }
+        suspend fun importConfiguration(code: String, modules: Set<com.landosol.toolbox.labyrinth.LabyrinthConfigModule>,
+            profileId: String, accountId: Long?, confirmEmptyScores: Boolean, revision: Long) {
+            request(ControlOps.CONFIG_IMPORT, buildJsonObject {
+                put("code", code); put("modules", ControlModelCodec.encode(modules)); put("profileId", profileId)
+                accountId?.let { put("accountId", it) }; put("confirmEmptyScores", confirmEmptyScores); put("revision", revision)
+            })
+            awaitSnapshot { it.model("strategyLibrary", StrategyLibrary()).revision > revision }
+        }
+        suspend fun undoImport(revision: Long) {
+            request(ControlOps.CONFIG_UNDO, buildJsonObject { put("revision", revision) })
+            awaitSnapshot { it.model("strategyLibrary", StrategyLibrary()).revision > revision }
+        }
         suspend fun edit(profile:StrategyProfile,settings:LabyrinthStrategySettings=profile.settings):StrategyProfile {
             request(ControlOps.STRATEGY_EDIT,buildJsonObject{put("id",profile.id);put("revision",profile.revision);put("name",profile.name);put("note",profile.note);put("value",ControlModelCodec.encode(settings))})
             var updated=profile

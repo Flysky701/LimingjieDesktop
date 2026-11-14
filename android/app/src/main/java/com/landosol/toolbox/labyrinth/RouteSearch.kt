@@ -28,13 +28,16 @@ data class LabyrinthRoutePolicy(
     val thirdBlockChoice: LabyrinthThirdBlockChoice = LabyrinthThirdBlockChoice.EITHER,
     val area3BossIds: Set<Int> = LabyrinthRerollOptions.defaultArea3BossIds,
     val area5BossIds: Set<Int> = LabyrinthRerollOptions.defaultArea5BossIds,
+    val customNodePlan: LabyrinthCustomNodePlan = LabyrinthCustomNodePlan(),
 ) {
     fun targetAreas(difficulty: Int): List<Int> = if (difficulty == 1) listOf(1, 2, 3) else AREA_REQUIREMENTS.keys.toList()
 
     fun accepts(area: Int, route: List<LabyrinthMapNode>): Boolean {
         if (route.isEmpty()) return false
         if (!acceptsGeneric(route)) return false
-        if (perfectStart) {
+        if (evaluationMode == LabyrinthRouteEvaluationMode.CUSTOM_NODES) {
+            if (customNodePlan.validationError() != null || !customNodePlan.accepts(area, route)) return false
+        } else if (perfectStart) {
             val requiredColumns = AREA_REQUIREMENTS[area]?.keys ?: return false
             if (route.mapTo(mutableSetOf(), LabyrinthMapNode::column) != requiredColumns) return false
             if (route.any { node -> node.blockType !in expectedTypes(area, node.column) }) return false
@@ -264,6 +267,9 @@ class LabyrinthOpeningRouteMatcher(
         policy: LabyrinthRoutePolicy,
         currentBlockId: Long? = null,
     ): RouteSearchResult {
+        if (policy.evaluationMode == LabyrinthRouteEvaluationMode.CUSTOM_NODES) {
+            return LabyrinthCustomNodeRouteEvaluator(policy).search(enterId, nodes, difficulty, currentBlockId)
+        }
         if (policy.evaluationMode == LabyrinthRouteEvaluationMode.VALUE_ROUTE) {
             return searchValueRoute(enterId, nodes, difficulty, policy, currentBlockId)
         }
@@ -342,6 +348,8 @@ class LabyrinthOpeningRouteMatcher(
 sealed interface RouteSearchResult {
     data class Found(val route: LabyrinthRoute) : RouteSearchResult
     data object NoRoute : RouteSearchResult
+    /** 新模式的具体拒绝原因；布局/配置异常必须保留现场而不是无限重刷。 */
+    data class Rejected(val message: String, val fatal: Boolean = false) : RouteSearchResult
 }
 
 class LabyrinthRouteSearcher {

@@ -1,10 +1,14 @@
 package com.landosol.toolbox.protocol.labyrinth
 
+import kotlinx.serialization.Serializable
+
 data class LabyrinthTop(
     val enterId: Long?,
     val guildId: Int?,
     val difficulty: Int?,
     val clearedDifficulties: List<ClearedDifficulty>,
+    /** Null means unavailable; an empty set is a confirmed account with no acquired nodes. */
+    val enhanceNodeIds: Set<Int>? = null,
 )
 
 data class ClearedDifficulty(val guildId: Int, val difficulty: Int)
@@ -34,9 +38,16 @@ data class LabyrinthMapNode(
     val isAreaLastPoint: Boolean,
 )
 
+@Serializable
+data class LabyrinthOpeningRelicState(
+    val guildId: Int,
+    val enhanceNodeIds: Set<Int>? = null,
+)
+
 data class LabyrinthRoute(
     val enterId: Long,
     val nodes: List<LabyrinthMapNode>,
+    val openingRelics: LabyrinthOpeningRelicState? = null,
 ) {
     val blockIds: List<Long> get() = nodes.map(LabyrinthMapNode::blockId)
 }

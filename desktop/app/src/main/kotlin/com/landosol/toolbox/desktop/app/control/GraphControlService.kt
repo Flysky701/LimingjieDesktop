@@ -254,6 +254,21 @@ class GraphControlService(
                 val id = graph.labyrinthStrategySettings.add(imported.name, imported.note, imported.settings)
                 return buildJsonObject { put("id", id) }
             }
+            ControlOps.CONFIG_IMPORT -> {
+                val configuration = com.landosol.toolbox.labyrinth.LabyrinthConfigShareCodec.decode(args.requiredString("code"))
+                val modules = decode<Set<com.landosol.toolbox.labyrinth.LabyrinthConfigModule>>(args.required("modules"))
+                val accountId = args["accountId"]?.jsonPrimitive?.longOrNull
+                if (com.landosol.toolbox.labyrinth.LabyrinthConfigModule.REROLL in modules) {
+                    check(accountId != null && graph.database.accountDao().getById(accountId) != null) { "请选择有效的本机账号" }
+                }
+                graph.labyrinthStrategySettings.importConfiguration(configuration, modules, args.requiredString("profileId"),
+                    accountId, args.boolean("confirmEmptyScores"), args.long("revision"))
+                refreshLocalRerollSettings()
+            }
+            ControlOps.CONFIG_UNDO -> {
+                graph.labyrinthStrategySettings.undoImport(args.long("revision"))
+                refreshLocalRerollSettings()
+            }
             ControlOps.CATALOG -> return buildJsonObject { put("items", model(graph.loadLabyrinthRoleRatings())) }
             ControlOps.DEVICE_DISCOVER -> {
                 requireIdle()
@@ -363,6 +378,7 @@ class GraphControlService(
 
     private suspend fun startTask(args: JsonObject) {
         requireIdle()
+        refreshLocalRerollSettings()
         val task = enumValueOf<DesktopTask>(args.requiredString("task"))
         if (graph.sharedData != null) {
             val id = binding["accountId"]?.jsonPrimitive?.longOrNull
@@ -435,6 +451,15 @@ class GraphControlService(
             shared.saveReroll(id, value)
         }
         graph.labyrinthController.saveSettings(value)
+    }
+
+    private fun refreshLocalRerollSettings() {
+        if (graph.sharedData != null || graph.busy) return
+        val state = graph.labyrinthController.uiState.value
+        val accountId = state.selectedAccount?.id ?: return
+        if (!state.settingsReady) return
+        val saved = graph.labyrinthStrategySettings.load(accountId)
+        if (state.rerollSettings() != saved) graph.labyrinthController.onConfigurationImported(accountId, saved)
     }
 
     private suspend fun saveAccount(editor: AccountEditorState) {
@@ -640,7 +665,8 @@ class GraphControlService(
     private companion object {
         val GLOBAL_EDITS = setOf(ControlOps.ACCOUNT_NEW, ControlOps.ACCOUNT_EDIT, ControlOps.ACCOUNT_SAVE,
             ControlOps.ACCOUNT_DELETE, ControlOps.STRATEGY_SAVE, ControlOps.STRATEGY_ADD, ControlOps.STRATEGY_EDIT,
-            ControlOps.STRATEGY_ACTIVATE, ControlOps.STRATEGY_DELETE, ControlOps.STRATEGY_IMPORT, ControlOps.SETTINGS_PATCH, ControlOps.ADB_CONFIGURE, ControlOps.ADB_DOWNLOAD)
+            ControlOps.STRATEGY_ACTIVATE, ControlOps.STRATEGY_DELETE, ControlOps.STRATEGY_IMPORT, ControlOps.CONFIG_IMPORT, ControlOps.CONFIG_UNDO,
+            ControlOps.SETTINGS_PATCH, ControlOps.ADB_CONFIGURE, ControlOps.ADB_DOWNLOAD)
         val DATA_ROLE_FORBIDDEN = setOf(ControlOps.START, ControlOps.STOP, ControlOps.PAUSE, ControlOps.PREVIEW,
             ControlOps.DEVICE_CONNECT, ControlOps.DEVICE_DISCONNECT, ControlOps.DEVICE_TEST, ControlOps.CAPTURE_STOP)
     }

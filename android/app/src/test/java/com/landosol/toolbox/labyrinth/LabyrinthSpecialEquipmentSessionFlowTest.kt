@@ -22,6 +22,9 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthSpecialEquipmentObservatio
 import com.landosol.toolbox.labyrinth.vision.LabyrinthSpecialEquipmentStage
 import com.landosol.toolbox.labyrinth.vision.labyrinthRelicDetailHoldsFrame
 import com.landosol.toolbox.labyrinth.vision.labyrinthSpecialEquipmentOwnsFrame
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -383,16 +386,102 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
             assertFalse(labyrinthSpecialEquipmentBlocksBattleStart(timedOut.stage))
         }
 
-        // 弹窗也点不到、退不出去时：只给消息，不点任何东西，但本轮照样结束（不能卡死）。
+        // 连「取消」都识别不到时：只给消息，不点任何东西，但本轮照样结束（不能卡死）。
         val noEscape = labyrinthSpecialEquipmentDecision(
             stage = LabyrinthSpecialEquipmentFlowStage.AWAIT_ACK_CANCEL,
-            observation = autoDialogObservation(),
+            observation = autoDialogObservation().copy(cancelButtonRect = null),
             stepAttempts = MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS,
             stepElapsedMillis = 0,
             equipConfirmEnabled = null,
         )
         assertTrue(noEscape.finished)
         assertNull(noEscape.tap)
+    }
+
+    @Test
+    fun `the auto-equip retry waits out the data connection before clicking again`() {
+        // 点过「自动装备」之后游戏要联网才弹窗2，这期间画面仍停在弹窗1：紧挨着上一次派发的帧只等，
+        // 不重复点击——否则 3 次预算一秒多就烧完，8 秒的时间上限根本轮不到。
+        val waiting = labyrinthSpecialEquipmentDecision(
+            stage = LabyrinthSpecialEquipmentFlowStage.AWAIT_AUTO_DIALOG,
+            observation = mainDialogObservation(enabled = false),
+            stepAttempts = 1,
+            stepElapsedMillis = 600,
+            equipConfirmEnabled = null,
+            sinceLastStepDispatchMillis = 600,
+        )
+        assertNull(waiting.tap)
+        assertFalse(waiting.finished)
+        assertEquals(LabyrinthSpecialEquipmentFlowStage.AWAIT_AUTO_DIALOG, waiting.stage)
+        assertTrue(waiting.message, waiting.message.contains("等待弹窗2"))
+
+        // 满 [SPECIAL_EQUIPMENT_STEP_RETRY_INTERVAL_MILLIS] 之后才重试，目标仍然是「自动装备」。
+        val retried = labyrinthSpecialEquipmentDecision(
+            stage = LabyrinthSpecialEquipmentFlowStage.AWAIT_AUTO_DIALOG,
+            observation = mainDialogObservation(enabled = false),
+            stepAttempts = 1,
+            stepElapsedMillis = SPECIAL_EQUIPMENT_STEP_RETRY_INTERVAL_MILLIS,
+            equipConfirmEnabled = null,
+            sinceLastStepDispatchMillis = SPECIAL_EQUIPMENT_STEP_RETRY_INTERVAL_MILLIS,
+        )
+        assertEquals(LabyrinthSpecialEquipmentTap.AUTO_BUTTON, retried.tap)
+
+        // 本步还没有派发过时不受间隔限制（首帧就要能点）。
+        val first = labyrinthSpecialEquipmentDecision(
+            stage = LabyrinthSpecialEquipmentFlowStage.AWAIT_AUTO_DIALOG,
+            observation = mainDialogObservation(enabled = false),
+            stepAttempts = 0,
+            stepElapsedMillis = 0,
+            equipConfirmEnabled = null,
+            sinceLastStepDispatchMillis = 0,
+        )
+        assertEquals(LabyrinthSpecialEquipmentTap.AUTO_BUTTON, first.tap)
+
+        // 3 次派发铺开至少 2 个间隔，仍在 8 秒等待上限之内：超限收尾必须晚于游戏的响应。
+        assertTrue(
+            (MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS - 1) * SPECIAL_EQUIPMENT_STEP_RETRY_INTERVAL_MILLIS <
+                SPECIAL_EQUIPMENT_STEP_TIMEOUT_MILLIS,
+        )
+    }
+
+    @Test
+    fun `an over-limit escape cancels the popup that is actually open`() {
+        // 弹窗1 上超限：逃生点弹窗1 的左下白色「取消」退回编组页。
+        val mainObservation = mainDialogObservation(enabled = true)
+        val main = labyrinthSpecialEquipmentDecision(
+            stage = LabyrinthSpecialEquipmentFlowStage.AWAIT_SECOND_MAIN_DIALOG,
+            observation = mainObservation,
+            stepAttempts = MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS,
+            stepElapsedMillis = 0,
+            equipConfirmEnabled = true,
+        )
+        assertEquals(LabyrinthSpecialEquipmentTap.CANCEL, main.tap)
+        assertEquals(
+            mainCancelRect,
+            labyrinthSpecialEquipmentTapRect(requireNotNull(main.tap), mainObservation),
+        )
+        assertTrue(main.message, main.message.contains("退回编组页"))
+
+        // 弹窗2 正开着时超限：先点弹窗2 左白的「取消」退回弹窗1，再由后续逃生点击关掉弹窗1；
+        // 逃生永远不是「确认」或「装备确定」。
+        val autoObservation = autoDialogObservation()
+        val auto = labyrinthSpecialEquipmentDecision(
+            stage = LabyrinthSpecialEquipmentFlowStage.AWAIT_SECOND_MAIN_DIALOG,
+            observation = autoObservation,
+            stepAttempts = MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS,
+            stepElapsedMillis = 0,
+            equipConfirmEnabled = null,
+        )
+        assertEquals(LabyrinthSpecialEquipmentTap.CANCEL, auto.tap)
+        assertEquals(
+            autoObservation.cancelButtonRect,
+            labyrinthSpecialEquipmentTapRect(requireNotNull(auto.tap), autoObservation),
+        )
+        assertTrue(auto.message, auto.message.contains("弹窗2"))
+        assertNull(labyrinthSpecialEquipmentTapRect(LabyrinthSpecialEquipmentTap.AUTO_CONFIRM, mainObservation))
+        assertNull(
+            labyrinthSpecialEquipmentTapRect(LabyrinthSpecialEquipmentTap.EQUIP_CONFIRM, autoObservation),
+        )
     }
 
     @Test
@@ -811,12 +900,18 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
 
     @Test
     fun `a finished round with a stuck dialog stops instead of parking for ever`() {
-        // 第一段：超限时连「取消」都识别不到（弹窗2 的取消不在本流程动作集里）⇒ 必须停机并保留诊断，
+        // 第一段：超限时连「取消」都识别不到（这一帧没有任何可信的取消矩形）⇒ 必须停机并保留诊断，
         // 而不是每帧重复「本轮已结束，继续编组与开战」把运行永久停在编组页。
         val stuck = session(kind = LabyrinthCombatKind.BOSS, settings = settingsFor(LabyrinthCombatKind.BOSS))
         setFlowStage(stuck, LabyrinthSpecialEquipmentFlowStage.AWAIT_SECOND_MAIN_DIALOG)
         setField(stuck, "specialEquipmentStepAttempts", MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS)
-        assertTrue(flowFrame(stuck, teamPageFrame(autoDialogObservation()), 1_000L))
+        assertTrue(
+            flowFrame(
+                stuck,
+                teamPageFrame(autoDialogObservation().copy(cancelButtonRect = null)),
+                1_000L,
+            ),
+        )
 
         assertTrue("status=${stuck.state.value.status}", awaitStopped(stuck))
         val stuckMessage = stuck.state.value.message.orEmpty()
@@ -890,7 +985,13 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
         val abandoned = session(kind = LabyrinthCombatKind.BOSS, settings = settingsFor(LabyrinthCombatKind.BOSS))
         setFlowStage(abandoned, LabyrinthSpecialEquipmentFlowStage.AWAIT_SECOND_MAIN_DIALOG)
         setField(abandoned, "specialEquipmentStepAttempts", MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS)
-        assertTrue(flowFrame(abandoned, teamPageFrame(autoDialogObservation()), 1_000L))
+        assertTrue(
+            flowFrame(
+                abandoned,
+                teamPageFrame(autoDialogObservation().copy(cancelButtonRect = null)),
+                1_000L,
+            ),
+        )
         assertTrue("status=${abandoned.state.value.status}", awaitStopped(abandoned))
         val abandonedMessage = abandoned.state.value.message.orEmpty()
         assertTrue(abandonedMessage, abandonedMessage.contains("已放弃本轮"))
@@ -985,12 +1086,13 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
 
     @Test
     fun `a boss multi-team run gives every team tab its own full special-equipment round`() {
+        var now = 1_000L
         val session = readySession(
             kind = LabyrinthCombatKind.BOSS,
             settings = settingsFor(LabyrinthCombatKind.BOSS),
             bossTeamMode = LabyrinthBossTeamMode.MULTI_TEAM,
+            clock = { now },
         )
-        var now = 1_000L
         val dispatched = mutableListOf<String?>()
 
         for (tab in 1..3) {
@@ -1415,6 +1517,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
     private fun session(
         kind: LabyrinthCombatKind?,
         settings: LabyrinthStrategySettings?,
+        clock: () -> Long = System::currentTimeMillis,
     ): LabyrinthEntryRecognitionSession {
         val manager = AutomationSessionManager()
         val session = LabyrinthEntryRecognitionSession(
@@ -1422,6 +1525,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
             processorFactory = { { error("测试不投喂帧") } },
             actionExecutor = SessionBoundActionExecutor(manager) { AutomationBackendResult.Completed },
             actionsAvailable = { true },
+            clock = clock,
         )
         setField(session, "activeSessionId", SESSION_ID)
         setField(session, "specialEquipmentSettings", settings)
@@ -1544,7 +1648,8 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
         ids: List<String> = teamIds,
         bossTeamMode: LabyrinthBossTeamMode? = null,
         bossMultiTeamTargetCount: Int? = null,
-    ): LabyrinthEntryRecognitionSession = session(kind = kind, settings = settings).also { created ->
+        clock: () -> Long = System::currentTimeMillis,
+    ): LabyrinthEntryRecognitionSession = session(kind = kind, settings = settings, clock = clock).also { created ->
         setBattleTeamPlan(created, readyPlan(ids))
         setBattleTeamRecommendation(created, readyRecommendation(ids))
         if (kind == LabyrinthCombatKind.BOSS) {
@@ -1559,12 +1664,17 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
      * 返回**这一帧**派发的动作标签（null ＝ 这一帧没有派发任何点击）。
      */
     private fun feedFrame(session: Any, result: LabyrinthEntryFrameResult, now: Long): String? {
-        updateState(session) { it.copy(frameTrace = LabyrinthFrameTrace()) }
+        updateState(session) { it.copy(lastResult = result, frameTrace = LabyrinthFrameTrace()) }
         // 真实运行里单动作锁由动作协程释放；测试里显式放锁，让每一次派发都可确定复现。
         releaseActionLatch(session)
-        if (flowFrame(session, result, now)) return frameActionLabel(session)
-        runTeamSelection(session, result, now)
-        return frameActionLabel(session)
+        if (!flowFrame(session, result, now)) runTeamSelection(session, result, now)
+        val label = frameActionLabel(session)
+        // Finish this fixture's stale-session action before the next synthetic tab arrives.
+        // Boss tab receipts are now installed before dispatch and cleared by its completion.
+        runBlocking { withTimeout(5_000) {
+            while ((field(session, "actionInFlight").get(session) as java.util.concurrent.atomic.AtomicBoolean).get()) delay(1)
+        } }
+        return label
     }
 
     /** 这一帧派发的动作标签（`frameTrace` 是私有的 StateFlow 字段）。 */

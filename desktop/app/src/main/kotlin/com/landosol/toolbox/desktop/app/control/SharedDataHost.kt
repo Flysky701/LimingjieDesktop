@@ -8,7 +8,6 @@ import com.landosol.toolbox.desktop.platform.UserRuntimeDirectory
 import com.landosol.toolbox.desktop.shared.DesktopContext
 import com.landosol.toolbox.desktop.shared.DesktopLog
 import com.landosol.toolbox.desktop.shared.AtomicFiles
-import com.landosol.toolbox.labyrinth.AndroidLabyrinthRerollSettingsStore
 import com.landosol.toolbox.labyrinth.LabyrinthRerollSettings
 import com.landosol.toolbox.protocol.bilibili.GameServer
 import com.sun.net.httpserver.HttpServer
@@ -133,7 +132,7 @@ class SharedDataHost private constructor(
                 val material = graph.accountRepository.loadLoginMaterial(id)
                 val strategy = graph.labyrinthStrategySettings.state.value
                 val value = SharedTaskData(SharedAccountMetadata(id, account.alias, account.serverId, account.gameUid, account.updatedAt),
-                    material.loginId, material.password, AndroidLabyrinthRerollSettingsStore(graph.context).load(id),
+                    material.loginId, material.password, graph.labyrinthStrategySettings.load(id),
                     strategy, strategyRevision(), graph.settings.state.value,
                     (verifiedUids[id.toString()] as? JsonObject)?.takeIf { it["serverId"]?.jsonPrimitive?.content == account.serverId }
                         ?.get("uid")?.jsonPrimitive?.longOrNull, graph.ux.preferences.state.value,
@@ -155,7 +154,7 @@ class SharedDataHost private constructor(
                 check(graph.database.accountDao().getById(accountId) != null) { "共享账号不存在" }
                 val value = ControlModelCodec.decode<LabyrinthRerollSettings>(args.getValue("value"))
                 value.validationError()?.let { error(it) }
-                AndroidLabyrinthRerollSettingsStore(graph.context).save(accountId, value)
+                graph.labyrinthStrategySettings.save(accountId, value)
                 withContext(Dispatchers.Main) {
                     if (graph.labyrinthController.uiState.value.selectedAccount?.id == accountId && graph.labyrinthController.uiState.value.settingsReady)
                         graph.labyrinthController.saveSettings(value)

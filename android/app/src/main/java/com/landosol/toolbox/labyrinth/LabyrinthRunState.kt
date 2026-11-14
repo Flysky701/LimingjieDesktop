@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.landosol.toolbox.data.local.AppDatabase
 import com.landosol.toolbox.data.local.LabyrinthRunCharacterEntity
 import com.landosol.toolbox.data.local.LabyrinthRunRelicEntity
+import com.landosol.toolbox.data.local.LabyrinthRunRelicStackEntity
 import com.landosol.toolbox.data.local.LabyrinthRunStateEntity
 import com.landosol.toolbox.labyrinth.vision.LabyrinthCharacterMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthRelicMatch
@@ -26,8 +27,9 @@ data class LabyrinthObservedRelic(
     val confidence: Double,
     val firstSeenAt: Long,
     val lastSeenAt: Long,
-    val observationCount: Int,
 )
+
+data class LabyrinthOpeningRelicReceipt(val enterId: Long, val complete: Boolean)
 
 data class LabyrinthRunSnapshot(
     val runKey: String,
@@ -38,6 +40,9 @@ data class LabyrinthRunSnapshot(
     val joinedCharacters: List<LabyrinthJoinedCharacter>,
     val updatedAt: Long,
     val observedRelics: List<LabyrinthObservedRelic> = emptyList(),
+    val startedAt: Long = 0,
+    val relicStacks: Map<LabyrinthRelicMark, LabyrinthRelicStackRecord> = emptyMap(),
+    val openingRelicReceipt: LabyrinthOpeningRelicReceipt? = null,
 )
 
 interface LabyrinthRunStateStore {
@@ -52,6 +57,9 @@ interface LabyrinthRunStateStore {
         nowMillis: Long,
         relics: List<LabyrinthRelicMatch> = emptyList(),
         replaceCharacters: Boolean = false,
+        expectedStartedAt: Long? = null,
+        relicStacks: Map<LabyrinthRelicMark, LabyrinthRelicStackRecord>? = null,
+        openingRelicReceipt: LabyrinthOpeningRelicReceipt? = null,
     ): LabyrinthRunSnapshot
 
     suspend fun load(accountId: Long?): LabyrinthRunSnapshot?
@@ -110,7 +118,7 @@ object LabyrinthRelicMerger {
         matches: List<LabyrinthRelicMatch>,
         nowMillis: Long,
     ): List<LabyrinthObservedRelic> {
-        val merged = existing.toMutableList()
+        val merged = existing.distinctBy(LabyrinthObservedRelic::relicId).toMutableList()
         matches
             .filter {
                 !it.relicId.isNullOrBlank() &&
@@ -122,19 +130,7 @@ object LabyrinthRelicMerger {
                 val relicId = requireNotNull(match.relicId)
                 val displayName = requireNotNull(match.displayName)
                 val attribute = requireNotNull(match.attribute)
-                val index = merged.indexOfFirst { it.relicId == relicId }
-                if (index >= 0) {
-                    val previous = merged[index]
-                    merged[index] = previous.copy(
-                        displayName = displayName,
-                        attribute = attribute,
-                        attributeBonus = match.attributeBonus.orEmpty(),
-                        effect = match.effect.orEmpty(),
-                        confidence = maxOf(previous.confidence, match.confidence),
-                        lastSeenAt = nowMillis,
-                        observationCount = previous.observationCount + 1,
-                    )
-                } else {
+                if (merged.none { it.relicId == relicId }) {
                     merged += LabyrinthObservedRelic(
                         relicId = relicId,
                         displayName = displayName,
@@ -144,7 +140,6 @@ object LabyrinthRelicMerger {
                         confidence = match.confidence,
                         firstSeenAt = nowMillis,
                         lastSeenAt = nowMillis,
-                        observationCount = 1,
                     )
                 }
             }
@@ -176,8 +171,12 @@ class RoomLabyrinthRunStateStore(
     override suspend fun startNew(accountId: Long?, nowMillis: Long): LabyrinthRunSnapshot = database.withTransaction {
         val key = runKey(accountId)
         val dao = database.labyrinthRunStateDao()
+        val previous = dao.getState(key)
+        check(previous?.startedAt != Long.MAX_VALUE) { "本局代际已耗尽" }
+        val startedAt = maxOf(nowMillis, previous?.startedAt?.plus(1) ?: nowMillis)
         dao.deleteCharacters(key)
         dao.deleteRelics(key)
+        dao.deleteRelicStacks(key)
         dao.upsertState(
             LabyrinthRunStateEntity(
                 runKey = key,
@@ -185,7 +184,7 @@ class RoomLabyrinthRunStateStore(
                 status = ACTIVE,
                 currentPage = null,
                 unrecognizedCharacterCount = 0,
-                startedAt = nowMillis,
+                startedAt = startedAt,
                 updatedAt = nowMillis,
             ),
         )
@@ -199,10 +198,15 @@ class RoomLabyrinthRunStateStore(
         nowMillis: Long,
         relics: List<LabyrinthRelicMatch>,
         replaceCharacters: Boolean,
+        expectedStartedAt: Long?,
+        relicStacks: Map<LabyrinthRelicMark, LabyrinthRelicStackRecord>?,
+        openingRelicReceipt: LabyrinthOpeningRelicReceipt?,
     ): LabyrinthRunSnapshot = database.withTransaction {
         val key = runKey(accountId)
         val dao = database.labyrinthRunStateDao()
-        val current = dao.getState(key) ?: LabyrinthRunStateEntity(
+        val savedState = dao.getState(key)
+        check(expectedStartedAt == null || savedState?.startedAt == expectedStartedAt) { "本局已切换，拒绝旧页面记录" }
+        val current = savedState ?: LabyrinthRunStateEntity(
             runKey = key,
             accountId = accountId,
             status = ACTIVE,
@@ -211,6 +215,11 @@ class RoomLabyrinthRunStateStore(
             startedAt = nowMillis,
             updatedAt = nowMillis,
         )
+        openingRelicReceipt?.let { receipt ->
+            require(receipt.enterId > 0)
+            check(current.openingEnterId == null || current.openingEnterId == receipt.enterId) { "本局开局身份不一致" }
+        }
+        dao.upsertState(current)
         val existing = dao.getCharacters(key).map(LabyrinthRunCharacterEntity::toDomain)
         val merged = LabyrinthRosterMerger.merge(
             existing = existing,
@@ -224,10 +233,26 @@ class RoomLabyrinthRunStateStore(
         val mergedRelics = LabyrinthRelicMerger.merge(existingRelics, relics, nowMillis)
         dao.deleteRelics(key)
         dao.insertRelics(mergedRelics.map { it.toEntity(key) })
+        if (relicStacks != null) {
+            val newIds = mergedRelics.map { it.relicId }.toSet() - existingRelics.map { it.relicId }.toSet()
+            val replayedMarks = relics.filter { it.relicId !in newIds }
+                .mapNotNull { LabyrinthRelicMark.fromLabel(it.attribute) }.toSet()
+            val acquiredMarks = relics.filter { it.relicId in newIds }
+                .mapNotNull { LabyrinthRelicMark.fromLabel(it.attribute) }.toSet()
+            val updates = relicStacks.filter { (mark, record) ->
+                require(record.stacks in 0..30)
+                record.source != LabyrinthRelicStackSource.ACQUISITION || mark !in replayedMarks || mark in acquiredMarks
+            }
+            dao.insertRelicStacks(updates.map { (mark, record) ->
+                LabyrinthRunRelicStackEntity(key, mark.name, record.stacks, record.source.name)
+            })
+        }
         dao.upsertState(
             current.copy(
                 status = ACTIVE,
                 currentPage = page,
+                openingEnterId = openingRelicReceipt?.enterId ?: current.openingEnterId,
+                openingRelicsComplete = current.openingRelicsComplete || openingRelicReceipt?.complete == true,
                 unrecognizedCharacterCount = if (characters.isNotEmpty()) {
                     characters.count { it.characterId == null || it.displayName == null }
                 } else {
@@ -256,6 +281,16 @@ class RoomLabyrinthRunStateStore(
             joinedCharacters = dao.getCharacters(key).map(LabyrinthRunCharacterEntity::toDomain),
             updatedAt = state.updatedAt,
             observedRelics = dao.getRelics(key).map(LabyrinthRunRelicEntity::toDomain),
+            startedAt = state.startedAt,
+            openingRelicReceipt = state.openingEnterId?.takeIf { it > 0 }?.let {
+                LabyrinthOpeningRelicReceipt(it, state.openingRelicsComplete)
+            },
+            relicStacks = dao.getRelicStacks(key).mapNotNull { entry ->
+                val mark = LabyrinthRelicMark.entries.firstOrNull { it.name == entry.mark } ?: return@mapNotNull null
+                val source = LabyrinthRelicStackSource.entries.firstOrNull { it.name == entry.source } ?: return@mapNotNull null
+                if (entry.stacks !in 0..30) return@mapNotNull null
+                mark to LabyrinthRelicStackRecord(entry.stacks, source)
+            }.toMap(),
         )
     }
 
@@ -295,7 +330,6 @@ private fun LabyrinthRunRelicEntity.toDomain() = LabyrinthObservedRelic(
     confidence = confidence,
     firstSeenAt = firstSeenAt,
     lastSeenAt = lastSeenAt,
-    observationCount = observationCount,
 )
 
 private fun LabyrinthObservedRelic.toEntity(runKey: String) = LabyrinthRunRelicEntity(
@@ -308,5 +342,4 @@ private fun LabyrinthObservedRelic.toEntity(runKey: String) = LabyrinthRunRelicE
     confidence = confidence,
     firstSeenAt = firstSeenAt,
     lastSeenAt = lastSeenAt,
-    observationCount = observationCount,
 )

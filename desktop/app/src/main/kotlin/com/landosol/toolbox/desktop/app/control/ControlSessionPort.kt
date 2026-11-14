@@ -38,6 +38,8 @@ object ControlOps {
     const val STRATEGY_ACTIVATE="strategy.activate"
     const val STRATEGY_DELETE="strategy.delete"
     const val STRATEGY_IMPORT="strategy.import"
+    const val CONFIG_IMPORT="configuration.import"
+    const val CONFIG_UNDO="configuration.undo"
     const val CATALOG="catalog.load" // reply items:[LabyrinthRoleRatingItem]
     const val DEVICE_DISCOVER="device.discover" // force:Boolean
     const val DEVICE_CONNECT="device.connect" // serial:String,reconnect:Boolean

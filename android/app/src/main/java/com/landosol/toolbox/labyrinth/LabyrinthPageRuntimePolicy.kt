@@ -130,8 +130,15 @@ internal const val ORPHAN_MOVE_CONFIRMATION_CLEAR_FRAMES = 3
 internal fun labyrinthSingleChoiceEventButtonRect(
     result: LabyrinthEntryFrameResult,
     minimumScore: Double = 0.72,
+    eventCustomizationEnabled: Boolean = false,
 ): EntryPixelRect? {
     if (result.observation.state != LabyrinthEntryPageState.EVENT_CHOICE) return null
+    if (eventCustomizationEnabled) {
+        val diagnostic = result.eventOcrDiagnostics
+        if ((diagnostic?.completeLayoutCount ?: 0) >= 2) return null
+        if (diagnostic?.status?.startsWith("TITLE_") == true) return null
+        if (diagnostic?.status == "WAITING_OCR") return null
+    }
     val scores = result.observation.anchorScores
     if (scores[EntryAnchorId.EVENT_SINGLE_CHOICE_TRIGGER_TITLE] < minimumScore) return null
     val match = result.anchorMatches[EntryAnchorId.EVENT_SINGLE_CHOICE_SELECT_BUTTON] ?: return null
@@ -852,6 +859,17 @@ internal const val MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS = 3
 internal const val SPECIAL_EQUIPMENT_STEP_TIMEOUT_MILLIS = 8_000L
 
 /**
+ * 「点「自动装备」后等弹窗2」这一步的重复点击间隔。
+ *
+ * 游戏要先发一次联网请求把自动装备算完才弹窗2（画面右上角显示「正在进行数据连接」），这段时间画面一直
+ * 停在弹窗1。把「还看到弹窗1」当成「点击没生效」并按会话动作间隔（600 ms）重试，
+ * [MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS] 的次数预算一秒多就烧完，
+ * [SPECIAL_EQUIPMENT_STEP_TIMEOUT_MILLIS] 根本轮不到——那正是「游戏马上就要弹窗2、流程却已经放弃」的
+ * 形态。间隔取 3 秒：3 次派发至少铺开 6 秒，仍在 8 秒等待上限之内。
+ */
+internal const val SPECIAL_EQUIPMENT_STEP_RETRY_INTERVAL_MILLIS = 3_000L
+
+/**
  * 「装备确定」的两态判定要求**连续这么多帧同类证据**。
  *
  * 单帧判态会判错：「弹窗2 刚关、弹窗1 正在显现」的过渡帧上，内芯两个信号都可能落在
@@ -984,6 +1002,9 @@ internal fun labyrinthSpecialEquipmentTeamIsUnchanged(
  *   两态证据不可信），只等下一帧；判定推迟不会破坏 3.1 分支——稳定不可用仍然会走
  *   「取消」这条路，只是晚一帧。这里刻意**不给默认值**：调用方必须显式传入稳定后的结论，避免有人
  *   拿单帧原始证据直接判态。
+ * @param sinceLastStepDispatchMillis 距离本步上一次**真正派发**的毫秒数；本步还没有派发过时是
+ *   `Long.MAX_VALUE`（默认值）。只有「点「自动装备」后等弹窗2」这一步用它限速：游戏联网期间画面还停在
+ *   弹窗1，重复点击必须慢于游戏的响应。
  *
  * 终止条件只有三个，且都在这一个函数里：
  * 1. 走完 3.2（点「装备确定」并回到编组页）→ [LabyrinthSpecialEquipmentFlowStage.DONE]；
@@ -996,6 +1017,7 @@ internal fun labyrinthSpecialEquipmentDecision(
     stepAttempts: Int,
     stepElapsedMillis: Long,
     equipConfirmEnabled: Boolean?,
+    sinceLastStepDispatchMillis: Long = Long.MAX_VALUE,
     maxStepAttempts: Int = MAX_SPECIAL_EQUIPMENT_STEP_ATTEMPTS,
     stepTimeoutMillis: Long = SPECIAL_EQUIPMENT_STEP_TIMEOUT_MILLIS,
 ): LabyrinthSpecialEquipmentDecision {
@@ -1013,20 +1035,18 @@ internal fun labyrinthSpecialEquipmentDecision(
     val dialog = observation?.stage
     val observed = dialog?.let { "当前弹窗=${it.name}" } ?: "当前无弹窗"
     if (stepAttempts >= maxStepAttempts || stepElapsedMillis >= stepTimeoutMillis) {
-        // 只要弹窗1 还开着且「取消」矩形可信，就点它退回编组页；否则只给可诊断消息
-        // ，并且本轮照样结束、照样放行开战。
-        val escape = if (
-            dialog == LabyrinthSpecialEquipmentStage.MAIN_DIALOG &&
-            observation.cancelButtonRect != null
-        ) {
+        // 只要当前开着的那一层弹窗给出可信的「取消」矩形，就点它退回上一层；否则只给可诊断消息，
+        // 并且本轮照样结束、照样放行开战。弹窗2 的「确认」永远不是逃生目标。
+        val escape = if (observation?.cancelButtonRect != null) {
             LabyrinthSpecialEquipmentTap.CANCEL
         } else {
             null
         }
-        val tail = if (escape != null) {
-            "；点击左下白色「取消」退回编组页后照常开始战斗"
-        } else {
-            "；放弃本轮并照常开始战斗"
+        val tail = when {
+            escape == null -> "；放弃本轮并照常开始战斗"
+            dialog == LabyrinthSpecialEquipmentStage.AUTO_DIALOG ->
+                "；先点弹窗2 左白的「取消」退回弹窗1，再点弹窗1 左下白色「取消」退回编组页后照常开始战斗"
+            else -> "；点击左下白色「取消」退回编组页后照常开始战斗"
         }
         return LabyrinthSpecialEquipmentDecision(
             stage = LabyrinthSpecialEquipmentFlowStage.DONE,
@@ -1071,8 +1091,22 @@ internal fun labyrinthSpecialEquipmentDecision(
 
         LabyrinthSpecialEquipmentFlowStage.AWAIT_AUTO_DIALOG -> when (dialog) {
             LabyrinthSpecialEquipmentStage.AUTO_DIALOG -> autoConfirmDecision(observation)
-            // 还停在弹窗1：重新点「自动装备」（有次数上限兜底）。
-            LabyrinthSpecialEquipmentStage.MAIN_DIALOG -> autoButtonDecision(observation)
+            // 还停在弹窗1：游戏可能正在联网（弹窗2 还没出现），所以只有距本步上一次派发已满
+            // [SPECIAL_EQUIPMENT_STEP_RETRY_INTERVAL_MILLIS] 才重试「自动装备」——按会话动作间隔重试
+            // 会把 3 次预算一秒多烧完，8 秒的时间上限根本轮不到。
+            LabyrinthSpecialEquipmentStage.MAIN_DIALOG ->
+                if (
+                    stepAttempts == 0 ||
+                    sinceLastStepDispatchMillis >= SPECIAL_EQUIPMENT_STEP_RETRY_INTERVAL_MILLIS
+                ) {
+                    autoButtonDecision(observation)
+                } else {
+                    waitFor(
+                        stage,
+                        "特别装备：已点「自动装备」，等待弹窗2「自动特别装备设定」出现" +
+                            "（游戏数据连接中，暂不重复点击）",
+                    )
+                }
             null -> waitFor(stage, "特别装备：等待「自动特别装备设定」弹窗出现")
         }
 

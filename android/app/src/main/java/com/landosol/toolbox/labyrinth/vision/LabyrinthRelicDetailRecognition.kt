@@ -7,6 +7,7 @@ data class LabyrinthRelicDetailObservation(
     val titleConfirmed: Boolean,
     val entries: Map<LabyrinthRelicMark, Int> = emptyMap(),
     val evidenceId: Long? = null,
+    val capturedAtMillis: Long = Long.MIN_VALUE,
 )
 
 /**

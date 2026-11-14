@@ -10,11 +10,12 @@ internal class AndroidRelicRoiOcr(private val submit: (Bitmap, (String?) -> Unit
     /** See [RelicOcrScheduler.lastCompletionAt]. */
     fun lastCompletionAt(): Long = scheduler.lastCompletionAt()
 
-    fun read(bitmap: Bitmap, slot: String, rect: EntryPixelRect, scale: Int = 1,
+    fun read(bitmap: Bitmap, slot: String, rect: EntryPixelRect, scale: Int = 1, capturedAtMillis: Long = Long.MIN_VALUE,
              readText: (Bitmap, (String?) -> Unit) -> Unit = submit): RelicOcrScheduler.Read? {
         val fingerprint = relicRoiFingerprint(bitmap, rect)
         val cached = scheduler.cached(slot, fingerprint)
-        val ticket = scheduler.request(slot, fingerprint) ?: return cached
+        val ticket = scheduler.request(slot, fingerprint, capturedAtMillis) ?: return cached
+        val diagnosticId = RelicRoiOcrTelemetry.requested(slot, capturedAtMillis, android.os.SystemClock.elapsedRealtime())
         var input: Bitmap? = null
         try {
             val crop = Bitmap.createBitmap(bitmap, rect.left, rect.top, rect.width, rect.height)
@@ -25,11 +26,16 @@ internal class AndroidRelicRoiOcr(private val submit: (Bitmap, (String?) -> Unit
             }
             val owned = requireNotNull(input)
             readText(owned) { text ->
-                scheduler.complete(ticket, text)
-                if (!owned.isRecycled) owned.recycle()
+                try {
+                    scheduler.complete(ticket, text)
+                } finally {
+                    RelicRoiOcrTelemetry.completed(diagnosticId, android.os.SystemClock.elapsedRealtime(), text?.length)
+                    if (!owned.isRecycled) owned.recycle()
+                }
             }
         } catch (failure: Exception) {
             scheduler.complete(ticket, null)
+            RelicRoiOcrTelemetry.completed(diagnosticId, android.os.SystemClock.elapsedRealtime(), null)
             input?.let { if (!it.isRecycled) it.recycle() }
         }
         return cached

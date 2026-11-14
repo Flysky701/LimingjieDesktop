@@ -40,6 +40,9 @@ fun PermissionCenterScreen(
     onOpenAccessibilitySettings: () -> Unit,
     onRequestNotifications: () -> Unit,
     onStopCapture: () -> Unit,
+    onOpenConfigurationSharing: () -> Unit = {},
+    configurationSharingEnabled: Boolean = true,
+    configurationSharingReason: String? = null,
 ) {
     val configuration = LocalConfiguration.current
     val wideLandscape = shouldUseNavigationRail(
@@ -61,6 +64,17 @@ fun PermissionCenterScreen(
                 "完成无障碍和任务通知设置后即可启动任务；启动时会请求截图授权，任务控制入口位于通知栏。",
                 style = MaterialTheme.typography.bodySmall,
             )
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("配置导入与导出", style = MaterialTheme.typography.titleMedium)
+                    Text("分享全局策略、个人评分和刷开局设置。",
+                        style = MaterialTheme.typography.bodySmall)
+                    configurationSharingReason?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    Button(onClick = onOpenConfigurationSharing, enabled = configurationSharingEnabled) {
+                        Text("管理配置分享码")
+                    }
+                }
+            }
             val permissionItems = listOf(
                 PermissionItem(
                     title = "无障碍服务",

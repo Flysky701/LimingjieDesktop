@@ -34,6 +34,7 @@ fun LabyrinthOpeningRosterScreen(
     loadCatalog: suspend () -> List<LabyrinthRoleRatingItem>,
     onChange: (Int, List<List<String>>?) -> Unit,
     onClose: () -> Unit,
+    wideLayout: Boolean = false,
 ) {
     var catalog by remember { mutableStateOf<List<LabyrinthRoleRatingItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -43,6 +44,7 @@ fun LabyrinthOpeningRosterScreen(
     }
     val nameOf: (String) -> String = { id -> catalog.firstOrNull { it.id == id }?.name ?: id }
     var picking by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var selectedGuild by rememberSaveable { mutableStateOf(LabyrinthOpeningRosterCatalog.guilds.first().guildId) }
 
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Scaffold(
@@ -54,8 +56,24 @@ fun LabyrinthOpeningRosterScreen(
                 )
             },
         ) { padding ->
+            Row(Modifier.fillMaxSize().padding(padding)) {
+                if (wideLayout) Surface(Modifier.width(236.dp).fillMaxHeight(), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                    Column(Modifier.verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("选择公会", Modifier.padding(10.dp), style = MaterialTheme.typography.labelMedium)
+                        LabyrinthOpeningRosterCatalog.guilds.forEach { guild ->
+                            Surface(onClick = { selectedGuild = guild.guildId }, shape = MaterialTheme.shapes.small,
+                                color = if (guild.guildId == selectedGuild) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow) {
+                                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                    Text(guild.guildName, style = MaterialTheme.typography.bodyMedium)
+                                    if (guild.guildId in rosters) Text("已自定义", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            val contentScroll = key(if (wideLayout) selectedGuild else 0) { rememberScrollState() }
             Column(
-                Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
+                Modifier.weight(1f).fillMaxHeight().verticalScroll(contentScroll).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
@@ -66,7 +84,7 @@ fun LabyrinthOpeningRosterScreen(
                 if (loading) {
                     Text("正在读取角色资料…", style = MaterialTheme.typography.bodySmall)
                 }
-                LabyrinthOpeningRosterCatalog.guilds.forEach { guild ->
+                LabyrinthOpeningRosterCatalog.guilds.filter { !wideLayout || it.guildId == selectedGuild }.forEach { guild ->
                     val custom = rosters[guild.guildId]
                     val slots = custom ?: guild.slots.map { slot -> slot.candidates.map { it.characterId } }
                     Card(Modifier.fillMaxWidth()) {
@@ -111,6 +129,7 @@ fun LabyrinthOpeningRosterScreen(
                         }
                     }
                 }
+            }
             }
         }
     }

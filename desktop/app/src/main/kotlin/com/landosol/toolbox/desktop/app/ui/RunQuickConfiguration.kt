@@ -77,7 +77,7 @@ internal class RunSetupDraft(state: LabyrinthUiState, goals: List<DesktopGoal>) 
     }
 
     companion object {
-        private fun goalInputs(state: LabyrinthUiState, goals: List<DesktopGoal>) = state.guildOptions.take(5).map { guild ->
+        private fun goalInputs(state: LabyrinthUiState, goals: List<DesktopGoal>) = state.guildOptions.map { guild ->
             val saved = goals.firstOrNull { it.guildId == guild.guildId }
             RunGoalInput(guild.guildId, saved?.count?.toString().orEmpty(), saved?.clears ?: true)
         }

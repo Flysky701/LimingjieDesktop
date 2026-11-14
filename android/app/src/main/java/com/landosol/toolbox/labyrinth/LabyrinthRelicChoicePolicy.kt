@@ -88,8 +88,9 @@ class LabyrinthRelicChoicePolicy(
         currentArea: Int? = null,
     ): LabyrinthRelicChoiceDecision? {
         val stacks = markStacks(acquired, calibratedStacks)
+        val ownedIds = acquired.map { it.relicId }.toSet()
         val recognized = candidates.mapNotNull { match ->
-            if (!match.recognized) return@mapNotNull null
+            if (!match.recognized || match.relicId in ownedIds) return@mapNotNull null
             val mark = LabyrinthRelicMark.fromLabel(match.attribute) ?: return@mapNotNull null
             val bonus = match.attributeBonus?.trim()?.toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
             Candidate(match, mark, bonus)
@@ -182,10 +183,10 @@ class LabyrinthRelicChoicePolicy(
         calibratedStacks: Map<LabyrinthRelicMark, Int> = emptyMap(),
     ): Map<LabyrinthRelicMark, Int> {
         val totals = LabyrinthRelicMark.entries.associateWith { 0 }.toMutableMap()
-        acquired.forEach { relic ->
+        acquired.distinctBy(LabyrinthObservedRelic::relicId).forEach { relic ->
             val mark = LabyrinthRelicMark.fromLabel(relic.attribute) ?: return@forEach
             val bonus = relic.attributeBonus.trim().toIntOrNull()?.takeIf { it > 0 } ?: return@forEach
-            totals[mark] = totals.getValue(mark) + bonus * relic.observationCount.coerceAtLeast(1)
+            totals[mark] = totals.getValue(mark) + bonus
         }
         calibratedStacks.forEach { (mark, stacks) ->
             if (stacks >= 0) totals[mark] = stacks

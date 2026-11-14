@@ -1,6 +1,7 @@
 package android.content
 
 interface SharedPreferences {
+    val all: Map<String, *>
     fun getString(key: String, defValue: String?): String?
     fun getInt(key: String, defValue: Int): Int
     fun getLong(key: String, defValue: Long): Long

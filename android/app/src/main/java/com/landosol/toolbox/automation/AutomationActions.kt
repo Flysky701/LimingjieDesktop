@@ -25,8 +25,16 @@ sealed interface AutomationBackendResult {
     data class Rejected(val reason: String) : AutomationBackendResult
 }
 
+/** Reserved backend reason: input was suppressed BEFORE any native dispatch, not system rejection. */
+const val AUTOMATION_PRE_DISPATCH_SUPPRESSED_REASON = "automation-pre-dispatch-permit-suppressed"
+
 fun interface AutomationActionBackend {
     suspend fun execute(action: AutomationAction): AutomationBackendResult
+
+    /** Optional last-moment gate. Legacy/SAM backends keep their one abstract execute method. */
+    suspend fun executeGuarded(action: AutomationAction, permit: () -> Boolean): AutomationBackendResult =
+        if (!permit()) AutomationBackendResult.Rejected(AUTOMATION_PRE_DISPATCH_SUPPRESSED_REASON)
+        else execute(action)
 }
 
 sealed interface AutomationActionResult {
@@ -44,14 +52,31 @@ class SessionBoundActionExecutor(
     suspend fun execute(
         sessionId: AutomationSessionId,
         action: AutomationAction,
+    ): AutomationActionResult = executeInternal(sessionId, action, null)
+
+    /** The permit must capture only atomic stop/pause/epoch sources, never a frame or Session. */
+    suspend fun executeWithPermit(
+        sessionId: AutomationSessionId,
+        action: AutomationAction,
+        permit: () -> Boolean,
+    ): AutomationActionResult = executeInternal(sessionId, action, permit)
+
+    private suspend fun executeInternal(
+        sessionId: AutomationSessionId,
+        action: AutomationAction,
+        permit: (() -> Boolean)?,
     ): AutomationActionResult = when (
         val gated = sessionManager.executeIfActive(sessionId) { session ->
             if (session.dryRun) {
                 AutomationActionResult.DryRun(action)
             } else {
-                when (val result = backend.execute(action)) {
+                val result = if (permit == null) backend.execute(action) else backend.executeGuarded(action, permit)
+                when (result) {
                     AutomationBackendResult.Completed -> AutomationActionResult.Executed(action)
-                    is AutomationBackendResult.Rejected -> AutomationActionResult.Rejected(action, result.reason)
+                    is AutomationBackendResult.Rejected -> if (permit != null &&
+                        result.reason == AUTOMATION_PRE_DISPATCH_SUPPRESSED_REASON) {
+                        AutomationActionResult.Paused
+                    } else AutomationActionResult.Rejected(action, result.reason)
                 }
             }
         }

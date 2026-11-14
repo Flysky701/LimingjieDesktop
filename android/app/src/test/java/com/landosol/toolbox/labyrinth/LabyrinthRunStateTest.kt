@@ -51,7 +51,7 @@ class LabyrinthRunStateTest {
     }
 
     @Test
-    fun `relic merge preserves attributes and counts repeated observations`() {
+    fun `relic ownership is unique and replay cannot change recorded attributes`() {
         val first = LabyrinthRelicMerger.merge(
             emptyList(),
             listOf(
@@ -70,19 +70,20 @@ class LabyrinthRunStateTest {
         assertEquals(listOf("弱体", "强化"), merged.map(LabyrinthObservedRelic::attribute))
         val firstRelic = requireNotNull(merged.first { it.relicId == "14004" })
         assertEquals(0.93, firstRelic.confidence, 0.0001)
-        assertEquals(2, firstRelic.observationCount)
+        assertEquals(first, merged)
         assertEquals(100L, firstRelic.firstSeenAt)
-        assertEquals(200L, firstRelic.lastSeenAt)
+        assertEquals(100L, firstRelic.lastSeenAt)
 
         val repeated = LabyrinthRelicMerger.merge(
             first,
-            listOf(relic("14004", "蛇紋のツルギ", "强化", 0.96)),
+            listOf(relic("14004", "incorrect", "守备", 0.96), relic("14004", "incorrect", "守备", 0.96)),
             nowMillis = 300L,
         )
         val repeatedRelic = requireNotNull(repeated.first { it.relicId == "14004" })
-        assertEquals(0.96, repeatedRelic.confidence, 0.0001)
-        assertEquals(2, repeatedRelic.observationCount)
-        assertEquals(300L, repeatedRelic.lastSeenAt)
+        assertEquals(first, repeated)
+        assertEquals("强化", repeatedRelic.attribute)
+        assertEquals(100L, repeatedRelic.lastSeenAt)
+        assertEquals(1, LabyrinthRelicChoicePolicy().markStacks(repeated + repeated)[LabyrinthRelicMark.ENHANCEMENT])
     }
 
     private fun match(id: String, name: String, confidence: Double) = LabyrinthCharacterMatch(

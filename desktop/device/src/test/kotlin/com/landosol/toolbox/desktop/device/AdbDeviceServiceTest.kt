@@ -119,6 +119,24 @@ class AdbDeviceServiceTest {
             assertEquals(TouchResult.Rejected("触控坐标系与截图尺寸不一致"), device.back(FakeAdb.GAME))
         }
     }
+    @Test fun staleActionIsSuppressedAfterForegroundQueryForBothInputBackends() = runBlocking {
+        for (mode in TouchMode.entries) {
+            val adb = FakeAdb(); val touch = RecordingTouch()
+            service(adb, touch).use { device ->
+                device.connect("fixture", mode)
+                var permitted = true
+                adb.calls.clear()
+                adb.handler = { call ->
+                    if (call.arguments == listOf("dumpsys", "window")) permitted = false
+                    adb.default(call)
+                }
+                val result = withContext(DeviceDispatchPermit { permitted }) { device.tap(10f, 20f, FakeAdb.GAME) }
+                assertEquals(TouchResult.Rejected(DEVICE_DISPATCH_SUPPRESSED), result)
+                assertTrue(touch.gestures.isEmpty())
+                assertFalse(adb.calls.any { it.arguments.firstOrNull() == "input" })
+            }
+        }
+    }
     @Test fun fiveFailedCapturesNotifyLostBeforeReconnectAndNeverResumeTasks() = runBlocking {
         val adb = FakeAdb(); val lost = CopyOnWriteArrayList<String>()
         service(adb, lost = lost).use { device ->

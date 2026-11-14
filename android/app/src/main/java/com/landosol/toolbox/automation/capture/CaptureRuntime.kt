@@ -226,6 +226,9 @@ object CaptureStateRegistry {
 
     fun isActive(): Boolean = state.value is CaptureState.Running
 
+    fun captureSize(): Pair<Int, Int>? =
+        (state.value as? CaptureState.Running)?.let { it.width to it.height }
+
     fun lastStopReason(): String? = lastStopReason
 
     fun gestureDisplayId(): Int =

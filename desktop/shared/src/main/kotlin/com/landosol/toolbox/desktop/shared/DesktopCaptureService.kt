@@ -47,6 +47,7 @@ class DesktopCaptureService(
     private val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "desktop-capture").apply { isDaemon = true } }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val lifecycle = Mutex()
+    private var frameSequence = 0L
     private var job: Job? = null
     suspend fun start() = lifecycle.withLock {
         if (job?.isActive == true) return@withLock
@@ -90,7 +91,7 @@ class DesktopCaptureService(
                                 lastPreview = frame.timestampMillis
                             }
                             val bitmap = frame.recognitionBitmap()
-                            CaptureFrameBus.dispatch(CapturedFrame(bitmap, frame.timestampMillis))
+                            CaptureFrameBus.dispatch(bitmap.capturedFrame(frame.timestampMillis, ++frameSequence))
                         }
                     }
                     if (frame.pixels.all { it and 0xffffff == 0 }) {

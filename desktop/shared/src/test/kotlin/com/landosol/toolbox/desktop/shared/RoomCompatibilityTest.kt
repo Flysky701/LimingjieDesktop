@@ -40,8 +40,8 @@ class RoomCompatibilityTest {
     }
     @Test fun oldSchemasMigrateWithIdentityAndPreserveAccounts() = runBlocking {
         val schemas = File("schemas/com.landosol.toolbox.data.local.AppDatabase")
-        val expectedIdentity = JSONObject(File(schemas, "4.json").readText()).getJSONObject("database").getString("identityHash")
-        for (version in 1..4) {
+        val expectedIdentity = JSONObject(File(schemas, "5.json").readText()).getJSONObject("database").getString("identityHash")
+        for (version in 1..5) {
             val context = DesktopContext(Files.createTempDirectory("migration-$version").toFile())
             val path = File(context.dataDir, "databases/${AppDatabase.FILE_NAME}").apply { parentFile.mkdirs() }
             val schema = JSONObject(File(schemas, "$version.json").readText()).getJSONObject("database")
@@ -58,6 +58,11 @@ class RoomCompatibilityTest {
                 for (i in 0 until queries.length()) connection.execSQL(queries.getString(i))
                 connection.execSQL("PRAGMA user_version = $version")
                 connection.execSQL("INSERT INTO accounts(alias,server_id,game_uid,credential_key,is_selected,created_at,updated_at) VALUES('migration','bilibili',NULL,'fixture',0,1,1)")
+                if (version == 4) {
+                    connection.execSQL("INSERT INTO labyrinth_run_states VALUES ('account:unbound', NULL, 'ACTIVE', 'NODE_SELECTION', 0, 100, 200)")
+                    connection.execSQL("INSERT INTO labyrinth_run_relics VALUES ('account:unbound', 'a', 'a', '守备', '2', '', 0.9, 100, 200, 7)")
+                    connection.execSQL("INSERT INTO labyrinth_run_characters VALUES ('account:unbound', '1001', 'role', 0, 0.9, 100, 200)")
+                }
             }
             val db = AppDatabase.create(context)
             try { assertEquals("migration", db.accountDao().getFirst()!!.alias); assertEquals(1, db.accountDao().count()) }
@@ -65,6 +70,17 @@ class RoomCompatibilityTest {
             BundledSQLiteDriver().open(path.path).use { connection ->
                 connection.prepare("SELECT identity_hash FROM room_master_table WHERE id=42").use { statement ->
                     assertTrue(statement.step()); assertEquals(expectedIdentity, statement.getText(0))
+                }
+                if (version == 4) {
+                    connection.prepare("SELECT attribute_bonus, first_seen_at, last_seen_at FROM labyrinth_run_relics").use {
+                        assertTrue(it.step()); assertEquals("2", it.getText(0)); assertEquals(100L, it.getLong(1)); assertEquals(200L, it.getLong(2)); assertFalse(it.step())
+                    }
+                    connection.prepare("SELECT * FROM labyrinth_run_relic_stacks").use { assertFalse(it.step()) }
+                    connection.prepare("SELECT character_id FROM labyrinth_run_characters").use { assertTrue(it.step()); assertEquals("1001", it.getText(0)) }
+                    connection.prepare("SELECT opening_enter_id, opening_relics_complete FROM labyrinth_run_states").use {
+                        assertTrue(it.step()); assertTrue(it.isNull(0)); assertEquals(0L, it.getLong(1))
+                    }
+                    connection.prepare("PRAGMA foreign_key_check").use { assertFalse(it.step()) }
                 }
             }
         }

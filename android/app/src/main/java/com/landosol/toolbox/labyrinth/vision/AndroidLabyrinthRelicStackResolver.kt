@@ -6,10 +6,13 @@ import android.graphics.Bitmap
 class AndroidLabyrinthRelicStackResolver(
     submitTextRead: (Bitmap, (String?) -> Unit) -> Unit = AndroidChineseRoleNameOcr::readAsync,
 ) {
-    private val ocr = AndroidRelicRoiOcr(submitTextRead)
+    private val ocr = AndroidRelicRoiOcr(submitTextRead, maximumAttempts = 3)
+    private var evidenceVersion = Long.MIN_VALUE
     private var identities: List<String?> = emptyList()
 
-    @Synchronized fun resolve(bitmap: Bitmap, result: LabyrinthEntryFrameResult): LabyrinthEntryFrameResult {
+    @Synchronized fun resolve(bitmap: Bitmap, result: LabyrinthEntryFrameResult,
+        capturedAtMillis: Long = Long.MIN_VALUE, version: Long = 0): LabyrinthEntryFrameResult {
+        if (evidenceVersion != version) { ocr.clear(); evidenceVersion = version }
         if (result.observation.state != LabyrinthEntryPageState.RELIC_CHOICE) {
             ocr.clear()
             identities = emptyList()
@@ -23,10 +26,12 @@ class AndroidLabyrinthRelicStackResolver(
             val rect = STACK_RECTS[choice.slotId]?.let {
                 ReferenceFitMapper.map(bitmap.width, bitmap.height, STANDARD_REFERENCE, it)
             } ?: return@map choice
-            val read = ocr.read(bitmap, choice.slotId, rect) ?: return@map choice
+            val read = ocr.read(bitmap, choice.slotId, rect, capturedAtMillis = capturedAtMillis) ?: return@map choice
             choice.copy(currentMarkStacks = read.text?.let(::parseCurrentStacks),
                 currentMarkStacksEvidenceText = read.text,
-                currentMarkStacksEvidenceId = read.id)
+                currentMarkStacksEvidenceId = read.id,
+                currentMarkStacksConfirmations = read.confirmations,
+                currentMarkStacksCapturedAtMillis = read.capturedAtMillis)
         }
         return result.copy(relicChoiceSelection = selection.copy(choices = choices))
     }

@@ -16,6 +16,7 @@ enum class LabyrinthThirdBlockChoice(val label: String) {
 enum class LabyrinthRouteEvaluationMode(val label: String) {
     VALUE_ROUTE("价值路线 v2"),
     LEGACY_TEMPLATE("旧版固定模板"),
+    CUSTOM_NODES("自定义节点"),
 }
 
 enum class LabyrinthBossDifficulty(val label: String) {
@@ -37,6 +38,11 @@ object LabyrinthRerollOptions {
         LabyrinthGuildOption(3, "咲恋救济院"),
         LabyrinthGuildOption(4, "王宫骑士团（NIGHTMARE）"),
         LabyrinthGuildOption(5, "拉比林斯"),
+        LabyrinthGuildOption(6, "慈乐之音"),
+        LabyrinthGuildOption(7, "恶魔伪王国军"),
+        LabyrinthGuildOption(8, "伊丽莎白牧场"),
+        LabyrinthGuildOption(9, "墨丘利财团"),
+        LabyrinthGuildOption(10, "暮光流星群"),
     )
 
     val area3Bosses = listOf(

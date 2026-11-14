@@ -84,6 +84,5 @@ class LabyrinthRelicPriorityTest {
         confidence = 1.0,
         firstSeenAt = 0L,
         lastSeenAt = 0L,
-        observationCount = 1,
     )
 }

@@ -1,5 +1,6 @@
 package com.landosol.toolbox.ui.labyrinth
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -11,14 +12,14 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.landosol.toolbox.labyrinth.LabyrinthBossTeamMode
 import com.landosol.toolbox.labyrinth.LabyrinthCombatKind
+import com.landosol.toolbox.labyrinth.LabyrinthCustomEventCatalog
 import com.landosol.toolbox.labyrinth.LabyrinthRelicMark
 import com.landosol.toolbox.labyrinth.LabyrinthSpecialEquipmentMode
 import com.landosol.toolbox.labyrinth.RESPONSE_INTERVAL_FAST
@@ -34,7 +35,19 @@ private val StrategySaver = Saver<LabyrinthStrategySettings, String>(
     restore = LabyrinthStrategySettingsCodec::decodeDraft,
 )
 
-/** Full-screen phone editor: one expanded category, thumb-size controls, explicit durable save. */
+private val LocalStrategySection = staticCompositionLocalOf<String?> { null }
+private val strategySections = listOf("评分", "选人", "开局", "Boss编组", "战斗失败", "遗物", "遗物优先级", "商店", "事件", "事件自定义", "特别装备", "响应速度")
+
+internal enum class StrategyLeaveDecision { STAY, CONFIRM_DISCARD, LEAVE }
+
+internal fun strategyLeaveDecision(saving: Boolean, hasChanges: Boolean): StrategyLeaveDecision =
+    when {
+        saving -> StrategyLeaveDecision.STAY
+        hasChanges -> StrategyLeaveDecision.CONFIRM_DISCARD
+        else -> StrategyLeaveDecision.LEAVE
+    }
+
+/** 独立策略页面：保留原草稿、分组、子编辑器与显式保存。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LabyrinthStrategySettingsScreen(
@@ -44,19 +57,44 @@ fun LabyrinthStrategySettingsScreen(
     onSave: (LabyrinthStrategySettings) -> Unit,
     onClose: () -> Unit,
     loadRoleRatings: suspend () -> List<LabyrinthRoleRatingItem> = { emptyList() },
+    registerLeaveHandler: (((() -> Unit) -> Unit)?) -> Unit = {},
+    wideLayout: Boolean = false,
+    title: String = "策略设置",
+    dialogsVisible: Boolean = true,
+    onDirtyChange: (Boolean) -> Unit = {},
 ) {
     var draft by rememberSaveable(stateSaver = StrategySaver) { mutableStateOf(saved) }
     var section by rememberSaveable { mutableStateOf("评分") }
-    var confirmDiscard by remember { mutableStateOf(false) }
+    var pendingLeave by remember { mutableStateOf<(() -> Unit)?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
     var showRoleRatings by rememberSaveable { mutableStateOf(false) }
     var showOpeningRoster by rememberSaveable { mutableStateOf(false) }
-    val close = { if (!saving) { if (draft != saved) confirmDiscard = true else onClose() } }
-    Dialog(onDismissRequest = close, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    val requestLeave: (() -> Unit) -> Unit = { leave ->
+        if (!showRoleRatings && !showOpeningRoster && !confirmReset && pendingLeave == null) {
+            when (strategyLeaveDecision(saving, draft != saved)) {
+                StrategyLeaveDecision.STAY -> Unit
+                StrategyLeaveDecision.CONFIRM_DISCARD -> pendingLeave = leave
+                StrategyLeaveDecision.LEAVE -> leave()
+            }
+        }
+    }
+    val currentRequestLeave by rememberUpdatedState(requestLeave)
+    SideEffect { onDirtyChange(draft != saved) }
+    DisposableEffect(Unit) { onDispose { onDirtyChange(false) } }
+    DisposableEffect(registerLeaveHandler) {
+        registerLeaveHandler { leave -> currentRequestLeave(leave) }
+        onDispose { registerLeaveHandler(null) }
+    }
+    val close = { requestLeave(onClose) }
+    BackHandler(enabled = !showRoleRatings && !showOpeningRoster && !confirmReset && pendingLeave == null) {
+        close()
+    }
+    Box(Modifier.fillMaxSize()) {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
             topBar = {
-                CompactTopBar(title = "策略设置", onBack = close, backEnabled = !saving, actions = {
+                CompactTopBar(title = title, actions = {
+                    if (wideLayout) TextButton(onClick = close, enabled = !saving) { Text("返回策略库") }
                     TextButton(onClick = { confirmReset = true }, enabled = !saving) {
                         Text("恢复默认", style = MaterialTheme.typography.labelLarge)
                     }
@@ -64,9 +102,22 @@ fun LabyrinthStrategySettingsScreen(
             },
             bottomBar = {
                 Surface(tonalElevation = 3.dp) {
-                    Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) {
-                        Text(draft.validationError() ?: message ?: if (draft == saved) "配置已保存；下次启动生效" else "有未保存的修改",
+                    if (wideLayout) Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(draft.validationError() ?: if (draft != saved) "有未保存的修改" else "配置已保存",
+                                style = MaterialTheme.typography.bodyMedium)
+                            message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                            Text("保存后从下次任务生效", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        OutlinedButton(onClick = close, enabled = !saving, shape = MaterialTheme.shapes.small) { Text("返回") }
+                        Button(onClick = { onSave(draft) }, enabled = draft.canSaveDraft(saved, saving), shape = MaterialTheme.shapes.small) {
+                            Text(if (saving) "正在保存…" else "保存修改")
+                        }
+                    } else Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) {
+                        Text(draft.validationError() ?: if (draft != saved) "有未保存的修改" else "配置已保存；下次启动生效",
                             style = MaterialTheme.typography.bodySmall)
+                        message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                         Button(onClick = { onSave(draft) }, enabled = draft.canSaveDraft(saved, saving),
                             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                             Text(if (saving) "正在保存…" else "保存配置")
@@ -75,9 +126,23 @@ fun LabyrinthStrategySettingsScreen(
                 }
             },
         ) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp),
+            Row(Modifier.fillMaxSize().padding(padding)) {
+                if (wideLayout) Surface(Modifier.width(184.dp).fillMaxHeight(), color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                    Column(Modifier.verticalScroll(rememberScrollState()).padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("策略配置", Modifier.padding(12.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        strategySections.forEach { name ->
+                            Surface(onClick = { section = name }, shape = MaterialTheme.shapes.small,
+                                color = if (section == name) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow) {
+                                Text(name, Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 11.dp), style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+            CompositionLocalProvider(LocalStrategySection provides section.takeIf { wideLayout }) {
+            val contentScroll = key(if (wideLayout) section else "all") { rememberScrollState() }
+            Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(contentScroll).padding(if (wideLayout) 24.dp else 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("全局配置 · 所有账号共用。保存后从下次启动识别/自动执行生效，当前任务不变。",
+                if (!wideLayout) Text("全局配置 · 所有账号共用。保存后从下次启动识别/自动执行生效，当前任务不变。",
                     style = MaterialTheme.typography.bodyMedium)
                 StrategySection("评分", "玩家评分 ${draft.playerWeight}% · 系统权重自动归一化", section, { section = it }) {
                     OutlinedButton(onClick = { showRoleRatings = true }, enabled = !saving,
@@ -92,7 +157,7 @@ fun LabyrinthStrategySettingsScreen(
                     StrategyNumber("系统：阵型", draft.formationWeight, 0..100, "", !saving) { draft = draft.copy(formationWeight = it) }
                     StrategyNumber("系统：协同", draft.cohesionWeight, 0..100, "", !saving) { draft = draft.copy(cohesionWeight = it) }
                     StrategySwitch(
-                        "属性配对增伤",
+                        "属性配队增伤",
                         "关闭后角色属性仍会识别，并继续用于筛选/显示；只是评分时不再计算同属性 2/3/4/5 人的 8/16/25/75% 伤害加成。",
                         draft.attributePairingBonusEnabled,
                         !saving,
@@ -193,7 +258,9 @@ fun LabyrinthStrategySettingsScreen(
                     )
                 }
                 StrategySection("商店", if (draft.buyRelics) "购买遗物 · ${if (draft.refreshShop) "区域 ${draft.refreshFromArea} 起刷新" else "不刷新"}" else "不购买", section, { section = it }) {
-                    Text("遗物始终优先；达到允许刷新起始区域后，本轮遗物买完或当前商品行已无可购买遗物且刷新可用时，继续花300金币刷新。只有遗物/刷新都无法继续时，才用剩余金币购买已确认的职能印记。无法确认的商品不会盲买。")
+                    Text("遗物优先。区域4固定保留金币并退出；区域3/5常规购买时跳过★3、★4遗物，普通职能印记仅购买随机型，全体选择印记保留。区域3最多刷新一次。")
+                    Text("其他区域遵循下方开关与起始区域。遗物无法继续购买或刷新时，才考虑已确认的职能印记；无法确认的商品会跳过。")
+                    Text("区域5确认无法继续刷新时，会按性价比清仓剩余金币，可能购买★3遗物和职能选择印记；★4仍跳过。", style = MaterialTheme.typography.bodySmall)
                     StrategySwitch("购买遗物", "关闭后退出商店，也不会刷新。", draft.buyRelics, !saving) { draft = draft.copy(buyRelics = it) }
                     StrategySwitch("允许商店刷新", "买完当前可确认遗物后，才考虑花费 300 金币刷新。", draft.refreshShop, !saving && draft.buyRelics) { draft = draft.copy(refreshShop = it) }
                     if (draft.buyRelics && draft.refreshShop) {
@@ -222,6 +289,11 @@ fun LabyrinthStrategySettingsScreen(
                     StrategyNumber("普通战估计胜率", draft.normalWinRate, 0..100, "%", !saving) { draft = draft.copy(normalWinRate = it) }
                     StrategyNumber("极难战估计胜率", draft.extremeWinRate, 0..100, "%", !saving) { draft = draft.copy(extremeWinRate = it) }
                 }
+                EventCustomizationEditor(
+                    settings = draft,
+                    saving = saving,
+                    onChange = { draft = it },
+                )
                 StrategySection("响应速度", responseIntervalSummary(draft), section, { section = it }) {
                     Text("延迟越低响应越快，但CPU需求会更高")
                     StrategyChoice(
@@ -232,19 +304,17 @@ fun LabyrinthStrategySettingsScreen(
                     ) { draft = draft.copy(responseIntervalMillis = it) }
                 }
                 StrategySection("特别装备", specialEquipmentSummary(draft), section, { section = it }) {
-                    Text(
-                        "自动穿戴会在队伍编组页点开「特别装备」并尝试自动穿戴，只对下面勾选的关卡类型生效；" +
-                            "是否执行按本次启动读取的设置快照判定，运行中保存只影响下一次启动。",
-                    )
+                    Text("自动穿戴会在队伍编组页点开「特别装备」并尝试自动穿戴，只对下面勾选的关卡类型生效", style = MaterialTheme.typography.bodySmall)
+                    Text("是否执行按本次启动读取的设置快照判定，运行中保存只影响下一次启动", style = MaterialTheme.typography.bodySmall)
                     StrategyRadioChoice(
                         label = "关闭",
-                        detail = "默认。本次编组页不会为特别装备产生任何额外点击。",
+                        detail = "默认，本次编组页不会为特别装备产生任何额外点击",
                         selected = draft.specialEquipmentMode == LabyrinthSpecialEquipmentMode.OFF,
                         enabled = !saving,
                     ) { draft = draft.copy(specialEquipmentMode = LabyrinthSpecialEquipmentMode.OFF) }
                     StrategyRadioChoice(
                         label = "自动穿戴",
-                        detail = "只在队伍编组页执行，且仅限下面勾选的关卡类型。",
+                        detail = "只在队伍编组页执行，且仅限下面勾选的关卡类型",
                         selected = draft.specialEquipmentMode == LabyrinthSpecialEquipmentMode.AUTO_EQUIP,
                         enabled = !saving,
                     ) { draft = draft.copy(specialEquipmentMode = LabyrinthSpecialEquipmentMode.AUTO_EQUIP) }
@@ -274,20 +344,23 @@ fun LabyrinthStrategySettingsScreen(
                         }
                     }
                 }
-                Text("识别置信度、资料完整性、游戏属性档位和操作安全检查保持原规则，不随偏好配置关闭。",
+                if (!wideLayout) Text("识别置信度、资料完整性、游戏属性档位和操作安全检查保持原规则，不随偏好配置关闭。",
                     style = MaterialTheme.typography.bodySmall)
+            }
+            }
             }
         }
     }
-    if (showRoleRatings) LabyrinthRoleRatingsScreen(
+    if (showRoleRatings && dialogsVisible) LabyrinthRoleRatingsScreen(
         scores = draft.personalRoleScores,
         loadCatalog = loadRoleRatings,
         onScoreChange = { id, value -> draft = draft.copy(personalRoleScores =
             if (value == null) draft.personalRoleScores - id else draft.personalRoleScores + (id to value)) },
         onClose = { showRoleRatings = false },
     )
-    if (showOpeningRoster) LabyrinthOpeningRosterScreen(
+    if (showOpeningRoster && dialogsVisible) LabyrinthOpeningRosterScreen(
         rosters = draft.openingRosters,
+        wideLayout = wideLayout,
         loadCatalog = loadRoleRatings,
         onChange = { guildId, slots ->
             draft = draft.copy(
@@ -300,14 +373,79 @@ fun LabyrinthStrategySettingsScreen(
         },
         onClose = { showOpeningRoster = false },
     )
-    if (confirmDiscard) AlertDialog(onDismissRequest = { confirmDiscard = false },
+    if (pendingLeave != null && dialogsVisible) AlertDialog(onDismissRequest = { pendingLeave = null },
         title = { Text("放弃未保存的修改？") }, text = { Text("已保存的配置不会改变。") },
-        confirmButton = { TextButton(onClick = { confirmDiscard = false; onClose() }) { Text("放弃修改") } },
-        dismissButton = { TextButton(onClick = { confirmDiscard = false }) { Text("继续编辑") } })
-    if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false },
+        confirmButton = { TextButton(onClick = {
+            if (!saving) {
+                val leave = pendingLeave
+                pendingLeave = null
+                leave?.invoke()
+            }
+        }, enabled = !saving) { Text("放弃修改") } },
+        dismissButton = { TextButton(onClick = { pendingLeave = null }) { Text("继续编辑") } })
+    if (confirmReset && dialogsVisible) AlertDialog(onDismissRequest = { confirmReset = false },
         title = { Text("恢复全部默认策略？") }, text = { Text("恢复后仍需点击保存，才会替换已保存的配置。") },
         confirmButton = { TextButton(onClick = { draft = LabyrinthStrategySettings(); confirmReset = false }) { Text("恢复默认") } },
         dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("取消") } })
+}
+
+@Composable
+private fun EventCustomizationEditor(
+    settings: LabyrinthStrategySettings,
+    saving: Boolean,
+    onChange: (LabyrinthStrategySettings) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    // 状态留在外层，收起整个自定义区块也不会丢失各事件卡的独立展开状态。
+    var expandedCardIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    val configured = settings.configuredEventChoiceOverrides()
+    StrategySection(
+        title = "事件自定义",
+        summary = if (settings.eventCustomizationEnabled) "已开启 · ${LabyrinthCustomEventCatalog.cards.size} 个可自定义事件" else "关闭（默认） · 已配置分支保留",
+        active = if (expanded) "事件自定义" else "",
+        select = { expanded = it.isNotEmpty() },
+    ) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            StrategySwitch(
+                label = "启用事件自定义",
+                detail = "默认关闭，开启后使用自定义配置。",
+                checked = settings.eventCustomizationEnabled,
+                enabled = !saving,
+            ) { onChange(settings.copy(eventCustomizationEnabled = it)) }
+            Text("总开关和分支配置保存后，从下次自动任务启动生效；当前任务不变。", style = MaterialTheme.typography.bodySmall)
+            Text("启用后优先选择指定分支；按钮不可用时回退到既有事件选择策略，不硬点。", style = MaterialTheme.typography.bodySmall)
+        }
+        LabyrinthCustomEventCatalog.cards.forEach { card ->
+            val selectedChoice = card.choices.firstOrNull { it.runtimeName == configured[card.runtimeName] }
+            StrategySection(
+                title = card.name,
+                summary = if (card.id == "arena") {
+                    "四区共用 · ${selectedChoice?.name ?: "已保存分支不在目录中"}"
+                } else selectedChoice?.name ?: "已保存分支不在目录中",
+                active = if (card.id in expandedCardIds) card.name else "",
+                select = { title ->
+                    expandedCardIds = if (title.isEmpty()) expandedCardIds - card.id else expandedCardIds + card.id
+                },
+                nested = true,
+            ) {
+                val enabled = !saving && settings.eventCustomizationEnabled
+                Column(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.38f)) {
+                    card.choices.sortedBy { it.slot }.forEach { choice ->
+                        StrategyRadioChoice(
+                            label = choice.name,
+                            detail = choice.description,
+                            selected = selectedChoice == choice,
+                            enabled = enabled,
+                        ) {
+                            onChange(settings.copy(
+                                eventChoiceOverrides = settings.eventChoiceOverrides + (card.runtimeName to choice.runtimeName),
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 private fun relicPrioritySummary(priority: List<LabyrinthRelicMark>): String =
@@ -414,7 +552,19 @@ private fun StrategyCheckChoice(
 }
 
 @Composable
-private fun StrategySection(title: String, summary: String, active: String, select: (String) -> Unit, content: @Composable ColumnScope.() -> Unit) {
+private fun StrategySection(title: String, summary: String, active: String, select: (String) -> Unit,
+    nested: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
+    val selected = LocalStrategySection.current
+    if (selected != null && !nested && selected != title) return
+    if (selected != null) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(title, style = if (nested) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineSmall)
+            Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            content()
+            if (nested) HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        }
+        return
+    }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { select(if (active == title) "" else title) }) {

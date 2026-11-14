@@ -10,8 +10,15 @@ import org.junit.Test
 class LabyrinthRoutePolicyTest {
     @Test
     fun `guild options and reroll defaults are stable`() {
-        assertEquals(listOf(1, 2, 3, 4, 5), LabyrinthRerollOptions.guilds.map { it.guildId })
-        assertEquals("拉比林斯", LabyrinthRerollOptions.guilds.last().name)
+        assertEquals(
+            listOf(
+                1 to "美食殿堂", 2 to "破晓之星", 3 to "咲恋救济院",
+                4 to "王宫骑士团（NIGHTMARE）", 5 to "拉比林斯",
+                6 to "慈乐之音", 7 to "恶魔伪王国军", 8 to "伊丽莎白牧场",
+                9 to "墨丘利财团", 10 to "暮光流星群",
+            ),
+            LabyrinthRerollOptions.guilds.map { it.guildId to it.name },
+        )
         assertEquals(1, LabyrinthRerollOptions.DEFAULT_GUILD_ID)
         assertEquals(5, LabyrinthRerollOptions.DEFAULT_DIFFICULTY)
         assertTrue(LabyrinthRerollOptions.DEFAULT_PERFECT_START)

@@ -21,9 +21,10 @@ import kotlinx.coroutines.Dispatchers
         LabyrinthRunStateEntity::class,
         LabyrinthRunCharacterEntity::class,
         LabyrinthRunRelicEntity::class,
+        LabyrinthRunRelicStackEntity::class,
         MigrationCheckpointEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -167,13 +168,51 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SQLiteConnection) {
+                db.execSQL(
+                    """
+                    CREATE TABLE `labyrinth_run_relics_unique` (
+                        `run_key` TEXT NOT NULL, `relic_id` TEXT NOT NULL,
+                        `display_name` TEXT NOT NULL, `relic_attribute` TEXT NOT NULL,
+                        `attribute_bonus` TEXT NOT NULL, `effect` TEXT NOT NULL,
+                        `confidence` REAL NOT NULL, `first_seen_at` INTEGER NOT NULL,
+                        `last_seen_at` INTEGER NOT NULL,
+                        PRIMARY KEY(`run_key`, `relic_id`),
+                        FOREIGN KEY(`run_key`) REFERENCES `labyrinth_run_states`(`run_key`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "INSERT INTO `labyrinth_run_relics_unique` " +
+                        "SELECT `run_key`, `relic_id`, `display_name`, `relic_attribute`, `attribute_bonus`, " +
+                        "`effect`, `confidence`, `first_seen_at`, `last_seen_at` FROM `labyrinth_run_relics`",
+                )
+                db.execSQL("DROP TABLE `labyrinth_run_relics`")
+                db.execSQL("ALTER TABLE `labyrinth_run_relics_unique` RENAME TO `labyrinth_run_relics`")
+                db.execSQL("CREATE INDEX `index_labyrinth_run_relics_run_key_last_seen_at` ON `labyrinth_run_relics` (`run_key`, `last_seen_at`)")
+                db.execSQL(
+                    """
+                    CREATE TABLE `labyrinth_run_relic_stacks` (
+                        `run_key` TEXT NOT NULL, `mark` TEXT NOT NULL,
+                        `stacks` INTEGER NOT NULL, `source` TEXT NOT NULL,
+                        PRIMARY KEY(`run_key`, `mark`),
+                        FOREIGN KEY(`run_key`) REFERENCES `labyrinth_run_states`(`run_key`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("ALTER TABLE `labyrinth_run_states` ADD COLUMN `opening_enter_id` INTEGER")
+                db.execSQL("ALTER TABLE `labyrinth_run_states` ADD COLUMN `opening_relics_complete` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder<AppDatabase>(
             name = java.io.File(context.filesDir.parentFile, "databases/$FILE_NAME").apply { parentFile.mkdirs() }.path,
         )
             .setDriver(BundledSQLiteDriver())
             .setQueryCoroutineContext(Dispatchers.IO)
             .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .build()
     }
 }

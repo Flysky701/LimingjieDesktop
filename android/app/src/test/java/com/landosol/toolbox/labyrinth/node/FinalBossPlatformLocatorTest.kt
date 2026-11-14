@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth.node
 import com.landosol.toolbox.clanbattle.recognition.PixelImage
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import java.io.File
+import kotlin.math.roundToInt
 import org.junit.Assume.assumeTrue
 import org.junit.Assert.*
 import org.junit.Test
@@ -76,8 +77,8 @@ class FinalBossPlatformLocatorTest {
         val pixels = IntArray(width * height) { i ->
             if (i / width < height * 0.50) body else 0xff182c40.toInt()
         }
-        val labelWidth = (122 * scale).toInt()
-        val labelHeight = (46 * scale).toInt()
+        val labelWidth = (122 * scale).roundToInt()
+        val labelHeight = (46 * scale).roundToInt()
         val top = (598 * scale).toInt()
         for (center in centers) {
             val left = (center * scale).toInt() - labelWidth / 2
@@ -98,6 +99,16 @@ class FinalBossPlatformLocatorTest {
             assertEquals(center.toDouble(), x.toDouble(), 3.0)
             assertEquals(621.0, y.toDouble(), 3.0)
         }
+    }
+
+    /** A 1280x720 capture must clear the same gate as 1080p: the nameplate is scored 1:1. */
+    @Test fun `720p capture clears the nameplate confidence gate`() {
+        val frame = scene(listOf(880), height = 720)
+        val locator = FinalBossPlatformLocator(platform)
+        val matches = locator.locate(frame)
+        assertEquals("matches=$matches candidates=${locator.lastCandidates}", 1, matches.size)
+        assertTrue("confidence=${matches.single().confidence}", matches.single().confidence >= 0.90)
+        assertNotNull(finalBossPlatformClickRect(matches, 1280, 720, null))
     }
 
     @Test fun `scaled capture uses current label not original pixels`() {

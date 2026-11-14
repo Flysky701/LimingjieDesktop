@@ -159,8 +159,12 @@ class LabyrinthShopCategoryResolutionTest {
         assertEquals("2", preferred.item.slotId)
         assertFalse(preferred.opensRolePicker)
 
-        // With only the choice imprint available it is still bought rather than skipped.
-        val fallback = decide(listOf(choice), area = 5) as LabyrinthShopDecision.BuyRoleImprint
+        // 2026-11-01 rule: inside areas 3/5 a role-specific 选择 imprint is skipped outright
+        // (随机 780 against 选择 1,820 for the same class), so a lone choice imprint ends the visit.
+        assertTrue("area 5 must skip a lone choice imprint",
+            decide(listOf(choice), area = 5) is LabyrinthShopDecision.Close)
+        // Areas without the imprint gate keep the old fallback behaviour.
+        val fallback = decide(listOf(choice), area = 2) as LabyrinthShopDecision.BuyRoleImprint
         assertEquals("1", fallback.item.slotId)
         assertTrue(fallback.opensRolePicker)
 

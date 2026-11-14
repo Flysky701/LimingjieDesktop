@@ -6,6 +6,7 @@ import com.landosol.toolbox.protocol.labyrinth.LabyrinthEnter
 import com.landosol.toolbox.protocol.labyrinth.LabyrinthEnterRequest
 import com.landosol.toolbox.protocol.labyrinth.LabyrinthFailureKind
 import com.landosol.toolbox.protocol.labyrinth.LabyrinthMapNode
+import com.landosol.toolbox.protocol.labyrinth.LabyrinthOpeningRelicState
 import com.landosol.toolbox.protocol.labyrinth.LabyrinthOperationResult
 import com.landosol.toolbox.protocol.labyrinth.LabyrinthResume
 import com.landosol.toolbox.protocol.labyrinth.LabyrinthRoute
@@ -173,7 +174,7 @@ class LabyrinthRerollWorkflowTest {
 
     @Test
     fun `network interrupted enter recovers matching generated run`() = runTest {
-        val active = unlockedTop().copy(enterId = 777, guildId = 101, difficulty = 2)
+        val active = unlockedTop().copy(enterId = 777, guildId = 101, difficulty = 2, enhanceNodeIds = setOf(31))
         val map = fullMap(area3BossQuest = 770330401, area5BossQuest = 770530301)
         val api = FakeApi(
             top = unlockedTop(),
@@ -201,6 +202,7 @@ class LabyrinthRerollWorkflowTest {
         assertTrue(result is LabyrinthRerollResult.Success)
         assertTrue((result as LabyrinthRerollResult.Success).resumedExisting)
         assertEquals(777L, store.route?.enterId)
+        assertEquals(LabyrinthOpeningRelicState(101, setOf(31)), store.route?.openingRelics)
         assertEquals(LabyrinthRouteVerdict.TARGET, checkpoints.value?.verdict)
         assertEquals(777L, checkpoints.value?.enterId)
         assertTrue(api.retired.isEmpty())
@@ -451,6 +453,40 @@ class LabyrinthRerollWorkflowTest {
             LabyrinthFailureKind.REJECTED,
             (result as LabyrinthRerollResult.Failure).kind,
         )
+    }
+
+    @Test
+    fun `fresh route carries account enhancement state for the requested guild`() = runTest {
+        for (nodes in listOf<Set<Int>?>(setOf(31), emptySet(), null)) {
+            val api = FakeApi(top = unlockedTop().copy(guildId = 1, enhanceNodeIds = nodes),
+                enters = ArrayDeque(listOf(matchingEnter(12))))
+            val store = FakeRouteStore()
+            val result = LabyrinthRerollWorkflow(api, store, pause = {}).run(config().copy(guildId = 5))
+            assertTrue(result is LabyrinthRerollResult.Success)
+            assertEquals(LabyrinthOpeningRelicState(5, nodes), store.route?.openingRelics)
+            assertEquals(1, api.topCalls)
+        }
+    }
+
+    @Test
+    fun `existing route uses server guild and never a default guild for fixed grants`() = runTest {
+        val map = matchingEnter(99).map
+        for (guild in listOf(3, null)) {
+            val top = unlockedTop().copy(enterId = 99, difficulty = 2, guildId = guild, enhanceNodeIds = setOf(31))
+            val api = FakeApi(top = top, resumes = ArrayDeque(listOf(LabyrinthResume(99, guild, null, map))))
+            val found = ExistingLabyrinthRouteResolver(api).resolve(top, config().routePolicy) as ExistingLabyrinthRouteResult.Found
+            assertEquals(guild?.let { LabyrinthOpeningRelicState(it, setOf(31)) }, found.value.route.openingRelics)
+        }
+    }
+
+    @Test
+    fun `reused route preserves explicit empty enhancement state`() = runTest {
+        val api = FakeApi(top = unlockedTop().copy(enterId = 99, difficulty = 2, guildId = 3, enhanceNodeIds = emptySet()),
+            resumes = ArrayDeque(listOf(LabyrinthResume(99, 3, null, matchingEnter(99).map))))
+        val store = FakeRouteStore()
+        val result = LabyrinthRerollWorkflow(api, store).run(config().copy(guildId = 3))
+        assertTrue(result is LabyrinthRerollResult.Success)
+        assertEquals(LabyrinthOpeningRelicState(3, emptySet()), store.route?.openingRelics)
     }
 
     private fun config(

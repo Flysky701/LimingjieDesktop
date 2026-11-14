@@ -37,6 +37,8 @@ private class JsonPreferences(private val file: File, onRecovered: (File) -> Uni
         if (entry.getString("type") != type) throw ClassCastException("Preference type mismatch: $key")
         return entry.get("value")
     }
+    override val all: Map<String, *>
+        get() = synchronized(this) { values.keys().asSequence().associateWith { values.getJSONObject(it).get("value") } }
     override fun getString(key: String, defValue: String?): String? = value(key, "string") as String? ?: defValue
     override fun getInt(key: String, defValue: Int): Int = (value(key, "int") as Number?)?.toInt() ?: defValue
     override fun getLong(key: String, defValue: Long): Long = (value(key, "long") as Number?)?.toLong() ?: defValue

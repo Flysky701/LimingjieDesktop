@@ -76,6 +76,14 @@ class LabyrinthReusableOpeningSnapshotTest {
         assertTrue(result is LabyrinthBatchReusableOpeningCheck.Stale)
     }
 
+    @Test
+    fun `saved default guild cannot stand in for the verified server guild`() {
+        val result = labyrinthReusableOpeningSnapshotCheck(
+            opening, top, LabyrinthResume(77L, 2, null, listOf(node)), route.copy(guildId = 1),
+        )
+        assertTrue(result is LabyrinthBatchReusableOpeningCheck.Stale)
+    }
+
     private fun LabyrinthMapNode.toJson() = LabyrinthNodeJson(
         area = area,
         column = column,

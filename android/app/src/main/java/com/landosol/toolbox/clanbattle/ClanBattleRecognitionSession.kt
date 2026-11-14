@@ -56,6 +56,7 @@ class ClanBattleRecognitionSession(
         AndroidClanBattleFrameProcessor.createDefault()::process
     },
     private val overlayCoordinator: AutomationOverlayCoordinator = AutomationOverlayCoordinator(),
+    private val configurationGate: com.landosol.toolbox.automation.TaskConfigurationGate = com.landosol.toolbox.automation.TaskConfigurationGate(),
 ) {
     private val mutex = Mutex()
     private val _state = MutableStateFlow(ClanBattleRecognitionSessionState())
@@ -101,7 +102,13 @@ class ClanBattleRecognitionSession(
         confirmed
     }
 
-    suspend fun start(): ClanBattleRecognitionStartResult = mutex.withLock {
+    suspend fun start(): ClanBattleRecognitionStartResult {
+        val admission = configurationGate.tryBeginTask()
+            ?: return ClanBattleRecognitionStartResult.Blocked(com.landosol.toolbox.automation.TaskConfigurationGate.TRANSFER_MESSAGE)
+        return try { startAdmitted() } finally { admission.close() }
+    }
+
+    private suspend fun startAdmitted(): ClanBattleRecognitionStartResult = mutex.withLock {
         activeSessionId?.let { return ClanBattleRecognitionStartResult.AlreadyRunning(it) }
         if (!captureActive()) {
             val reason = "请先在权限中心开启屏幕捕获"

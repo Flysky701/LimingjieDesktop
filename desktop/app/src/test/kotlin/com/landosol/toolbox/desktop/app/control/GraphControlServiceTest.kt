@@ -256,7 +256,7 @@ class GraphControlServiceTest {
         val state = LabyrinthEntryRecognitionSessionState(status = LabyrinthEntryRecognitionStatus.RUNNING,
             sessionId = AutomationSessionId(17L), dryRun = true, paused = true, receivedFrameCount = 7, frameCount = 5,
             lastResult = result, joinedCharacters = listOf(LabyrinthJoinedCharacter("100101", "示例角色", 0, .99, 1, 2)),
-            observedRelics = listOf(LabyrinthObservedRelic("1", "示例遗物", "火", "+1", "效果", .95, 1, 2, 2)),
+            observedRelics = listOf(LabyrinthObservedRelic("1", "示例遗物", "火", "+1", "效果", .95, 1, 2)),
             routeProgress = LabyrinthRouteProgress(2, 4, 21, "下个节点", rect),
             combatContext = LabyrinthCombatContext(LabyrinthCombatKind.EX, 1, 3),
             battleTeamRecommendation = LabyrinthBattleTeamRecommendation(listOf(member), LabyrinthTeamDamageType.PHYSICAL,

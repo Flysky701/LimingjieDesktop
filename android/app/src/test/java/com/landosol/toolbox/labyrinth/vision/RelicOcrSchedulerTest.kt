@@ -120,6 +120,17 @@ class RelicOcrSchedulerTest {
         assertNull(scheduler.request("ex-monster-detail-name", 7))
     }
 
+    @Test fun `result carries the original capture time rather than callback completion time`() {
+        val ticket = requireNotNull(scheduler.request("a", 1, capturedAtMillis = 123))
+        now = 10_000
+        scheduler.complete(ticket, "9")
+        assertEquals(123L, scheduler.cached("a", 1)?.capturedAtMillis)
+        scheduler.clear()
+        assertNull(scheduler.cached("a", 1))
+        scheduler.complete(ticket, "9")
+        assertNull(scheduler.cached("a", 1))
+    }
+
     @Test fun `two reads that disagree buy one more look instead of deadlocking`() {
         scheduler.complete(requireNotNull(scheduler.request("a", 1)), "美空")
         now = 500

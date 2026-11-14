@@ -195,6 +195,15 @@ class LabyrinthDecisionPolicyTest {
             listOf(candidate("守备", 3, "suspect").copy(relicId = null)), currentArea = 1))
     }
 
+    @Test fun `already owned relic is excluded before scoring the remaining candidates`() {
+        val owned = acquired("守备", 1)
+        val repeated = candidate("守备", 3, owned.relicId)
+        val available = candidate("强化", 1, "available")
+        val choice = LabyrinthRelicChoicePolicy().choose(listOf(owned), listOf(repeated, available), currentArea = 1)
+        assertEquals("available", choice?.choice?.relicId)
+        assertNull(LabyrinthRelicChoicePolicy().choose(listOf(owned), listOf(repeated), currentArea = 1))
+    }
+
     private fun acquired(mark: String, stacks: Int) = LabyrinthObservedRelic(
         relicId = "owned-$mark",
         displayName = "owned-$mark",
@@ -204,7 +213,6 @@ class LabyrinthDecisionPolicyTest {
         confidence = 1.0,
         firstSeenAt = 0L,
         lastSeenAt = 0L,
-        observationCount = 1,
     )
 
     private fun candidate(mark: String, bonus: Int, id: String) = LabyrinthRelicMatch(

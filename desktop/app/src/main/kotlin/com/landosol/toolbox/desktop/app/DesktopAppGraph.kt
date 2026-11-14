@@ -412,8 +412,25 @@ class DesktopAppGraph(
     }
     val labyrinthStrategySettings by lazy {
         com.landosol.toolbox.desktop.app.adapters.storage.DesktopStrategyStore(dataDirectory,
-            legacy = { com.landosol.toolbox.labyrinth.AndroidLabyrinthStrategySettingsStore(context, transient = sharedData != null).state.value },
-            notice = ::addNotice, transient = sharedData != null)
+            legacy = {
+                val raw = if (sharedData == null) context.getSharedPreferences("labyrinth-strategy", android.content.Context.MODE_PRIVATE)
+                    .getString("settings.v1", null) else null
+                com.landosol.toolbox.labyrinth.LabyrinthStrategySettingsCodec.decode(raw)
+            },
+            notice = ::addNotice, transient = sharedData != null,
+            legacyRerolls = {
+                val prefs = context.getSharedPreferences("labyrinth-reroll-settings", android.content.Context.MODE_PRIVATE)
+                val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                prefs.all.keys.mapNotNull { key ->
+                    val id = key.removePrefix("account.").toLongOrNull()?.takeIf { key.startsWith("account.") && it > 0 }
+                    id?.let { accountId ->
+                        val settings = runCatching {
+                            json.decodeFromString(com.landosol.toolbox.labyrinth.LabyrinthRerollSettings.serializer(), prefs.getString(key, null)!!)
+                        }.getOrNull()?.takeIf { it.validationError() == null } ?: com.landosol.toolbox.labyrinth.LabyrinthRerollSettings()
+                        accountId to settings
+                    }
+                }.toMap()
+            })
     }
     @Volatile private var sharedStrategyIdentity: com.landosol.toolbox.desktop.app.adapters.storage.StrategyIdentity? = null
     @Volatile private var taskStrategy: com.landosol.toolbox.desktop.app.adapters.storage.StrategyProfile? = null
@@ -492,15 +509,48 @@ class DesktopAppGraph(
                 AndroidLabyrinthEntryFrameProcessor.create(
                     context = context,
                     characterAttributes = characterAttributes,
-                    finalBossOnly = finalBossOnly,
-                    skipJoinedCharacters = { labyrinthEntryRecognitionSession.skipRoleRewardJoinedRecognition },
-                    nodeSearchHint = { labyrinthEntryRecognitionSession.currentNodeSearchHint() },
+                    finalBossOnly = {
+                        com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.finalBossOnly ?: finalBossOnly()
+                    },
+                    skipJoinedCharacters = {
+                        com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.skipJoinedCharacters
+                            ?: labyrinthEntryRecognitionSession.skipRoleRewardJoinedRecognition
+                    },
+                    relicEvidenceVersion = {
+                        com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.relicEvidenceVersion
+                            ?: labyrinthEntryRecognitionSession.relicEvidenceVersion
+                    },
+                    relicVerificationMarks = {
+                        com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.relicVerificationMarks
+                            ?: labyrinthEntryRecognitionSession.relicVerificationMarks
+                    },
+                    nodeSearchHint = {
+                        val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
+                        if (snapshot != null) snapshot.nodeSearchHint else labyrinthEntryRecognitionSession.currentNodeSearchHint()
+                    },
                     nodeScanRequested = { labyrinthEntryRecognitionSession.nodeScanRequested() },
                     nodeScanConsumable = { labyrinthEntryRecognitionSession.nodeScanConsumable() },
-                    rosterCharacterIds = { labyrinthEntryRecognitionSession.rosterCharacterIds() },
+                    rosterCharacterIds = {
+                        com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.rosterCharacterIds
+                            ?: labyrinthEntryRecognitionSession.rosterCharacterIds()
+                    },
                     readResultScore = false,
-                    allowInitial1088GeometryRefinement = labyrinthEntryRecognitionSession::allowInitial1088GeometryRefinement,
+                    captureFrameSize = com.landosol.toolbox.automation.capture.CaptureStateRegistry::captureSize,
+                    eventChoiceOverrides = labyrinthEntryRecognitionSession.eventChoiceOverridesSnapshot,
+                    eventCustomizationEnabled = labyrinthEntryRecognitionSession.eventCustomizationEnabledSnapshot,
+                    allowInitial1088GeometryRefinement = {
+                        com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.allowInitial1088GeometryRefinement
+                            ?: labyrinthEntryRecognitionSession.allowInitial1088GeometryRefinement()
+                    },
                 )::processDesktopFrame
+            },
+            fastProcessorFactory = {
+                com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthFastFrameObserver.create(
+                    context, com.landosol.toolbox.automation.capture.CaptureStateRegistry::captureSize,
+                )::process
+            },
+            fastFramePublisher = debugDashboard?.let { dashboard ->
+                { fast, state -> dashboard.publishFast(fast, state) }
             },
             captureStop = { captureService.stop() },
             overlayCoordinator = automationOverlayCoordinator,
@@ -525,6 +575,9 @@ class DesktopAppGraph(
             battleTeamRecommendationUnavailableReason = roleDecisionUnavailableReason,
             battleTeamSelectionPlanner = roleDecisionRuntime?.battleTeamSelectionPlanner,
             runStateStore = labyrinthRunStateStore,
+            openingRelicCatalog = com.landosol.toolbox.labyrinth.LabyrinthOpeningRelicCatalog(
+                com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthRelicTemplateLoader(context).loadRelics(),
+            ),
             routeLoader = { accountId ->
                 accountId?.let { labyrinthRouteStore.loadLatest(it) }
             },
@@ -646,7 +699,7 @@ class DesktopAppGraph(
     val labyrinthController by lazy {
         com.landosol.toolbox.labyrinth.LabyrinthController(
             accountRepository, gameSessionRegistry, database, { bilibiliNativeLoginCoordinator },
-            if (sharedData == null) com.landosol.toolbox.labyrinth.AndroidLabyrinthRerollSettingsStore(context) else sharedRerollCache,
+            if (sharedData == null) labyrinthStrategySettings else sharedRerollCache,
             launchForeground = ::startRerollHost,
             scope = mainScope,
             beforeRerollLogin = { accountId -> withContext(Dispatchers.IO) { hardCloseChannelClientBeforeReroll(accountId) } },

@@ -4,6 +4,7 @@ import com.landosol.toolbox.gamedata.EventChoiceResource
 import com.landosol.toolbox.gamedata.EventLayoutTemplateResource
 import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.gamedata.NormalizedOcrRect
+import com.landosol.toolbox.labyrinth.LabyrinthCustomEventCatalog
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -79,6 +80,34 @@ data class LabyrinthEventOcrDiagnostics(
     val trusted: Boolean = false,
 )
 
+/** Logical arena identity: reward/area identity is deliberately not claimed by title OCR. */
+object LabyrinthArenaEvent {
+    const val NAME = "发现了魔物们聚集的斗技场！"
+    const val NORMAL = "一试身手吧！"
+    const val EXTREME = "与强敌战斗真是令人兴奋！"
+    const val ID = "arena"
+    private val variantIds = setOf("1105", "1109", "1113", "1117")
+
+    val event = EventResource(
+        id = ID,
+        name = NAME,
+        choices = listOf(
+            EventChoiceResource(id = "arena.normal", slot = 1, name = NORMAL),
+            EventChoiceResource(id = "arena.extreme", slot = 2, name = EXTREME),
+        ),
+    )
+
+    fun supports(events: List<EventResource>): Boolean {
+        val variants = events.filter { it.name == NAME }
+        return variants.map { it.id }.toSet() == variantIds && variants.all { variant ->
+            variant.choices.sortedBy { it.slot }.map { it.slot to it.name } ==
+                listOf(1 to NORMAL, 2 to EXTREME)
+        }
+    }
+
+    fun configured(overrides: Map<String, String>): Boolean = overrides[NAME] in setOf(NORMAL, EXTREME)
+}
+
 /**
  * Matches one OCR block against the database-backed event catalog. Shared event titles are
  * deliberately not sufficient: labels, effects and numeric rewards all participate so the four
@@ -113,6 +142,65 @@ class LabyrinthEventTextRecognizer(
             titleScore = best.titleScore,
             choiceScore = best.choiceScore,
             trusted = candidate && best.score >= minimumTrustedScore && margin >= minimumTrustedMargin,
+        )
+    }
+
+    /** Compare distinct titles, not the four reward variants of the same arena. */
+    fun recognizeArenaTitle(observedText: String): LabyrinthEventTextMatch {
+        val observed = normalizeEventText(observedText)
+        if (observed.length < 8 || !LabyrinthArenaEvent.supports(events)) return emptyMatch()
+        val titleScore = fuzzyContainedScore(normalizeEventText(LabyrinthArenaEvent.NAME), observed)
+        val rival = events.asSequence().map { it.name }.distinct()
+            .filter { it != LabyrinthArenaEvent.NAME }
+            .map { fuzzyContainedScore(normalizeEventText(it), observed) }
+            .maxOrNull() ?: 0.0
+        val margin = (titleScore - rival).coerceAtLeast(0.0)
+        val trusted = titleScore >= 0.80 && margin >= 0.10
+        return LabyrinthEventTextMatch(
+            event = LabyrinthArenaEvent.event.takeIf { trusted },
+            score = titleScore,
+            margin = margin,
+            titleScore = titleScore,
+            choiceScore = 0.0,
+            trusted = trusted,
+        )
+    }
+
+    /** Only the eight editable cards can use title OCR; guilds and excluded events stay upstream. */
+    fun customTitleEvents(overrides: Map<String, String>): List<EventResource> =
+        LabyrinthCustomEventCatalog.cards.mapNotNull { card ->
+            if (card.choices.none { it.runtimeName == overrides[card.runtimeName] }) {
+                return@mapNotNull null
+            }
+            if (card.id == LabyrinthArenaEvent.ID) {
+                return@mapNotNull LabyrinthArenaEvent.event.takeIf { LabyrinthArenaEvent.supports(events) }
+            }
+            events.singleOrNull { it.id == card.id && it.name == card.runtimeName }?.takeIf { event ->
+                event.choices.sortedBy { it.slot }.map { it.slot to it.name } ==
+                    card.choices.sortedBy { it.slot }.map { it.slot to it.runtimeName }
+            }
+        }
+
+    /** Compare distinct catalog titles. Short titles require exact normalized evidence. */
+    fun recognizeCustomTitle(
+        observedText: String,
+        candidates: List<EventResource>,
+    ): LabyrinthEventTextMatch {
+        if (candidates.isEmpty()) return emptyMatch()
+        val observed = normalizeEventText(observedText)
+        val best = candidates.maxByOrNull { fuzzyContainedScore(normalizeEventText(it.name), observed) }
+            ?: return emptyMatch()
+        val title = normalizeEventText(best.name)
+        val titleScore = fuzzyContainedScore(title, observed)
+        val rival = events.asSequence().map { it.name }.distinct().filter { it != best.name }
+            .map { fuzzyContainedScore(normalizeEventText(it), observed) }.maxOrNull() ?: 0.0
+        val margin = (titleScore - rival).coerceAtLeast(0.0)
+        val enoughText = if (title.length <= 6) observed.contains(title)
+            else observed.length >= 8
+        val trusted = enoughText && titleScore >= 0.80 && margin >= 0.10
+        return LabyrinthEventTextMatch(
+            event = best.takeIf { trusted }, score = titleScore, margin = margin,
+            titleScore = titleScore, choiceScore = 0.0, trusted = trusted,
         )
     }
 
@@ -216,6 +304,12 @@ class LabyrinthEventLayoutMapper(
         val layout = layoutsByCount[optionCount] ?: return emptyList()
         if (layout.calibrationRequired || layout.selectButtonRois.size != optionCount) return emptyList()
         return layout.selectButtonRois.mapNotNull { it.toPixelRect(frameWidth, frameHeight) }
+    }
+
+    fun titleBounds(optionCount: Int, frameWidth: Int, frameHeight: Int): EntryPixelRect? {
+        val layout = layoutsByCount[optionCount] ?: return null
+        if (layout.calibrationRequired) return null
+        return layout.titleRoi?.toPixelRect(frameWidth, frameHeight)
     }
 
     /**
