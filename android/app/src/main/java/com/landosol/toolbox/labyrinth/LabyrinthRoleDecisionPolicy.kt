@@ -393,6 +393,8 @@ data class LabyrinthRoleDecisionContext(
     val relaxedVanguardGate: Boolean = false,
     /** Actual battle area; only area 1 extends the opening-roster vanguardless fallback. */
     val currentArea: Int? = null,
+    /** Opt-in battle-only frontline hard gate; does not disable any survival scoring. */
+    val frontlineSurvivalGateEnabled: Boolean = false,
 ) {
     init {
         require(defenseMarkStacks >= 0)
@@ -1288,14 +1290,14 @@ class LabyrinthTeamOptimizer(
         if (context.preferSingleDamageSystem && context.encounterStrategy?.vanguardIsolationRadius == null) {
             val cohesive = rankedFormationsInternal(
                 roster = unique, context = context, requiredCharacterId = null, systemOnly = false,
-                limit = 1, requireFrontmostTank = true, forbidMixedDamageSystem = true,
+                limit = 1, requireFrontmostTank = context.frontlineSurvivalGateEnabled, forbidMixedDamageSystem = true,
                 requiredCharacterIds = requiredIds,
             ).firstOrNull()
             if (cohesive != null) return cohesive
         }
         return rankedFormationsInternal(
             roster = unique, context = context, requiredCharacterId = null, systemOnly = false,
-            limit = 1, requireFrontmostTank = true, requiredCharacterIds = requiredIds,
+            limit = 1, requireFrontmostTank = context.frontlineSurvivalGateEnabled, requiredCharacterIds = requiredIds,
         ).firstOrNull()
     }
 
@@ -1310,7 +1312,7 @@ class LabyrinthTeamOptimizer(
                 requiredCharacterId = null,
                 systemOnly = false,
                 limit = 1,
-                requireFrontmostTank = true,
+                requireFrontmostTank = context.frontlineSurvivalGateEnabled,
                 forbidMixedDamageSystem = true,
             ).firstOrNull()
             if (cohesive != null) return cohesive
@@ -1321,7 +1323,7 @@ class LabyrinthTeamOptimizer(
             requiredCharacterId = null,
             systemOnly = false,
             limit = 1,
-            requireFrontmostTank = true,
+            requireFrontmostTank = context.frontlineSurvivalGateEnabled,
         ).firstOrNull()
     }
 
@@ -1375,7 +1377,7 @@ class LabyrinthTeamOptimizer(
         context = context,
         requiredCharacterId = null,
         systemOnly = false,
-        requireFrontmostTank = true,
+        requireFrontmostTank = context.frontlineSurvivalGateEnabled,
     )
 
     private fun rankedFormationsInternal(
@@ -1406,10 +1408,17 @@ class LabyrinthTeamOptimizer(
             unique.sortedByDescending { individualSearchPriority(it, context) }
                 .take(scorer.config.exhaustiveRosterLimit)
                 .let { limited ->
-                    if (requiredCharacterId == null || limited.any { it.characterId == requiredCharacterId }) {
-                        limited
-                    } else {
-                        limited.dropLast(1) + requireNotNull(unique.firstOrNull { it.characterId == requiredCharacterId })
+                    // Guide-required roles must survive the bounded pool even with the frontline gate off.
+                    val reservedIds = requiredCharacterIds + listOfNotNull(requiredCharacterId)
+                    val missing = unique.filter { role ->
+                        role.characterId in reservedIds && limited.none { it.characterId == role.characterId }
+                    }
+                    if (missing.isEmpty()) limited else {
+                        // Remove only optional roles: an already retained guide role must not
+                        // be evicted while making room for another required role.
+                        val removedIds = limited.asReversed().filterNot { it.characterId in reservedIds }
+                            .take(missing.size).mapTo(HashSet()) { it.characterId }
+                        limited.filterNot { it.characterId in removedIds } + missing
                     }
                 }
         }
@@ -2022,7 +2031,7 @@ data class LabyrinthTeamPlan(
     val kind: LabyrinthTeamPlanKind,
     val teams: List<LabyrinthTeamEvaluation>,
     val reason: String,
-    /** Leading teams that passed the vanguard survival gate; any team after them is a damage supplement. */
+    /** Leading main-search teams (with the optional vanguard gate); later teams are damage supplements. */
     val safeTeamCount: Int = teams.size,
 )
 
@@ -2068,7 +2077,7 @@ class LabyrinthTeamPlanSearcher(
             // First-area battles share the opening-roster fallback regardless of pool size.
             // Outside area 1, a larger pool with a qualified vanguard keeps the refusal below.
             ?: return if (
-                context.currentArea != 1 &&
+                context.frontlineSurvivalGateEnabled && context.currentArea != 1 &&
                 roster.distinctBy(LabyrinthRoleProfile::characterId).size > TEAM_SIZE &&
                 hasAnyEligibleVanguard(roster, context)
             ) {
@@ -2092,7 +2101,9 @@ class LabyrinthTeamPlanSearcher(
         return LabyrinthTeamPlan(
             LabyrinthTeamPlanKind.FIRST_ATTEMPT_ONE_TEAM,
             listOf(first),
-            (if (context.optimizeBossVanguardSynergy) {
+            (if (!context.frontlineSurvivalGateEnabled) {
+                "前排生存门槛已关闭；首次挑战使用当前最佳队伍，评分${formatScore(first.score)}"
+            } else if (context.optimizeBossVanguardSynergy) {
                 "Boss主力队先要求一号位通过生存线，再将T的物理/法术队伍增益与其余四人联合优化，评分${formatScore(first.score)}"
             } else {
                 "首次挑战使用满足“一号位生存资格”硬约束的当前最佳队伍，评分${formatScore(first.score)}；实际失败后才启用后续队伍"
@@ -2154,13 +2165,19 @@ class LabyrinthTeamPlanSearcher(
         val qualifiedVanguards = unique.count {
             it.isEligibleBattleVanguard(searchContext, vanguardGate)
         }
-        val gateNote = if (searchContext.relaxedVanguardGate) {
+        val gateNote = if (!searchContext.frontlineSurvivalGateEnabled) {
+            "；前排生存门槛已关闭"
+        } else if (searchContext.relaxedVanguardGate) {
             "；失败后放宽一号位生存线至${formatScore(vanguardGate)}"
         } else {
             ""
         }
         val fullTeamCapacity = unique.size / TEAM_SIZE
-        val safeCapacity = minOf(requestedTeams, qualifiedVanguards, fullTeamCapacity)
+        val safeCapacity = if (searchContext.frontlineSurvivalGateEnabled) {
+            minOf(requestedTeams, qualifiedVanguards, fullTeamCapacity)
+        } else {
+            minOf(requestedTeams, fullTeamCapacity)
+        }
         if (safeCapacity <= 0) {
             return LabyrinthTeamPlan(
                 LabyrinthTeamPlanKind.INSUFFICIENT_ROLES,
@@ -2319,7 +2336,7 @@ class LabyrinthTeamPlanSearcher(
         if (ranked.isEmpty()) {
             // First-area retries also use the opening-roster fallback. Other areas retain the
             // existing refusal when a qualified vanguard is present.
-            if (context.currentArea == 1 || !hasAnyEligibleVanguard(roster, context)) {
+            if (!context.frontlineSurvivalGateEnabled || context.currentArea == 1 || !hasAnyEligibleVanguard(roster, context)) {
                 return vanguardlessPlan(roster, context, excludedTeamSignatures)
             }
             return LabyrinthTeamPlan(
@@ -2516,6 +2533,7 @@ internal fun labyrinthEncounterGuideCore(
             .take((requirement.minimumCount - already).coerceAtLeast(0))
             .forEach { core += it.characterId }
     }
+    if (!context.frontlineSurvivalGateEnabled) return core.take(ENCOUNTER_GUIDE_CORE_MAX).toSet()
     val eligibleTanks = unique.filter { it.isEligibleBattleVanguard(context) }
     return core.filter { id ->
         val role = unique.first { it.characterId == id }

@@ -1558,6 +1558,8 @@ class LabyrinthEntryRecognitionSession(
     private var roleDisplayNames: Map<String, String> = emptyMap()
     private var bossTeamMode: LabyrinthBossTeamMode = LabyrinthBossTeamMode.MULTI_TEAM
     private var preferPureBossDamageSystem: Boolean = true
+    /** Immutable user settings captured at start; saving during a run applies to the next run. */
+    private var battleStrategySettingsSnapshot = LabyrinthStrategySettings()
     /**
      * 启动时抓取的设置快照，只用来回答「本次战斗的关卡类型要不要自动穿戴特别装备」：
      * 运行中保存新配置不改变本轮，只影响下一次启动。
@@ -1978,6 +1980,7 @@ class LabyrinthEntryRecognitionSession(
         singleBossRetryCountBeforeMulti = 2
         pendingSingleBossFallbackToMulti = false
         bossFallbackMultiTeamActive = false
+        battleStrategySettingsSnapshot = strategySnapshot?.settings ?: LabyrinthStrategySettings()
         eventCustomizationEnabledSnapshot = strategySnapshot?.settings?.eventCustomizationEnabled == true
         eventChoiceOverridesSnapshot = strategySnapshot?.settings?.effectiveEventChoiceOverrides()?.toMap().orEmpty()
         strategySnapshot?.let { snapshot ->
@@ -4586,6 +4589,8 @@ class LabyrinthEntryRecognitionSession(
             append(targetCount)
             append("|team=")
             append(currentCombatContext?.teamIndex ?: 1)
+            append("|frontlineGate=")
+            append(battleStrategySettingsSnapshot.frontlineSurvivalGateEnabled)
             append("|bossMode=")
             append(bossTeamMode.name)
             append("|fallbackMulti=")
@@ -4641,6 +4646,7 @@ class LabyrinthEntryRecognitionSession(
             effectiveCharacterIds = synchronized(effectiveExCharacterIds) { effectiveExCharacterIds.toSet() },
             relaxedVanguardGate = currentCombatContext?.kind == LabyrinthCombatKind.BOSS && bossFallbackMultiTeamActive,
             currentArea = battleArea,
+            frontlineSurvivalGateEnabled = battleStrategySettingsSnapshot.frontlineSurvivalGateEnabled,
         )
         val allowSupplementLead = currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
             bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM && currentCombatContext.teamIndex > 1
@@ -4749,11 +4755,13 @@ class LabyrinthEntryRecognitionSession(
             recommendation = recommendation,
             observation = observation,
             exhaustedFilters = exhaustedBattleRosterFilters.toSet(),
-            // Ordinary battles keep whatever full team the game already has instead of paying for
-            // a re-selection; a failed attempt (battleRetryCount > 0) goes back to the normal
-            // recommendation path, which is the existing retry behaviour.
-            holdCurrentTeamRequested = combatContext?.kind == LabyrinthCombatKind.NORMAL &&
-                battleRetryCount == 0,
+            // Reuse a confirmed full ordinary-battle team only when the saved switch is on.
+            // Retries always return to recommendation-based selection.
+            holdCurrentTeamRequested = labyrinthRequestsCurrentNormalBattleTeam(
+                settings = battleStrategySettingsSnapshot,
+                kind = combatContext?.kind,
+                retryCount = battleRetryCount,
+            ),
         )
         val logText = plan.logText()
         val current = _state.value
