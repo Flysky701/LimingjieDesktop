@@ -18,7 +18,7 @@ dependencies {
     implementation(project(":shared")); implementation(project(":device")); implementation(project(":ocr")); implementation(project(":platform"))
     implementation(compose.desktop.currentOs); implementation(compose.material3)
     implementation(kotlin("reflect"))
-    testImplementation(libs.junit)
+    testImplementation(libs.junit); testImplementation(libs.coroutines.test)
     testImplementation(compose.desktop.uiTestJUnit4)
 }
 

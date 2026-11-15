@@ -1,7 +1,9 @@
 package com.landosol.toolbox.desktop.device
 
 import com.android.apksig.ApkSigner
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -19,7 +21,7 @@ import java.util.zip.ZipOutputStream
 
 class DeviceIdentityReaderTest {
     @get:Rule val directory = TemporaryFolder()
-    @Test fun realApkSignatureUsesCertificateDerCachesUpdateKeyAndDeletesPulledApk() = runBlocking {
+    @Test fun slowApkTransferVerifiesSignatureCachesUpdateKeyAndDeletesPulledApk() = runTest {
         // Disposable, locally generated signing identity. No real game APK or credential is used.
         val keyStoreFile = directory.root.toPath().resolve("synthetic.p12")
         val keytool = Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "keytool.exe" else "keytool")
@@ -50,12 +52,23 @@ class DeviceIdentityReaderTest {
             call.arguments == listOf("dumpsys", "package", FakeAdb.GAME) -> FakeAdb.success("versionName=1.0\nversionCode=1 minSdk=26\nlastUpdateTime=$updated")
             call.arguments == listOf("pm", "path", FakeAdb.GAME) -> FakeAdb.success("package:/data/app/fixture/split_config.apk\npackage:/data/app/fixture/base.apk")
             call.arguments.firstOrNull() == "stat" -> FakeAdb.success(apkStamp)
-            call.arguments.firstOrNull() == "pull" -> { Files.copy(v23, Path.of(call.arguments[2]), java.nio.file.StandardCopyOption.REPLACE_EXISTING); FakeAdb.success("copied") }
+            call.arguments.firstOrNull() == "pull" -> withContext(StandardTestDispatcher(testScheduler)) {
+                // Advance virtual time: a healthy transfer may exceed the old one-minute limit.
+                try { withTimeout(call.timeoutMillis) { delay(75_000) } }
+                catch (_: TimeoutCancellationException) { return@withContext AdbResult.Failure(AdbFailureKind.Timeout, "synthetic slow transfer") }
+                Files.copy(v23, Path.of(call.arguments[2]), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                FakeAdb.success("copied")
+            }
             else -> fake.default(call)
         } }
         val reader = DeviceIdentityReader(fake, directory.root.toPath(), setOf(FakeAdb.GAME))
         repeat(2) { assertEquals(expected, reader.read("fixture", 1920 to 1080).packages[FakeAdb.GAME]!!.certificateMd5) }
         assertEquals(1, fake.calls.count { it.arguments.firstOrNull() == "pull" })
+        val cacheDirectory = directory.root.toPath().resolve("cache/verified-packages")
+        Files.list(cacheDirectory).use { files ->
+            val entries = files.toList()
+            assertEquals("Verification must persist before another worker connects", 1, entries.size)
+        }
         // A recreated worker must reuse the previous verification, not pull the APK again.
         DeviceIdentityReader(fake, directory.root.toPath().resolve("new-worker"), setOf(FakeAdb.GAME),
             verifiedCacheDirectory = directory.root.toPath().resolve("cache/verified-packages")).read("fixture", 1920 to 1080)
@@ -72,6 +85,36 @@ class DeviceIdentityReaderTest {
         }
         DeviceIdentityReader(fake, directory.root.toPath(), setOf(FakeAdb.GAME)).read("fixture", 1920 to 1080)
         assertEquals(4, fake.calls.count { it.arguments.firstOrNull() == "pull" })
+        Files.list(directory.root.toPath().resolve("cache/apk")).use { assertEquals(0L, it.count()) }
+    }
+
+    @Test fun failedOrCancelledPullNeverCachesPartialApkAndDeletesTemporaryFile() = runBlocking {
+        val fake = FakeAdb()
+        var failure = AdbFailureKind.Timeout
+        var cancel = false
+        fake.handler = { call -> when {
+            call.arguments == listOf("pm", "list", "packages") -> FakeAdb.success("package:${FakeAdb.GAME}")
+            call.arguments == listOf("dumpsys", "package", FakeAdb.GAME) -> FakeAdb.success("versionName=1.0\nversionCode=1\nlastUpdateTime=2026-10-25 10:00:00")
+            call.arguments == listOf("pm", "path", FakeAdb.GAME) -> FakeAdb.success("package:/data/app/fixture/base.apk")
+            call.arguments.firstOrNull() == "stat" -> FakeAdb.success("12345:1761386400")
+            call.arguments.firstOrNull() == "pull" -> {
+                Files.writeString(Path.of(call.arguments[2]), "partial APK")
+                if (cancel) throw CancellationException("synthetic cancellation")
+                AdbResult.Failure(failure, "synthetic failed transfer")
+            }
+            else -> fake.default(call)
+        } }
+        val reader = DeviceIdentityReader(fake, directory.root.toPath(), setOf(FakeAdb.GAME))
+        for (kind in listOf(AdbFailureKind.Timeout, AdbFailureKind.DeviceOffline)) {
+            failure = kind
+            val error = runCatching { reader.read("fixture", 1920 to 1080) }.exceptionOrNull()
+            assertEquals(kind, (error as DeviceOperationException).adbFailure)
+            Files.list(directory.root.toPath().resolve("cache/apk")).use { assertEquals(0L, it.count()) }
+        }
+        cancel = true
+        assertTrue(runCatching { reader.read("fixture", 1920 to 1080) }.exceptionOrNull() is CancellationException)
+        assertEquals(3, fake.calls.count { it.arguments.firstOrNull() == "pull" })
+        assertFalse(Files.exists(directory.root.toPath().resolve("cache/verified-packages")))
         Files.list(directory.root.toPath().resolve("cache/apk")).use { assertEquals(0L, it.count()) }
     }
 

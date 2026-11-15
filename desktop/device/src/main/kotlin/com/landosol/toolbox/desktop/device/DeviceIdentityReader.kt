@@ -41,7 +41,7 @@ class DeviceIdentityReader(private val adb: AdbExecutor, private val dataDirecto
             val stamp = (adb.shell(serial, listOf("stat", "-c", "%s:%Y", source)) as? AdbResult.Success)?.text()?.trim().orEmpty()
             val cacheKey = CacheKey(key, pkg, code, updated, sdk, source, stamp)
             val cached = certificateCache[cacheKey] ?: readVerifiedCertificate(cacheKey)
-            val certificate = cached ?: readCertificate(serial, source, sdk).also {
+            val certificate = cached ?: readCertificate(serial, pkg, source, sdk).also {
                 saveVerifiedCertificate(cacheKey, it)
             }
             if (cached != null) onEvent("复用已校验的游戏签名：$pkg")
@@ -78,19 +78,28 @@ class DeviceIdentityReader(private val adb: AdbExecutor, private val dataDirecto
         } // A cache write failure cannot turn a verified package into a connection failure.
     }
 
-    private suspend fun readCertificate(serial: String, source: String, sdk: Int): String {
+    private suspend fun readCertificate(serial: String, packageName: String, source: String, sdk: Int): String {
         return withContext(Dispatchers.IO) {
             val directory = dataDirectory.resolve("cache/apk")
             Files.createDirectories(directory)
             val apk = Files.createTempFile(directory, "certificate-", ".apk")
             try {
-                adb.execute(listOf("pull", source, apk.toString()), serial, timeoutMillis = 60_000).requireSuccess()
+                onEvent("正在复制游戏安装包以校验签名：$packageName（首次或更新后可能需要数分钟）")
+                val result = adb.execute(listOf("pull", source, apk.toString()), serial, timeoutMillis = APK_PULL_TIMEOUT_MILLIS)
+                if (result is AdbResult.Failure && result.kind == AdbFailureKind.Timeout) {
+                    throw DeviceOperationException("复制游戏安装包超时（${APK_PULL_TIMEOUT_MILLIS / 1000} 秒）：$packageName。请确认模拟器运行正常，并在“设备 → ADB 工具”选择该模拟器自带的 adb.exe 后重试。", result.kind)
+                }
+                result.requireSuccess()
+                onEvent("游戏安装包复制完成，正在校验签名：$packageName")
                 certificateMd5(apk, sdk)
             } finally { Files.deleteIfExists(apk) }
         }
     }
 
     companion object {
+        // This transfers the entire APK, which can take minutes on a slow emulator or disk.
+        private const val APK_PULL_TIMEOUT_MILLIS = 10 * 60_000L
+
         /** ApkVerifier chooses the current signer for the actual device's Android version. */
         fun certificateMd5(apk: Path, sdk: Int): String {
             val result = ApkVerifier.Builder(apk.toFile()).setMinCheckedPlatformVersion(sdk).setMaxCheckedPlatformVersion(sdk).build().verify()

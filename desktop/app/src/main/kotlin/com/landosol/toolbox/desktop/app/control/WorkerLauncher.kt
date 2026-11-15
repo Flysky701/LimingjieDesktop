@@ -14,6 +14,11 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 
+internal suspend fun awaitWorkerReply(op: String, reply: Deferred<JsonObject>): JsonObject =
+    // Connecting has bounded boot/ADB steps and may copy several large APKs. Keep the
+    // transport heartbeat and caller cancellation, without the generic three-minute cutoff.
+    if (op == ControlOps.DEVICE_CONNECT) reply.await() else withTimeout(180_000) { reply.await() }
+
 class WorkerLauncher(
     private val scope: CoroutineScope,
     private val containProcess: (Long) -> AutoCloseable,
@@ -158,7 +163,7 @@ private class ProcessWorkerLink(
             withContext(Dispatchers.IO) {
                 checkNotNull(wire).write(wireMessage("request", instanceId, workerRunId) { put("requestId", id); put("op", op); put("args", args) })
             }
-            return withTimeout(180_000) { result.await() }
+            return awaitWorkerReply(op, result)
         } finally { pending.remove(id) }
     }
 
