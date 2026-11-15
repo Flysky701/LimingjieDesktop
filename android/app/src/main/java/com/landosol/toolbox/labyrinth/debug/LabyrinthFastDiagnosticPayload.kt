@@ -1,6 +1,7 @@
 package com.landosol.toolbox.labyrinth.debug
 
 import com.landosol.toolbox.labyrinth.LabyrinthBalancedDiagnostics
+import com.landosol.toolbox.labyrinth.LabyrinthEventPlanningDiagnostics
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSessionState
 import com.landosol.toolbox.labyrinth.vision.LabyrinthFastFrameObservation
 
@@ -37,7 +38,7 @@ internal fun labyrinthFastDiagnosticPayload(
     "balancedDiagnostics" to state.balancedDiagnostics?.let(::labyrinthBalancedDiagnosticPayload),
 )
 
-internal fun labyrinthBalancedDiagnosticPayload(d: LabyrinthBalancedDiagnostics): Map<String, Any?> = linkedMapOf(
+internal fun labyrinthBalancedDiagnosticPayload(d: LabyrinthBalancedDiagnostics): Map<String, Any?> = linkedMapOf<String, Any?>(
     "enabled" to d.enabled,
     "businessThreadBudget" to d.businessThreadBudget,
     "cpuWorkerBudget" to d.cpuWorkerBudget,
@@ -63,4 +64,18 @@ internal fun labyrinthBalancedDiagnosticPayload(d: LabyrinthBalancedDiagnostics)
     "diagnosticReplacementCount" to d.diagnosticReplacementCount,
     "staleActionBlockedCount" to d.staleActionBlockedCount,
     "sceneEpoch" to d.sceneEpoch,
+).apply { d.eventPlanning?.let { put("eventPlanning", labyrinthEventPlanningDiagnosticPayload(it)) } }
+
+internal fun labyrinthEventPlanningDiagnosticPayload(d: LabyrinthEventPlanningDiagnostics): Map<String, Any?> = linkedMapOf(
+    "scope" to "event_planning_only_not_action_permission",
+    "eventId" to d.eventId, "phase" to d.phase, "semanticKeyHash" to d.semanticKeyHash,
+    "active" to d.active, "ready" to d.ready,
+    "requestCount" to d.requestCount, "submittedCount" to d.submittedCount,
+    "completedCount" to d.completedCount, "cancelledCount" to d.cancelledCount,
+    "discardedCount" to d.discardedCount, "ocrRefreshRetainedCount" to d.ocrRefreshRetainedCount,
+    "submittedAtMillis" to d.submittedAtMillis, "startedAtMillis" to d.startedAtMillis,
+    "endedAtMillis" to d.endedAtMillis, "resultAtMillis" to d.resultAtMillis,
+    "quiescedAtMillis" to d.quiescedAtMillis, "readyAtMillis" to d.readyAtMillis,
+    "waitingMillis" to d.waitingMillis,
+    "lastCancellationReason" to d.lastCancellationReason, "lastFailure" to d.lastFailure,
 )

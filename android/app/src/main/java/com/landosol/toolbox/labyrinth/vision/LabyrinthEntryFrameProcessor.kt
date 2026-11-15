@@ -398,6 +398,10 @@ data class LabyrinthEntryFrameResult(
     val nodeSearchMode: String = "none",
     /** Candidate windows the node classifier scored on this frame; 0 when no node scan ran. */
     val nodeSearchWindowCount: Int = 0,
+    /** Explicit current-frame proof; no implicit trust from a search mode or cached windows. */
+    val nodeEvidenceSource: com.landosol.toolbox.labyrinth.node.NodeFrameEvidenceSource =
+        com.landosol.toolbox.labyrinth.node.NodeFrameEvidenceSource.NONE,
+    val nodeRevalidationCount: Int = 0,
     /** Pixel-only map viewport signature, independent from successful node classification. */
     val nodeViewportSignature: String = "",
     val nodeViewportPixels: com.landosol.toolbox.labyrinth.node.NodeViewportPixels? = null,
@@ -528,6 +532,8 @@ class LabyrinthEntryFrameProcessor(
         var battleTeamNanos = 0L
         var nodeSearchMode = "none"
         var nodeSearchWindowCount = 0
+        var nodeEvidenceSource = com.landosol.toolbox.labyrinth.node.NodeFrameEvidenceSource.NONE
+        var nodeRevalidationCount = 0
         var nodeViewportSignature = ""
         var nodeViewportPixels: com.landosol.toolbox.labyrinth.node.NodeViewportPixels? = null
         val elapsedNanos = measureNanoTime {
@@ -638,6 +644,7 @@ class LabyrinthEntryFrameProcessor(
                             finalBossPlatforms = finalBossPlatformLocator.locate(frame)
                             finalBossPlatformCandidates = finalBossPlatformLocator.lastCandidates
                         }
+                        nodeEvidenceSource = com.landosol.toolbox.labyrinth.node.NodeFrameEvidenceSource.FINAL_BOSS_PLATFORM
                     } else {
                         nodesNanos = measureNanoTime {
                             nodeClassifications = nodeClassifier.classifyMapNodes(
@@ -648,6 +655,8 @@ class LabyrinthEntryFrameProcessor(
                         }
                         nodeSearchMode = nodeClassifier.lastSearchMode
                         nodeSearchWindowCount = nodeClassifier.lastSearchWindowCount
+                        nodeEvidenceSource = nodeClassifier.lastEvidenceSource
+                        nodeRevalidationCount = nodeClassifier.lastRevalidationCount
                     }
                 }
             } else {
@@ -705,6 +714,8 @@ class LabyrinthEntryFrameProcessor(
                     (elapsedNanos - nodesNanos - bossPlatformNanos - battleTeamNanos) / 1_000_000),
             nodeSearchMode = nodeSearchMode,
             nodeSearchWindowCount = nodeSearchWindowCount,
+            nodeEvidenceSource = nodeEvidenceSource,
+            nodeRevalidationCount = nodeRevalidationCount,
             nodeViewportSignature = nodeViewportSignature,
             nodeViewportPixels = nodeViewportPixels,
             anchorMatches = anchorMatches,

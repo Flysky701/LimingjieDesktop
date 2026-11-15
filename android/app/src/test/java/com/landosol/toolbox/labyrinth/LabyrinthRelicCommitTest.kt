@@ -116,7 +116,7 @@ class LabyrinthRelicCommitTest {
         try {
             harness.start()
             harness.dispatch(LabyrinthPostEntryActionKind.SELECT_ROLE_REWARD)
-            enteredAction.await()
+            withTimeout(5_000) { enteredAction.await() }
             harness.frame(LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION, 2_000)
             val writes = harness.store.writes
             action.complete(AutomationBackendResult.Completed)
@@ -421,8 +421,9 @@ class LabyrinthRelicCommitTest {
         fun get(name: String): Any? = field(name).get(session)
         fun set(name: String, value: Any?) { field(name).set(session, value) }
         private fun field(name: String) = session.javaClass.getDeclaredField(name).apply { isAccessible = true }
-        private fun method(name: String) = session.javaClass.declaredMethods.single {
-            (it.name == name || it.name.startsWith("$name-")) && !it.name.endsWith("\$default")
+        private fun method(name: String, parameterCount: Int? = null) = session.javaClass.declaredMethods.single {
+            (it.name == name || it.name.startsWith("$name-")) && !it.name.endsWith("\$default") &&
+                (parameterCount == null || it.parameterCount == parameterCount)
         }.apply { isAccessible = true }
         fun plan(candidate: LabyrinthRelicMatch) {
             ledger.prepare(requireNotNull(candidate.relicId), mark, 2, 9)
@@ -440,7 +441,7 @@ class LabyrinthRelicCommitTest {
                 state.value = state.value.copy(lastResult = frame, roleRewardChoiceDecision = LabyrinthRoleRewardChoiceDecision.Select(
                     selectedRole, "千歌（礼服）", rect, emptyList()))
             }
-            method("dispatchPostEntryTap").invoke(session, sessionId, kind, "test action", rect,
+            method("dispatchPostEntryTap", 12).invoke(session, sessionId, kind, "test action", rect,
                 now, roleSelectionSignature, selectedRole, relicId, null, null, false, emptyList<String>())
         }
         suspend fun awaitAction() = withTimeout(5_000) {

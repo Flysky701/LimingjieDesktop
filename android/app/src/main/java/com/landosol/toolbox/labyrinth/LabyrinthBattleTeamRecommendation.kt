@@ -114,11 +114,9 @@ class LabyrinthBattleTeamRecommendationPlanner(
         // rather than blocking 编组 (2026-09-19, by request). The planner still never promotes a
         // 掩护者 who fails the survival line into a "safe" lead; it just says so and plays on.
         val poolHasVanguard = resolved.any { it.isEligibleBattleVanguard(context) }
-        // A pool that cannot fill one team has no second line-up to fall back on, so leading
-        // without a qualified vanguard is the only way to play it. Same boundary as the plan
-        // searcher; larger pools keep the strict refusal below.
+        // First-area battles share the small opening-roster fallback after safe search fails.
         val supplementLead = allowSupplementLead || !poolHasVanguard ||
-            resolved.size <= TEAM_SIZE
+            resolved.size <= TEAM_SIZE || context.currentArea == 1
 
         val plan = if (requestedBossTeamCount > 1 || allowSupplementLead) {
             teamPlanSearcher.bossMultiTeamSearch(
@@ -163,7 +161,9 @@ class LabyrinthBattleTeamRecommendationPlanner(
             }
             if (leadIsSupplement) {
                 add(
-                    if (poolHasVanguard) {
+                    if (context.currentArea == 1) {
+                        "第一层无法组成合格一号位队伍；按无T阵容上场"
+                    } else if (poolHasVanguard) {
                         "Boss后续队伍：无合格一号位，作为输出补刀队上场而不留空"
                     } else {
                         "角色池中没有满足生存资格的一号位；按无T阵容上场，不再空等"
@@ -316,7 +316,7 @@ class LabyrinthBattleTeamRecommendationPlanner(
         // A retry with a vanguard-less team beats leaving the run parked on the failure page
         // (2026-09-19, by request; same fallback as the first attempt).
         val retryPoolHasVanguard = resolved.any { it.isEligibleBattleVanguard(context) }
-        val retrySupplementLead = allowSupplementLead || !retryPoolHasVanguard
+        val retrySupplementLead = allowSupplementLead || !retryPoolHasVanguard || context.currentArea == 1
 
         val isolatedRetryPlan = if (context.encounterStrategy?.vanguardIsolationRadius != null) {
             teamPlanSearcher.fallbackSearch(resolved, context, failedTeamSignatures)

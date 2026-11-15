@@ -68,6 +68,7 @@ data class LabyrinthBalancedDiagnostics(
     val diagnosticReplacementCount: Long = 0,
     val staleActionBlockedCount: Long = 0,
     val sceneEpoch: Long = 0,
+    val eventPlanning: LabyrinthEventPlanningDiagnostics? = null,
 )
 
 /** Checked before claiming the latch / creating a RoleRound dispatch token. */

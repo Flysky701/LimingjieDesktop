@@ -19,9 +19,14 @@ sealed interface NodeAction {
         val expectedBlockType: Int,
         val detectedBlockType: Int,
         val screenRect: EntryPixelRect?,
+        /** Compatibility/ranking score; admission uses visualConfidence plus the current crop. */
         val confidence: Double,
         val topologyConfidence: Double? = null,
         val topologyBindingKind: NodeTopologyBindingKind? = null,
+        /** Real classifier confidence; null only for source-compatible legacy callers. */
+        val visualConfidence: Double? = null,
+        /** A distinct, correctly typed sibling supports this ordered partial/subset binding. */
+        val hasOrderedSiblingEvidence: Boolean = false,
     ) : NodeAction
     data object Complete : NodeAction
     data class Error(val message: String) : NodeAction
@@ -52,9 +57,6 @@ class LabyrinthNodeActionPlanner {
         val nextNode = matchResult.nextNode
         val targetMappings = matchResult.visibleNodes
             .filter { it.blockId == nextNode.blockId }
-        val activeTargetMappings = targetMappings.filter { mapping ->
-            mapping.isClickable && mapping.screenRect != null
-        }
         val inactiveRouteTopologyFallback = matchResult.topologyMappings
             .asSequence()
             .filter { topology ->
@@ -91,7 +93,10 @@ class LabyrinthNodeActionPlanner {
                     .thenBy { it.visualConfidence },
             )
         fun hasStrongOrderedTopology(mapping: NodePositionMapping): Boolean {
-            if ((mapping.topologyConfidence ?: 0.0) < TOPOLOGY_ORDERED_OVERRIDE_MIN_CONFIDENCE) {
+            val topologyConfidence = mapping.topologyConfidence ?: return false
+            if (!topologyConfidence.isFinite() ||
+                topologyConfidence !in TOPOLOGY_ORDERED_OVERRIDE_MIN_CONFIDENCE..1.0
+            ) {
                 return false
             }
             return when (mapping.topologyBindingKind) {
@@ -101,21 +106,21 @@ class LabyrinthNodeActionPlanner {
                 -> matchResult.visibleNodes.any { sibling ->
                         sibling.column == mapping.column &&
                             sibling.blockId != mapping.blockId &&
+                            sibling.screenRect != null && mapping.screenRect != null &&
+                            !labyrinthNodeRectsOverlapSameCrop(sibling.screenRect, mapping.screenRect) &&
                             sibling.isClickable &&
                             sibling.detectedBlockType == sibling.blockType &&
-                            (sibling.topologyConfidence ?: 0.0) >= TOPOLOGY_ORDERED_OVERRIDE_MIN_CONFIDENCE
+                            (sibling.topologyConfidence ?: 0.0) in TOPOLOGY_ORDERED_OVERRIDE_MIN_CONFIDENCE..1.0 &&
+                            NodeClickAdmission.hasSemanticScores(sibling.visualConfidence, sibling.typeConfidence)
                     }
                 NodeTopologyBindingKind.SINGLE_TARGET,
                 null,
                 -> false
             }
         }
-        val strongOrderedTopology = targetMappings
-            .filter { mapping ->
-                mapping.isClickable &&
-                    hasStrongOrderedTopology(mapping)
-            }
-            .maxByOrNull { it.topologyConfidence ?: 0.0 }
+        // A protected semantic correction authorizes one actual mapping, not every candidate
+        // that happens to share the route id. Carry that identity through final admission below.
+        var protectedConflictMapping: NodePositionMapping? = null
 
         // A route blockId tells us which logical node should be selected; it must not be allowed
         // to rewrite a contradictory visual crop by itself. The exception is a high-confidence
@@ -190,23 +195,44 @@ class LabyrinthNodeActionPlanner {
                 // same screen rect must be independently bound by ordered topology, and partial
                 // columns require a second mapped sibling to prove the vertical ordering.
                 if (
+                    conflictMapping != null && !conflictMapping.routeSemanticRepair &&
                     !labyrinthBossSemanticConflict(conflict.expectedBlockType, conflict.detectedBlockType) &&
                     (
-                        strongOrderedTopology != null ||
+                        targetMappings.any { mapping ->
+                            mapping.isClickable && mapping.screenRect == conflict.screenRect &&
+                                hasStrongOrderedTopology(mapping)
+                        } ||
                             purpleExConflict ||
                             (linkRelicSemanticSwap && linkRelicTopology)
                         )
-                ) return@let
+                ) {
+                    protectedConflictMapping = conflictMapping
+                    return@let
+                }
                 return NodeAction.TypeConflict(
                     blockId = conflict.blockId,
                     expectedBlockType = conflict.expectedBlockType,
                     detectedBlockType = conflict.detectedBlockType,
                     screenRect = conflict.screenRect,
                     confidence = conflict.confidence,
-                    topologyConfidence = conflictMapping?.topologyConfidence,
+                    topologyConfidence = conflict.topologyConfidence ?: conflictMapping?.topologyConfidence,
                     topologyBindingKind = conflictMapping?.topologyBindingKind,
+                    visualConfidence = conflict.visualConfidence ?: conflict.confidence,
+                    hasOrderedSiblingEvidence = conflictMapping?.let { target ->
+                        targetMappingsWithSiblingEvidence(matchResult, target)
+                    } == true,
                 )
             }
+
+        val activeTargetMappings = targetMappings.filter { mapping ->
+            mapping.isClickable && mapping.screenRect != null &&
+                NodeClickAdmission.hasFiniteVisualEvidence(mapping.visualConfidence, mapping.typeConfidence) &&
+                (
+                    mapping === protectedConflictMapping ||
+                        (!mapping.routeSemanticRepair && hasStrongOrderedTopology(mapping)) ||
+                        NodeClickAdmission.hasSemanticScores(mapping.visualConfidence, mapping.typeConfidence)
+                    )
+        }
 
         // Normally an inactive crop remains diagnostic-only. One bounded exception handles the
         // post-battle/reward map state seen in production: ordered topology can identify the saved
@@ -244,6 +270,20 @@ class LabyrinthNodeActionPlanner {
             blockType = nextNode.blockType,
             screenRect = screenRect,
         )
+    }
+
+    private fun targetMappingsWithSiblingEvidence(
+        matchResult: NodeMatchResult,
+        target: NodePositionMapping,
+    ): Boolean = matchResult.visibleNodes.any { sibling ->
+        sibling.blockId != target.blockId && sibling.column == target.column &&
+            sibling.screenRect != null && target.screenRect != null &&
+            !labyrinthNodeRectsOverlapSameCrop(sibling.screenRect, target.screenRect) &&
+            sibling.isClickable && sibling.detectedBlockType == sibling.blockType &&
+            sibling.topologyBindingKind != null &&
+            sibling.topologyBindingKind != NodeTopologyBindingKind.SINGLE_TARGET &&
+            (sibling.topologyConfidence ?: 0.0) >= 0.80 &&
+            NodeClickAdmission.hasSemanticScores(sibling.visualConfidence, sibling.typeConfidence)
     }
 
     /**

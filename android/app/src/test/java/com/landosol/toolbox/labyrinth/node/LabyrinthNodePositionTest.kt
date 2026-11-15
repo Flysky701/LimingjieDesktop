@@ -1640,7 +1640,8 @@ class LabyrinthNodePositionTest {
                         blockType = next.blockType,
                         column = 2,
                         row = 1,
-                        confidence = 0.56,
+                        // Higher confidence must not make an inactive crop win.
+                        confidence = 0.76,
                         screenRect = inactive,
                         isClickable = false,
                     ),
@@ -1649,7 +1650,8 @@ class LabyrinthNodePositionTest {
                         blockType = next.blockType,
                         column = 2,
                         row = 1,
-                        confidence = 0.47,
+                        // Independently admissible, but still weaker than the inactive crop.
+                        confidence = 0.67,
                         screenRect = active,
                         isClickable = true,
                     ),

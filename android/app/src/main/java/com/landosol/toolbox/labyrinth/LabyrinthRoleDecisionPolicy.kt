@@ -390,6 +390,8 @@ data class LabyrinthRoleDecisionContext(
      * Scoring still prefers a genuinely reliable front; only the hard eligibility gate relaxes.
      */
     val relaxedVanguardGate: Boolean = false,
+    /** Actual battle area; only area 1 extends the opening-roster vanguardless fallback. */
+    val currentArea: Int? = null,
 ) {
     init {
         require(defenseMarkStacks >= 0)
@@ -2059,19 +2061,10 @@ class LabyrinthTeamPlanSearcher(
         }
         val first = chosenCore
             ?: ordinary
-            // Nobody in this pool can lead. Refusing leaves the run with nothing to send and the
-            // fight still has to be played, so compose the best team the pool allows and say
-            // plainly that it leads without a qualified tank (2026-09-19, by request). Boss
-            // follow-up slots have filled this way since 2026-09-17.
-            //
-            // Deliberately narrow: a pool that *does* hold a qualified vanguard but still cannot
-            // form a team has a different problem (unknown 站位, too few roles), and its specific
-            // reason below is what tells the user which. But a pool that cannot even fill one team
-            // has no alternative line-up at all: the frontmost role is fixed by position data and
-            // cannot be swapped, so the gate can never be satisfied and the run would idle on this
-            // page until the stall watchdog ends it. Those two cases fall back; only a pool large
-            // enough to have chosen a different front keeps the refusal and its diagnosis.
+            // First-area battles share the opening-roster fallback regardless of pool size.
+            // Outside area 1, a larger pool with a qualified vanguard keeps the refusal below.
             ?: return if (
+                context.currentArea != 1 &&
                 roster.distinctBy(LabyrinthRoleProfile::characterId).size > TEAM_SIZE &&
                 hasAnyEligibleVanguard(roster, context)
             ) {
@@ -2320,10 +2313,9 @@ class LabyrinthTeamPlanSearcher(
                     .joinToString(",") in excludedTeamSignatures
             }
         if (ranked.isEmpty()) {
-            // Same reasoning as the first attempt: with nobody fit to lead, a vanguard-less retry
-            // beats leaving the run parked on the failure page. A pool that does have a tank but
-            // exhausted its untried formations keeps the original message.
-            if (!hasAnyEligibleVanguard(roster, context)) {
+            // First-area retries also use the opening-roster fallback. Other areas retain the
+            // existing refusal when a qualified vanguard is present.
+            if (context.currentArea == 1 || !hasAnyEligibleVanguard(roster, context)) {
                 return vanguardlessPlan(roster, context, excludedTeamSignatures)
             }
             return LabyrinthTeamPlan(

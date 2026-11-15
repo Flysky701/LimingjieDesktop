@@ -2,6 +2,8 @@ package com.landosol.toolbox.labyrinth
 
 import com.landosol.toolbox.labyrinth.concurrent.LabyrinthFourThreadRuntime
 import com.landosol.toolbox.labyrinth.vision.LabyrinthFastFrameObservation
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEventChoiceObservation
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEventVisualIdentity
 import com.landosol.toolbox.automation.capture.RefCountedFrameLease
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -187,6 +189,17 @@ internal fun labyrinthPersistedBossNode(route: LabyrinthRouteJson?): LabyrinthNo
         it.blockType == LabyrinthNodeTypes.BOSS && it.area + 1 == current.area
     }
 }
+
+/** The active battle can remain on an area Boss after the saved cursor advances to the next START. */
+internal fun labyrinthBattleTeamArea(
+    activeNodeArea: Int?,
+    combatKind: LabyrinthCombatKind?,
+    route: LabyrinthRouteJson?,
+    progressArea: Int?,
+): Int? = activeNodeArea
+    ?: (if (combatKind == LabyrinthCombatKind.BOSS) labyrinthPersistedBossNode(route)?.area else null)
+    ?: labyrinthPersistedCurrentNode(route)?.area
+    ?: progressArea
 
 internal fun labyrinthBossEncounterStrategy(route: LabyrinthRouteJson?): LabyrinthExEncounterStrategy? {
     val boss = labyrinthPersistedBossNode(route) ?: return null
@@ -1189,7 +1202,11 @@ class LabyrinthEntryRecognitionSession(
     private val diagnosticLane = LabyrinthBalancedDiagnosticLane(this.actionScope, ::publishBalancedDiagnostics)
     private val rolePlanning = LabyrinthBalancedPlanningSlot<LabyrinthBalancedRolePlanningKey, LabyrinthRoleRewardChoiceDecision>(this.actionScope, clock, ::publishBalancedDiagnostics)
     private val freeRolePlanning = LabyrinthBalancedPlanningSlot<List<Any?>, LabyrinthRoleRewardChoiceDecision>(this.actionScope, clock, ::publishBalancedDiagnostics)
-    private val eventPlanning = LabyrinthBalancedPlanningSlot<List<Any?>, LabyrinthEventChoiceDecision>(this.actionScope, clock, ::publishBalancedDiagnostics)
+    private val eventPlanning = LabyrinthEventPlanningLane(this.actionScope, clock, ::publishBalancedDiagnostics)
+    private val eventActionPermit = LabyrinthEventActionPermit()
+    private val nodeActionEvidence = LabyrinthNodeActionEvidence()
+    private var nodeEvidenceFrameWidth = 0
+    private var nodeEvidenceFrameHeight = 0
     private val battlePlanning = LabyrinthBalancedPlanningSlot<List<Any?>, LabyrinthBalancedBattlePlanningOutput>(this.actionScope, clock, ::publishBalancedDiagnostics)
     private var latestFastObservation: LabyrinthFastFrameObservation? = null
     private var balancedSceneEpoch = 0L
@@ -2205,6 +2222,8 @@ class LabyrinthEntryRecognitionSession(
     private suspend fun setPausedOnControl(paused: Boolean): Boolean = mutex.withLock {
         val sessionId = activeSessionId ?: return false
         if (!sessionManager.setPaused(sessionId, paused)) return false
+        nodeActionEvidence.invalidate()
+        nodeConflictRecovery.reset()
         finalBossLocalizationStartedAt = Long.MIN_VALUE
         resetPendingNodeClickStability()
         if (paused) {
@@ -2447,6 +2466,9 @@ class LabyrinthEntryRecognitionSession(
                 positiveChanged = true // First definite page establishes the initial scene immediately.
             }
             balancedPendingPositivePage != page -> {
+                // A pending positive page already contradicts an old node tap waiting on Main.
+                // Revoke only node input now; retain the existing two-frame planning scene gate.
+                nodeActionEvidence.invalidate()
                 balancedPendingPositivePage = page
                 balancedPendingPositiveAt = fast.timestampMillis
                 balancedPendingPositiveSequence = fast.frameSequence
@@ -2470,7 +2492,11 @@ class LabyrinthEntryRecognitionSession(
     }
 
     private fun invalidateBalancedPlanning() {
+        nodeActionEvidence.invalidate()
+        nodeConflictRecovery.reset()
+        resetPendingNodeClickStability()
         if (!balancedMode) return
+        eventActionPermit.clear()
         rolePlanning.invalidate(); freeRolePlanning.invalidate(); eventPlanning.invalidate(); battlePlanning.invalidate()
     }
 
@@ -2492,6 +2518,7 @@ class LabyrinthEntryRecognitionSession(
             diagnosticActive = diagnosticLane.busy, diagnosticQuiescent = !diagnosticLane.busy,
             diagnosticPending = diagnosticLane.hasPending, diagnosticReplacementCount = diagnosticLane.replacements,
             staleActionBlockedCount = balancedStaleActionBlocks, sceneEpoch = balancedSceneEpoch,
+            eventPlanning = eventPlanning.diagnostics(),
         ))
     }
 
@@ -2636,6 +2663,22 @@ class LabyrinthEntryRecognitionSession(
     ) {
         if (activeSessionId != sessionId || (balancedMode && (_state.value.paused || manualPauseRequested.get() || stopRequested.get() ||
                 balancedDetailEpoch != balancedSceneEpoch))) return
+        val nodeEvidenceDimensionsChanged =
+            nodeEvidenceFrameWidth != frameWidth || nodeEvidenceFrameHeight != frameHeight
+        nodeEvidenceFrameWidth = frameWidth
+        nodeEvidenceFrameHeight = frameHeight
+        nodeActionEvidence.observe(
+            capturedAtMillis = timestampMillis,
+            currentFrameVerified = result.nodeEvidenceSource.currentFrameVerified &&
+                result.observation.state == LabyrinthEntryPageState.NODE_SELECTION &&
+                result.nodeMoveConfirmation == null && frameWidth > 0 && frameHeight > 0 &&
+                result.frameWidth == frameWidth && result.frameHeight == frameHeight,
+        )
+        if (nodeEvidenceDimensionsChanged || !nodeActionEvidence.isCurrentFrame(timestampMillis)) {
+            resetPendingNodeClickStability()
+            nodeConflictRecovery.reset()
+        }
+        fenceEventActionAgainstFrame(sessionId, result, frameWidth, frameHeight)
         firstFrameWatchdog?.cancel()
         firstFrameWatchdog = null
         if (result.frameWidth != frameWidth || result.frameHeight != frameHeight) {
@@ -2675,6 +2718,10 @@ class LabyrinthEntryRecognitionSession(
             runScoreCollector.observe(pageState, result.runResultScore, timestampMillis)
         }
         if (clock() < channelPromptVisibleUntil) {
+            nodeActionEvidence.invalidate()
+            resetPendingNodeClickStability()
+            nodeConflictRecovery.reset()
+            eventActionPermit.clear()
             // The channel prompt poll owns the screen; nothing behind the dialog may be tapped.
             channelPromptMessage?.let { message -> _state.value = _state.value.copy(message = message) }
             return
@@ -2689,6 +2736,10 @@ class LabyrinthEntryRecognitionSession(
                 dryRun = current.dryRun,
             )
         ) {
+            nodeActionEvidence.invalidate()
+            resetPendingNodeClickStability()
+            nodeConflictRecovery.reset()
+            eventActionPermit.clear()
             return
         }
         if (skipRoleRewardJoinedRecognition &&
@@ -3264,6 +3315,10 @@ class LabyrinthEntryRecognitionSession(
 
     /** Restart login/entry navigation while retaining any already-loaded route progress. */
     private fun restartEntryNavigationAfterSessionError() {
+        nodeActionEvidence.reset()
+        nodeEvidenceFrameWidth = 0
+        nodeEvidenceFrameHeight = 0
+        nodeConflictRecovery.reset()
         battleWait.reset()
         entryPhaseComplete = false
         resetPendingNodeClickStability()
@@ -3611,41 +3666,93 @@ class LabyrinthEntryRecognitionSession(
         return true
     }
 
-    private fun refreshBalancedEventChoice(
-        sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, planner: LabyrinthEventChoicePlanner,
+    private fun eventActionKey(sessionId: AutomationSessionId, decision: LabyrinthEventChoiceDecision.Select) =
+        LabyrinthEventActionKey(sessionId, roleDecisionGeneration.get(), balancedSceneEpoch,
+            decision.eventId, decision.choiceId, decision.buttonRect)
+
+    private fun catalogEventTapPlan(
+        sessionId: AutomationSessionId, decision: LabyrinthEventChoiceDecision.Select, timestampMillis: Long,
+    ): LabyrinthPostEntryTapPlan? {
+        val permit = eventActionPermit.capture(eventActionKey(sessionId, decision), timestampMillis)
+        if (balancedMode && permit == null) return null
+        return LabyrinthPostEntryTapPlan(LabyrinthPostEntryActionKind.SELECT_EVENT,
+            "选择事件：" + decision.choiceId + " " + decision.label + "；" + decision.explanation,
+            decision.buttonRect, permit, decision.choiceId)
+    }
+
+    private fun publishEventActionPermission(
+        sessionId: AutomationSessionId, observation: LabyrinthEventChoiceObservation?,
+        decision: LabyrinthEventChoiceDecision?,
     ) {
-        val observation = result.eventChoiceSelection ?: return
+        val selected = decision as? LabyrinthEventChoiceDecision.Select
+        eventActionPermit.update(if (observation?.trusted == true && observation.stableFrames >= 2 &&
+            selected?.actionSafe == true && selected.eventId == observation.event.id)
+            eventActionKey(sessionId, selected) else null)
+    }
+
+    /** Fence old catalog gestures before any accepted-frame handler can early-return or suspend. */
+    private fun fenceEventActionAgainstFrame(
+        sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, frameWidth: Int, frameHeight: Int,
+    ) {
+        val old = _state.value.eventChoiceDecision as? LabyrinthEventChoiceDecision.Select
+        val observation = result.eventChoiceSelection
+        val planner = eventChoicePlanner
+        if (old == null || observation == null || planner == null ||
+            result.observation.state != LabyrinthEntryPageState.EVENT_CHOICE ||
+            result.frameWidth != frameWidth || result.frameHeight != frameHeight ||
+            clock() < channelPromptVisibleUntil || labyrinthSessionBlockObservation(result, sessionBlockClassifier).blocksNormalActions ||
+            (balancedMode && !eventPlanning.matchesConfirmedKey(eventPlanningInputs(sessionId, planner, observation).key))) {
+            eventActionPermit.clear()
+            return
+        }
+        val current = planner.revalidateDecision(old, observation,
+            _state.value.joinedCharacters.map(LabyrinthJoinedCharacter::characterId).toSet(), eventChoiceRejectedIds.toSet())
+        publishEventActionPermission(sessionId, observation, current)
+    }
+
+    private data class EventPlanningInputs(
+        val key: List<Any?>,
+        val acquired: Set<String>,
+        val context: LabyrinthRoleDecisionContext,
+        val stacks: Map<LabyrinthRelicMark, Int>,
+        val rejected: Set<String>,
+    )
+
+    private fun eventPlanningInputs(
+        sessionId: AutomationSessionId, planner: LabyrinthEventChoicePlanner,
+        observation: LabyrinthEventChoiceObservation,
+    ): EventPlanningInputs {
         val stacks = relicChoicePolicy.markStacks(_state.value.observedRelics, relicMarkStackCalibration).toMap()
         val acquired = _state.value.joinedCharacters.map(LabyrinthJoinedCharacter::characterId).toCollection(linkedSetOf())
         val rejected = eventChoiceRejectedIds.toSet()
         val context = LabyrinthRoleDecisionContext(defenseMarkStacks = stacks.getValue(LabyrinthRelicMark.DEFENSE),
             targetCount = combatContext?.targetCount ?: 1)
-        val key = listOf(sessionId, roleDecisionGeneration.get(), balancedSceneEpoch, planner, observation.event,
-            observation.trusted, observation.stableFrames >= 2,
-            observation.choices.map { listOf(it.choice, it.enabledConfidence >= 0.35, it.buttonConfidence >= 0.12) },
-            acquired.toList(), context, stacks, rejected.toList())
-        val ready = eventPlanning.request(key) {
-            runCatching { planner.decide(observation, acquired, context, stacks, rejected) }.getOrElse {
-                LabyrinthEventChoiceDecision.Wait("事件${observation.event.id}推荐失败：${it.message ?: "未知错误"}")
-            }
-        }
-        val decision = if (ready == null || (balancedDetailCapturedAt ?: Long.MIN_VALUE) <= eventPlanning.readyAt) {
-            LabyrinthEventChoiceDecision.Wait("事件规划进行中，等待规划返回后的新详细帧")
-        } else if (ready is LabyrinthEventChoiceDecision.Select) {
-            val visual = observation.choices.firstOrNull { it.choice.id == ready.choiceId }
-            if (visual == null) LabyrinthEventChoiceDecision.Wait("事件目标等待最新按钮映射")
-            else ready.copy(buttonRect = visual.buttonRect)
-        } else ready
-        if (ready != null) balancedRequiredCapturedAfter = maxOf(balancedRequiredCapturedAfter, eventPlanning.readyAt)
+        val key = labyrinthEventPlanningSemanticKey(sessionId, roleDecisionGeneration.get(), balancedSceneEpoch,
+            planner, observation, acquired.toList(), context, stacks, rejected.toList())
+        return EventPlanningInputs(key, acquired, context, stacks, rejected)
+    }
+
+    private fun refreshBalancedEventChoice(
+        sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult, planner: LabyrinthEventChoicePlanner,
+    ) {
+        val observation = result.eventChoiceSelection ?: return
+        val inputs = eventPlanningInputs(sessionId, planner, observation)
+        val visual = LabyrinthEventVisualIdentity.from(balancedSceneEpoch, balancedDetailWidth,
+            balancedDetailHeight, result.eventOcrDiagnostics)
+        val decision = eventPlanning.update(inputs.key, observation, visual, balancedDetailCapturedAt,
+            calculate = { planner.decide(observation, inputs.acquired, inputs.context, inputs.stacks, inputs.rejected) },
+            revalidate = { planner.revalidateDecision(it, observation, inputs.acquired, inputs.rejected) })
+        if (eventPlanning.hasReady) balancedRequiredCapturedAfter = maxOf(balancedRequiredCapturedAfter, eventPlanning.readyAt)
         val message = when (decision) {
             is LabyrinthEventChoiceDecision.Select -> buildString {
-                append("事件${decision.eventId}建议：${decision.label}")
+                append("事件" + decision.eventId + "建议：" + decision.label)
                 if (!decision.actionSafe) append("（仅推荐）")
-                append("；${decision.explanation}")
-                decision.safetyNote?.let { append("；$it") }
+                append("；" + decision.explanation)
+                decision.safetyNote?.let { append("；" + it) }
             }
             is LabyrinthEventChoiceDecision.Wait -> decision.reason
         }
+        publishEventActionPermission(sessionId, observation, decision)
         _state.value = _state.value.copy(eventChoiceDecision = decision, message = message)
         publishBalancedDiagnostics()
     }
@@ -3657,6 +3764,25 @@ class LabyrinthEntryRecognitionSession(
     ) {
         if (activeSessionId != sessionId) return
         val observation = result.eventChoiceSelection
+        if (result.observation.state != LabyrinthEntryPageState.EVENT_CHOICE || observation?.trusted != true || observation.stableFrames < 2) eventActionPermit.clear()
+        if (balancedMode && observation == null && result.observation.state == LabyrinthEntryPageState.EVENT_CHOICE &&
+            !_state.value.paused && !manualPauseRequested.get() && !stopRequested.get()) {
+            val planner = eventChoicePlanner
+            val held = eventPlanning.heldObservation
+            val key = if (planner != null && held != null) eventPlanningInputs(sessionId, planner, held).key else null
+            val visual = LabyrinthEventVisualIdentity.from(balancedSceneEpoch, balancedDetailWidth,
+                balancedDetailHeight, result.eventOcrDiagnostics)
+            if (eventPlanning.holdExpired(key, visual, result.observation.state, result.eventOcrDiagnostics)) {
+                val reason = "事件文字刷新确认中；保留同一事件计算，禁止点击"
+                if ((_state.value.eventChoiceDecision as? LabyrinthEventChoiceDecision.Wait)?.reason != reason) {
+                    nodeLog("event-planning-ocr-refresh-retained event=" + held?.event?.id +
+                        " cacheAgeMillis=" + result.eventOcrDiagnostics?.cache?.ageMillis)
+                }
+                _state.value = _state.value.copy(eventChoiceDecision = LabyrinthEventChoiceDecision.Wait(reason), message = reason)
+                publishBalancedDiagnostics()
+                return
+            }
+        }
         if (result.observation.state != LabyrinthEntryPageState.EVENT_CHOICE || observation == null) {
             if (balancedMode) eventPlanning.invalidate()
             if (_state.value.eventChoiceDecision != null) {
@@ -3674,6 +3800,8 @@ class LabyrinthEntryRecognitionSession(
         }
         val decision = if (planner == null) {
             LabyrinthEventChoiceDecision.Wait("事件推荐资料未加载")
+        } else if (!observation.trusted || observation.stableFrames < 2) {
+            LabyrinthEventChoiceDecision.Wait("事件文字尚未连续稳定确认，等待确认后再规划")
         } else {
             val current = _state.value
             val stacks = relicChoicePolicy.markStacks(current.observedRelics, relicMarkStackCalibration)
@@ -3705,6 +3833,7 @@ class LabyrinthEntryRecognitionSession(
             }
             is LabyrinthEventChoiceDecision.Wait -> decision.reason
         }
+        publishEventActionPermission(sessionId, observation, decision)
         _state.value = _state.value.copy(eventChoiceDecision = decision, message = message)
     }
 
@@ -4435,6 +4564,9 @@ class LabyrinthEntryRecognitionSession(
 
         val current = _state.value
         val currentCombatContext = combatContext
+        val battleArea = labyrinthBattleTeamArea(
+            activeNodeArea, currentCombatContext?.kind, validatedRoute, current.routeProgress?.currentArea,
+        )
         val encounterStrategy = when (currentCombatContext?.kind) {
             LabyrinthCombatKind.EX -> currentExEncounterStrategy
             LabyrinthCombatKind.BOSS -> labyrinthBossEncounterStrategy(validatedRoute)
@@ -4466,6 +4598,8 @@ class LabyrinthEntryRecognitionSession(
             .distinct()
         val cacheKey = buildString {
             append(acquiredCharacterIds.sorted().joinToString(","))
+            append("|area=")
+            append(battleArea)
             append("|defense=")
             append(defenseStacks)
             append("|targets=")
@@ -4526,6 +4660,7 @@ class LabyrinthEntryRecognitionSession(
             preferSingleDamageSystem = preferCohesiveDamageSystem, encounterStrategy = encounterStrategy,
             effectiveCharacterIds = synchronized(effectiveExCharacterIds) { effectiveExCharacterIds.toSet() },
             relaxedVanguardGate = currentCombatContext?.kind == LabyrinthCombatKind.BOSS && bossFallbackMultiTeamActive,
+            currentArea = battleArea,
         )
         val allowSupplementLead = currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
             bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM && currentCombatContext.teamIndex > 1
@@ -5800,7 +5935,9 @@ class LabyrinthEntryRecognitionSession(
     }
 
     private class BalancedQueuedAction(
-        val sessionId: AutomationSessionId?, val epoch: Long, private val rollback: () -> Unit,
+        val sessionId: AutomationSessionId?, val epoch: Long,
+        val eventPermit: LabyrinthEventActionPermit.Token?,
+        val nodePermit: LabyrinthNodeActionEvidence.Token?, private val rollback: () -> Unit,
     ) : AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<BalancedQueuedAction>
         var suppressed = false
@@ -5812,10 +5949,17 @@ class LabyrinthEntryRecognitionSession(
     private suspend fun executeBalancedAction(
         executor: SessionBoundActionExecutor, sessionId: AutomationSessionId, action: AutomationAction,
     ): AutomationActionResult {
+        val queued = coroutineContext[BalancedQueuedAction]
+        val eventPermit = queued?.eventPermit
+        val nodePermit = queued?.nodePermit
+        if (nodePermit?.isCurrent(clock()) == false) {
+            queued?.suppress()
+            return AutomationActionResult.Paused
+        }
         if (balancedMode) {
-            val queued = coroutineContext[BalancedQueuedAction]
             if (activeSessionId != sessionId || manualPauseRequested.get() || stopRequested.get() || _state.value.paused ||
-                (queued != null && !balancedLifecycleCurrent(queued.epoch)) || !balancedFreshInput()) {
+                (queued != null && !balancedLifecycleCurrent(queued.epoch)) || !balancedFreshInput() ||
+                eventPermit?.isCurrent() == false || nodePermit?.isCurrent(clock()) == false) {
                 queued?.suppress()
                 return AutomationActionResult.Paused
             }
@@ -5823,15 +5967,26 @@ class LabyrinthEntryRecognitionSession(
             val stopAtomic = stopRequested
             val epochAtomic = lifecycleEpoch
             val expectedEpoch = queued?.epoch ?: epochAtomic.get()
-            // Android Main's native-dispatch recheck borrows only atomics + a scalar epoch.
-            // No Session, queued rollback, processor, or pixels escape in this permit closure.
+            // Main borrows only lifecycle atomics and the tokens' atomic/scalar deadlines.
+            // No Session, queued rollback, processor, observation or pixels enter this closure.
             val result = executor.executeWithPermit(sessionId, action) {
-                !pauseAtomic.get() && !stopAtomic.get() && epochAtomic.get() == expectedEpoch
+                !pauseAtomic.get() && !stopAtomic.get() && epochAtomic.get() == expectedEpoch &&
+                    eventPermit?.isCurrent() != false && nodePermit?.isCurrent() != false
             }
             if (result == AutomationActionResult.Paused) queued?.suppress()
             return result
         }
-        return executor.execute(sessionId, action)
+        if (eventPermit == null && nodePermit == null) return executor.execute(sessionId, action)
+        val pauseAtomic = manualPauseRequested
+        val stopAtomic = stopRequested
+        val epochAtomic = lifecycleEpoch
+        val expectedEpoch = queued?.epoch ?: epochAtomic.get()
+        val result = executor.executeWithPermit(sessionId, action) {
+            eventPermit?.isCurrent() != false && nodePermit?.isCurrent() != false &&
+                (nodePermit == null || (!pauseAtomic.get() && !stopAtomic.get() && epochAtomic.get() == expectedEpoch))
+        }
+        if (result == AutomationActionResult.Paused) queued?.suppress()
+        return result
     }
 
     /** Runs a dispatched action, releasing the latch however the body ends. */
@@ -5840,15 +5995,42 @@ class LabyrinthEntryRecognitionSession(
         onSuppressed: () -> Unit = {},
         block: suspend () -> Unit,
     ) {
+        launchGuardedAction(requireFreshEvidence, onSuppressed, null, block)
+    }
+
+    private fun launchGuardedAction(
+        requireFreshEvidence: Boolean = true,
+        onSuppressed: () -> Unit = {},
+        eventPermit: LabyrinthEventActionPermit.Token?,
+        block: suspend () -> Unit,
+    ) {
+        launchGuardedActionWithEvidence(requireFreshEvidence, onSuppressed, eventPermit, null, block)
+    }
+
+    private fun launchGuardedNodeAction(
+        nodePermit: LabyrinthNodeActionEvidence.Token,
+        onSuppressed: () -> Unit = {},
+        block: suspend () -> Unit,
+    ) {
+        launchGuardedActionWithEvidence(true, onSuppressed, null, nodePermit, block)
+    }
+
+    private fun launchGuardedActionWithEvidence(
+        requireFreshEvidence: Boolean,
+        onSuppressed: () -> Unit,
+        eventPermit: LabyrinthEventActionPermit.Token?,
+        nodePermit: LabyrinthNodeActionEvidence.Token?,
+        block: suspend () -> Unit,
+    ) {
         val queuedSession = activeSessionId
         val queuedEpoch = lifecycleEpoch.get()
-        val queued = BalancedQueuedAction(queuedSession, queuedEpoch) {
+        val queued = BalancedQueuedAction(queuedSession, queuedEpoch, eventPermit, nodePermit) {
             if (activeSessionId == queuedSession) onSuppressed()
         }
         actionScope.launch(queued) {
             try {
-                if (balancedMode && requireFreshEvidence &&
-                    (activeSessionId != queuedSession || !balancedLifecycleCurrent(queuedEpoch) || !balancedFreshInput())) {
+                if (eventPermit?.isCurrent() == false || nodePermit?.isCurrent(clock()) == false || (balancedMode && requireFreshEvidence &&
+                    (activeSessionId != queuedSession || !balancedLifecycleCurrent(queuedEpoch) || !balancedFreshInput()))) {
                     // No executor call and no synthetic Rejected: unwind only never-executed input.
                     queued.suppress()
                     return@launch
@@ -6507,18 +6689,15 @@ class LabyrinthEntryRecognitionSession(
                         nodeLog("event-choice-refused id=$rejected rejected=$eventChoiceRejectedIds", warning = true)
                     }
                     eventChoiceCommittedChoiceId = null
-                    if (eventCustomizationEnabledSnapshot) refreshEventChoiceDecision(sessionId, result)
+                    eventActionPermit.clear()
+                    refreshEventChoiceDecision(sessionId, result)
                 }
                 when (val decision = _state.value.eventChoiceDecision) {
                     is LabyrinthEventChoiceDecision.Select -> if (
                         decision.actionSafe &&
-                            (!eventCustomizationEnabledSnapshot || decision.choiceId !in eventChoiceRejectedIds)
+                            decision.choiceId !in eventChoiceRejectedIds
                     ) {
-                        LabyrinthPostEntryTapPlan(
-                            LabyrinthPostEntryActionKind.SELECT_EVENT,
-                            "选择事件：${decision.choiceId} ${decision.label}；${decision.explanation}",
-                            decision.buttonRect,
-                        )
+                        catalogEventTapPlan(sessionId, decision, timestampMillis)
                     } else {
                         null
                     }
@@ -6826,6 +7005,8 @@ class LabyrinthEntryRecognitionSession(
             },
             shopPurchaseRelicId = if (relicPurchaseTap) plannedShopPurchaseRelicId else null,
             shopPurchaseRoleImprintLabel = if (imprintPurchaseTap) plannedShopRoleImprintLabel else null,
+            eventPermit = plan.eventPermit,
+            expectedEventChoiceId = plan.eventChoiceId,
         )
     }
 
@@ -7932,13 +8113,40 @@ class LabyrinthEntryRecognitionSession(
         eventFreeRoleConfirm: Boolean = false,
         eventFreeRoleConfirmIds: List<String> = emptyList(),
     ) {
+        dispatchPostEntryTap(sessionId, kind, label, rect, timestampMillis, roleRewardSelectionSignature,
+            roleRewardSelectedCharacterId, shopPurchaseRelicId, shopPurchaseRoleImprintLabel,
+            eventFreeRoleCandidateId, eventFreeRoleConfirm, eventFreeRoleConfirmIds, null, null)
+    }
+
+    private fun dispatchPostEntryTap(
+        sessionId: AutomationSessionId,
+        kind: LabyrinthPostEntryActionKind,
+        label: String,
+        rect: EntryPixelRect,
+        timestampMillis: Long,
+        roleRewardSelectionSignature: String? = null,
+        roleRewardSelectedCharacterId: String? = null,
+        shopPurchaseRelicId: String? = null,
+        shopPurchaseRoleImprintLabel: String? = null,
+        eventFreeRoleCandidateId: String? = null,
+        eventFreeRoleConfirm: Boolean = false,
+        eventFreeRoleConfirmIds: List<String> = emptyList(),
+        eventPermit: LabyrinthEventActionPermit.Token?,
+        expectedEventChoiceId: String?,
+    ) {
         if (kind == LabyrinthPostEntryActionKind.SELECT_ROLE_REWARD && roleRewardRound.blocksDispatch()) {
             traceReject("role-round-awaiting-confirmation"); return
         }
+        if (expectedEventChoiceId != null) {
+            val current = _state.value.eventChoiceDecision as? LabyrinthEventChoiceDecision.Select
+            if (current?.actionSafe != true || current.choiceId != expectedEventChoiceId || current.buttonRect != rect ||
+                current.choiceId in eventChoiceRejectedIds || eventPermit?.isCurrent() != true) {
+                traceReject("EVENT_ACTION_PERMIT_INVALID")
+                return
+            }
+        }
         if (!beginGuardedAction()) return
-        val dispatchedEventChoiceId = if (eventCustomizationEnabledSnapshot &&
-            kind == LabyrinthPostEntryActionKind.SELECT_EVENT
-        ) {
+        val dispatchedEventChoiceId = expectedEventChoiceId ?: if (kind == LabyrinthPostEntryActionKind.SELECT_EVENT) {
             (_state.value.eventChoiceDecision as? LabyrinthEventChoiceDecision.Select)
                 ?.takeIf { it.buttonRect == rect }?.choiceId
         } else null
@@ -7987,7 +8195,7 @@ class LabyrinthEntryRecognitionSession(
             lastCharacterAcquisitionActionAt = timestampMillis
         }
         if (kind == LabyrinthPostEntryActionKind.ADVANCE_FINAL_SETTLEMENT) postBossUnknownAttempts++
-        launchGuardedAction(onSuppressed = {
+        launchGuardedAction(eventPermit = eventPermit, onSuppressed = {
             if (kind == LabyrinthPostEntryActionKind.SELECT_ROLE_REWARD && roleDispatchToken != null &&
                 roleRewardRound.notExecuted(roleDispatchToken, clock())) roleRewardChoiceCommitted = false
             postEntryAttempts = (postEntryAttempts - 1).coerceAtLeast(0)
@@ -8053,11 +8261,7 @@ class LabyrinthEntryRecognitionSession(
                     if (kind == LabyrinthPostEntryActionKind.SELECT_EVENT) {
                         eventChoiceCommitted = true
                         eventChoiceCommittedAt = clock()
-                        eventChoiceCommittedChoiceId = if (eventCustomizationEnabledSnapshot) {
-                            dispatchedEventChoiceId
-                        } else {
-                            (_state.value.eventChoiceDecision as? LabyrinthEventChoiceDecision.Select)?.choiceId
-                        }
+                        eventChoiceCommittedChoiceId = dispatchedEventChoiceId
                     }
                     if (kind == LabyrinthPostEntryActionKind.SELECT_RELIC) {
                         relicChoiceCommitted = true
@@ -8280,6 +8484,10 @@ class LabyrinthEntryRecognitionSession(
     }
 
     private fun resetNodeExecutionState() {
+        nodeActionEvidence.reset()
+        nodeEvidenceFrameWidth = 0
+        nodeEvidenceFrameHeight = 0
+        nodeConflictRecovery.reset()
         battleWait.reset()
         shopConfirmClosedFrames = 0
         shopConfirmClosedAt = Long.MIN_VALUE
@@ -8519,13 +8727,18 @@ class LabyrinthEntryRecognitionSession(
         // none: observing that empty mapping also invalidates old camera coordinates after a pan.
         val rawNodeAction = session.processClassifications(result.nodeClassifications)
         val conflictTargetId = (rawNodeAction as? NodeAction.TypeConflict)?.blockId
-        val visuallyPlannedAction = nodeConflictRecovery.resolve(
-            session = sessionId.toString(),
-            action = rawNodeAction,
-            visible = result.nodeClassifications,
-            uniqueReachableRouteTarget = conflictTargetId != null &&
-                session.uniqueReachableRouteTarget()?.blockId == conflictTargetId,
-        )
+        val visuallyPlannedAction = if (nodeActionEvidence.isCurrentFrame(timestampMillis)) {
+            nodeConflictRecovery.resolve(
+                session = sessionId.toString(),
+                action = rawNodeAction,
+                visible = result.nodeClassifications,
+                uniqueReachableRouteTarget = conflictTargetId != null &&
+                    session.uniqueReachableRouteTarget()?.blockId == conflictTargetId,
+            )
+        } else {
+            nodeConflictRecovery.reset()
+            rawNodeAction
+        }
         if (rawNodeAction is NodeAction.TypeConflict && visuallyPlannedAction is NodeAction.ClickNode) {
             nodeLog("node-conflict-recovery route=${visuallyPlannedAction.blockId} generic-route-bound stable=3+ rect=${visuallyPlannedAction.screenRect}")
         }
@@ -8788,6 +9001,12 @@ class LabyrinthEntryRecognitionSession(
         if (_state.value.dryRun) return
 
         val rect = action.screenRect
+        if (rect != null && !nodeActionEvidence.isCurrentFrame(timestampMillis)) {
+            resetPendingNodeClickStability()
+            nodeConflictRecovery.reset()
+            traceReject("node-current-frame-unverified")
+            return
+        }
         val targetMapping = session.getLastMatchResult()?.visibleNodes
             ?.filter { it.blockId == action.blockId && it.screenRect == rect }
             ?.maxByOrNull { it.topologyConfidence ?: 0.0 }
@@ -8932,10 +9151,12 @@ class LabyrinthEntryRecognitionSession(
         }
         resetNodeScrollSearchGate()
         val clickRect = rect ?: return
+        val nodePermit = nodeActionEvidence.capture(timestampMillis) ?: return
+        val nodeEvidenceSource = _state.value.lastResult?.nodeEvidenceSource
         if (!beginGuardedAction()) return
         traceAction("点击节点 $label")
         lastNodeActionAt = timestampMillis
-        launchGuardedAction(onSuppressed = { lastNodeActionAt = Long.MIN_VALUE }) {
+        launchGuardedNodeAction(nodePermit, onSuppressed = { lastNodeActionAt = Long.MIN_VALUE }) {
             val executor = actionExecutor
             // Each rejected attempt steps further down the node's own body: repeating the exact
             // pixel the game already refused can only be refused again (2026-09-20 bundle 163307:
@@ -8946,7 +9167,7 @@ class LabyrinthEntryRecognitionSession(
             )
             nodeLog(
                 "node-tap target=$label rect=$clickRect tap=$clickX,$clickY " +
-                    "frame=${frameWidth}x${frameHeight} " +
+                    "frame=${frameWidth}x${frameHeight} evidence=$nodeEvidenceSource capturedAt=$timestampMillis " +
                     "display=${CaptureStateRegistry.gestureDisplayId()} " +
                     "attempt=${nodeTapAttempts + 1}/$MAX_NODE_TAP_ATTEMPTS " +
                     "viewport=$viewportSignature",
