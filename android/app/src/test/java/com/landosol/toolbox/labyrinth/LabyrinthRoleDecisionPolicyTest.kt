@@ -35,7 +35,7 @@ class LabyrinthRoleDecisionPolicyTest {
             physical("other2", "候选三", position = 5),
         )
         val profiles = (owned + candidates).associateBy(LabyrinthRoleProfile::characterId)
-        val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 0)
+        val context = legacyFrontlineContext(defenseMarkStacks = 0)
         val baseline = rolePolicy.chooseOneRole(
             candidates.map(LabyrinthRoleProfile::characterId),
             owned.map(LabyrinthRoleProfile::characterId).toSet(), profiles, context,
@@ -79,7 +79,7 @@ class LabyrinthRoleDecisionPolicyTest {
         )
         val noMove = physical("move", "普通位", position = 5)
         val push = physical("move", "击退位", position = 5, enemyPush = 82.0)
-        val context = LabyrinthRoleDecisionContext(
+        val context = legacyFrontlineContext(
             defenseMarkStacks = 4,
             targetCount = 5,
             encounterStrategy = strategy,
@@ -113,7 +113,7 @@ class LabyrinthRoleDecisionPolicyTest {
             candidateIds = listOf("left", "missing", "right"),
             acquiredCharacterIds = setOf("owned"),
             profiles = profiles,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 0),
+            context = legacyFrontlineContext(defenseMarkStacks = 0),
         ) as LabyrinthOneRoleDecision.Unavailable
 
         assertEquals(listOf("missing"), decision.missingProfileIds)
@@ -139,7 +139,7 @@ class LabyrinthRoleDecisionPolicyTest {
             candidateIds = candidates.map(LabyrinthRoleProfile::characterId),
             acquiredCharacterIds = acquired.map(LabyrinthRoleProfile::characterId).toSet(),
             profiles = profiles,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
         ) as LabyrinthOneRoleDecision.Unavailable
 
         assertEquals(listOf("1331"), decision.incompleteProfileIds)
@@ -215,7 +215,7 @@ class LabyrinthRoleDecisionPolicyTest {
             candidateIds = candidates.map(LabyrinthRoleProfile::characterId),
             acquiredCharacterIds = acquired.map(LabyrinthRoleProfile::characterId).toSet(),
             profiles = profiles,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
         ) as LabyrinthOneRoleDecision.Ready
 
         assertEquals("light5", decision.chosen.characterId)
@@ -265,7 +265,7 @@ class LabyrinthRoleDecisionPolicyTest {
             candidateIds = candidates.map(LabyrinthRoleProfile::characterId),
             acquiredCharacterIds = acquired.map(LabyrinthRoleProfile::characterId).toSet(),
             profiles = profiles,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
         ) as LabyrinthOneRoleDecision.Ready
 
         assertEquals("compound", decision.chosen.characterId)
@@ -293,7 +293,7 @@ class LabyrinthRoleDecisionPolicyTest {
             ),
         )
 
-        val evaluation = scorer.evaluate(team, LabyrinthRoleDecisionContext(defenseMarkStacks = 4))
+        val evaluation = scorer.evaluate(team, legacyFrontlineContext(defenseMarkStacks = 4))
 
         assertEquals(LabyrinthTeamDamageType.MIXED, evaluation.damageType)
         assertTrue(evaluation.physicalRatio >= 0.70)
@@ -330,14 +330,14 @@ class LabyrinthRoleDecisionPolicyTest {
             LabyrinthTeamDamageType.PHYSICAL,
             scorer.evaluate(
                 physicalCore + universalHealer,
-                LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+                legacyFrontlineContext(defenseMarkStacks = 4),
             ).damageType,
         )
         assertEquals(
             LabyrinthTeamDamageType.MIXED,
             scorer.evaluate(
                 physicalCore + magicBreaker,
-                LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+                legacyFrontlineContext(defenseMarkStacks = 4),
             ).damageType,
         )
     }
@@ -351,10 +351,10 @@ class LabyrinthRoleDecisionPolicyTest {
             physical("d4", "输出四", position = 4, damage = 70.0, aoe = 70.0),
             physical("d5", "输出五", position = 5, damage = 70.0, aoe = 70.0),
         )
-        val baseline = scorer.evaluate(team, LabyrinthRoleDecisionContext(defenseMarkStacks = 4, targetCount = 3))
+        val baseline = scorer.evaluate(team, legacyFrontlineContext(defenseMarkStacks = 4, targetCount = 3))
         val prioritized = scorer.evaluate(
             team,
-            LabyrinthRoleDecisionContext(
+            legacyFrontlineContext(
                 defenseMarkStacks = 4,
                 targetCount = 3,
                 effectiveCharacterIds = setOf("effective1", "effective2"),
@@ -400,7 +400,7 @@ class LabyrinthRoleDecisionPolicyTest {
             damage = 50.0,
             aoe = 70.0,
         )
-        val context = LabyrinthRoleDecisionContext(
+        val context = legacyFrontlineContext(
             defenseMarkStacks = 4,
             targetCount = 3,
             effectiveCharacterIds = setOf(effective.characterId),
@@ -430,8 +430,8 @@ class LabyrinthRoleDecisionPolicyTest {
         )
         val physicalOnly = neutral.copy(physicalTeamUplift = 0.60)
 
-        val baseline = scorer.evaluate(magicCore + neutral, LabyrinthRoleDecisionContext(4))
-        val supported = scorer.evaluate(magicCore + physicalOnly, LabyrinthRoleDecisionContext(4))
+        val baseline = scorer.evaluate(magicCore + neutral, legacyFrontlineContext(4))
+        val supported = scorer.evaluate(magicCore + physicalOnly, legacyFrontlineContext(4))
 
         assertEquals(baseline.magicDamage, supported.magicDamage, 0.000001)
         assertEquals(0.0, supported.magicTeamUplift, 0.000001)
@@ -452,8 +452,8 @@ class LabyrinthRoleDecisionPolicyTest {
         )
         val magicOnly = neutral.copy(magicTeamUplift = 0.60)
 
-        val baseline = scorer.evaluate(physicalCore + neutral, LabyrinthRoleDecisionContext(4))
-        val supported = scorer.evaluate(physicalCore + magicOnly, LabyrinthRoleDecisionContext(4))
+        val baseline = scorer.evaluate(physicalCore + neutral, legacyFrontlineContext(4))
+        val supported = scorer.evaluate(physicalCore + magicOnly, legacyFrontlineContext(4))
 
         assertEquals(baseline.physicalDamage, supported.physicalDamage, 0.000001)
         assertEquals(0.0, supported.physicalTeamUplift, 0.000001)
@@ -477,8 +477,8 @@ class LabyrinthRoleDecisionPolicyTest {
         )
         val universal = neutral.copy(physicalTeamUplift = 0.25, magicTeamUplift = 0.25)
 
-        val baseline = scorer.evaluate(core + neutral, LabyrinthRoleDecisionContext(4))
-        val supported = scorer.evaluate(core + universal, LabyrinthRoleDecisionContext(4))
+        val baseline = scorer.evaluate(core + neutral, legacyFrontlineContext(4))
+        val supported = scorer.evaluate(core + universal, legacyFrontlineContext(4))
 
         assertTrue(supported.physicalDamage > baseline.physicalDamage)
         assertTrue(supported.magicDamage > baseline.magicDamage)
@@ -494,7 +494,7 @@ class LabyrinthRoleDecisionPolicyTest {
             combatRole("f3", "异常大辅助", type = LabyrinthRoleDamageType.NONE, modelStatus = "database-v2", physicalTeamUplift = 9.0),
         )
 
-        val evaluation = scorer.evaluate(core, LabyrinthRoleDecisionContext(4))
+        val evaluation = scorer.evaluate(core, legacyFrontlineContext(4))
 
         // (1.5 * 1.5 * 1.8) - 1 would be 3.05, then the team cap keeps it at +200%.
         assertEquals(2.0, evaluation.physicalTeamUplift, 0.000001)
@@ -507,7 +507,7 @@ class LabyrinthRoleDecisionPolicyTest {
         }
         val unrated = combatRole("u", "未评分", physical = 20.0, position = 5, userScore = null)
 
-        val evaluation = scorer.evaluate(rated + unrated, LabyrinthRoleDecisionContext(4))
+        val evaluation = scorer.evaluate(rated + unrated, legacyFrontlineContext(4))
 
         assertEquals(0.80, evaluation.playerCoverage, 0.000001)
         assertEquals(0.56, evaluation.effectivePlayerWeight, 0.000001)
@@ -531,9 +531,9 @@ class LabyrinthRoleDecisionPolicyTest {
             combatRole("f4", "填充四", type = LabyrinthRoleDamageType.NONE, attribute = LabyrinthCharacterAttribute.DARK),
         )
 
-        val one = scorer.evaluate(listOf(modeled) + fillers, LabyrinthRoleDecisionContext(4, targetCount = 1))
-        val two = scorer.evaluate(listOf(modeled) + fillers, LabyrinthRoleDecisionContext(4, targetCount = 2))
-        val three = scorer.evaluate(listOf(modeled) + fillers, LabyrinthRoleDecisionContext(4, targetCount = 3))
+        val one = scorer.evaluate(listOf(modeled) + fillers, legacyFrontlineContext(4, targetCount = 1))
+        val two = scorer.evaluate(listOf(modeled) + fillers, legacyFrontlineContext(4, targetCount = 2))
+        val three = scorer.evaluate(listOf(modeled) + fillers, legacyFrontlineContext(4, targetCount = 3))
 
         assertEquals(10.0, one.physicalDamage, 0.000001)
         assertEquals(30.0, two.physicalDamage, 0.000001)
@@ -557,8 +557,8 @@ class LabyrinthRoleDecisionPolicyTest {
             combatRole("x5", "混法二", magic = 21.5),
         )
 
-        val pureEvaluation = scorer.evaluate(pure, LabyrinthRoleDecisionContext(4))
-        val mixedEvaluation = scorer.evaluate(mixed, LabyrinthRoleDecisionContext(4))
+        val pureEvaluation = scorer.evaluate(pure, legacyFrontlineContext(4))
+        val mixedEvaluation = scorer.evaluate(mixed, legacyFrontlineContext(4))
 
         assertEquals(0.57, mixedEvaluation.physicalRatio, 0.000001)
         assertTrue(pureEvaluation.systemComponents.getValue("体系一致性") > mixedEvaluation.systemComponents.getValue("体系一致性"))
@@ -574,10 +574,10 @@ class LabyrinthRoleDecisionPolicyTest {
             combatRole("m4", "法一", magic = 20.0),
             combatRole("m5", "法二", magic = 20.0),
         )
-        val normal = scorer.evaluate(mixed, LabyrinthRoleDecisionContext(4))
+        val normal = scorer.evaluate(mixed, legacyFrontlineContext(4))
         val preferred = scorer.evaluate(
             mixed,
-            LabyrinthRoleDecisionContext(4, preferSingleDamageSystem = true),
+            legacyFrontlineContext(4, preferSingleDamageSystem = true),
         )
 
         assertEquals(LabyrinthTeamDamageType.MIXED, preferred.damageType)
@@ -598,12 +598,12 @@ class LabyrinthRoleDecisionPolicyTest {
         )
 
         val unrestricted = requireNotNull(
-            optimizer.bestBattleFormation(roster, LabyrinthRoleDecisionContext(defenseMarkStacks = 4)),
+            optimizer.bestBattleFormation(roster, legacyFrontlineContext(defenseMarkStacks = 4)),
         )
         val cohesive = requireNotNull(
             optimizer.bestBattleFormation(
                 roster,
-                LabyrinthRoleDecisionContext(defenseMarkStacks = 4, preferSingleDamageSystem = true),
+                legacyFrontlineContext(defenseMarkStacks = 4, preferSingleDamageSystem = true),
             ),
         )
 
@@ -625,8 +625,8 @@ class LabyrinthRoleDecisionPolicyTest {
             if (role.characterId == "g1") role.copy(functions = role.functions.copy(reliableVanguard = 100.0)) else role
         }
 
-        val unsafe = scorer.evaluate(glass, LabyrinthRoleDecisionContext(0))
-        val safer = scorer.evaluate(fronted, LabyrinthRoleDecisionContext(0))
+        val unsafe = scorer.evaluate(glass, legacyFrontlineContext(0))
+        val safer = scorer.evaluate(fronted, legacyFrontlineContext(0))
 
         assertEquals(0.58, unsafe.survivalMultiplier, 0.000001)
         assertEquals(0.88, safer.survivalMultiplier, 0.000001)
@@ -646,10 +646,10 @@ class LabyrinthRoleDecisionPolicyTest {
         )
         val rest = (1..3).map { combatRole("r$it", "其余$it", physical = 20.0, position = 20 + it) }
 
-        val behind = scorer.evaluate(listOf(attacker, protector) + rest, LabyrinthRoleDecisionContext(0))
+        val behind = scorer.evaluate(listOf(attacker, protector) + rest, legacyFrontlineContext(0))
         val inFront = scorer.evaluate(
             listOf(attacker.copy(position = 10), protector.copy(position = 1)) + rest,
-            LabyrinthRoleDecisionContext(0),
+            legacyFrontlineContext(0),
         )
 
         assertEquals("front", behind.vanguardCharacterId)
@@ -693,7 +693,7 @@ class LabyrinthRoleDecisionPolicyTest {
             candidateIds = candidates.map(LabyrinthRoleProfile::characterId),
             acquiredCharacterIds = acquired.map(LabyrinthRoleProfile::characterId).toSet(),
             profiles = profiles,
-            context = LabyrinthRoleDecisionContext(4),
+            context = legacyFrontlineContext(4),
         ) as LabyrinthOneRoleDecision.Ready
         val ranking = decision.rankings.first()
 
@@ -719,7 +719,7 @@ class LabyrinthRoleDecisionPolicyTest {
             physical("p10", "十", damage = 60.0),
         )
         val bestScore = requireNotNull(
-            optimizer.bestFormation(roster, LabyrinthRoleDecisionContext(defenseMarkStacks = 4)),
+            optimizer.bestFormation(roster, legacyFrontlineContext(defenseMarkStacks = 4)),
         ).score
         val searcher = LabyrinthTeamPlanSearcher(
             optimizer,
@@ -734,7 +734,7 @@ class LabyrinthRoleDecisionPolicyTest {
             ),
         )
 
-        val plan = searcher.search(roster, LabyrinthRoleDecisionContext(defenseMarkStacks = 4))
+        val plan = searcher.search(roster, legacyFrontlineContext(defenseMarkStacks = 4))
 
         assertEquals(LabyrinthTeamPlanKind.FIRST_ATTEMPT_ONE_TEAM, plan.kind)
         assertEquals(1, plan.teams.size)
@@ -754,7 +754,7 @@ class LabyrinthRoleDecisionPolicyTest {
             physical("d7", "输出七", position = 9, damage = 80.0),
             physical("d8", "输出八", position = 10, damage = 76.0),
         )
-        val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4, targetCount = 3)
+        val context = legacyFrontlineContext(defenseMarkStacks = 4, targetCount = 3)
         val searcher = LabyrinthTeamPlanSearcher(
             optimizer,
             LabyrinthTeamPlanSearchConfig(
@@ -804,7 +804,7 @@ class LabyrinthRoleDecisionPolicyTest {
             physical("d7", "输出七", position = 9, damage = 88.0),
             physical("d8", "输出八", position = 10, damage = 86.0),
         )
-        val strict = LabyrinthRoleDecisionContext(defenseMarkStacks = 4)
+        val strict = legacyFrontlineContext(defenseMarkStacks = 4)
         val relaxed = strict.copy(relaxedVanguardGate = true)
         // 60 * 0.75 = 45: below the strict 55 gate, above the relaxed 40 gate.
         assertFalse(roster[1].isEligibleBattleVanguard(strict))
@@ -845,7 +845,7 @@ class LabyrinthRoleDecisionPolicyTest {
             physical("d8", "输出八", position = 9, damage = 86.0),
             physical("d9", "输出九", position = 10, damage = 84.0),
         )
-        val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4)
+        val context = legacyFrontlineContext(defenseMarkStacks = 4)
         val searcher = LabyrinthTeamPlanSearcher(
             optimizer,
             LabyrinthTeamPlanSearchConfig(
@@ -887,7 +887,7 @@ class LabyrinthRoleDecisionPolicyTest {
             physical("d4", "输出四", position = 5, damage = 94.0),
             physical("d5", "输出五", position = 6, damage = 92.0),
         )
-        val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4)
+        val context = legacyFrontlineContext(defenseMarkStacks = 4)
         val searcher = LabyrinthTeamPlanSearcher(
             optimizer,
             LabyrinthTeamPlanSearchConfig(
@@ -918,7 +918,7 @@ class LabyrinthRoleDecisionPolicyTest {
                 physicalDurability = 30.0, magicDurability = 30.0, untargetable = 98.0,
             ),
         )
-        assertFalse(special.isEligibleBattleVanguard(LabyrinthRoleDecisionContext(defenseMarkStacks = 4)))
+        assertFalse(special.isEligibleBattleVanguard(legacyFrontlineContext(defenseMarkStacks = 4)))
         val roster = listOf(
             protector, special,
             physical("d1", "输出一", position = 3, damage = 95.0),
@@ -937,7 +937,7 @@ class LabyrinthRoleDecisionPolicyTest {
 
         val plan = searcher.initialSearch(
             roster,
-            LabyrinthRoleDecisionContext(defenseMarkStacks = 4, optimizeBossVanguardSynergy = true),
+            legacyFrontlineContext(defenseMarkStacks = 4, optimizeBossVanguardSynergy = true),
         )
 
         assertEquals("protector", plan.teams.single().vanguardCharacterId)
@@ -970,7 +970,7 @@ class LabyrinthRoleDecisionPolicyTest {
                 threeTeamCombinedScore = 0.0,
             ),
         )
-        val context = LabyrinthRoleDecisionContext(
+        val context = legacyFrontlineContext(
             defenseMarkStacks = 4,
             targetCount = 1,
             optimizeBossVanguardSynergy = true,
@@ -1005,7 +1005,7 @@ class LabyrinthRoleDecisionPolicyTest {
             physical("p10", "十", damage = 60.0),
         )
         val bestScore = requireNotNull(
-            fallbackOptimizer.bestFormation(roster, LabyrinthRoleDecisionContext(defenseMarkStacks = 4)),
+            fallbackOptimizer.bestFormation(roster, legacyFrontlineContext(defenseMarkStacks = 4)),
         ).score
         val searcher = LabyrinthTeamPlanSearcher(
             fallbackOptimizer,
@@ -1021,8 +1021,8 @@ class LabyrinthRoleDecisionPolicyTest {
             ),
         )
 
-        val initial = searcher.search(roster, LabyrinthRoleDecisionContext(defenseMarkStacks = 4))
-        val fallback = searcher.fallbackSearch(roster, LabyrinthRoleDecisionContext(defenseMarkStacks = 4))
+        val initial = searcher.search(roster, legacyFrontlineContext(defenseMarkStacks = 4))
+        val fallback = searcher.fallbackSearch(roster, legacyFrontlineContext(defenseMarkStacks = 4))
 
         assertEquals(LabyrinthTeamPlanKind.FIRST_ATTEMPT_ONE_TEAM, initial.kind)
         assertEquals(1, initial.teams.size)
@@ -1043,7 +1043,7 @@ class LabyrinthRoleDecisionPolicyTest {
             val referenceScorer = LabyrinthTeamScorer(scoringConfig.copy(teamSearchBeamWidth = width))
             val search = LabyrinthTeamOptimizer(referenceScorer)
             for (targets in 1..3) {
-                val context = LabyrinthRoleDecisionContext(defenseMarkStacks = if (targets == 1) 0 else 4,
+                val context = legacyFrontlineContext(defenseMarkStacks = if (targets == 1) 0 else 4,
                     targetCount = targets)
                 for (required in listOf(null, "r2")) {
                     val all = referenceCombinations(roster, 5)
@@ -1065,7 +1065,7 @@ class LabyrinthRoleDecisionPolicyTest {
         val referenceScorer = LabyrinthTeamScorer(config)
         val search = LabyrinthTeamOptimizer(referenceScorer)
         val roster = (0 until 8).map { physical("r$it", "同值$it") }
-        val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4)
+        val context = legacyFrontlineContext(defenseMarkStacks = 4)
         assertEquals(referenceCombinations(roster, 5).take(3).map { referenceScorer.evaluate(it, context) },
             search.rankedFormations(roster, context))
         assertEquals(listOf(referenceScorer.evaluate(roster.take(3), context)),
@@ -1083,7 +1083,7 @@ class LabyrinthRoleDecisionPolicyTest {
         }
         // Leave substantial background occupancy while the 192 MiB worker searches all 42,504 teams.
         val background = ByteArray(72 * 1024 * 1024) { 1 }
-        val result = optimizer.rankedFormations(roster, LabyrinthRoleDecisionContext(defenseMarkStacks = 4))
+        val result = optimizer.rankedFormations(roster, legacyFrontlineContext(defenseMarkStacks = 4))
         assertEquals(1, background.last().toInt())
         assertEquals(scoringConfig.teamSearchBeamWidth, result.size)
         assertTrue(result.zipWithNext().all { (a, b) -> a.score >= b.score })

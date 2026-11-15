@@ -61,6 +61,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.landosol.toolbox.labyrinth.batch.LabyrinthBatchCheckpoint
@@ -208,7 +209,7 @@ fun LabyrinthScreen(
         }
         SupportFooter(uriHandler)
     }
-    val batch: @Composable () -> Unit = {
+    val batch: @Composable (Dp?) -> Unit = { goalCardReferenceExtraWidth ->
         batchStateHolder.SaveableStateProvider("batch-plan") {
             BatchRunCard(
                 state = state,
@@ -218,6 +219,7 @@ fun LabyrinthScreen(
                 entryRecognitionRunning = entryRecognitionState.running,
                 onStart = onStartAutoRun,
                 onStop = onStopAutoRun,
+                goalCardReferenceExtraWidth = goalCardReferenceExtraWidth,
             )
         }
     }
@@ -256,16 +258,22 @@ fun LabyrinthScreen(
     ) { padding ->
         BoxWithConstraints(Modifier.fillMaxSize().padding(padding).imePadding()) {
             if (maxWidth >= 820.dp) {
-                Row(Modifier.fillMaxSize().padding(20.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                val paneSpacing = 20.dp
+                val overviewWeight = 0.32f * 1.20f
+                // Account for the width transferred from the plan to the overview.
+                val overviewExtraWidth = (maxWidth - paneSpacing * 3) * (overviewWeight - 0.32f)
+                Row(Modifier.fillMaxSize().padding(paneSpacing), horizontalArrangement = Arrangement.spacedBy(paneSpacing)) {
                     Column(
-                        Modifier.weight(0.32f).fillMaxHeight().verticalScroll(overviewScrollState),
+                        Modifier.weight(overviewWeight).fillMaxHeight().verticalScroll(overviewScrollState),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         overview()
                         auxiliary()
                     }
-                    ToolboxCard(Modifier.weight(0.68f).fillMaxHeight()) {
-                        Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(bottom = 48.dp)) { batch() }
+                    ToolboxCard(Modifier.weight(1f - overviewWeight).fillMaxHeight()) {
+                        Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(bottom = 48.dp)) {
+                            batch(overviewExtraWidth)
+                        }
                     }
                 }
             } else {
@@ -274,7 +282,7 @@ fun LabyrinthScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
                     overview()
-                    ToolboxCard { batch() }
+                    ToolboxCard { batch(null) }
                     auxiliary()
                 }
             }
@@ -859,6 +867,7 @@ private fun BatchRunCard(
     entryRecognitionRunning: Boolean,
     onStart: (List<LabyrinthBatchGoal>) -> Unit,
     onStop: () -> Unit,
+    goalCardReferenceExtraWidth: Dp? = null,
 ) {
     val guildOptions = state.guildOptions
     val selectedDifficulty = state.selectedDifficulty
@@ -995,12 +1004,29 @@ private fun BatchRunCard(
                 }
             }
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                if (maxWidth >= 500.dp) {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                val columnGap = 12.dp
+                // Preserve room for the mode chip, 80dp input, padding, and larger fonts.
+                val minCardWidth = 120.dp + 80.dp * LocalConfiguration.current.fontScale.coerceAtLeast(1f)
+                val minTwoColumnWidth = if (goalCardReferenceExtraWidth != null) {
+                    minCardWidth * 2 + columnGap
+                } else {
+                    500.dp
+                }
+                if (maxWidth >= minTwoColumnWidth) {
+                    val gridWidth = goalCardReferenceExtraWidth?.let { extraWidth ->
+                        // Shrink from the original card width, not the already narrower pane.
+                        val referenceCardWidth = (maxWidth + extraWidth - columnGap) / 2
+                        val cardWidth = (referenceCardWidth * 0.80f).coerceAtLeast(minCardWidth)
+                        (cardWidth * 2 + columnGap).coerceAtMost(maxWidth)
+                    } ?: maxWidth
+                    Column(
+                        modifier = Modifier.width(gridWidth),
+                        verticalArrangement = Arrangement.spacedBy(columnGap),
+                    ) {
                         guildOptions.chunked(2).forEach { pair ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(columnGap),
                                 verticalAlignment = Alignment.Top,
                             ) {
                                 pair.forEach { guild -> GoalEditor(guild, Modifier.weight(1f)) }
@@ -1009,7 +1035,7 @@ private fun BatchRunCard(
                         }
                     }
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(columnGap)) {
                         guildOptions.forEach { guild -> GoalEditor(guild, Modifier.fillMaxWidth()) }
                     }
                 }

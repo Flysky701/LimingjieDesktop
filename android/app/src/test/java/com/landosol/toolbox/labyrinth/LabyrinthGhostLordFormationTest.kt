@@ -6,7 +6,7 @@ import org.junit.Test
 
 class LabyrinthGhostLordFormationTest {
     private val ghost = LabyrinthExEncounterCatalog.singleTarget.single { it.id == "ghost_lord" }
-    private val context = LabyrinthRoleDecisionContext(
+    private val context = legacyFrontlineContext(
         defenseMarkStacks = 4, encounterStrategy = ghost, preferSingleDamageSystem = true,
     )
     private val scoring = LabyrinthTeamScoringConfig(attributeDamageBonus = (1..5).associateWith { 0.0 }, playerWeight = 1.0)

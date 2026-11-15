@@ -145,10 +145,10 @@ class LabyrinthFirstAreaBattleTeamTest {
         }
         assertNull(labyrinthBattleTeamArea(null, null, null, null))
         assertEquals(2, labyrinthBattleTeamArea(null, LabyrinthCombatKind.NORMAL, null, 2))
-        assertNull(LabyrinthRoleDecisionContext(defenseMarkStacks = 2).currentArea)
+        assertNull(legacyFrontlineContext(defenseMarkStacks = 2).currentArea)
     }
 
-    private fun context(area: Int?, kind: LabyrinthCombatKind = LabyrinthCombatKind.NORMAL) = LabyrinthRoleDecisionContext(
+    private fun context(area: Int?, kind: LabyrinthCombatKind = LabyrinthCombatKind.NORMAL) = legacyFrontlineContext(
         defenseMarkStacks = 2,
         currentArea = area,
         preferSingleDamageSystem = kind == LabyrinthCombatKind.EX,

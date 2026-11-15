@@ -39,7 +39,7 @@ private val StrategySaver = Saver<LabyrinthStrategySettings, String>(
 )
 
 private val strategySections = listOf(
-    "评分", "选人", "开局", "Boss编组", "战斗失败", "遗物", "遗物优先级",
+    "评分", "选人", "开局", "战斗设置", "Boss编组", "战斗失败", "遗物", "遗物优先级",
     "商店", "事件", "事件自定义", "特别装备", "响应速度",
 )
 
@@ -192,12 +192,29 @@ fun LabyrinthStrategySettingsScreen(
                                     StrategyNumber("第三队部署权重", draft.thirdTeamWeight, 0..100, "%", !saving) { draft = draft.copy(thirdTeamWeight = it) }
                                     StrategyNumber("重复纯职能基础扣分", draft.duplicateRolePenalty, 0..30, "分", !saving) { draft = draft.copy(duplicateRolePenalty = it) }
                                 }
+                                "战斗设置" -> StrategyPanel("战斗设置", "默认关闭 · 保存后下次启动生效") {
+                                    StrategySwitch(
+                                        "前排生存门槛",
+                                        "开启后限制新编组的前排生存资格，保留原有无T兜底和补刀例外；关闭不取消生存评分与开战安全检查。",
+                                        draft.frontlineSurvivalGateEnabled,
+                                        !saving,
+                                    ) { draft = draft.copy(frontlineSurvivalGateEnabled = it) }
+                                    StrategySwitch(
+                                        "普战跳编队",
+                                        "仅普通战首次尝试沿用已确认的满5人队伍，跳过重新选人；关闭按推荐阵容编组，不是跳过战斗。",
+                                        draft.normalBattleSkipTeamSelectionEnabled,
+                                        !saving,
+                                    ) { draft = draft.copy(normalBattleSkipTeamSelectionEnabled = it) }
+                                    if (draft.normalBattleSkipTeamSelectionEnabled && draft.frontlineSurvivalGateEnabled) {
+                                        Text("推荐与识别流程正常时，沿用的现队不会按前排门槛重新换人。", style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
                                 "Boss编组" -> StrategyPanel(
                                     "Boss编组",
                                     (if (draft.bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM) "多队编组（默认）" else "单队编组") +
                                         if (draft.preferPureBossDamageSystem) " · 优先纯物/法" else " · 允许自由混编",
                                 ) {
-                                    Text("多队模式会按当前角色池自动使用可安全组成的3/2/1队，并优化多队总评分；单队模式只编第一队。每支实际编组队伍都要求一号位达到生存资格。物法偏好是软限制，不会为了纯体系牺牲明显更强或更能生存的阵容。")
+                                    Text("多队模式会按当前角色池自动使用可安全组成的3/2/1队，并优化多队总评分；单队模式只编第一队。前排资格限制由“战斗设置”分类中的“前排生存门槛”开关控制。物法偏好是软限制，不会为了纯体系牺牲明显更强或更能生存的阵容。")
                                     StrategyRadioChoice(
                                         label = "多队编组",
                                         detail = "默认。依次生成并自动配置三支互不重复的 Boss 队伍。",
@@ -218,7 +235,7 @@ fun LabyrinthStrategySettingsScreen(
                                     ) { draft = draft.copy(preferPureBossDamageSystem = it) }
                                     StrategySwitch(
                                         "单队Boss失败后切换多队",
-                                        "仅单队编组生效。达到下面设置的重新挑战次数后仍失败，不直接重刷开局，而是返回编组并临时切换为多队模式；随后把一号位生存线从55分放宽到40分，按当前角色池尽量组成3/2/1队。不会永久修改你的Boss编组设置。",
+                                        "仅单队编组生效。达到下面设置的重新挑战次数后仍失败，不直接重刷开局，而是返回编组并临时切换为多队模式；若开启前排生存门槛，则把一号位生存线从55分放宽到40分；按当前角色池尽量组成3/2/1队。不会永久修改你的Boss编组设置。",
                                         draft.singleBossFallbackToMultiAfterThreeFailures,
                                         !saving,
                                     ) { draft = draft.copy(singleBossFallbackToMultiAfterThreeFailures = it) }

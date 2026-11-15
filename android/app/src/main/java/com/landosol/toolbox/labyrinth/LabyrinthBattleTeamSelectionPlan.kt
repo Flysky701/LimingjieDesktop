@@ -549,6 +549,14 @@ internal fun labyrinthBossSingleTeamExecutionStep(
     )
 }
 
+/** Only the saved opt-in flag may request the ordinary-battle lineup shortcut. */
+internal fun labyrinthRequestsCurrentNormalBattleTeam(
+    settings: LabyrinthStrategySettings,
+    kind: LabyrinthCombatKind?,
+    retryCount: Int,
+): Boolean = settings.normalBattleSkipTeamSelectionEnabled &&
+    kind == LabyrinthCombatKind.NORMAL && retryCount == 0
+
 /**
  * Whether an ordinary battle keeps the team the game already shows instead of re-selecting the
  * recommendation. Requires a full five-slot strip with every slot identified: a short strip needs
