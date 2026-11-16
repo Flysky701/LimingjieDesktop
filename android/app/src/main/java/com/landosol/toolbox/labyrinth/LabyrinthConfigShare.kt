@@ -160,7 +160,11 @@ object LabyrinthConfigShareCodec {
         require(envelope.format == "labyrinth-config" && envelope.schemaVersion == 1) { "不支持此配置格式，请升级应用" }
         require(envelope.modules.isNotEmpty() && envelope.modules.keys.all { it in setOf("strategy", "personalScores", "reroll") }) { "分享码未包含有效模块，或包含不支持的模块" }
         val strategy = envelope.modules["strategy"]?.let { element ->
-            val fields = requireFields(element, strategyTemplate)
+            val supplied = element as? JsonObject ?: throw IllegalArgumentException("配置模块结构无效")
+            // Older strategy shares predate these switches. Only these known additions may be absent.
+            val addedFields = setOf("frontlineSurvivalGateEnabled", "normalBattleSkipTeamSelectionEnabled")
+            val compatible = JsonObject(strategyTemplate.filterKeys { it in addedFields } + supplied)
+            val fields = requireFields(compatible, strategyTemplate)
             validateStrategyTypes(fields)
             decodeValue<LabyrinthStrategySettings>(fields)
         }

@@ -62,7 +62,8 @@ object StrategyShareCodec {
             document["version"]?.jsonPrimitive?.intOrNull == 1) { "不支持此策略格式，请更新助手" }
         require(document.keys == setOf("format", "version", "name", "note", "settings")) { "策略包含不支持的内容，请更新助手" }
         val keys = (document["settings"] as? JsonObject)?.keys.orEmpty()
-        val addedFields = setOf("eventCustomizationEnabled", "eventChoiceOverrides")
+        val addedFields = setOf("eventCustomizationEnabled", "eventChoiceOverrides",
+            "frontlineSurvivalGateEnabled", "normalBattleSkipTeamSelectionEnabled")
         require(keys.all { it in settingKeys } && keys.containsAll(settingKeys - addedFields)) { "策略字段不完整或不兼容，请复制完整分享码或更新助手" }
         val profile = try {
             StrategyProfile(UUID.randomUUID().toString(), document.getValue("name").jsonPrimitive.content,

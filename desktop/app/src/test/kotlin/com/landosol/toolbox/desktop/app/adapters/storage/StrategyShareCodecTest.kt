@@ -48,10 +48,28 @@ class StrategyShareCodecTest {
         val settings = valid.getValue("settings").jsonObject
         rejects { StrategyShareCodec.decode(code(JsonObject(valid + ("settings" to JsonObject(emptyMap()))).toString())) }
         rejects { StrategyShareCodec.decode(code(JsonObject(valid + ("settings" to JsonObject(settings - "playerWeight"))).toString())) }
-        for (patch in listOf("playerWeight" to JsonPrimitive(101), "bossTeamMode" to JsonPrimitive("NEW_MODE"), "newOption" to JsonPrimitive(true))) {
+        for (patch in listOf("playerWeight" to JsonPrimitive(101), "bossTeamMode" to JsonPrimitive("NEW_MODE"), "newOption" to JsonPrimitive(true),
+            "frontlineSurvivalGateEnabled" to JsonNull, "normalBattleSkipTeamSelectionEnabled" to JsonPrimitive("invalid"))) {
             rejects { StrategyShareCodec.decode(code(JsonObject(valid + ("settings" to JsonObject(settings + patch))).toString())) }
         }
         rejects { StrategyShareCodec.decode(code(" ".repeat(300_000))) }
+    }
+
+    @Test fun legacySharesDefaultMissingBattleSwitchesWithoutChangingOtherSettings() {
+        val settings = LabyrinthStrategySettings(playerWeight = 37, buyRelics = false,
+            personalRoleScores = mapOf("100101" to 83),
+            frontlineSurvivalGateEnabled = true, normalBattleSkipTeamSelectionEnabled = true)
+        val original = StrategyProfile("source", "旧版策略", "保留原偏好", settings = settings)
+        val root = document(StrategyShareCodec.encode(original))
+        val switches = setOf("frontlineSurvivalGateEnabled", "normalBattleSkipTeamSelectionEnabled")
+        for (missing in listOf(switches, setOf("frontlineSurvivalGateEnabled"), setOf("normalBattleSkipTeamSelectionEnabled"))) {
+            val fields = JsonObject(root.getValue("settings").jsonObject - missing)
+            val restored = StrategyShareCodec.decode(code(JsonObject(root + ("settings" to fields)).toString()))
+            assertEquals(original.name, restored.name)
+            assertEquals(original.note, restored.note)
+            assertEquals(settings.copy(frontlineSurvivalGateEnabled = "frontlineSurvivalGateEnabled" !in missing,
+                normalBattleSkipTeamSelectionEnabled = "normalBattleSkipTeamSelectionEnabled" !in missing), restored.settings)
+        }
     }
 
     @Test fun migrationImportAndStaleEditNeverOverwriteAnExistingStrategy() = runBlocking {
@@ -110,7 +128,8 @@ class StrategyShareCodecTest {
         val encoded = StrategyShareCodec.encode(StrategyProfile("fixture", "十公会", settings = settings))
         assertEquals(settings, StrategyShareCodec.decode(encoded).settings)
         val root = document(encoded)
-        val oldSettings = JsonObject(root.getValue("settings").jsonObject - setOf("eventCustomizationEnabled", "eventChoiceOverrides"))
+        val oldSettings = JsonObject(root.getValue("settings").jsonObject - setOf("eventCustomizationEnabled", "eventChoiceOverrides",
+            "frontlineSurvivalGateEnabled", "normalBattleSkipTeamSelectionEnabled"))
         val legacy = StrategyShareCodec.decode(code(JsonObject(root + ("settings" to oldSettings)).toString())).settings
         assertFalse(legacy.eventCustomizationEnabled)
         assertEquals(LabyrinthStrategySettings().eventChoiceOverrides, legacy.eventChoiceOverrides)

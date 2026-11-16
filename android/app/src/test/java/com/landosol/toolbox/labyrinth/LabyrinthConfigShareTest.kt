@@ -60,6 +60,27 @@ class LabyrinthConfigShareTest {
         assertTrue(text.contains("\"personalScores\""))
     }
 
+    @Test fun `legacy strategy shares default only missing battle switches and keep other modules`() {
+        val original = shared().let { it.copy(strategy = requireNotNull(it.strategy).copy(
+            frontlineSurvivalGateEnabled = true, normalBattleSkipTeamSelectionEnabled = true)) }
+        val root = Json.parseToJsonElement(unpack(LabyrinthConfigShareCodec.encode(original))).jsonObject
+        val modules = root.getValue("modules").jsonObject
+        val switches = setOf("frontlineSurvivalGateEnabled", "normalBattleSkipTeamSelectionEnabled")
+        for (missing in listOf(switches, setOf("frontlineSurvivalGateEnabled"), setOf("normalBattleSkipTeamSelectionEnabled"))) {
+            val fields = JsonObject(modules.getValue("strategy").jsonObject - missing)
+            val payload = JsonObject(root + ("modules" to JsonObject(modules + ("strategy" to fields))))
+            val restored = LabyrinthConfigShareCodec.decode(pack(payload.toString()))
+            assertEquals(original.copy(strategy = requireNotNull(original.strategy).copy(
+                frontlineSurvivalGateEnabled = "frontlineSurvivalGateEnabled" !in missing,
+                normalBattleSkipTeamSelectionEnabled = "normalBattleSkipTeamSelectionEnabled" !in missing)), restored)
+            val target = LabyrinthConfigurationValues()
+            LabyrinthConfigImportPlan(restored, restored.modules, 7L, target).changeSummary()
+            val imported = restored.replacement(target, restored.modules, 7L, confirmEmptyScores = false)
+            assertEquals(requireNotNull(restored.strategy).copy(personalRoleScores = values.strategy.personalRoleScores), imported.strategy)
+            assertEquals(values.rerolls, imported.rerolls)
+        }
+    }
+
     @Test fun `each module works independently`() {
         LabyrinthConfigModule.entries.forEach { module ->
             val decoded = LabyrinthConfigShareCodec.decode(LabyrinthConfigShareCodec.encode(shared(setOf(module))))
@@ -120,6 +141,8 @@ class LabyrinthConfigShareTest {
         val text = unpack(LabyrinthConfigShareCodec.encode(shared()))
         reject(pack(text.replace("\"schemaVersion\":1", "\"schemaVersion\":2")))
         reject(pack(text.replace("\"playerWeight\":43,", "")))
+        reject(pack(text.replace("\"frontlineSurvivalGateEnabled\":false", "\"frontlineSurvivalGateEnabled\":null")))
+        reject(pack(text.replace("\"normalBattleSkipTeamSelectionEnabled\":false", "\"normalBattleSkipTeamSelectionEnabled\":\"true\"")))
         reject(pack(text.replace("\"playerWeight\":43", "\"playerWeight\":101")))
         reject(pack(text.replace("\"playerWeight\":43", "\"playerWeight\":\"43\"")))
         reject(pack(text.replace("\"playerWeight\":43", "\"playerWeight\":43,\"playerWeight\":70")))
