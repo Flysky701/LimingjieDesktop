@@ -511,7 +511,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
         assertEquals(1, stepAttempts(session))
 
         // 单动作锁在真实运行里由动作协程释放；测试里显式放锁，让下一次派发可确定复现。
-        releaseActionLatch(session)
+        awaitActionLatch(session)
 
         // 弹窗开着、页面分类变成 UNKNOWN：不算离开，继续走（点「自动装备」）。
         assertTrue(
@@ -553,7 +553,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
         // 武装并推进到「等弹窗1」。
         assertTrue(flowFrame(session, teamPageFrame(teamPageObservation()), 1_000L))
         assertEquals(LabyrinthSpecialEquipmentFlowStage.AWAIT_MAIN_DIALOG, flowStage(session))
-        releaseActionLatch(session)
+        awaitActionLatch(session)
 
         // 关键：UNKNOWN **且弹窗不打开**——旧的钉法用 UNKNOWN+弹窗帧，dialogOpen 会把这一支提前短路，
         // 所以钉不住「单帧误判离开」。修复前这里会把本轮标记清成 INACTIVE。
@@ -584,7 +584,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
     fun `UNKNOWN frames are handed back so the wait stays bounded by the existing watchdog`() {
         val session = session(kind = LabyrinthCombatKind.BOSS, settings = settingsFor(LabyrinthCombatKind.BOSS))
         assertTrue(flowFrame(session, teamPageFrame(teamPageObservation()), 1_000L))
-        releaseActionLatch(session)
+        awaitActionLatch(session)
 
         // 喂 >N 帧 UNKNOWN（200 帧 / 约 200 秒），每帧按调度器的顺序处理：本流程先看一眼，返回 false
         // 就交给既有 post-entry 处理器（停滞看门狗唯一推进的地方）。
@@ -928,7 +928,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
         assertEquals("特别装备：点击「取消」", waited.state.value.frameTrace.actionLabel)
         // 这一帧真的派发过点击：放掉单动作锁，20_000 那一帧的停机申请才不会被它瞬时挡下
         // （`finishFromPlanner` 在锁被占时静默返回，而这一段的用例只喂三帧）。
-        releaseActionLatch(waited)
+        awaitActionLatch(waited)
 
         val noCancel = mainDialogObservation(enabled = false, cancel = null)
         assertTrue(flowFrame(waited, teamPageFrame(noCancel), 2_000L))
@@ -1035,7 +1035,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
         assertEquals(0, stepAttempts(session))
 
         // 反例：队伍编好之后（teamReady）**第一帧**就派发入口点击。
-        releaseActionLatch(session)
+        awaitActionLatch(session)
         setBattleTeamPlan(session, teamPlan(alreadyCorrect = 3, needSelect = 0, teamReady = true))
         assertTrue(flowFrame(session, teamPageFrame(teamPageObservation()), 3_000L))
         assertEquals("特别装备：点击入口「特别装备」", session.state.value.frameTrace.actionLabel)
@@ -1664,17 +1664,11 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
      * 返回**这一帧**派发的动作标签（null ＝ 这一帧没有派发任何点击）。
      */
     private fun feedFrame(session: Any, result: LabyrinthEntryFrameResult, now: Long): String? {
+        awaitActionLatch(session)
         updateState(session) { it.copy(lastResult = result, frameTrace = LabyrinthFrameTrace()) }
-        // 真实运行里单动作锁由动作协程释放；测试里显式放锁，让每一次派发都可确定复现。
-        releaseActionLatch(session)
-        if (!flowFrame(session, result, now)) runTeamSelection(session, result, now)
-        val label = frameActionLabel(session)
-        // Finish this fixture's stale-session action before the next synthetic tab arrives.
-        // Boss tab receipts are now installed before dispatch and cleared by its completion.
-        runBlocking { withTimeout(5_000) {
-            while ((field(session, "actionInFlight").get(session) as java.util.concurrent.atomic.AtomicBoolean).get()) delay(1)
-        } }
-        return label
+        if (flowFrame(session, result, now)) return frameActionLabel(session)
+        runTeamSelection(session, result, now)
+        return frameActionLabel(session)
     }
 
     /** 这一帧派发的动作标签（`frameTrace` 是私有的 StateFlow 字段）。 */
@@ -1690,8 +1684,8 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
      * 最后才落到既有编组/开战路径（`processFrameResult` 的同一顺序）。
      */
     private fun feedFrameWithBattleWait(session: Any, result: LabyrinthEntryFrameResult, now: Long): String? {
+        awaitActionLatch(session)
         updateState(session) { it.copy(frameTrace = LabyrinthFrameTrace()) }
-        releaseActionLatch(session)
         if (invoke(session, "handleBattleWaitFrame", SESSION_ID, result, now) as Boolean) return frameActionLabel(session)
         if (flowFrame(session, result, now)) return frameActionLabel(session)
         runTeamSelection(session, result, now)
@@ -1825,13 +1819,14 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
     private fun stepAttempts(session: Any): Int = field(session, "specialEquipmentStepAttempts").get(session) as Int
 
     /**
-     * 放掉单动作锁（`actionInFlight`）。
+     * 等待单动作锁（`actionInFlight`）由真实动作协程释放。
      *
      * 真实运行时由动作协程的 finally 释放；单元测试里动作只会在无会话的后端上得到 `StaleSession`，
-     * 释放时机不确定，所以需要连续两次派发的用例显式放锁，断言才是确定性的。
+     * 下一帧必须等到上一动作及切队回执清理完成，不能替换锁后与仍在运行的协程并发写状态。
      */
-    private fun releaseActionLatch(session: Any) {
-        setField(session, "actionInFlight", java.util.concurrent.atomic.AtomicBoolean(false))
+    private fun awaitActionLatch(session: Any) = runBlocking {
+        val inFlight = field(session, "actionInFlight").get(session) as java.util.concurrent.atomic.AtomicBoolean
+        withTimeout(5_000) { while (inFlight.get()) delay(1) }
     }
 
     /**

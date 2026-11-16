@@ -1,37 +1,52 @@
 package com.landosol.toolbox.ui.account
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.account.AccountEditorState
 import com.landosol.toolbox.account.AccountListItem
@@ -55,7 +70,17 @@ fun AccountScreen(
     onSaveEditor: () -> Unit,
     onDismissMessage: () -> Unit,
 ) {
+    var query by rememberSaveable { mutableStateOf("") }
+    val searchTerm = query.trim()
+    val visibleAccounts = remember(state.accounts, searchTerm) {
+        state.accounts.filter { account ->
+            account.alias.contains(searchTerm, ignoreCase = true) ||
+                account.serverName.contains(searchTerm, ignoreCase = true) ||
+                account.gameUid?.contains(searchTerm) == true
+        }
+    }
     Scaffold(
+        modifier = Modifier.imePadding(),
         topBar = {
             CompactTopBar(
                 title = "账号库",
@@ -68,52 +93,89 @@ fun AccountScreen(
             )
         },
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            item {
-                Text(
-                    text = "账号与密码使用 Android Keystore 加密，不写入 Room。选择当前账号后，黎明界功能会在需要时自动登录。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            state.message?.takeIf {
-                state.editor == null && state.deleteCandidate == null
-            }?.let { message ->
-                item {
-                    MessageCard(message = message, onDismiss = onDismissMessage)
-                }
-            }
-            if (state.accounts.isEmpty()) {
-                item {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Text("还没有账号")
-                        Button(onClick = onAdd) { Text("新增账号") }
+        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 300.dp),
+                modifier = Modifier.widthIn(max = 1080.dp).fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("共 ${state.accounts.size} 个账号", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = "选择当前账号后，黎明界会在需要时自动登录。登录凭据加密保存在本机。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (state.accounts.isNotEmpty() || query.isNotEmpty()) {
+                            OutlinedTextField(
+                                value = query,
+                                onValueChange = { query = it },
+                                label = { Text("查找账号") },
+                                placeholder = { Text("名称、服务器或游戏 UID") },
+                                singleLine = true,
+                                trailingIcon = {
+                                    if (query.isNotEmpty()) {
+                                        TextButton(onClick = { query = "" }) { Text("清除") }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        if (searchTerm.isNotEmpty()) {
+                            Text("找到 ${visibleAccounts.size} 个账号", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
-            } else {
-                items(state.accounts, key = { it.id }) { account ->
-                    AccountCard(
-                        account = account,
-                        enabled = !state.isWorking,
-                        onEdit = { onEdit(account.id) },
-                        onSelect = { onSelect(account.id) },
-                        onDelete = { onRequestDelete(account) },
-                    )
+                state.message?.takeIf {
+                    state.editor == null && state.deleteCandidate == null
+                }?.let { message ->
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        MessageCard(message = message, onDismiss = onDismissMessage)
+                    }
                 }
-            }
-            if (state.isWorking && state.editor == null && state.deleteCandidate == null) {
-                item {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                        CircularProgressIndicator()
+                if (state.accounts.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Text("还没有账号", style = MaterialTheme.typography.titleMedium)
+                            Text("添加账号后即可配置黎明界任务。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Button(onClick = onAdd, enabled = !state.isWorking) { Text("新增账号") }
+                        }
+                    }
+                } else if (visibleAccounts.isEmpty()) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Column(
+                            Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("没有找到匹配的账号", style = MaterialTheme.typography.titleMedium)
+                            TextButton(onClick = { query = "" }) { Text("显示全部账号") }
+                        }
+                    }
+                } else {
+                    items(visibleAccounts, key = { it.id }) { account ->
+                        AccountCard(
+                            account = account,
+                            enabled = !state.isWorking,
+                            onEdit = { onEdit(account.id) },
+                            onSelect = { onSelect(account.id) },
+                            onDelete = { onRequestDelete(account) },
+                        )
+                    }
+                }
+                if (state.isWorking && state.editor == null && state.deleteCandidate == null) {
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                            CircularProgressIndicator()
+                        }
                     }
                 }
             }
@@ -154,6 +216,7 @@ fun AccountScreen(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun AccountCard(
     account: AccountListItem,
     enabled: Boolean,
@@ -161,27 +224,51 @@ private fun AccountCard(
     onSelect: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    var showActions by remember { mutableStateOf(false) }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = if (account.isSelected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, if (account.isSelected) {
+            MaterialTheme.colorScheme.primary
+        } else MaterialTheme.colorScheme.outlineVariant),
+    ) {
         Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(account.alias, style = MaterialTheme.typography.titleMedium)
-                    Text(account.serverName, style = MaterialTheme.typography.bodyMedium)
-                }
-                if (account.isSelected) {
-                    Text("当前账号", color = MaterialTheme.colorScheme.primary)
+            if (account.isSelected) {
+                Surface(color = MaterialTheme.colorScheme.primary, shape = MaterialTheme.shapes.small) {
+                    Text("当前账号", Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelMedium)
                 }
             }
-            account.gameUid?.let { Text("游戏 UID：$it", style = MaterialTheme.typography.bodySmall) }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(account.alias, style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(account.serverName, style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                account.gameUid?.let {
+                    Text("游戏 UID：$it", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!account.isSelected) {
-                    TextButton(onClick = onSelect, enabled = enabled) { Text("设为当前") }
+                    OutlinedButton(onClick = onSelect, enabled = enabled) { Text("设为当前") }
                 }
                 TextButton(onClick = onEdit, enabled = enabled) { Text("编辑") }
-                TextButton(onClick = onDelete, enabled = enabled) { Text("删除") }
+                Box {
+                    TextButton(onClick = { showActions = true }, enabled = enabled) { Text("更多") }
+                    DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
+                        DropdownMenuItem(
+                            text = { Text("删除账号", color = MaterialTheme.colorScheme.error) },
+                            enabled = enabled,
+                            onClick = { showActions = false; onDelete() },
+                        )
+                    }
+                }
             }
         }
     }
@@ -214,6 +301,8 @@ private fun AccountEditorDialog(
                     value = editor.alias,
                     onValueChange = { value -> onChange { it.copy(alias = value) } },
                     label = { Text("账号名称") },
+                    enabled = !isWorking,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -221,6 +310,8 @@ private fun AccountEditorDialog(
                     value = editor.loginId,
                     onValueChange = { value -> onChange { it.copy(loginId = value) } },
                     label = { Text(if (editor.server?.isChannelServer == true) "登录账号（uid）" else "登录账号") },
+                    enabled = !isWorking,
+                    keyboardOptions = KeyboardOptions(autoCorrect = false, imeAction = ImeAction.Next),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -239,12 +330,16 @@ private fun AccountEditorDialog(
                     },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
+                    enabled = !isWorking,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = editor.gameUid,
                     onValueChange = { value -> onChange { it.copy(gameUid = value) } },
                     label = { Text("游戏 UID（可选）") },
+                    enabled = !isWorking,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )

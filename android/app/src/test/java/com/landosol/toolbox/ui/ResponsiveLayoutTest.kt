@@ -70,8 +70,29 @@ class ResponsiveLayoutTest {
         assertTrue(screen.contains("draft.canSaveDraft(saved, saving)"))
         assertTrue(screen.contains("EventCustomizationEditor("))
         assertTrue(screen.contains("draft = LabyrinthStrategySettings()"))
-        assertTrue(screen.contains("全局配置 · 所有账号共用"))
-        assertTrue(screen.contains("CompactTopBar(title = title, actions"))
+        assertTrue(screen.contains("所有账号共用 · 下次启动生效"))
+        assertTrue(Regex("""CompactTopBar\(\s*title\s*=\s*title,[^)]*\bactions\s*=""")
+            .containsMatchIn(screen))
+    }
+
+    @Test
+    fun `battle settings is a peer category and switches appear only in its selected content`() {
+        val screen = mainSource("labyrinth/LabyrinthStrategySettingsScreen.kt")
+        val categoryList = screen.substringAfter("private val strategySections = listOf(").substringBefore(")")
+        val categories = Regex("\"([^\"]+)\"").findAll(categoryList).map { it.groupValues[1] }.toList()
+        assertTrue(categories.containsAll(listOf("评分", "选人", "开局", "战斗设置")))
+        assertEquals(1, categories.count { it == "战斗设置" })
+        assertEquals(2, Regex("strategySections.forEach").findAll(screen).count())
+        val beforeContent = screen.substringBefore("when (section) {")
+        assertFalse(beforeContent.contains("draft.frontlineSurvivalGateEnabled"))
+        assertFalse(beforeContent.contains("draft.normalBattleSkipTeamSelectionEnabled"))
+        val battleContent = screen.substringAfter("\"战斗设置\" -> StrategyPanel")
+            .substringBefore("\"Boss编组\" -> StrategyPanel")
+        assertTrue(battleContent.contains("前排生存门槛"))
+        assertTrue(battleContent.contains("普战跳编队"))
+        assertTrue(battleContent.contains("draft = draft.copy(frontlineSurvivalGateEnabled = it)"))
+        assertTrue(battleContent.contains("draft = draft.copy(normalBattleSkipTeamSelectionEnabled = it)"))
+        assertTrue(battleContent.contains("默认关闭 · 保存后下次启动生效"))
     }
 
     @Test

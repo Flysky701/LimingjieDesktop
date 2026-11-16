@@ -64,8 +64,8 @@ class LabyrinthTeamCompositionPolicyTest {
         val serial = LabyrinthTeamOptimizer(LabyrinthTeamScorer(bonusConfig), searchThreads = 1)
         val parallel = LabyrinthTeamOptimizer(LabyrinthTeamScorer(bonusConfig), searchThreads = 4)
         for (context in listOf(
-            LabyrinthRoleDecisionContext(0),
-            LabyrinthRoleDecisionContext(3, targetCount = 3, preferSingleDamageSystem = true),
+            legacyFrontlineContext(0),
+            legacyFrontlineContext(3, targetCount = 3, preferSingleDamageSystem = true),
         )) {
             fun ids(list: List<LabyrinthTeamEvaluation>) = list.map { e -> e.members.map { it.characterId } to e.score }
             assertEquals(ids(serial.rankedFormations(pool, context)), ids(parallel.rankedFormations(pool, context)))
@@ -96,7 +96,7 @@ class LabyrinthTeamCompositionPolicyTest {
             physicalDamagePotential = damage, magicDamagePotential = 0.0,
             functions = LabyrinthRoleFunctions(singleTargetDamage = damage),
         )
-        val context = LabyrinthRoleDecisionContext(0)
+        val context = legacyFrontlineContext(0)
 
         // DARK appears first but is a singleton (no bonus); WATER and FIRE both have pairs with
         // identical damage, so their tie resolves to appearance order: WATER before FIRE.
@@ -162,7 +162,7 @@ class LabyrinthTeamCompositionPolicyTest {
     @Test
     fun `second pure role costs four six eight points as defense grows`() {
         for ((stacks, penalty) in listOf(0 to 4.0, 1 to 4.0, 2 to 6.0, 3 to 6.0, 4 to 8.0, 15 to 8.0)) {
-            val context = LabyrinthRoleDecisionContext(stacks)
+            val context = legacyFrontlineContext(stacks)
             val actual = scorer.evaluate(tankTeam(), context)
             val noPenalty = LabyrinthTeamScorer(config.copy(duplicatePureRolePenalty = 0.0)).evaluate(tankTeam(), context)
             assertEquals(2, actual.pureTankCount)
@@ -179,7 +179,7 @@ class LabyrinthTeamCompositionPolicyTest {
     fun `two tanks and two healers accumulate independent penalties`() {
         val team = listOf(role("t1", tank = true), role("t2", tank = true),
             role("h1", healer = true), role("h2", healer = true), role("dps"))
-        val actual = scorer.evaluate(team, LabyrinthRoleDecisionContext(4))
+        val actual = scorer.evaluate(team, legacyFrontlineContext(4))
         assertEquals(2, actual.pureHealerCount)
         assertEquals(16.0, actual.duplicateRolePenalty, 1e-9)
     }
@@ -187,12 +187,12 @@ class LabyrinthTeamCompositionPolicyTest {
     @Test
     fun `class labels alone do not impose caps and no healer slot is mandatory`() {
         val team = (0 until 5).map { role("r$it").copy(roleClass = if (it < 3) "掩护者" else "治疗者") }
-        val evaluation = scorer.evaluate(team, LabyrinthRoleDecisionContext(4))
+        val evaluation = scorer.evaluate(team, legacyFrontlineContext(4))
         assertEquals(0, evaluation.pureTankCount)
         assertEquals(0, evaluation.pureHealerCount)
         assertEquals(0.0, evaluation.duplicateRolePenalty, 1e-9)
         assertEquals(5, requireNotNull(LabyrinthTeamOptimizer(scorer).bestFormation(team,
-            LabyrinthRoleDecisionContext(4))).members.size)
+            legacyFrontlineContext(4))).members.size)
     }
 
     @Test
@@ -206,14 +206,14 @@ class LabyrinthTeamCompositionPolicyTest {
         )
         for (composite in composites) {
             val team = tankTeam().toMutableList().also { it[1] = composite }
-            val actual = scorer.evaluate(team, LabyrinthRoleDecisionContext(4))
+            val actual = scorer.evaluate(team, legacyFrontlineContext(4))
             assertEquals(1, actual.pureTankCount)
             assertEquals(0.0, actual.duplicateRolePenalty, 1e-9)
         }
         val offSystem = tankTeam().toMutableList().also {
             it[1] = pure.copy(support = LabyrinthRoleSupport(magicOffense = 100.0))
         }
-        assertEquals(8.0, scorer.evaluate(offSystem, LabyrinthRoleDecisionContext(4)).duplicateRolePenalty, 1e-9)
+        assertEquals(8.0, scorer.evaluate(offSystem, legacyFrontlineContext(4)).duplicateRolePenalty, 1e-9)
     }
 
     @Test
@@ -222,34 +222,34 @@ class LabyrinthTeamCompositionPolicyTest {
             it[1] = it[1].copy(physicalDamage1Target = 20.0, physicalDamage3Target = 80.0,
                 functions = it[1].functions.copy(pureHealer = 100.0))
         }
-        assertEquals(8.0, scorer.evaluate(team, LabyrinthRoleDecisionContext(4, targetCount = 1)).duplicateRolePenalty, 1e-9)
-        assertEquals(0.0, scorer.evaluate(team, LabyrinthRoleDecisionContext(4, targetCount = 3)).duplicateRolePenalty, 1e-9)
+        assertEquals(8.0, scorer.evaluate(team, legacyFrontlineContext(4, targetCount = 1)).duplicateRolePenalty, 1e-9)
+        assertEquals(0.0, scorer.evaluate(team, legacyFrontlineContext(4, targetCount = 3)).duplicateRolePenalty, 1e-9)
     }
 
     @Test
     fun `missing survival and explicit fallback halve but never eliminate penalties`() {
         val withoutHealing = tankTeam().toMutableList().also { it[2] = role("dps3") }
-        assertEquals(2.0, scorer.evaluate(withoutHealing, LabyrinthRoleDecisionContext(0)).duplicateRolePenalty, 1e-9)
-        assertEquals(4.0, scorer.evaluate(tankTeam(), LabyrinthRoleDecisionContext(4, survivalRecovery = true))
+        assertEquals(2.0, scorer.evaluate(withoutHealing, legacyFrontlineContext(0)).duplicateRolePenalty, 1e-9)
+        assertEquals(4.0, scorer.evaluate(tankTeam(), legacyFrontlineContext(4, survivalRecovery = true))
             .duplicateRolePenalty, 1e-9)
         val searcher = LabyrinthTeamPlanSearcher(LabyrinthTeamOptimizer(scorer),
             LabyrinthTeamPlanSearchConfig(oneTeamKillScore = 0.0, mainTeamScore = 0.0,
                 cleanupTeamScore = 0.0, mainPlusCleanupCombinedScore = 0.0,
                 stableTeamScore = 0.0, fallbackTeamScore = 0.0, threeTeamCombinedScore = 0.0))
-        assertEquals(8.0, searcher.initialSearch(tankTeam(), LabyrinthRoleDecisionContext(4)).teams.single()
+        assertEquals(8.0, searcher.initialSearch(tankTeam(), legacyFrontlineContext(4)).teams.single()
             .duplicateRolePenalty, 1e-9)
-        assertEquals(4.0, searcher.fallbackSearch(tankTeam(), LabyrinthRoleDecisionContext(4)).teams.single()
+        assertEquals(4.0, searcher.fallbackSearch(tankTeam(), legacyFrontlineContext(4)).teams.single()
             .duplicateRolePenalty, 1e-9)
     }
 
     @Test
     fun `optimizer prefers useful replacement but still returns forced double tank teams`() {
         val roster = tankTeam() + role("extraDamage")
-        val best = requireNotNull(LabyrinthTeamOptimizer(scorer).bestFormation(roster, LabyrinthRoleDecisionContext(4)))
+        val best = requireNotNull(LabyrinthTeamOptimizer(scorer).bestFormation(roster, legacyFrontlineContext(4)))
         assertEquals(1, best.pureTankCount)
         assertTrue(best.members.any { it.characterId == "extraDamage" })
         assertEquals(5, requireNotNull(LabyrinthTeamOptimizer(scorer).bestFormation(tankTeam(),
-            LabyrinthRoleDecisionContext(4))).members.size)
+            legacyFrontlineContext(4))).members.size)
     }
 
     @Test

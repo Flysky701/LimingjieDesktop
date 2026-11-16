@@ -16,15 +16,16 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /**
- * Exactly two owned CPU workers. Queue capacity is a hard bound; rejection is never CallerRuns.
- * Future.get/invokeAll on a CPU worker help queued CPU tasks instead of waiting for a third worker.
+ * Owns exactly workerCount CPU workers. Queue capacity is a hard bound; rejection is never CallerRuns.
+ * Future.get/invokeAll on a CPU worker help queued CPU tasks instead of requiring an extra worker.
  * Only this executor's tasks are helped. Every help saves/restores the complete root context.
  */
 class LabyrinthHelpingExecutor(
     val queueCapacity: Int = 64,
     private val threadPrefix: String = "labyrinth-b5-compute",
+    val workerCount: Int = 2,
 ) : AbstractExecutorService() {
-    init { require(queueCapacity > 0) }
+    init { require(queueCapacity > 0); require(workerCount > 0) }
     private val lock = ReentrantLock()
     private val changed = lock.newCondition()
     private val sequence = AtomicLong()
@@ -34,7 +35,7 @@ class LabyrinthHelpingExecutor(
     private val depthScanBuffer = arrayOfNulls<WorkFuture<*>>(queueCapacity)
     private var stopping = false
     private var workersExited = 0
-    private val workers = (1..2).map { index ->
+    private val workers = (1..workerCount).map { index ->
         Thread({ workerLoop() }, "$threadPrefix-$index").apply { isDaemon = true }
     }.also { threads -> threads.forEach(Thread::start) }
 
@@ -253,11 +254,11 @@ class LabyrinthHelpingExecutor(
         return pending.toMutableList<Runnable>()
     }
     override fun isShutdown(): Boolean = lock.withLock { stopping }
-    override fun isTerminated(): Boolean = lock.withLock { workersExited == 2 }
+    override fun isTerminated(): Boolean = lock.withLock { workersExited == workerCount }
     override fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean {
         var remaining = unit.toNanos(timeout)
         return lock.withLock {
-            while (workersExited != 2) {
+            while (workersExited != workerCount) {
                 if (remaining <= 0) return@withLock false
                 remaining = changed.awaitNanos(remaining)
             }

@@ -233,7 +233,7 @@ internal fun batch3SyntheticInput(acquiredCount: Int, tied: Boolean = false): Ba
     val owned = (0 until acquiredCount).map { role("r$it", it) }
     val candidates = (0..2).map { role("c$it", 31 + it) }
     return Batch3RoleInput(candidates.map { it.characterId }, owned.mapTo(LinkedHashSet()) { it.characterId },
-        (owned + candidates).associateBy { it.characterId }, LabyrinthRoleDecisionContext(defenseMarkStacks = 4))
+        (owned + candidates).associateBy { it.characterId }, legacyFrontlineContext(defenseMarkStacks = 4))
 }
 
 internal fun batch3ProductionRuntime(): LabyrinthRoleDecisionRuntime {
@@ -253,7 +253,7 @@ internal fun batch3ObservedInputs(runtime: LabyrinthRoleDecisionRuntime): List<B
     val beforeMaho = listOf("1025", "1308", "1145", "1150", "1258", "1191", "1050", "1240", "1157",
         "1014", "1285", "1008", "1168", "1113", "1331", "1299", "1141", "1200", "1330", "1114",
         "1006", "1140", "1066", "1276", "1084")
-    val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4)
+    val context = legacyFrontlineContext(defenseMarkStacks = 4)
     return listOf(
         Batch3RoleInput(listOf("1222", "1010", "1129"), LinkedHashSet(beforeMaho), runtime.profiles, context),
         Batch3RoleInput(listOf("1001", "1094", "1348"), LinkedHashSet(beforeMaho + "1010"), runtime.profiles, context),

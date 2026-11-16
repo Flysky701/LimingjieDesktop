@@ -217,7 +217,7 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                     if(transportError!=null)Message(transportError)
                     BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                         CompositionLocalProvider(LocalContext provides graph.context,LocalTaskBusy provides (graph.busy||actions.working),LocalDesktopWindow provides hostWindow,LocalNavigationGuard provides navigation,
-                            LocalConfiguration provides Configuration(maxWidth.value.toInt(),maxHeight.value.toInt())) {
+                            LocalConfiguration provides Configuration(maxWidth.value.toInt(),maxHeight.value.toInt(), androidx.compose.ui.platform.LocalDensity.current.fontScale)) {
                             when(if(runOnly)Page.Run else page) {
                                 Page.Run -> RunConsole(graph,state,selected,::selectTask,::configure,{navigate(it)},searchFocus,
                                     setup,configuration,standaloneGuild,{if(!graph.busy)standaloneGuild=it},setupMessage ?: actions.message,sharedSettings)

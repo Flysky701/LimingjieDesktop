@@ -104,9 +104,10 @@ tasks.matching { it.name == "kspKotlin" }.configureEach {
 tasks.test {
     workingDir(upstream)
     maxHeapSize = "2g"
-    // Upstream performance experiments require Java 17, the retired four-worker pool,
-    // or private _round1 captures; keep the portable behavior/equivalence tests enabled.
-    exclude("**/Batch4RoleAllocationBenchmarkTest*", "**/Batch6Round1BenchmarkTest*")
+    // Host benchmarks have platform/worker prerequisites and are explicitly opt-in upstream.
+    if (!providers.gradleProperty("includeBenchmarks").map(String::toBoolean).getOrElse(false)) {
+        filter { excludeTestsMatching("*BenchmarkTest") }
+    }
     filter { excludeTestsMatching("*.Batch6Round1EquivalenceTest.fourRealSlowSegmentsAndObservedTwoSafeToThreeSafeVariants") }
     doFirst { check(upstream.resolve("src/test/resources/character-icon-golden.txt").isFile) { "Missing upstream golden; refusing regeneration" } }
 }

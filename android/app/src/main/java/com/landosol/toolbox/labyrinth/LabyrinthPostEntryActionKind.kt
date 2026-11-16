@@ -68,4 +68,6 @@ internal data class LabyrinthPostEntryTapPlan(
     val kind: LabyrinthPostEntryActionKind,
     val label: String,
     val rect: com.landosol.toolbox.labyrinth.vision.EntryPixelRect,
+    val eventPermit: LabyrinthEventActionPermit.Token? = null,
+    val eventChoiceId: String? = null,
 )

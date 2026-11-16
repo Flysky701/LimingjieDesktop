@@ -14,7 +14,8 @@ class LabyrinthRoleRewardCommitTest {
             rewardFrame = Batch2SessionFixture().roleFrame(listOf("1002", "1003", "1004")))
 
     @Test fun `rejected choice never records ownership or bypasses joined recognition`() =
-        exercise(AutomationBackendResult.Rejected("test rejection"), failStore = false, expectedWrites = 0, expectedBypass = false)
+        exercise(AutomationBackendResult.Rejected("test rejection"), failStore = false, expectedWrites = 0, expectedBypass = false,
+            rewardFrame = Batch2SessionFixture().roleFrame(listOf("1002", "1003", "1004")))
 
     @Test fun `failed persistence keeps joined recognition available for recovery`() =
         exercise(AutomationBackendResult.Completed, failStore = true, expectedWrites = 1, expectedBypass = false,
@@ -41,7 +42,7 @@ class LabyrinthRoleRewardCommitTest {
                     "1002", "千歌（礼服）", rect, emptyList(),
                 ))
             val dispatch = session.javaClass.declaredMethods.single {
-                it.name.startsWith("dispatchPostEntryTap-") && !it.name.endsWith("\$default")
+                it.name.startsWith("dispatchPostEntryTap-") && it.parameterCount == 12 && !it.name.endsWith("\$default")
             }.apply { isAccessible = true }
             // The label is display text only; the commit path keys on the action kind. A label
             // that looks nothing like the UI copy must still persist the selection.

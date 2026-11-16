@@ -79,9 +79,13 @@ class LandosolToolboxApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Freeze the Android-visible CPU choice once, before any business executor is initialized.
+        val threadBudget = com.landosol.toolbox.labyrinth.concurrent.LabyrinthThreadBudget.process
         // First line of every process log, so a diagnostic bundle always names the build it came
         // from even when the interesting part of the run happened much later.
         Log.i(APP_LOG_TAG, "黎明界助手启动：${AppVersion.display}")
+        Log.i(APP_LOG_TAG, "线程启动预算：Android可见CPU=${threadBudget.availableProcessors}，" +
+            "采集=1，控制=1，重计算=${threadBudget.cpuWorkerBudget}，业务预算=${threadBudget.businessThreadBudget}")
         logGameClient()
         // 只有登录时会临时转竖屏的渠道才容忍旋转；其他服务器保持上游「尺寸一变就停止捕获」。
         com.landosol.toolbox.automation.capture.CaptureRotationPolicy.toleratesTransientRotation = {

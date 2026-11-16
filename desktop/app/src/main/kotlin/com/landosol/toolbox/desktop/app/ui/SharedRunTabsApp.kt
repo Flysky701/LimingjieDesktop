@@ -134,7 +134,7 @@ private data class PendingSessionAction(val title:String,val message:String,val 
                     HorizontalDivider(color=Line)
                     (error ?: globalError ?: globalLocalError ?: actions.message)?.let{Message(it)}
                     BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()){
-                        val configuration=Configuration(maxWidth.value.toInt(),maxHeight.value.toInt())
+                        val configuration=Configuration(maxWidth.value.toInt(),maxHeight.value.toInt(), androidx.compose.ui.platform.LocalDensity.current.fontScale)
                         CompositionLocalProvider(LocalContext provides global.context,LocalDesktopWindow provides hostWindow,LocalConfiguration provides configuration){
                             // Keep every run composition alive when another device or a global page is visible.
                             Column(retainedViewport(page==Page.Run)){

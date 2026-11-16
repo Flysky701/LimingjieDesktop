@@ -50,6 +50,13 @@ class LabyrinthConfigImportPlanTest {
         assertTrue(changes.contains("特别装备关卡类型：普通、EX、BOSS → 未选择关卡类型"))
     }
 
+    @Test fun `new battle switches can be previewed in imported configurations`() {
+        val defaults = LabyrinthStrategySettings()
+        val enabled = defaults.copy(frontlineSurvivalGateEnabled = true, normalBattleSkipTeamSelectionEnabled = true)
+        assertEquals(2, strategySummary(defaults, enabled).count { it.endsWith("关闭 → 开启") })
+        assertEquals(2, strategySummary(enabled, defaults).count { it.endsWith("开启 → 关闭") })
+    }
+
     @Test fun `reroll fields resolve guild bosses modes and units`() {
         val settings = LabyrinthRerollSettings(guildId = 3, difficulty = 2, perfectStart = false,
             routeEvaluationMode = LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE, valueAllowance = 2,

@@ -1,5 +1,6 @@
 package com.landosol.toolbox.ui.permissions
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -8,21 +9,30 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.permissions.PermissionCenterState
 import com.landosol.toolbox.ui.CompactTopBar
-import com.landosol.toolbox.ui.shouldUseNavigationRail
+import com.landosol.toolbox.ui.ToolboxCard
+import com.landosol.toolbox.ui.ToolboxIcons
+import com.landosol.toolbox.ui.theme.AppThemeMode
+import com.landosol.toolbox.AppVersion
 
 private data class PermissionItem(
     val title: String,
@@ -43,38 +53,28 @@ fun PermissionCenterScreen(
     onOpenConfigurationSharing: () -> Unit = {},
     configurationSharingEnabled: Boolean = true,
     configurationSharingReason: String? = null,
+    themeMode: AppThemeMode = AppThemeMode.SYSTEM,
+    onThemeChange: (AppThemeMode) -> Unit = {},
 ) {
     val configuration = LocalConfiguration.current
-    val wideLandscape = shouldUseNavigationRail(
-        configuration.screenWidthDp,
-        configuration.screenHeightDp,
-    )
+    val wideLandscape = configuration.screenWidthDp >= 900
     Scaffold(
-        topBar = { CompactTopBar(title = "设置与权限", onBack = onBack) },
+        topBar = { CompactTopBar(title = "设置", onBack = onBack) },
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(if (wideLandscape) 10.dp else 16.dp),
-            verticalArrangement = Arrangement.spacedBy(if (wideLandscape) 8.dp else 12.dp),
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
+            AppearanceCard(themeMode, onThemeChange)
+            Text("任务权限", style = MaterialTheme.typography.titleMedium)
             Text(
                 "完成无障碍和任务通知设置后即可启动任务；启动时会请求截图授权，任务控制入口位于通知栏。",
                 style = MaterialTheme.typography.bodySmall,
             )
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("配置导入与导出", style = MaterialTheme.typography.titleMedium)
-                    Text("分享全局策略、个人评分和刷开局设置。",
-                        style = MaterialTheme.typography.bodySmall)
-                    configurationSharingReason?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    Button(onClick = onOpenConfigurationSharing, enabled = configurationSharingEnabled) {
-                        Text("管理配置分享码")
-                    }
-                }
-            }
             val permissionItems = listOf(
                 PermissionItem(
                     title = "无障碍服务",
@@ -122,7 +122,6 @@ fun PermissionCenterScreen(
                         PermissionCard(
                             modifier = Modifier.weight(1f),
                             item = item,
-                            compact = true,
                         )
                     }
                 }
@@ -132,7 +131,6 @@ fun PermissionCenterScreen(
                         PermissionCard(
                             modifier = Modifier.fillMaxWidth(),
                             item = item,
-                            compact = false,
                         )
                     }
                 }
@@ -153,7 +151,61 @@ fun PermissionCenterScreen(
                     MaterialTheme.colorScheme.onSurface
                 },
             )
+            ToolboxCard {
+                Text("配置导入与导出", style = MaterialTheme.typography.titleMedium)
+                Text("分享全局策略、个人评分和刷开局设置。", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                configurationSharingReason?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                OutlinedButton(onClick = onOpenConfigurationSharing, enabled = configurationSharingEnabled) {
+                    Text("管理配置分享码")
+                }
+            }
+            Text("黎明界助手 · ${AppVersion.display}", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+}
+
+@Composable
+private fun AppearanceCard(selected: AppThemeMode, onSelect: (AppThemeMode) -> Unit) {
+    ToolboxCard {
+        Text("外观", style = MaterialTheme.typography.titleMedium)
+        Text("选择适合当前环境的显示方式。", style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            AppThemeMode.entries.forEach { mode ->
+                val active = selected == mode
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = MaterialTheme.shapes.medium,
+                    color = if (active) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(
+                        Modifier.selectable(selected = active, role = Role.RadioButton, onClick = { onSelect(mode) })
+                            .heightIn(min = 88.dp).padding(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+                    ) {
+                        Icon(when (mode) {
+                            AppThemeMode.SYSTEM -> ToolboxIcons.System
+                            AppThemeMode.LIGHT -> ToolboxIcons.Sun
+                            AppThemeMode.DARK -> ToolboxIcons.Moon
+                        }, contentDescription = null, modifier = Modifier.size(24.dp))
+                        Text(mode.label, style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+            }
+        }
+        Text(
+            when (selected) {
+                AppThemeMode.SYSTEM -> "随 Android 系统自动切换浅色与深色。"
+                AppThemeMode.LIGHT -> "始终使用浅色外观。"
+                AppThemeMode.DARK -> "始终使用深色外观。"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -161,30 +213,30 @@ fun PermissionCenterScreen(
 private fun PermissionCard(
     modifier: Modifier,
     item: PermissionItem,
-    compact: Boolean,
 ) {
-    Card(modifier = modifier) {
+    Surface(modifier = modifier, shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
         Column(
-            modifier = Modifier.padding(if (compact) 10.dp else 14.dp),
-            verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 7.dp),
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(item.title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                Text(item.title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                 Text(
                     item.statusText,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (item.enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (item.enabled) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Text(item.description, style = MaterialTheme.typography.bodySmall)
+            Text(item.description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             val onAction = item.onAction
             val actionLabel = item.actionLabel
             if (onAction != null && actionLabel != null) {
-                Button(
+                OutlinedButton(
                     onClick = onAction,
                     modifier = Modifier.defaultMinSize(minHeight = 36.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),

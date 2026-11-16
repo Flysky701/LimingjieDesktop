@@ -22,7 +22,7 @@ class LabyrinthBattleTeamRecommendationTest {
                 role.copy(functions = role.functions.copy(dot = if (i == 2) 80.0 else missingScore))
             }.associateBy { it.characterId }
             val planner = recommendationPlanner(profiles)
-            val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4, encounterStrategy = dotGuide)
+            val context = legacyFrontlineContext(defenseMarkStacks = 4, encounterStrategy = dotGuide)
             val first = planner.initialRecommendation(profiles.keys, context) as LabyrinthBattleTeamRecommendationResult.Ready
             assertEquals(5, first.recommendation.members.size)
             assertTrue(first.recommendation.members.any { it.characterId == "r2" })
@@ -44,7 +44,7 @@ class LabyrinthBattleTeamRecommendationTest {
         }.associateBy { it.characterId }
         val failed = labyrinthBattleTeamSignature((1..5).map { "r$it" })
         val result = recommendationPlanner(profiles).retryRecommendation(profiles.keys,
-            LabyrinthRoleDecisionContext(defenseMarkStacks = 4, encounterStrategy = dotGuide),
+            legacyFrontlineContext(defenseMarkStacks = 4, encounterStrategy = dotGuide),
             setOf(failed), retryNumber = 2, lastFailedTeamSignature = failed) as LabyrinthBattleTeamRecommendationResult.Ready
         assertTrue(result.recommendation.members.any { it.characterId == "r6" })
         assertTrue(result.recommendation.reasons.any { it.contains("本队确认0/2") })
@@ -62,7 +62,7 @@ class LabyrinthBattleTeamRecommendationTest {
             }
         }.associateBy { it.characterId }
         val planner = recommendationPlanner(profiles)
-        val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4, encounterStrategy = dotGuide)
+        val context = legacyFrontlineContext(defenseMarkStacks = 4, encounterStrategy = dotGuide)
         val first = planner.initialRecommendation(profiles.keys, context) as LabyrinthBattleTeamRecommendationResult.Ready
         val ids = first.recommendation.members.map { it.characterId }.toSet()
         assertTrue("$ids", ids.containsAll(setOf("dot1", "dot2", "tank")))
@@ -86,7 +86,7 @@ class LabyrinthBattleTeamRecommendationTest {
             add(front.copy(functions = front.functions.copy(dot = 90.0)))
         }.associateBy { it.characterId }
         val first = recommendationPlanner(profiles).initialRecommendation(
-            profiles.keys, LabyrinthRoleDecisionContext(defenseMarkStacks = 4, encounterStrategy = dotGuide),
+            profiles.keys, legacyFrontlineContext(defenseMarkStacks = 4, encounterStrategy = dotGuide),
         ) as LabyrinthBattleTeamRecommendationResult.Ready
         assertEquals("tank", first.recommendation.vanguard.characterId)
         assertFalse(first.recommendation.members.any { it.characterId == "dotFront" })
@@ -100,7 +100,7 @@ class LabyrinthBattleTeamRecommendationTest {
             role.copy(functions = role.functions.copy(dot = if (i >= 6) 80.0 else 0.0))
         }.associateBy { it.characterId }
         val result = recommendationPlanner(profiles).initialRecommendation(profiles.keys,
-            LabyrinthRoleDecisionContext(defenseMarkStacks = 4, encounterStrategy = dotGuide)) as LabyrinthBattleTeamRecommendationResult.Ready
+            legacyFrontlineContext(defenseMarkStacks = 4, encounterStrategy = dotGuide)) as LabyrinthBattleTeamRecommendationResult.Ready
         assertTrue(result.recommendation.members.map { it.characterId }.containsAll(listOf("r6", "r7")))
         assertFalse(result.recommendation.reasons.any { it.contains("继续编组") })
     }
@@ -121,15 +121,19 @@ class LabyrinthBattleTeamRecommendationTest {
         val rear = role("rear", "输出", 20, 90.0, 90.0).copy(attribute = null)
         val profiles = listOf(tank, rear).associateBy { it.characterId }
         val decision = recommendationPlanner(profiles).initialRecommendation(profiles.keys,
-            LabyrinthRoleDecisionContext(defenseMarkStacks = 4)) as LabyrinthBattleTeamRecommendationResult.Ready
+            legacyFrontlineContext(defenseMarkStacks = 4)) as LabyrinthBattleTeamRecommendationResult.Ready
         assertEquals("T", decision.recommendation.vanguard.characterId)
         assertEquals(2, decision.recommendation.members.size)
+        assertEquals(1, decision.recommendation.safeBossTeamCount)
         assertEquals(null, tank.physicalDamagePotential)
         val unknownPosition = profiles + ("rear" to rear.copy(position = null))
+        // Small opening rosters use the existing supplement fallback when safe positioning
+        // cannot be established; they must not be labelled as a safe tank-led team.
         val fallback = recommendationPlanner(unknownPosition).initialRecommendation(unknownPosition.keys,
-            LabyrinthRoleDecisionContext(defenseMarkStacks = 4)) as LabyrinthBattleTeamRecommendationResult.Ready
-        assertEquals(setOf("T", "rear"), fallback.recommendation.members.map { it.characterId }.toSet())
+            legacyFrontlineContext(defenseMarkStacks = 4)) as LabyrinthBattleTeamRecommendationResult.Ready
+        assertEquals(profiles.keys, fallback.recommendation.members.map { it.characterId }.toSet())
         assertEquals(0, fallback.recommendation.safeBossTeamCount)
+        assertTrue(fallback.recommendation.reasons.any { it.contains("资料不完整") })
         assertEquals(null, unknownPosition.getValue("rear").position)
     }
 
@@ -137,7 +141,7 @@ class LabyrinthBattleTeamRecommendationTest {
         val profiles = (1..5).map { index -> role("r$index", "角色$index", index, 80.0, 70.0,
             reliableVanguard = if (index == 1) 100.0 else 0.0) }.associateBy { it.characterId }
         val decision = recommendationPlanner(profiles).initialRecommendation(profiles.keys + "missing",
-            LabyrinthRoleDecisionContext(defenseMarkStacks = 4)) as LabyrinthBattleTeamRecommendationResult.Ready
+            legacyFrontlineContext(defenseMarkStacks = 4)) as LabyrinthBattleTeamRecommendationResult.Ready
         assertEquals(profiles.keys, decision.recommendation.members.map { it.characterId }.toSet())
         assertTrue(decision.recommendation.reasons.any { it.contains("missing") })
     }
@@ -156,7 +160,7 @@ class LabyrinthBattleTeamRecommendationTest {
 
         val result = planner.initialRecommendation(
             acquiredCharacterIds = profiles.keys,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 2, targetCount = 2),
+            context = legacyFrontlineContext(defenseMarkStacks = 2, targetCount = 2),
         ) as LabyrinthBattleTeamRecommendationResult.Ready
         val recommendation = result.recommendation
 
@@ -208,7 +212,7 @@ class LabyrinthBattleTeamRecommendationTest {
 
         val result = recommendationPlanner(profiles).initialRecommendation(
             acquiredCharacterIds = profiles.keys,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
         ) as LabyrinthBattleTeamRecommendationResult.Ready
 
         assertTrue(result.recommendation.excludedIncompleteCharacterIds.isEmpty())
@@ -233,7 +237,7 @@ class LabyrinthBattleTeamRecommendationTest {
 
         val result = recommendationPlanner(profiles).initialRecommendation(
             acquiredCharacterIds = profiles.keys,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 0),
+            context = legacyFrontlineContext(defenseMarkStacks = 0),
         ) as LabyrinthBattleTeamRecommendationResult.Ready
 
         assertEquals(3, result.recommendation.members.size)
@@ -254,7 +258,7 @@ class LabyrinthBattleTeamRecommendationTest {
 
         val result = recommendationPlanner(profiles).initialRecommendation(
             acquiredCharacterIds = profiles.keys,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
         ) as LabyrinthBattleTeamRecommendationResult.Ready
 
         assertEquals("tank", result.recommendation.vanguard.characterId)
@@ -274,7 +278,7 @@ class LabyrinthBattleTeamRecommendationTest {
 
         val result = recommendationPlanner(profiles).initialRecommendation(
             acquiredCharacterIds = profiles.keys,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
         ) as LabyrinthBattleTeamRecommendationResult.Ready
 
         assertEquals(5, result.recommendation.members.size)
@@ -304,7 +308,7 @@ class LabyrinthBattleTeamRecommendationTest {
 
         val result = recommendationPlanner(profiles).initialRecommendation(
             acquiredCharacterIds = profiles.keys,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
         ) as LabyrinthBattleTeamRecommendationResult.Ready
 
         // The team is fielded, but a setup-dependent untargetable is never counted as a safe lead.
@@ -333,7 +337,7 @@ class LabyrinthBattleTeamRecommendationTest {
 
         val result = recommendationPlanner(profiles).initialRecommendation(
             acquiredCharacterIds = profiles.keys,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
         ) as LabyrinthBattleTeamRecommendationResult.Ready
 
         assertEquals("tank", result.recommendation.vanguard.characterId)
@@ -361,7 +365,7 @@ class LabyrinthBattleTeamRecommendationTest {
 
         val result = recommendationPlanner(profiles).initialRecommendation(
             acquiredCharacterIds = profiles.keys,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
         ) as LabyrinthBattleTeamRecommendationResult.Ready
 
         assertEquals("tank", result.recommendation.vanguard.characterId)
@@ -383,7 +387,7 @@ class LabyrinthBattleTeamRecommendationTest {
         )
 
         val best = requireNotNull(
-            optimizer.bestBattleFormation(roster, LabyrinthRoleDecisionContext(defenseMarkStacks = 4)),
+            optimizer.bestBattleFormation(roster, legacyFrontlineContext(defenseMarkStacks = 4)),
         )
 
         assertEquals("tank", best.vanguardCharacterId)
@@ -402,7 +406,7 @@ class LabyrinthBattleTeamRecommendationTest {
             role("e", "E", 6, 20.0, 20.0),
         ).associateBy(LabyrinthRoleProfile::characterId)
         val planner = recommendationPlanner(profiles)
-        val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4)
+        val context = legacyFrontlineContext(defenseMarkStacks = 4)
         val initial = planner.initialRecommendation(profiles.keys, context)
             as LabyrinthBattleTeamRecommendationResult.Ready
         val failedSignature = labyrinthBattleTeamSignature(
@@ -434,7 +438,7 @@ class LabyrinthBattleTeamRecommendationTest {
             role("heal", "奶", 6, 80.0, 10.0, healing = 95.0),
         ).associateBy(LabyrinthRoleProfile::characterId)
         val planner = recommendationPlanner(profiles)
-        val context = LabyrinthRoleDecisionContext(
+        val context = legacyFrontlineContext(
             defenseMarkStacks = 1,
             encounterStrategy = LabyrinthExEncounterStrategy(
                 id = "test-ex",
@@ -470,7 +474,7 @@ class LabyrinthBattleTeamRecommendationTest {
             role("heal", "奶", 6, 80.0, 10.0, healing = 95.0),
         ).associateBy(LabyrinthRoleProfile::characterId)
         val planner = recommendationPlanner(profiles)
-        val context = LabyrinthRoleDecisionContext(
+        val context = legacyFrontlineContext(
             defenseMarkStacks = 1,
             encounterStrategy = LabyrinthExEncounterStrategy(
                 id = "test-ex-effective",
@@ -509,7 +513,7 @@ class LabyrinthBattleTeamRecommendationTest {
             role("heal", "奶", 6, 80.0, 10.0, healing = 95.0),
         ).associateBy(LabyrinthRoleProfile::characterId)
         val planner = recommendationPlanner(profiles)
-        val context = LabyrinthRoleDecisionContext(
+        val context = legacyFrontlineContext(
             defenseMarkStacks = 1,
             encounterStrategy = LabyrinthExEncounterStrategy(
                 id = "test-ex-all-effective",
@@ -547,7 +551,7 @@ class LabyrinthBattleTeamRecommendationTest {
             role("e", "E", 6, 60.0, 60.0),
         ).associateBy(LabyrinthRoleProfile::characterId)
         val planner = recommendationPlanner(profiles)
-        val context = LabyrinthRoleDecisionContext(
+        val context = legacyFrontlineContext(
             defenseMarkStacks = 1,
             encounterStrategy = LabyrinthExEncounterStrategy(id = "test-ex-no-healer", identityName = "无奶EX", targetCount = 1),
             effectiveCharacterIds = setOf("a", "b", "c", "d"),
@@ -656,7 +660,7 @@ class LabyrinthBattleTeamRecommendationTest {
         // would stop on the failure page with nothing to submit.
         val residual = (1..5).map { i -> role("d$i", "输出$i", i + 1, 70.0, 80.0) }
             .associateBy { it.characterId }
-        val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4)
+        val context = legacyFrontlineContext(defenseMarkStacks = 4)
 
         val retry = recommendationPlanner(residual).retryRecommendation(
             acquiredCharacterIds = residual.keys,
@@ -683,7 +687,7 @@ class LabyrinthBattleTeamRecommendationTest {
         // damage dealers instead of leaving the Boss on a sliver.
         val residual = (1..5).map { i -> role("d$i", "输出$i", i + 1, 70.0, 80.0) }
             .associateBy { it.characterId }
-        val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4)
+        val context = legacyFrontlineContext(defenseMarkStacks = 4)
 
         // Since 2026-09-19 a tankless pool is fielded rather than refused, so both the strict and
         // the explicit follow-up call produce a team; neither may report a safe lead.

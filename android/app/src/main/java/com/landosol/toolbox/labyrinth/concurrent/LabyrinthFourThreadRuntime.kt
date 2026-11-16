@@ -36,11 +36,14 @@ class WorkHandle<T> internal constructor(
 }
 
 /**
- * Batch5 main business chain: existing capture T1 + dedicated control T2 + two CPU workers.
+ * Main business chain: existing capture T1 + dedicated control T2 + startup-selected 2/4 CPU workers.
+ * Keep this legacy object name for existing callers; the business budget is now 4 or 6.
  * SDK/Room/network/Android helper threads are outside this business-thread budget.
  * Process lifetime object: do not close these dispatchers or shut down the shared executor.
  */
 object LabyrinthFourThreadRuntime {
+    private val startupBudget = LabyrinthThreadBudget.process
+    val availableProcessors: Int get() = startupBudget.availableProcessors
     private val controlExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread({
             LabyrinthHelpingExecutor.controlThread.set(true)
@@ -48,10 +51,13 @@ object LabyrinthFourThreadRuntime {
         }, "labyrinth-b5-control").apply { isDaemon = true }
     }
     val controlDispatcher: CoroutineDispatcher = controlExecutor.asCoroutineDispatcher()
-    private val sharedCompute = LabyrinthHelpingExecutor()
+    private val sharedCompute = LabyrinthHelpingExecutor(workerCount = startupBudget.cpuWorkerBudget)
+    /** Report the actual owned worker count, not a separately recomputed CPU heuristic. */
+    val cpuWorkerBudget: Int get() = sharedCompute.workerCount
+    val businessThreadBudget: Int get() = 2 + cpuWorkerBudget
     val computeExecutor: ExecutorService = sharedCompute
     // Do not use Executor.asCoroutineDispatcher for the bounded CPU queue: its rejection fallback
-    // dispatches to Dispatchers.IO, silently breaking the two-worker budget.
+    // dispatches to Dispatchers.IO, silently breaking the selected worker budget.
     val computeDispatcher: CoroutineDispatcher = object : CoroutineDispatcher() {
         override fun dispatch(context: CoroutineContext, block: Runnable) = sharedCompute.execute(block)
     }

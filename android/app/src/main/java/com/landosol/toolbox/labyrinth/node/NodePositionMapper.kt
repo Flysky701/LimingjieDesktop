@@ -27,6 +27,9 @@ data class NodePositionMapping(
     val purpleGlowScore: Double = 0.0,
     /** True when a unique protocol-reachable visual type repaired a contradictory topology slot. */
     val routeSemanticRepair: Boolean = false,
+    /** Actual classifier evidence, never the route/topology binding score. */
+    val visualConfidence: Double = confidence,
+    val typeConfidence: Double = visualConfidence,
 )
 
 enum class NodePositionConflictReason {
@@ -45,6 +48,7 @@ data class NodePositionConflict(
     val detectedBlockType: Int,
     val visualColumn: Int,
     val visualRow: Int,
+    /** Compatibility/ranking score; may describe topology, never infer visual quality from it. */
     val confidence: Double,
     val screenRect: EntryPixelRect? = null,
     val reason: NodePositionConflictReason = NodePositionConflictReason.TYPE_CONFLICT,
@@ -52,6 +56,10 @@ data class NodePositionConflict(
     val purpleGlowScore: Double = 0.0,
     /** Whether the contradictory visual crop itself is currently active/clickable. */
     val sourceClickable: Boolean = true,
+    /** Null only for legacy callers; production mappings always provide classifier evidence. */
+    val visualConfidence: Double? = null,
+    /** Positional binding evidence, deliberately separate from visual classification. */
+    val topologyConfidence: Double? = null,
 )
 
 data class NodePositionMapResult(
@@ -179,6 +187,11 @@ class NodePositionMapper {
             reachableNodeIds = reachableNodeIds,
             preferredNodeId = preferredNodeId,
         )
+        fun visualTypeConfidence(rect: EntryPixelRect?, detectedType: Int, fallback: Double): Double =
+            classifications.asSequence()
+                .filter { it.screenRect == rect && it.blockType == detectedType }
+                .minOfOrNull(NodeClassification::typeConfidence) ?: fallback
+
         val preferredFutureNodeId = preferredNodeId?.takeIf { id ->
             areaNodes.any { node -> node.blockId == id && node.column > currentColumn }
         }
@@ -212,6 +225,10 @@ class NodePositionMapper {
                     classification.blockType == target.blockType &&
                     classification.screenRect != null
             }.singleOrNull() ?: return@let null
+            // Uniqueness is not visual evidence: a lone 0.404 background crop must not acquire
+            // a route identity just because it has the expected type. Keep activation owned by
+            // the classifier and require an independent visual floor for semantic-only repair.
+            if (!NodeClickAdmission.hasSemanticEvidence(uniqueVisual)) return@let null
             // One crop is one node. If topology has already bound this very crop to a different
             // block, adopting it here would put two block ids on one rect, and the only thing
             // saying it belongs to the target is the crop's own type read — which is precisely
@@ -290,6 +307,8 @@ class NodePositionMapper {
                 detectedBlockType = uniqueVisual.blockType,
                 purpleGlowScore = uniqueVisual.purpleGlowScore,
                 routeSemanticRepair = true,
+                visualConfidence = uniqueVisual.confidence,
+                typeConfidence = uniqueVisual.typeConfidence,
             )
         }
         val semanticallyRepairedBlockIds = setOfNotNull(preferredTargetSemanticRepair?.blockId)
@@ -321,6 +340,8 @@ class NodePositionMapper {
                     topologyConfidence = it.topologyConfidence,
                     topologyBindingKind = it.bindingKind,
                     protocolPromoted = protocolReachabilityOverride && !it.isClickable,
+                    visualConfidence = it.visualConfidence,
+                    typeConfidence = visualTypeConfidence(it.screenRect, it.detectedBlockType, it.visualConfidence),
                 )
             }
         }
@@ -338,6 +359,8 @@ class NodePositionMapper {
                     confidence = it.topologyConfidence,
                     screenRect = it.screenRect,
                     sourceClickable = it.isClickable,
+                    visualConfidence = it.visualConfidence,
+                    topologyConfidence = it.topologyConfidence,
                 )
             }
         }
@@ -568,6 +591,8 @@ class NodePositionMapper {
                     screenRect = classNode.screenRect,
                     isClickable = classNode.isClickable,
                     purpleGlowScore = classNode.purpleGlowScore,
+                    visualConfidence = classNode.confidence,
+                    typeConfidence = classNode.typeConfidence,
                 )
                 val previous = bestMappingsByBlockId[matched.blockId]
                 if (previous == null || mapping.isPreferredTo(previous)) {
@@ -589,6 +614,8 @@ class NodePositionMapper {
                     screenRect = classNode.screenRect,
                     purpleGlowScore = classNode.purpleGlowScore,
                     sourceClickable = classNode.isClickable,
+                    visualConfidence = classNode.confidence,
+                    topologyConfidence = null,
                 )
                 val previous = bestConflictsByBlockId[conflict.blockId]
                 if (previous == null || conflict.confidence > previous.confidence) {

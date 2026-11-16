@@ -41,11 +41,16 @@ object LabyrinthBalancedVisionContext {
     }
 }
 
-/** Fast and detailed pixels are deliberately labelled as separate evidence sources. */
+/**
+ * Fast and detailed pixels are deliberately labelled as separate evidence sources.
+ * Budgets describe owned business workers, not all process threads or simultaneous CPU activity.
+ * Defaults access the runtime; production publication already runs on its control dispatcher.
+ * Environment-only diagnostics must use the lightweight startup selection instead.
+ */
 data class LabyrinthBalancedDiagnostics(
     val enabled: Boolean = true,
-    val businessThreadBudget: Int = 4,
-    val cpuWorkerBudget: Int = 2,
+    val businessThreadBudget: Int = LabyrinthFourThreadRuntime.businessThreadBudget,
+    val cpuWorkerBudget: Int = LabyrinthFourThreadRuntime.cpuWorkerBudget,
     val controlThread: Boolean = false,
     val fastObservationCount: Long = 0,
     val fastFrameSequence: Long? = null,
@@ -68,6 +73,9 @@ data class LabyrinthBalancedDiagnostics(
     val diagnosticReplacementCount: Long = 0,
     val staleActionBlockedCount: Long = 0,
     val sceneEpoch: Long = 0,
+    /** Android-visible processor count captured at startup, not a per-frame CPU resample. */
+    val availableProcessors: Int = LabyrinthFourThreadRuntime.availableProcessors,
+    val eventPlanning: LabyrinthEventPlanningDiagnostics? = null,
 )
 
 /** Checked before claiming the latch / creating a RoleRound dispatch token. */

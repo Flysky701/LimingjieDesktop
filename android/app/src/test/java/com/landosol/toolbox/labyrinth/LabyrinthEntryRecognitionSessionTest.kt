@@ -77,6 +77,50 @@ class LabyrinthEntryRecognitionSessionTest {
         } finally { session.stop() }
     }
 
+    @Test fun `battle switches are captured once per run and saved changes apply after restart`() = runTest {
+        var saved = LabyrinthStrategySettings()
+        var strategyReads = 0
+        val session = LabyrinthEntryRecognitionSession(
+            sessionManager = AutomationSessionManager(),
+            captureActive = { true }, captureStop = {},
+            strategyProvider = {
+                strategyReads++
+                LabyrinthStrategySnapshot(saved, null)
+            },
+            processorFactory = { { error("test does not dispatch frames") } },
+        )
+        val snapshotField = LabyrinthEntryRecognitionSession::class.java
+            .getDeclaredField("battleStrategySettingsSnapshot").apply { isAccessible = true }
+        fun captured() = snapshotField.get(session) as LabyrinthStrategySettings
+        fun assertSwitches(expected: Boolean) {
+            assertEquals(expected, captured().frontlineSurvivalGateEnabled)
+            assertEquals(expected, captured().normalBattleSkipTeamSelectionEnabled)
+            assertEquals(expected, labyrinthRequestsCurrentNormalBattleTeam(captured(), LabyrinthCombatKind.NORMAL, 0))
+            assertFalse(labyrinthRequestsCurrentNormalBattleTeam(captured(), LabyrinthCombatKind.NORMAL, 1))
+        }
+        try {
+            assertTrue(session.start() is LabyrinthEntryRecognitionStartResult.Started)
+            assertSwitches(false)
+            saved = LabyrinthStrategySettingsCodec.decode(LabyrinthStrategySettingsCodec.encode(
+                saved.copy(frontlineSurvivalGateEnabled = true, normalBattleSkipTeamSelectionEnabled = true),
+            ))
+            assertSwitches(false)
+            assertEquals(1, strategyReads)
+
+            assertTrue(session.stop(releaseCapture = false))
+            assertTrue(session.start() is LabyrinthEntryRecognitionStartResult.Started)
+            assertSwitches(true)
+            assertEquals(2, strategyReads)
+            saved = LabyrinthStrategySettings() // Restore defaults for the next run only.
+            assertSwitches(true)
+
+            assertTrue(session.stop(releaseCapture = false))
+            assertTrue(session.start() is LabyrinthEntryRecognitionStartResult.Started)
+            assertSwitches(false)
+            assertEquals(3, strategyReads)
+        } finally { session.stop() }
+    }
+
     @Test
     fun `result without a route does not end the run even after score timeout`() = runTest {
         val manager = AutomationSessionManager()

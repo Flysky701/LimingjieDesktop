@@ -1,12 +1,22 @@
 package com.landosol.toolbox.ui
 
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -16,10 +26,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -41,8 +51,12 @@ import android.provider.Settings
 import android.media.projection.MediaProjectionManager
 import android.view.WindowManager
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -62,6 +76,8 @@ import com.landosol.toolbox.automation.capture.CaptureStateRegistry
 import com.landosol.toolbox.automation.capture.CaptureState
 import com.landosol.toolbox.automation.overlay.AndroidAutomationNotificationHost
 import com.landosol.toolbox.ui.permissions.PermissionCenterScreen
+import com.landosol.toolbox.ui.theme.AppThemeMode
+import com.landosol.toolbox.ui.theme.ToolboxTheme
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -76,20 +92,45 @@ enum class AppScreen {
 private data class TopLevelDestination(
     val screen: AppScreen,
     val label: String,
-    val shortLabel: String,
+    val icon: ImageVector,
 )
 
 private val topLevelDestinations = listOf(
-    TopLevelDestination(AppScreen.Labyrinth, "黎明界", "黎"),
-    TopLevelDestination(AppScreen.Strategies, "策略设置", "策"),
-    TopLevelDestination(AppScreen.Accounts, "账号库", "号"),
-    TopLevelDestination(AppScreen.Permissions, "设置", "设"),
+    TopLevelDestination(AppScreen.Labyrinth, "主页", ToolboxIcons.Home),
+    TopLevelDestination(AppScreen.Strategies, "策略", ToolboxIcons.Strategy),
+    TopLevelDestination(AppScreen.Accounts, "账号", ToolboxIcons.Accounts),
+    TopLevelDestination(AppScreen.Permissions, "设置", ToolboxIcons.Settings),
 )
 
 @Composable
 fun LandosolToolboxApp() {
     val context = LocalContext.current
     val application = context.applicationContext as LandosolToolboxApplication
+    val appearance = remember(application) {
+        application.getSharedPreferences("appearance", android.content.Context.MODE_PRIVATE)
+    }
+    var themeMode by remember {
+        mutableStateOf(AppThemeMode.entries.firstOrNull { it.name == appearance.getString("theme_mode", null) }
+            ?: AppThemeMode.SYSTEM)
+    }
+    val changeTheme: (AppThemeMode) -> Unit = { mode ->
+        themeMode = mode
+        appearance.edit().putString("theme_mode", mode.name).apply()
+    }
+    val darkTheme = when (themeMode) {
+        AppThemeMode.SYSTEM -> isSystemInDarkTheme()
+        AppThemeMode.LIGHT -> false
+        AppThemeMode.DARK -> true
+    }
+    val view = LocalView.current
+    SideEffect {
+        (context as? Activity)?.window?.let { window ->
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
+        }
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val captureScope = rememberCoroutineScope()
     var pendingCaptureAction by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -208,9 +249,9 @@ fun LandosolToolboxApp() {
         configuration.screenWidthDp,
         configuration.screenHeightDp,
     )
-    MaterialTheme(typography = if (compactLandscape) CompactLandscapeTypography else Typography()) {
+    ToolboxTheme(dark = darkTheme, compact = compactLandscape) {
         val destinationContent: @Composable (Modifier) -> Unit = { modifier ->
-            Surface(modifier = modifier.fillMaxSize()) {
+            Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                 when (screen) {
                     AppScreen.Accounts -> AccountRoute()
                     AppScreen.Labyrinth -> homeStateHolder.SaveableStateProvider(AppScreen.Labyrinth.name) {
@@ -222,6 +263,7 @@ fun LandosolToolboxApp() {
                             batchCheckpoint = batchCheckpoint,
                             batchHaltReason = batchHaltReason,
                             onRequestCapture = requestCaptureThen,
+                            onOpenAccounts = { requestNavigation(AppScreen.Accounts) },
                         )
                     }
                     AppScreen.Strategies -> StrategyRoute(
@@ -229,49 +271,71 @@ fun LandosolToolboxApp() {
                         onClose = { screenName = AppScreen.Labyrinth.name },
                         registerLeaveHandler = registerStrategyLeaveHandler,
                     )
-                    AppScreen.Permissions -> PermissionRoute()
+                    AppScreen.Permissions -> PermissionRoute(themeMode = themeMode, onThemeChange = changeTheme)
                 }
             }
         }
         if (sideNavigation) {
             Row(modifier = Modifier.fillMaxSize()) {
-                NavigationRail(modifier = Modifier.fillMaxHeight().width(64.dp)) {
-                    topLevelDestinations.forEach { destination ->
-                        NavigationRailItem(
-                            selected = screen == destination.screen,
-                            onClick = { requestNavigation(destination.screen) },
-                            icon = {
-                                Text(destination.shortLabel, style = MaterialTheme.typography.labelLarge)
-                            },
-                            label = {
-                                Text(destination.label, style = MaterialTheme.typography.labelSmall)
-                            },
-                            alwaysShowLabel = true,
-                        )
+                NavigationRail(
+                    modifier = Modifier.fillMaxHeight().width(88.dp),
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    header = {
+                        Surface(
+                            Modifier.padding(vertical = 12.dp).size(38.dp),
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.primary,
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text("黎", style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+                    },
+                ) {
+                    Column(
+                        modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        topLevelDestinations.forEach { destination ->
+                            NavigationRailItem(
+                                selected = screen == destination.screen,
+                                onClick = { requestNavigation(destination.screen) },
+                                icon = {
+                                    Icon(destination.icon, contentDescription = null)
+                                },
+                                label = {
+                                    Text(destination.label, style = MaterialTheme.typography.labelMedium)
+                                },
+                                alwaysShowLabel = true,
+                            )
+                        }
                     }
                 }
+                VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 destinationContent(Modifier.weight(1f))
             }
         } else {
             Scaffold(
+                contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 bottomBar = {
-                    NavigationBar(modifier = Modifier.height(64.dp)) {
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                         topLevelDestinations.forEach { destination ->
                             NavigationBarItem(
                                 selected = screen == destination.screen,
                                 onClick = { requestNavigation(destination.screen) },
                                 icon = {
-                                    Text(destination.shortLabel, style = MaterialTheme.typography.labelLarge)
+                                    Icon(destination.icon, contentDescription = null)
                                 },
                                 label = {
-                                    Text(destination.label, style = MaterialTheme.typography.labelSmall)
+                                    Text(destination.label, style = MaterialTheme.typography.labelMedium)
                                 },
                             )
                         }
                     }
                 },
             ) { outerPadding ->
-                destinationContent(Modifier.padding(outerPadding))
+                destinationContent(Modifier.padding(outerPadding).consumeWindowInsets(outerPadding))
             }
         }
     }
@@ -304,7 +368,7 @@ private fun KeepScreenAwake(enabled: Boolean) {
 private const val CAPTURE_START_TIMEOUT_MILLIS = 5_000L
 
 @Composable
-private fun PermissionRoute() {
+private fun PermissionRoute(themeMode: AppThemeMode, onThemeChange: (AppThemeMode) -> Unit) {
     val context = LocalContext.current
     val application = context.applicationContext as LandosolToolboxApplication
     var sharing by rememberSaveable { mutableStateOf(false) }
@@ -344,6 +408,8 @@ private fun PermissionRoute() {
     PermissionCenterScreen(
         state = state,
         onBack = null,
+        themeMode = themeMode,
+        onThemeChange = onThemeChange,
         onOpenConfigurationSharing = { sharing = true },
         configurationSharingEnabled = sharingReason == null,
         configurationSharingReason = sharingReason,
@@ -376,6 +442,7 @@ private fun LabyrinthRoute(
     batchCheckpoint: com.landosol.toolbox.labyrinth.batch.LabyrinthBatchCheckpoint?,
     batchHaltReason: com.landosol.toolbox.labyrinth.batch.LabyrinthBatchHaltReason?,
     onRequestCapture: ((() -> Unit) -> Unit),
+    onOpenAccounts: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -418,6 +485,7 @@ private fun LabyrinthRoute(
         batchCheckpoint = batchCheckpoint,
         batchHaltReason = batchHaltReason,
         onBack = null,
+        onOpenAccounts = onOpenAccounts,
         onCheckStatus = labyrinthViewModel::checkStatus,
         onSaveSettings = labyrinthViewModel::saveSettings,
         onStart = { guildId ->

@@ -172,7 +172,7 @@ class LabyrinthBattleFailureAdvanceTest {
         kind: LabyrinthPostEntryActionKind,
     ) {
         val dispatch = session.javaClass.declaredMethods.single {
-            it.name.startsWith("dispatchPostEntryTap-") && !it.name.endsWith("\$default")
+            it.name.startsWith("dispatchPostEntryTap-") && it.parameterCount == 12 && !it.name.endsWith("\$default")
         }.apply { isAccessible = true }
         dispatch.invoke(
             session, manager.current()!!.id.value, kind, "battle-failure-test",

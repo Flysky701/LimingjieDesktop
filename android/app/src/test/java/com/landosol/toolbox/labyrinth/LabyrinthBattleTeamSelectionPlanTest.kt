@@ -17,6 +17,48 @@ import org.junit.Test
 
 class LabyrinthBattleTeamSelectionPlanTest {
 
+    @Test fun `switch request defaults off and only permits first normal battle`() {
+        for (frontline in listOf(false, true)) for (kind in LabyrinthCombatKind.entries + null) {
+            for (retry in listOf(0, 1, 2)) {
+                val disabled = LabyrinthStrategySettings(frontlineSurvivalGateEnabled = frontline)
+                assertFalse(labyrinthRequestsCurrentNormalBattleTeam(disabled, kind, retry))
+                val enabled = disabled.copy(normalBattleSkipTeamSelectionEnabled = true)
+                assertEquals(kind == LabyrinthCombatKind.NORMAL && retry == 0,
+                    labyrinthRequestsCurrentNormalBattleTeam(enabled, kind, retry))
+            }
+        }
+    }
+
+    @Test fun `switch chooses between recommendation diff and retained team start`() {
+        val planner = planner(listOf("A", "B", "C", "D", "E", "F"))
+        val recommendation = recommendation("A", "B", "C", "D", "F")
+        val current = listOf("A", "B", "C", "D", "E")
+        val observation = observation(
+            selected = current.mapIndexed { index, id -> match("s-$index", id, selected = true) },
+            visible = listOf(match("visible-F", "F")),
+        )
+        for (enabled in listOf(false, true)) {
+            val requested = labyrinthRequestsCurrentNormalBattleTeam(
+                LabyrinthStrategySettings(normalBattleSkipTeamSelectionEnabled = enabled), LabyrinthCombatKind.NORMAL, 0,
+            )
+            val plan = planner.plan(sessionId, recommendation, observation, holdCurrentTeamRequested = requested)
+            assertEquals(enabled, plan.holdCurrentTeam)
+            if (enabled) {
+                assertTrue(plan.teamReady)
+                assertTrue(plan.needSelectIds.isEmpty())
+                assertTrue(plan.needDeselectIds.isEmpty())
+                assertEquals(LabyrinthBattleTeamExecutionKind.START_BATTLE,
+                    requireNotNull(labyrinthBattleTeamExecutionStep(plan, sessionId, recommendation, observation,
+                        EntryPixelRect(1500, 900, 300, 100), 1920, 1080)).kind)
+            } else {
+                assertEquals(listOf("A", "B", "C", "D"), plan.alreadyCorrectIds)
+                assertEquals(listOf("E"), plan.needDeselectIds)
+                assertEquals(listOf("F"), plan.needSelectIds)
+                assertFalse(plan.teamReady)
+            }
+        }
+    }
+
     @Test
     fun `effective scan tolerates selected dimmed cards but keeps ordinary unsafe cards blocking`() {
         val selectedMember = match("current_member_1", "B", selected = true)

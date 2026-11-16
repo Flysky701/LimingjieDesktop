@@ -39,10 +39,12 @@ class LabyrinthNodeConflictRecoveryTest {
         val other = NodeClassification(
             3, 1, LabyrinthNodeTypes.RELIC, 0.93, true, EntryPixelRect(1180, 470, 280, 350),
         )
-        repeat(2) { assertEquals(conflict, recovery.resolve("session", conflict, visible + other)) }
+        // The current crop must agree with the conflict's detected type, not a nearby/other label.
+        val current = visible.map { it.copy(blockType = LabyrinthNodeTypes.NORMAL_BATTLE) }
+        repeat(2) { assertEquals(conflict, recovery.resolve("session", conflict, current + other)) }
         assertEquals(
             NodeAction.ClickNode(20603, LabyrinthNodeTypes.EVENT, rect),
-            recovery.resolve("session", conflict, visible + other),
+            recovery.resolve("session", conflict, current + other),
         )
     }
 

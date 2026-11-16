@@ -1,4 +1,5 @@
 import java.util.Properties
+import org.gradle.api.tasks.testing.Test
 
 plugins {
     alias(libs.plugins.android.application)
@@ -14,6 +15,19 @@ val localBuildProperties = Properties().apply {
 }
 val debugKeystorePath = localBuildProperties.getProperty("debug.keystore")
 
+// Host timing/allocation diagnostics have platform and worker-count prerequisites.
+// Keep them available, but do not treat them as portable correctness checks in Ubuntu CI.
+// Opt in to a compatible benchmark explicitly; legacy benchmarks require their documented host/worker setup.
+// Example: ./gradlew -PincludeBenchmarks=true testDebugUnitTest --tests "*LabyrinthAdaptiveThreadBenchmarkTest"
+val includeBenchmarks = providers.gradleProperty("includeBenchmarks")
+    .map { it.toBoolean() }
+    .orElse(false)
+tasks.withType<Test>().configureEach {
+    if (!includeBenchmarks.get()) {
+        filter { excludeTestsMatching("*BenchmarkTest") }
+    }
+}
+
 android {
     namespace = "com.landosol.toolbox"
     compileSdk = 35
@@ -27,8 +41,8 @@ android {
         minSdk = 26
         targetSdk = 35
         // major*10000 + minor*100 + patch, so the code stays monotonic as the name moves.
-        versionCode = 10087
-        versionName = "1.0.18-mod.V10.6-batch6-r1-rolelean-log3000"
+        versionCode = 10090
+        versionName = "1.0.18-mod.V10.9-nodefix-auto46-log3000"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -76,6 +90,10 @@ android {
     sourceSets {
         getByName("androidTest").assets.srcDir("$projectDir/schemas")
         getByName("test").resources.srcDir("$rootDir/test-fixtures/protocol")
+    }
+
+    testOptions.unitTests.all {
+        it.systemProperty("test.coexistSuffix", project.findProperty("coexistSuffix") ?: "")
     }
 }
 

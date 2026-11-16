@@ -24,7 +24,8 @@ class Batch1DiagnosticsTest {
         assertTrue(r.logText().contains("Boss计划队数=3"))
         assertTrue(r.logText().contains("Boss安全队数=1"))
     }
-    @Test fun `test package cannot replace the shipped package`() {
-        assertEquals("com.landosol.toolbox.mod.batch1test", BuildConfig.APPLICATION_ID)
+    @Test fun `application id respects the requested coexist suffix`() {
+        val suffix = System.getProperty("test.coexistSuffix", "").takeIf { it.isNotBlank() }.orEmpty()
+        assertEquals("com.landosol.toolbox" + suffix, BuildConfig.APPLICATION_ID)
     }
 }

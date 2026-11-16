@@ -58,6 +58,10 @@ data class LabyrinthStrategySettings(
     val effectiveCharacterSystemBonus: Int = 8,
     val secondTeamWeight: Int = 35,
     val thirdTeamWeight: Int = 20,
+    /** Opt-in hard frontline eligibility for newly generated battle teams; legacy settings default off. */
+    val frontlineSurvivalGateEnabled: Boolean = false,
+    /** Opt-in reuse of a confirmed full team on the first attempt of a normal battle. */
+    val normalBattleSkipTeamSelectionEnabled: Boolean = false,
     /** Boss battle composition mode. Multi-team is the product default. */
     val bossTeamMode: LabyrinthBossTeamMode = LabyrinthBossTeamMode.MULTI_TEAM,
     /** Boss-only soft preference: favor a coherent physical or magic damage system. */

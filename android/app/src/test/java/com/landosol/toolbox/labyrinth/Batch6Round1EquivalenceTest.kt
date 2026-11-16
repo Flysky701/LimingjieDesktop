@@ -69,7 +69,8 @@ class Batch6Round1EquivalenceTest {
             assertEquals(combinations(size - 1, 4), report.visitedCombinationCount)
             assertEquals(report.visitedCombinationCount, report.scoredCombinationCount)
             assertEquals(report.visitedCombinationCount, report.shardVisitedCounts.sum())
-            assertEquals(if (size == 9) 1 else 2, report.shardVisitedCounts.size)
+            val expectedShards = if (report.visitedCombinationCount < 512) 1 else LabyrinthFourThreadRuntime.cpuWorkerBudget
+            assertEquals(expectedShards, report.shardVisitedCounts.size)
             assertTrue(report.shardVisitedCounts.maxOrNull()!! - report.shardVisitedCounts.minOrNull()!! <= 1)
             assertTrue(report.retainedCandidateCopies in 1..report.scoredCombinationCount)
             println("BATCH6_ROUND1_WORK_COUNTS=$report") // untimed; benchmark leaves observer null
@@ -166,9 +167,14 @@ internal fun <T> batch6Round1Root(action: () -> T): T {
 internal data class Batch6Round1Fixture(val label: String, val input: Batch3RoleInput, val variants: List<Batch3RoleInput>)
 
 internal fun batch6Round1Fixtures(runtime: LabyrinthRoleDecisionRuntime): List<Batch6Round1Fixture> {
-    val file = listOf(File("../_round1/fixture-slow-segments.json"), File("../../_round1/fixture-slow-segments.json"),
-        File("_round1/fixture-slow-segments.json")).first { it.isFile }
-    val root = Json.parseToJsonElement(file.readText()).jsonObject
+    // Bundle the historical ledger input so a clean source ZIP does not depend on an untracked
+    // research directory. Profiles and policy defaults still come from this checkout's assets.
+    val bundled = Batch6Round1Fixture::class.java.getResourceAsStream("/auto46-slow-segments.json")
+        ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+    val fixtureText = bundled ?: listOf(File("../_round1/fixture-slow-segments.json"),
+        File("../../_round1/fixture-slow-segments.json"), File("_round1/fixture-slow-segments.json"))
+        .firstOrNull { it.isFile }?.readText() ?: error("Historical role ledger fixture is missing")
+    val root = Json.parseToJsonElement(fixtureText).jsonObject
     return root.getValue("fixtures").jsonArray.map { element ->
         val f = element.jsonObject
         fun strings(key: String) = f.getValue(key).jsonArray.map { it.jsonPrimitive.content }

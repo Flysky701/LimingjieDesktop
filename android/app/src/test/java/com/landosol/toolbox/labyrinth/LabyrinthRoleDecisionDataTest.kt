@@ -47,7 +47,7 @@ class LabyrinthRoleDecisionDataTest {
         assertTrue((christmasSaren.vanguardProfile?.physicalDurability ?: 0.0) > 60.0)
         assertTrue((christmasSaren.vanguardProfile?.panelHp ?: 0) > 100_000)
         assertEquals(98.0, grace.vanguardProfile?.untargetable ?: 0.0, 0.0001)
-        assertFalse(grace.isEligibleBattleVanguard(LabyrinthRoleDecisionContext(defenseMarkStacks = 0)))
+        assertFalse(grace.isEligibleBattleVanguard(legacyFrontlineContext(defenseMarkStacks = 0)))
         assertTrue((halloweenMisaki.functions.dot ?: 0.0) > 0.0)
         assertTrue((medusa.functions.dot ?: 0.0) > 0.0)
         assertEquals(0.0, salarariaHiyori.functions.dot ?: 0.0, 0.0001)
@@ -74,7 +74,7 @@ class LabyrinthRoleDecisionDataTest {
             "1008", "1258", "1140", "1178", "1175", "1147", "1061", "1346", "1075",
         )
         val planner = parsed.runtime.battleTeamRecommendationPlanner
-        val strict = LabyrinthRoleDecisionContext(
+        val strict = legacyFrontlineContext(
             defenseMarkStacks = 4,
             targetCount = 3,
             optimizeBossVanguardSynergy = true,
@@ -135,7 +135,7 @@ class LabyrinthRoleDecisionDataTest {
             "1108", "1215", "1093", "1068",
         )
         val planner = parsed.runtime.battleTeamRecommendationPlanner
-        val context = LabyrinthRoleDecisionContext(
+        val context = legacyFrontlineContext(
             defenseMarkStacks = 4,
             targetCount = 3,
             optimizeBossVanguardSynergy = true,
@@ -193,7 +193,7 @@ class LabyrinthRoleDecisionDataTest {
         val strategy = requireNotNull(LabyrinthExEncounterCatalog.matchObservedName("好朋友X"))
         val planner = parsed.runtime.battleTeamRecommendationPlanner
         for (effective in listOf(emptySet(), setOf("1040"))) {
-            val context = LabyrinthRoleDecisionContext(
+            val context = legacyFrontlineContext(
                 defenseMarkStacks = 4,
                 targetCount = 1,
                 preferSingleDamageSystem = true,
@@ -228,7 +228,7 @@ class LabyrinthRoleDecisionDataTest {
             "1122", "1328", "1278", "1112", "1237",
         )
         val planner = parsed.runtime.battleTeamRecommendationPlanner
-        val baseContext = LabyrinthRoleDecisionContext(defenseMarkStacks = 0, targetCount = 1)
+        val baseContext = legacyFrontlineContext(defenseMarkStacks = 0, targetCount = 1)
 
         val first = planner.initialRecommendation(
             acquiredCharacterIds = acquired,
@@ -302,7 +302,7 @@ class LabyrinthRoleDecisionDataTest {
         val choice = parsed.runtime.rewardChoicePlanner.decide(
             candidates = recognizedCandidates(),
             acquiredCharacterIds = acquiredProfiles().map(LabyrinthRoleProfile::characterId).toSet(),
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
             frameWidth = 1920,
             frameHeight = 1080,
         ) as LabyrinthRoleRewardChoiceDecision.Select
@@ -314,7 +314,7 @@ class LabyrinthRoleDecisionDataTest {
 
         val recommendation = parsed.runtime.battleTeamRecommendationPlanner.initialRecommendation(
             acquiredCharacterIds = parsed.runtime.profiles.keys,
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
         ) as LabyrinthBattleTeamRecommendationResult.Ready
         assertEquals(5, recommendation.recommendation.members.size)
         assertEquals(4, recommendation.recommendation.defenseMarkStacks)
@@ -335,7 +335,7 @@ class LabyrinthRoleDecisionDataTest {
         val result = planner.decide(
             candidates = recognizedCandidates(),
             acquiredCharacterIds = acquiredProfiles().map(LabyrinthRoleProfile::characterId).toSet(),
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
             frameWidth = 1920,
             frameHeight = 1080,
         ) as LabyrinthRoleRewardChoiceDecision.Select
@@ -360,7 +360,7 @@ class LabyrinthRoleDecisionDataTest {
         val result = planner.decide(
             candidates = recognizedCandidates(),
             acquiredCharacterIds = acquiredProfiles().map(LabyrinthRoleProfile::characterId).toSet(),
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
             frameWidth = 1920,
             frameHeight = 1080,
         ) as LabyrinthRoleRewardChoiceDecision.Select
@@ -380,12 +380,12 @@ class LabyrinthRoleDecisionDataTest {
         val planner = LabyrinthRoleRewardChoicePlanner(source,
             LabyrinthRoleChoicePolicy(LabyrinthTeamOptimizer(LabyrinthTeamScorer(scoring()))))
         val decision = planner.decide(recognizedCandidates(), setOf("old"),
-            LabyrinthRoleDecisionContext(defenseMarkStacks = 0), 1920, 1080) as LabyrinthRoleRewardChoiceDecision.Select
+            legacyFrontlineContext(defenseMarkStacks = 0), 1920, 1080) as LabyrinthRoleRewardChoiceDecision.Select
         assertTrue(decision.actionSafe)
         assertTrue(decision.characterId in listOf("left", "center", "right"))
         assertTrue(decision.safetyNote.orEmpty().contains("old"))
         val weak = recognizedCandidates().map { it.copy(trusted = false) }
-        assertTrue(planner.decide(weak, setOf("old"), LabyrinthRoleDecisionContext(defenseMarkStacks = 0),
+        assertTrue(planner.decide(weak, setOf("old"), legacyFrontlineContext(defenseMarkStacks = 0),
             1920, 1080) is LabyrinthRoleRewardChoiceDecision.Wait)
     }
 
@@ -409,7 +409,7 @@ class LabyrinthRoleDecisionDataTest {
                 match("role_reward_right", "right", "较弱候选", 0.92),
             ),
             acquiredCharacterIds = acquiredProfiles().map(LabyrinthRoleProfile::characterId).toSet(),
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
             frameWidth = 1920,
             frameHeight = 1080,
         ) as LabyrinthRoleRewardChoiceDecision.Select
@@ -438,7 +438,7 @@ class LabyrinthRoleDecisionDataTest {
                 trustedMatch("role_reward_right", "right", "较弱候选", confidence = 0.40, margin = 0.09),
             ),
             acquiredCharacterIds = acquiredProfiles().map(LabyrinthRoleProfile::characterId).toSet(),
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
             frameWidth = 1920,
             frameHeight = 1080,
         )
@@ -482,7 +482,7 @@ class LabyrinthRoleDecisionDataTest {
                 nameVerifiedRight,
             ),
             acquiredCharacterIds = acquiredProfiles().map(LabyrinthRoleProfile::characterId).toSet(),
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
             frameWidth = 1920,
             frameHeight = 1080,
         )
@@ -510,7 +510,7 @@ class LabyrinthRoleDecisionDataTest {
                 trustedMatch("role_reward_right", "right", "未可靠候选", confidence = 0.50, margin = 0.07),
             ),
             acquiredCharacterIds = acquiredProfiles().map(LabyrinthRoleProfile::characterId).toSet(),
-            context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4),
+            context = legacyFrontlineContext(defenseMarkStacks = 4),
             frameWidth = 1920,
             frameHeight = 1080,
         ) as LabyrinthRoleRewardChoiceDecision.Select
@@ -557,7 +557,7 @@ class LabyrinthRoleDecisionDataTest {
         val commonIds = listOf("1351", "1287", "1236", "1071")
         val common = commonIds.map(runtime.profiles::getValue)
         val scorer = LabyrinthTeamScorer(runtime.document.scoring)
-        val context = LabyrinthRoleDecisionContext(defenseMarkStacks = 4, targetCount = 1)
+        val context = legacyFrontlineContext(defenseMarkStacks = 4, targetCount = 1)
 
         val rinoTeam = scorer.evaluate(common + runtime.profiles.getValue("1011"), context)
         val nephiraTeam = scorer.evaluate(common + runtime.profiles.getValue("1297"), context)
@@ -733,7 +733,7 @@ class LabyrinthRoleDecisionDataTest {
             card("unreadable", 700, 100, trusted = false),
             card("mid", 900, 100),
         )
-        val context = LabyrinthRoleDecisionContext(0)
+        val context = legacyFrontlineContext(0)
 
         val first = planner.decideFreeVisibleRole(page, setOf("owned"), context)
                 as LabyrinthRoleRewardChoiceDecision.Select

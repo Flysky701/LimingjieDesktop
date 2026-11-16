@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth
 import com.landosol.toolbox.gamedata.EventChoiceResource
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEventChoiceObservation
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEventChoiceVisual
 import com.landosol.toolbox.labyrinth.vision.LabyrinthArenaEvent
 import kotlin.math.max
 
@@ -17,6 +18,8 @@ sealed interface LabyrinthEventChoiceDecision {
         /** False keeps the recommendation visible in Dry Run but forbids a live tap. */
         val actionSafe: Boolean,
         val safetyNote: String? = null,
+        /** False means utility is only an internal placeholder, not an estimated reward. */
+        val utilityEstimated: Boolean = true,
     ) : LabyrinthEventChoiceDecision
 
     data class Wait(val reason: String) : LabyrinthEventChoiceDecision
@@ -74,13 +77,7 @@ class LabyrinthEventChoicePlanner(
                 actionSafe = true,
             )
         }
-        val fixedGuildChoice = when (event.id) {
-            "1101" -> Triple("11012", 2, "想要治疗型 成为伙伴！")
-            "1102" -> Triple("11021", 1, "想要强化型 成为伙伴！")
-            "1103" -> Triple("11031", 1, "想要减益型 成为伙伴！")
-            "1104" -> Triple("11042", 2, "想要破防型 成为伙伴！")
-            else -> null
-        }
+        val fixedGuildChoice = fixedGuildChoiceFor(event.id)
         if (fixedGuildChoice != null) {
             // Retain upstream full OCR to distinguish the four identically titled guild events.
             // Fixed choices are independent of customization and never use role-pool ranking.
@@ -148,6 +145,27 @@ class LabyrinthEventChoicePlanner(
                 "事件${event.id}的${event.choices.size}个选项都已点击且页面未变化，没有可执行选项",
             )
         }
+        // A valid saved choice already settles the ranking. Do not enumerate role profiles or
+        // estimate random rewards/continuations just to select the same configured branch.
+        val overrideChoice = effectiveOverrides[event.name]
+            ?.let { name -> event.choices.singleOrNull { it.name == name } }
+        val overrideVisual = overrideChoice?.let { currentVisual(observation, it) }
+        if (overrideChoice != null && overrideVisual != null &&
+            overrideVisual.enabledConfidence >= MINIMUM_ENABLED_BUTTON_CONFIDENCE &&
+            overrideChoice.id !in rejectedChoiceIds) {
+            return revalidateDecision(
+                LabyrinthEventChoiceDecision.Select(
+                    eventId = event.id,
+                    choiceId = overrideChoice.id,
+                    label = overrideChoice.name,
+                    buttonRect = overrideVisual.buttonRect,
+                    utility = 0.0,
+                    explanation = "按自定义选择，未做自动收益估值",
+                    actionSafe = false,
+                    utilityEstimated = false,
+                ), observation, acquiredCharacterIds, rejectedChoiceIds,
+            )
+        }
         val canonicalAcquired = acquiredCharacterIds.map(::canonicalLabyrinthRoleId).toSet()
         val cacheKey = buildString {
             append(event.id)
@@ -174,59 +192,118 @@ class LabyrinthEventChoicePlanner(
                 }
             }
         }
-        val visualsByChoiceId = observation.choices.associateBy { it.choice.id }
-        // 事件自定义覆盖：命中时把用户指定的分支排到最前，按钮当前可用则优先选它，否则回退自动。
-        // 只改排序、不提前返回，utility/detail/actionSafe 仍走原路径，空覆盖时输出与之前逐位一致。
-        val overrideChoice = effectiveOverrides[event.name]
-            ?.let { name -> event.choices.firstOrNull { it.name == name } }
-        val ordered = if (overrideChoice == null) {
-            ranked
-        } else {
-            ranked.sortedByDescending { it.choice.id == overrideChoice.id }
-        }
-        // Some event options are condition-gated and rendered disabled.  Ranking the whole
-        // catalog first and only then checking the winning button used to pin the workflow on a
-        // grey high-utility option forever.  Prefer the best option that is *currently* blue; if
-        // none is actionable, keep the global recommendation visible but unsafe for diagnostics.
-        val selectable = ordered.filterNot { it.choice.id in rejectedChoiceIds }.ifEmpty { ordered }
-        // "Currently usable" means the bright blue, not merely blue: the game dims an option the
-        // player cannot afford but keeps it blue, so the dimmed fill used to pass this filter and
-        // the run tapped a 消耗2000 option holding 1,550 coins until it gave up.
+        // An unavailable/invalid override uses the original utility order, not a forced slot.
+        // Only unique catalog-consistent current mappings can make a recommendation actionable.
+        val visualsByChoiceId = event.choices.associate { it.id to currentVisual(observation, it) }
+        val selectable = ranked.filterNot { it.choice.id in rejectedChoiceIds }.ifEmpty { ranked }
+        // Use bright blue: disabled choices can still have strong layout-blue evidence.
         val best = selectable.firstOrNull { evaluated ->
             visualsByChoiceId[evaluated.choice.id]
                 ?.enabledConfidence
                 ?.let { it >= MINIMUM_ENABLED_BUTTON_CONFIDENCE }
                 ?: false
         } ?: selectable.first()
-        val visual = observation.choices.firstOrNull { it.choice.id == best.choice.id }
-            ?: return LabyrinthEventChoiceDecision.Wait("事件${event.id}推荐项${best.choice.id}没有按钮映射")
-        val missingOwnedProfiles = canonicalAcquired.filterNot(profiles::containsKey)
-        val rolePoolChoice = best.choice.id.toIntOrNull() in ROLE_CLASS_BY_CHOICE
+        val visual = currentVisual(observation, best.choice)
+            ?: return LabyrinthEventChoiceDecision.Wait("事件${event.id}推荐项${best.choice.id}没有唯一有效按钮映射")
+        return revalidateDecision(
+            LabyrinthEventChoiceDecision.Select(
+                eventId = event.id,
+                choiceId = best.choice.id,
+                label = best.choice.name,
+                buttonRect = visual.buttonRect,
+                utility = best.utility,
+                explanation = best.detail,
+                actionSafe = false,
+            ), observation, acquiredCharacterIds, rejectedChoiceIds,
+        )
+    }
+
+    /**
+     * Rebinds a completed semantic decision to current evidence without estimating any rewards.
+     * The caller must separately enforce scene/session identity and post-ready frame freshness.
+     * Never reuse the cached actionSafe flag: trust, usability and rejection can all change.
+     */
+    fun revalidateDecision(
+        decision: LabyrinthEventChoiceDecision,
+        observation: LabyrinthEventChoiceObservation,
+        acquiredCharacterIds: Set<String>,
+        rejectedChoiceIds: Set<String>,
+    ): LabyrinthEventChoiceDecision {
+        if (decision is LabyrinthEventChoiceDecision.Wait) return decision
+        decision as LabyrinthEventChoiceDecision.Select
+        val event = observation.event
+        if (decision.eventId != event.id) {
+            return LabyrinthEventChoiceDecision.Wait("事件${decision.eventId}推荐已失效，当前事件为${event.id}")
+        }
+        val choice = event.choices.singleOrNull { it.id == decision.choiceId }
+            ?: return LabyrinthEventChoiceDecision.Wait("事件${event.id}推荐项${decision.choiceId}目录映射缺失或歧义")
+        if (choice.name != decision.label) {
+            return LabyrinthEventChoiceDecision.Wait("事件${event.id}推荐项${decision.choiceId}名称与目录不一致")
+        }
+        val visual = currentVisual(observation, choice)
+            ?: return LabyrinthEventChoiceDecision.Wait("事件${event.id}推荐项${decision.choiceId}没有唯一有效最新按钮映射")
+        // Fixed guild/slate policies intentionally do not perform role-pool estimation or require
+        // owned profile coverage. Revalidation must not silently reintroduce that old gate.
+        val guildChoice = fixedGuildChoiceFor(event.id)
+        if (event.id == "1107" && (event.name != "发现了不可思议的石板！要怎么办？" ||
+                choice.id != "11073" || choice.slot != 1 || choice.name != "摸一下 应该没关系吧？")) {
+            return LabyrinthEventChoiceDecision.Wait("石板固定分支与当前目录不一致")
+        }
+        if (guildChoice != null && (event.name != "这里是公会管理协会！请问要找什么样的伙伴？" ||
+                choice.id != guildChoice.first || choice.slot != guildChoice.second || choice.name != guildChoice.third)) {
+            return LabyrinthEventChoiceDecision.Wait("公会固定分支与当前目录不一致")
+        }
+        if (event.id == LabyrinthArenaEvent.ID) {
+            if (event.name != LabyrinthArenaEvent.NAME ||
+                event.choices.sortedBy { it.slot }.map { Triple(it.id, it.slot, it.name) } !=
+                    LabyrinthArenaEvent.event.choices.sortedBy { it.slot }.map { Triple(it.id, it.slot, it.name) } ||
+                observation.choices.size != 2 || event.choices.any { currentVisual(observation, it) == null }) {
+                return LabyrinthEventChoiceDecision.Wait("斗技场最新双选按钮映射缺失或歧义")
+            }
+        }
+        val trusted = observation.trusted && observation.stableFrames >= 2
         val buttonEnabled = visual.enabledConfidence >= MINIMUM_ENABLED_BUTTON_CONFIDENCE
-        val rejected = best.choice.id in rejectedChoiceIds
-        val actionSafe = observation.trusted && buttonEnabled && !rejected &&
-            (!rolePoolChoice || missingOwnedProfiles.isEmpty())
+        val rejected = choice.id in rejectedChoiceIds
+        val arenaLayoutSafe = event.id != LabyrinthArenaEvent.ID ||
+            observation.choices.all { it.buttonConfidence >= 0.12 }
+        val rolePoolChoice = guildChoice == null && choice.id.toIntOrNull() in ROLE_CLASS_BY_CHOICE
+        val missingOwnedProfiles = if (rolePoolChoice) acquiredCharacterIds
+            .map(::canonicalLabyrinthRoleId).toSet().filterNot(profiles::containsKey) else emptyList()
         val safetyNote = when {
-            !observation.trusted -> "事件文字尚未连续稳定确认"
-            rejected -> "选项${best.choice.id}已点击且页面未变化，不再重复点击"
+            !trusted -> "事件文字尚未连续稳定确认"
+            rejected -> "选项${choice.id}已点击且页面未变化，不再重复点击"
             !buttonEnabled ->
                 "推荐按钮为灰蓝不可用状态(亮蓝${"%.2f".format(visual.enabledConfidence)})，通常是金币或条件不足"
-            rolePoolChoice && missingOwnedProfiles.isNotEmpty() ->
-                "已有角色资料缺失：${missingOwnedProfiles.sorted().joinToString()}"
+            !arenaLayoutSafe -> "斗技场双选按钮尚未完整确认"
+            missingOwnedProfiles.isNotEmpty() -> "已有角色资料缺失：${missingOwnedProfiles.sorted().joinToString()}"
             else -> null
         }
-        return LabyrinthEventChoiceDecision.Select(
-            eventId = event.id,
-            choiceId = best.choice.id,
-            label = best.choice.name,
+        return decision.copy(
             buttonRect = visual.buttonRect,
-            utility = best.utility,
-            explanation = if (overrideChoice?.id == best.choice.id) {
-                "按事件自定义选择；${best.detail}"
-            } else best.detail,
-            actionSafe = actionSafe,
+            actionSafe = trusted && buttonEnabled && !rejected && arenaLayoutSafe && missingOwnedProfiles.isEmpty(),
             safetyNote = safetyNote,
         )
+    }
+
+    /** A duplicate id/slot is ambiguous even if one duplicate happens to have the right name. */
+    private fun currentVisual(
+        observation: LabyrinthEventChoiceObservation,
+        choice: EventChoiceResource,
+    ): LabyrinthEventChoiceVisual? {
+        val catalogChoice = observation.event.choices.singleOrNull { it.id == choice.id } ?: return null
+        if (catalogChoice.slot != choice.slot || catalogChoice.name != choice.name ||
+            observation.event.choices.count { it.slot == choice.slot } != 1) return null
+        val visual = observation.choices.singleOrNull { it.choice.id == choice.id } ?: return null
+        if (observation.choices.count { it.choice.slot == choice.slot } != 1) return null
+        return visual.takeIf { it.choice.slot == choice.slot && it.choice.name == choice.name }
+    }
+
+    private fun fixedGuildChoiceFor(eventId: String): Triple<String, Int, String>? = when (eventId) {
+        "1101" -> Triple("11012", 2, "想要治疗型 成为伙伴！")
+        "1102" -> Triple("11021", 1, "想要强化型 成为伙伴！")
+        "1103" -> Triple("11031", 1, "想要减益型 成为伙伴！")
+        "1104" -> Triple("11042", 2, "想要破防型 成为伙伴！")
+        else -> null
     }
 
     private fun optionUtility(

@@ -1,0 +1,665 @@
+{
+  "schemaVersion": 1,
+  "sourceLog": "review-batch5-20261112-033347\\state\\history.ndjson",
+  "sourceSha256": "4543eb38ccab2451e54fcfa799c840b2270a8a245fa9e9f0a7db884057d387fe",
+  "assetSha256": "2da3c1b6eef56b26e080927d5f1690072173365d3edcefb0618d2dee35592578",
+  "aliasAssetSha256": "93d1772e0cfc2351e5761172a62f0bb958f2b8cad414595b87fa12de063d167a",
+  "nameResolution": "Exact profile displayName or roster name/officialName/aliases after parentheses normalization; ambiguous/missing names fail extraction; observed IDs cross-checked but never used as guesses.",
+  "missingConfiguration": [
+    "User personalScore overrides and full on-device scoring/settings snapshot absent; use real bundled assets defaults.",
+    "Pending acquired IDs are not independently logged; use ordered joined ledger exactly as reported.",
+    "Role-reward context source constructs defense-only context; other context fields use API defaults.",
+    "2safe means qualified card count, not defense stacks; only logged >=2 qualification variants are real variants."
+  ],
+  "ledgerTransitions": [
+    {
+      "sourceLine": 1314,
+      "seq": 3410,
+      "rc": 3207,
+      "acquiredCount": 31,
+      "addedNames": [
+        "铃莓",
+        "铃莓（春日）",
+        "咲恋（圣诞节）",
+        "真步（梦想乐园）",
+        "斑比",
+        "花凛（炼金术师）",
+        "露娜",
+        "花音",
+        "千歌",
+        "美里",
+        "克莉丝提娜",
+        "妮侬（万圣节）",
+        "祈梨（新年）",
+        "莱拉耶尔（圣诞节）",
+        "美美（夏日）",
+        "镜华（万圣节）",
+        "妮侬（大江户）",
+        "祈梨",
+        "望（解放者）",
+        "茉莉",
+        "阿剌克涅",
+        "香澄（新年）",
+        "莫妮卡",
+        "伊绪（夏日）",
+        "兰法",
+        "妮侬（夏日）",
+        "静流（情人节）",
+        "纯（夏日）",
+        "真步（夏日）",
+        "毗伽菈",
+        "智"
+      ],
+      "addedIds": [
+        "1025",
+        "1308",
+        "1145",
+        "1310",
+        "1223",
+        "1257",
+        "1114",
+        "1349",
+        "1042",
+        "1015",
+        "1071",
+        "1178",
+        "1283",
+        "1328",
+        "1229",
+        "1111",
+        "1096",
+        "1066",
+        "1248",
+        "1005",
+        "1360",
+        "1285",
+        "1053",
+        "1101",
+        "1181",
+        "1371",
+        "1091",
+        "1136",
+        "1106",
+        "1256",
+        "1037"
+      ],
+      "kind": "initial_ledger"
+    },
+    {
+      "sourceLine": 1338,
+      "seq": 3434,
+      "rc": 3231,
+      "acquiredCount": 32,
+      "addedNames": [
+        "惠理子（教官）"
+      ],
+      "addedIds": [
+        "1299"
+      ],
+      "kind": "new_roles_added_in_order"
+    },
+    {
+      "sourceLine": 1486,
+      "seq": 3594,
+      "rc": 3379,
+      "acquiredCount": 33,
+      "addedNames": [
+        "真琴（夏日）"
+      ],
+      "addedIds": [
+        "1104"
+      ],
+      "kind": "new_roles_added_in_order"
+    },
+    {
+      "sourceLine": 1529,
+      "seq": 3642,
+      "rc": 3422,
+      "acquiredCount": 36,
+      "addedNames": [
+        "美美（万圣节）",
+        "璃乃",
+        "纯"
+      ],
+      "addedIds": [
+        "1113",
+        "1011",
+        "1047"
+      ],
+      "kind": "new_roles_added_in_order"
+    },
+    {
+      "sourceLine": 1717,
+      "seq": 3840,
+      "rc": 3610,
+      "acquiredCount": 37,
+      "addedNames": [
+        "怜（夏日）"
+      ],
+      "addedIds": [
+        "1225"
+      ],
+      "kind": "new_roles_added_in_order"
+    }
+  ],
+  "fixtures": [
+    {
+      "label": "03:24:46",
+      "sourceLine": 1314,
+      "seq": 3410,
+      "rc": 3207,
+      "timestamp": "2026-11-12T03:24:46.439000+08:00",
+      "candidateNames": [
+        "克罗依",
+        "惠理子（教官）",
+        "流夏（新年）"
+      ],
+      "candidateIds": [
+        "1108",
+        "1299",
+        "1208"
+      ],
+      "acquiredNames": [
+        "铃莓",
+        "铃莓（春日）",
+        "咲恋（圣诞节）",
+        "真步（梦想乐园）",
+        "斑比",
+        "花凛（炼金术师）",
+        "露娜",
+        "花音",
+        "千歌",
+        "美里",
+        "克莉丝提娜",
+        "妮侬（万圣节）",
+        "祈梨（新年）",
+        "莱拉耶尔（圣诞节）",
+        "美美（夏日）",
+        "镜华（万圣节）",
+        "妮侬（大江户）",
+        "祈梨",
+        "望（解放者）",
+        "茉莉",
+        "阿剌克涅",
+        "香澄（新年）",
+        "莫妮卡",
+        "伊绪（夏日）",
+        "兰法",
+        "妮侬（夏日）",
+        "静流（情人节）",
+        "纯（夏日）",
+        "真步（夏日）",
+        "毗伽菈",
+        "智"
+      ],
+      "acquiredIds": [
+        "1025",
+        "1308",
+        "1145",
+        "1310",
+        "1223",
+        "1257",
+        "1114",
+        "1349",
+        "1042",
+        "1015",
+        "1071",
+        "1178",
+        "1283",
+        "1328",
+        "1229",
+        "1111",
+        "1096",
+        "1066",
+        "1248",
+        "1005",
+        "1360",
+        "1285",
+        "1053",
+        "1101",
+        "1181",
+        "1371",
+        "1091",
+        "1136",
+        "1106",
+        "1256",
+        "1037"
+      ],
+      "defenseMarkStacks": 6,
+      "qualificationVariants": [
+        {
+          "sourceLine": 1314,
+          "seq": 3410,
+          "rc": 3207,
+          "candidateNames": [
+            "克罗依",
+            "惠理子（教官）",
+            "流夏（新年）"
+          ],
+          "candidateIds": [
+            "1108",
+            "1299",
+            "1208"
+          ]
+        }
+      ],
+      "identityOnlyProfiles": [],
+      "defenseEvidence": "系列记录：加速6、会心7、弱体9、守备6、强化2",
+      "defenseCaveat": "Archive reports defense 6 and explicitly not rechecked; replay uses the logged operational ledger, not asserted game truth.",
+      "requireStrictProfiles": false,
+      "incompleteProfiles": [
+        {
+          "id": "1360",
+          "profileDisplayName": "阿剌克涅",
+          "missingFields": [
+            "damageType",
+            "position"
+          ],
+          "modelStatus": "unavailable",
+          "policy": "Preserve real bundled fallback fields; requireStrictProfiles=false exactly as reward planner."
+        }
+      ]
+    },
+    {
+      "label": "03:25:35",
+      "sourceLine": 1460,
+      "seq": 3568,
+      "rc": 3353,
+      "timestamp": "2026-11-12T03:25:35.272000+08:00",
+      "candidateNames": [
+        "可可萝（礼服）",
+        "露",
+        "真琴（夏日）"
+      ],
+      "candidateIds": [
+        "1155",
+        "1093",
+        "1104"
+      ],
+      "acquiredNames": [
+        "铃莓",
+        "铃莓（春日）",
+        "咲恋（圣诞节）",
+        "真步（梦想乐园）",
+        "斑比",
+        "花凛（炼金术师）",
+        "露娜",
+        "花音",
+        "千歌",
+        "美里",
+        "克莉丝提娜",
+        "妮侬（万圣节）",
+        "祈梨（新年）",
+        "莱拉耶尔（圣诞节）",
+        "美美（夏日）",
+        "镜华（万圣节）",
+        "妮侬（大江户）",
+        "祈梨",
+        "望（解放者）",
+        "茉莉",
+        "阿剌克涅",
+        "香澄（新年）",
+        "莫妮卡",
+        "伊绪（夏日）",
+        "兰法",
+        "妮侬（夏日）",
+        "静流（情人节）",
+        "纯（夏日）",
+        "真步（夏日）",
+        "毗伽菈",
+        "智",
+        "惠理子（教官）"
+      ],
+      "acquiredIds": [
+        "1025",
+        "1308",
+        "1145",
+        "1310",
+        "1223",
+        "1257",
+        "1114",
+        "1349",
+        "1042",
+        "1015",
+        "1071",
+        "1178",
+        "1283",
+        "1328",
+        "1229",
+        "1111",
+        "1096",
+        "1066",
+        "1248",
+        "1005",
+        "1360",
+        "1285",
+        "1053",
+        "1101",
+        "1181",
+        "1371",
+        "1091",
+        "1136",
+        "1106",
+        "1256",
+        "1037",
+        "1299"
+      ],
+      "defenseMarkStacks": 6,
+      "qualificationVariants": [
+        {
+          "sourceLine": 1460,
+          "seq": 3568,
+          "rc": 3353,
+          "candidateNames": [
+            "可可萝（礼服）",
+            "露",
+            "真琴（夏日）"
+          ],
+          "candidateIds": [
+            "1155",
+            "1093",
+            "1104"
+          ]
+        }
+      ],
+      "identityOnlyProfiles": [],
+      "defenseEvidence": "系列记录：加速6、会心7、弱体11、守备6、强化2",
+      "defenseCaveat": "Archive reports defense 6 and explicitly not rechecked; replay uses the logged operational ledger, not asserted game truth.",
+      "requireStrictProfiles": false,
+      "incompleteProfiles": [
+        {
+          "id": "1360",
+          "profileDisplayName": "阿剌克涅",
+          "missingFields": [
+            "damageType",
+            "position"
+          ],
+          "modelStatus": "unavailable",
+          "policy": "Preserve real bundled fallback fields; requireStrictProfiles=false exactly as reward planner."
+        }
+      ]
+    },
+    {
+      "label": "03:26:50",
+      "sourceLine": 1688,
+      "seq": 3811,
+      "rc": 3581,
+      "timestamp": "2026-11-12T03:26:50.189000+08:00",
+      "candidateNames": [
+        "怜（夏日）",
+        "咲恋",
+        "美里（夏日）"
+      ],
+      "candidateIds": [
+        "1225",
+        "1028",
+        "1135"
+      ],
+      "acquiredNames": [
+        "铃莓",
+        "铃莓（春日）",
+        "咲恋（圣诞节）",
+        "真步（梦想乐园）",
+        "斑比",
+        "花凛（炼金术师）",
+        "露娜",
+        "花音",
+        "千歌",
+        "美里",
+        "克莉丝提娜",
+        "妮侬（万圣节）",
+        "祈梨（新年）",
+        "莱拉耶尔（圣诞节）",
+        "美美（夏日）",
+        "镜华（万圣节）",
+        "妮侬（大江户）",
+        "祈梨",
+        "望（解放者）",
+        "茉莉",
+        "阿剌克涅",
+        "香澄（新年）",
+        "莫妮卡",
+        "伊绪（夏日）",
+        "兰法",
+        "妮侬（夏日）",
+        "静流（情人节）",
+        "纯（夏日）",
+        "真步（夏日）",
+        "毗伽菈",
+        "智",
+        "惠理子（教官）",
+        "真琴（夏日）",
+        "美美（万圣节）",
+        "璃乃",
+        "纯"
+      ],
+      "acquiredIds": [
+        "1025",
+        "1308",
+        "1145",
+        "1310",
+        "1223",
+        "1257",
+        "1114",
+        "1349",
+        "1042",
+        "1015",
+        "1071",
+        "1178",
+        "1283",
+        "1328",
+        "1229",
+        "1111",
+        "1096",
+        "1066",
+        "1248",
+        "1005",
+        "1360",
+        "1285",
+        "1053",
+        "1101",
+        "1181",
+        "1371",
+        "1091",
+        "1136",
+        "1106",
+        "1256",
+        "1037",
+        "1299",
+        "1104",
+        "1113",
+        "1011",
+        "1047"
+      ],
+      "defenseMarkStacks": 6,
+      "qualificationVariants": [
+        {
+          "sourceLine": 1687,
+          "seq": 3810,
+          "rc": 3580,
+          "candidateNames": [
+            "怜（夏日）",
+            "咲恋"
+          ],
+          "candidateIds": [
+            "1225",
+            "1028"
+          ]
+        },
+        {
+          "sourceLine": 1688,
+          "seq": 3811,
+          "rc": 3581,
+          "candidateNames": [
+            "怜（夏日）",
+            "咲恋",
+            "美里（夏日）"
+          ],
+          "candidateIds": [
+            "1225",
+            "1028",
+            "1135"
+          ]
+        }
+      ],
+      "identityOnlyProfiles": [],
+      "defenseEvidence": "系列记录：加速6、会心7、弱体11、守备6、强化2",
+      "defenseCaveat": "Archive reports defense 6 and explicitly not rechecked; replay uses the logged operational ledger, not asserted game truth.",
+      "requireStrictProfiles": false,
+      "incompleteProfiles": [
+        {
+          "id": "1360",
+          "profileDisplayName": "阿剌克涅",
+          "missingFields": [
+            "damageType",
+            "position"
+          ],
+          "modelStatus": "unavailable",
+          "policy": "Preserve real bundled fallback fields; requireStrictProfiles=false exactly as reward planner."
+        }
+      ]
+    },
+    {
+      "label": "03:28:30",
+      "sourceLine": 1993,
+      "seq": 4137,
+      "rc": 3886,
+      "timestamp": "2026-11-12T03:28:30.772000+08:00",
+      "candidateNames": [
+        "露易丝玛丽",
+        "静流（夏日）",
+        "栞（魔法少女）"
+      ],
+      "candidateIds": [
+        "1323",
+        "1171",
+        "1123"
+      ],
+      "acquiredNames": [
+        "铃莓",
+        "铃莓（春日）",
+        "咲恋（圣诞节）",
+        "真步（梦想乐园）",
+        "斑比",
+        "花凛（炼金术师）",
+        "露娜",
+        "花音",
+        "千歌",
+        "美里",
+        "克莉丝提娜",
+        "妮侬（万圣节）",
+        "祈梨（新年）",
+        "莱拉耶尔（圣诞节）",
+        "美美（夏日）",
+        "镜华（万圣节）",
+        "妮侬（大江户）",
+        "祈梨",
+        "望（解放者）",
+        "茉莉",
+        "阿剌克涅",
+        "香澄（新年）",
+        "莫妮卡",
+        "伊绪（夏日）",
+        "兰法",
+        "妮侬（夏日）",
+        "静流（情人节）",
+        "纯（夏日）",
+        "真步（夏日）",
+        "毗伽菈",
+        "智",
+        "惠理子（教官）",
+        "真琴（夏日）",
+        "美美（万圣节）",
+        "璃乃",
+        "纯",
+        "怜（夏日）"
+      ],
+      "acquiredIds": [
+        "1025",
+        "1308",
+        "1145",
+        "1310",
+        "1223",
+        "1257",
+        "1114",
+        "1349",
+        "1042",
+        "1015",
+        "1071",
+        "1178",
+        "1283",
+        "1328",
+        "1229",
+        "1111",
+        "1096",
+        "1066",
+        "1248",
+        "1005",
+        "1360",
+        "1285",
+        "1053",
+        "1101",
+        "1181",
+        "1371",
+        "1091",
+        "1136",
+        "1106",
+        "1256",
+        "1037",
+        "1299",
+        "1104",
+        "1113",
+        "1011",
+        "1047",
+        "1225"
+      ],
+      "defenseMarkStacks": 6,
+      "qualificationVariants": [
+        {
+          "sourceLine": 1991,
+          "seq": 4135,
+          "rc": 3884,
+          "candidateNames": [
+            "露易丝玛丽",
+            "静流（夏日）"
+          ],
+          "candidateIds": [
+            "1323",
+            "1171"
+          ]
+        },
+        {
+          "sourceLine": 1993,
+          "seq": 4137,
+          "rc": 3886,
+          "candidateNames": [
+            "露易丝玛丽",
+            "静流（夏日）",
+            "栞（魔法少女）"
+          ],
+          "candidateIds": [
+            "1323",
+            "1171",
+            "1123"
+          ]
+        }
+      ],
+      "identityOnlyProfiles": [],
+      "defenseEvidence": "系列记录：加速6、会心7、弱体11、守备6、强化2",
+      "defenseCaveat": "Archive reports defense 6 and explicitly not rechecked; replay uses the logged operational ledger, not asserted game truth.",
+      "requireStrictProfiles": false,
+      "incompleteProfiles": [
+        {
+          "id": "1360",
+          "profileDisplayName": "阿剌克涅",
+          "missingFields": [
+            "damageType",
+            "position"
+          ],
+          "modelStatus": "unavailable",
+          "policy": "Preserve real bundled fallback fields; requireStrictProfiles=false exactly as reward planner."
+        }
+      ]
+    }
+  ]
+}

@@ -8,8 +8,9 @@ import java.util.concurrent.ExecutorService
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-/** Default shard budget. Role and icon CPU work share exactly two workers in batch5. */
-private const val ICON_SCORING_THREADS = 2
+/** Default shard limit follows the actual shared compute workers; this never creates a pool. */
+private val ICON_SCORING_THREADS: Int
+    get() = LabyrinthFourThreadRuntime.cpuWorkerBudget
 
 /** Below this many candidates the thread hand-off costs more than the scoring it saves. */
 private const val ICON_SCORING_MIN_CANDIDATES = 128
@@ -467,12 +468,22 @@ class LabyrinthCharacterIconMatcher internal constructor(
      * the returned array is identical for any shard count. That is also why the shard count may
      * vary with the candidate count.
      */
-    private fun scoreAll(size: Int, score: (Int) -> Double): DoubleArray {
+    private fun scoreAll(size: Int, score: (Int) -> Double): DoubleArray =
+        scoreAllWithBudget(size, ICON_SCORING_THREADS, ICON_SCORING_EXECUTOR, score)
+
+    /** Minimal test seam: production always supplies the shared budget and the old executor alias. */
+    internal fun scoreAllWithBudget(
+        size: Int,
+        shardBudget: Int,
+        executor: ExecutorService,
+        score: (Int) -> Double,
+    ): DoubleArray {
+        require(shardBudget > 0)
         val scores = DoubleArray(size)
         val shards = if (size < ICON_SCORING_MIN_CANDIDATES) {
             1
         } else {
-            minOf(ICON_SCORING_THREADS, size / ICON_SCORING_MIN_PER_SHARD).coerceAtLeast(1)
+            minOf(shardBudget, size / ICON_SCORING_MIN_PER_SHARD).coerceAtLeast(1)
         }
         if (shards <= 1) {
             for (index in 0 until size) {
@@ -481,10 +492,13 @@ class LabyrinthCharacterIconMatcher internal constructor(
             }
             return scores
         }
-        val perShard = (size + shards - 1) / shards
+        // Keep original candidate indices contiguous and nonempty, including uneven four-way
+        // splits. Each shard owns its output; submission-order merging preserves every score bit.
+        val baseShardSize = size / shards
+        val extraShards = size % shards
         val tasks = (0 until shards).map { shard ->
-            val from = shard * perShard
-            val to = minOf(size, from + perShard)
+            val from = shard * baseShardSize + minOf(shard, extraShards)
+            val to = from + baseShardSize + if (shard < extraShards) 1 else 0
             Callable<DoubleArray> {
                 val part = DoubleArray(to - from)
                 for (index in from until to) {
@@ -495,7 +509,7 @@ class LabyrinthCharacterIconMatcher internal constructor(
             }
         }
         var at = 0
-        for (future in ICON_SCORING_EXECUTOR.invokeAll(tasks)) {
+        for (future in executor.invokeAll(tasks)) {
             val part = future.get()
             System.arraycopy(part, 0, scores, at, part.size)
             at += part.size

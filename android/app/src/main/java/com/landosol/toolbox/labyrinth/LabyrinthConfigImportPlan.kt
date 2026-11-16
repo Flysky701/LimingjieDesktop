@@ -178,6 +178,7 @@ data class LabyrinthConfigImportPlan(
             "attributePairingBonusEnabled" to "属性配队增伤", "duplicateRolePenalty" to "重复纯职能扣分",
             "mixedDamagePenalty" to "物法混编扣分", "effectiveCharacterSystemBonus" to "有效效果角色加分",
             "secondTeamWeight" to "第二队权重", "thirdTeamWeight" to "第三队权重", "bossTeamMode" to "Boss 编组模式",
+            "frontlineSurvivalGateEnabled" to "前排生存门槛", "normalBattleSkipTeamSelectionEnabled" to "普战跳编队",
             "preferPureBossDamageSystem" to "Boss 纯物理/法术偏好", "singleBossFallbackToMultiAfterThreeFailures" to "单队失败后切换多队",
             "singleBossRetryCountBeforeMulti" to "单队重新挑战次数", "rerollAfterThreeBattleFailures" to "三次战败后自动重刷",
             "baselineLastArea" to "基础加分截止区域", "baselineTarget" to "基础目标层数", "debuffPivotMinimum" to "转追削弱最低层数",

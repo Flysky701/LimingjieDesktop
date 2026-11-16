@@ -1,6 +1,7 @@
 package com.landosol.toolbox.ui.labyrinth
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -10,6 +11,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -18,9 +21,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.LaunchedEffect
-import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.labyrinth.LabyrinthRerollSettings
 import com.landosol.toolbox.labyrinth.LabyrinthCustomNodePlan
 import com.landosol.toolbox.labyrinth.rerollSettings
@@ -36,6 +39,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -47,6 +51,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,7 +59,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.landosol.toolbox.labyrinth.batch.LabyrinthBatchCheckpoint
@@ -75,7 +82,7 @@ import com.landosol.toolbox.labyrinth.LabyrinthUiState
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
 import com.landosol.toolbox.ui.account.GeetestCaptchaDialog
 import com.landosol.toolbox.ui.CompactTopBar
-import com.landosol.toolbox.ui.isCompactLandscape
+import com.landosol.toolbox.ui.ToolboxCard
 import kotlinx.coroutines.launch
 
 @Composable
@@ -100,16 +107,14 @@ fun LabyrinthScreen(
     onCaptchaError: (String) -> Unit,
     onCancelCaptcha: () -> Unit,
     onOpenStrategies: (() -> Unit)? = null,
+    onOpenAccounts: () -> Unit = {},
 ) {
     val configuration = LocalConfiguration.current
     val compactWidth = configuration.screenWidthDp < 600
-    val compactLandscape = isCompactLandscape(
-        configuration.screenWidthDp,
-        configuration.screenHeightDp,
-    )
     var confirmRetreat by remember(state.selectedAccount?.id) { mutableStateOf(false) }
     var showRerollSettings by remember(state.selectedAccount?.id) { mutableStateOf(false) }
     var showAdvancedTools by rememberSaveable { mutableStateOf(false) }
+    var showAuxiliaryTools by rememberSaveable { mutableStateOf(false) }
     var standaloneGuildId by rememberSaveable(state.selectedAccount?.id) {
         mutableStateOf(LabyrinthRerollOptions.DEFAULT_GUILD_ID)
     }
@@ -128,6 +133,8 @@ fun LabyrinthScreen(
             dismissButton = { TextButton(onClick = { confirmRetreat = false }) { Text("取消") } })
     }
     val scrollState = rememberScrollState()
+    val overviewScrollState = rememberScrollState()
+    val batchStateHolder = rememberSaveableStateHolder()
     val scope = rememberCoroutineScope()
     val uriHandler = LocalUriHandler.current
     val batchActive = batchCheckpoint?.stage in setOf(
@@ -136,14 +143,95 @@ fun LabyrinthScreen(
         LabyrinthBatchStage.RUNNING_LABYRINTH,
         LabyrinthBatchStage.RECORDING_RESULT,
     )
+    val auxiliaryRunning = entryRecognitionState.running ||
+        (state.isWorking && !batchActive && state.currentOpeningReadStatus != LabyrinthCurrentOpeningReadStatus.READING)
+    val auxiliaryExpanded = showAuxiliaryTools || auxiliaryRunning
+    val statusLabel = when {
+        batchActive -> "批量执行中"
+        entryRecognitionState.running -> "识别运行中"
+        state.isWorking -> "正在处理"
+        state.selectedAccount == null -> "待选择账号"
+        else -> "等待开始"
+    }
+    val overview: @Composable () -> Unit = {
+        ToolboxCard {
+            CurrentOpeningStep(
+                state = state,
+                statusLabel = statusLabel,
+                externalTaskActive = batchActive || entryRecognitionState.running,
+                onCheckStatus = onCheckStatus,
+                onStop = onStop,
+                onOpenAccounts = onOpenAccounts,
+            )
+        }
+        state.progress?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+        state.message?.let { message ->
+            ToolboxCard {
+                Text(message, style = MaterialTheme.typography.bodyMedium)
+                TextButton(onClick = onDismissMessage) { Text("关闭提示") }
+            }
+        }
+    }
+    val auxiliary: @Composable () -> Unit = {
+        ToolboxCard {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("辅助工具", style = MaterialTheme.typography.titleMedium)
+                    Text("单独刷开局与识别诊断", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                TextButton(onClick = { showAuxiliaryTools = !showAuxiliaryTools }, enabled = !auxiliaryRunning) {
+                    Text(if (auxiliaryExpanded) "收起" else "展开")
+                }
+            }
+            if (auxiliaryExpanded) {
+                HorizontalDivider()
+                AuxiliaryToolsSection(
+                    state = state,
+                    entryRecognitionState = entryRecognitionState,
+                    batchActive = batchActive,
+                    standaloneGuildId = standaloneGuildId,
+                    onStandaloneGuildSelected = { standaloneGuildId = it },
+                    onStartReroll = requestStart,
+                    onStopReroll = onStop,
+                    showAdvanced = showAdvancedTools,
+                    onToggleAdvanced = { showAdvancedTools = !showAdvancedTools },
+                )
+                if (showAdvancedTools || entryRecognitionState.running) {
+                    EntryRecognitionCard(
+                        state = entryRecognitionState,
+                        startEnabled = !batchActive && !state.isWorking && state.captcha == null,
+                        onStart = onStartEntryRecognition,
+                        onStartAutomation = onStartEntryAutomation,
+                        onStop = onStopEntryRecognition,
+                    )
+                }
+            }
+        }
+        SupportFooter(uriHandler)
+    }
+    val batch: @Composable (Dp?) -> Unit = { goalCardReferenceExtraWidth ->
+        batchStateHolder.SaveableStateProvider("batch-plan") {
+            BatchRunCard(
+                state = state,
+                checkpoint = batchCheckpoint,
+                haltReason = batchHaltReason,
+                routeProgress = entryRecognitionState.routeProgress,
+                entryRecognitionRunning = entryRecognitionState.running,
+                onStart = onStartAutoRun,
+                onStop = onStopAutoRun,
+                goalCardReferenceExtraWidth = goalCardReferenceExtraWidth,
+            )
+        }
+    }
     Scaffold(
         topBar = {
             CompactTopBar(
-                title = "黎明界 · ${AppVersion.display}",
+                title = "黎明界",
                 onBack = onBack,
                 actions = {
                     onOpenStrategies?.let { open -> TextButton(onClick = open) { Text("策略与编组") } }
-                    TextButton(
+                    OutlinedButton(
                         onClick = { showRerollSettings = true },
                         enabled = state.settingsReady && !state.isWorking && state.captcha == null,
                     ) {
@@ -170,72 +258,36 @@ fun LabyrinthScreen(
             }
         },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(scrollState)
-                .padding(
-                    start = if (compactLandscape) 8.dp else 16.dp,
-                    top = if (compactLandscape) 8.dp else 16.dp,
-                    end = if (compactLandscape) 8.dp else 16.dp,
-                    bottom = if (compactLandscape) 72.dp else 152.dp,
-                ),
-            verticalArrangement = Arrangement.spacedBy(if (compactLandscape) 8.dp else 12.dp),
-        ) {
-            WorkflowHeader()
-            CurrentOpeningStep(
-                state = state,
-                externalTaskActive = batchActive || entryRecognitionState.running,
-                onCheckStatus = onCheckStatus,
-                onStop = onStop,
-            )
-            HorizontalDivider()
-            BatchRunCard(
-                state = state,
-                checkpoint = batchCheckpoint,
-                haltReason = batchHaltReason,
-                routeProgress = entryRecognitionState.routeProgress,
-                entryRecognitionRunning = entryRecognitionState.running,
-                onStart = onStartAutoRun,
-                onStop = onStopAutoRun,
-            )
-            HorizontalDivider()
-            AuxiliaryToolsSection(
-                state = state,
-                entryRecognitionState = entryRecognitionState,
-                batchActive = batchActive,
-                standaloneGuildId = standaloneGuildId,
-                onStandaloneGuildSelected = { standaloneGuildId = it },
-                onStartReroll = requestStart,
-                onStopReroll = onStop,
-                showAdvanced = showAdvancedTools,
-                onToggleAdvanced = { showAdvancedTools = !showAdvancedTools },
-            )
-            if (showAdvancedTools) {
-                EntryRecognitionCard(
-                    state = entryRecognitionState,
-                    startEnabled = !batchActive && !state.isWorking && state.captcha == null,
-                    onStart = onStartEntryRecognition,
-                    onStartAutomation = onStartEntryAutomation,
-                    onStop = onStopEntryRecognition,
-                )
-            }
-
-            state.progress?.let { Text(it, style = MaterialTheme.typography.titleSmall) }
-            state.message?.let { message ->
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+        BoxWithConstraints(Modifier.fillMaxSize().padding(padding).imePadding()) {
+            if (maxWidth >= 820.dp) {
+                val paneSpacing = 20.dp
+                val overviewWeight = 0.32f * 1.20f
+                // Account for the width transferred from the plan to the overview.
+                val overviewExtraWidth = (maxWidth - paneSpacing * 3) * (overviewWeight - 0.32f)
+                Row(Modifier.fillMaxSize().padding(paneSpacing), horizontalArrangement = Arrangement.spacedBy(paneSpacing)) {
+                    Column(
+                        Modifier.weight(overviewWeight).fillMaxHeight().verticalScroll(overviewScrollState),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
-                        Text(message, modifier = Modifier.weight(1f))
-                        TextButton(onClick = onDismissMessage) { Text("关闭") }
+                        overview()
+                        auxiliary()
+                    }
+                    ToolboxCard(Modifier.weight(1f - overviewWeight).fillMaxHeight()) {
+                        Column(Modifier.fillMaxSize().verticalScroll(scrollState).padding(bottom = 48.dp)) {
+                            batch(overviewExtraWidth)
+                        }
                     }
                 }
+            } else {
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(scrollState).padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    overview()
+                    ToolboxCard { batch(null) }
+                    auxiliary()
+                }
             }
-
-            SupportFooter(uriHandler = uriHandler)
         }
     }
 
@@ -257,18 +309,6 @@ fun LabyrinthScreen(
             onSolved = onCaptchaSolved,
             onError = onCaptchaError,
             onDismiss = onCancelCaptcha,
-        )
-    }
-}
-
-@Composable
-private fun WorkflowHeader() {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("自动执行", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text(
-            "先登录并确认当前开局，再按批量目标连续执行。自动执行仍会准备新的目标开局。",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
@@ -555,9 +595,11 @@ private fun RerollSettingsFields(
 @Composable
 private fun CurrentOpeningStep(
     state: LabyrinthUiState,
+    statusLabel: String,
     externalTaskActive: Boolean,
     onCheckStatus: () -> Unit,
     onStop: () -> Unit,
+    onOpenAccounts: () -> Unit,
 ) {
     val verdict = state.routeVerdict
     val readStatus = state.currentOpeningReadStatus
@@ -578,10 +620,21 @@ private fun CurrentOpeningStep(
     }
     WorkflowStepHeader(
         number = "1",
-        title = "登录账号并读取当前开局",
-        summary = "使用账号库凭据登录游戏服，读取并验证现有路线。",
+        title = "账号与开局",
+        summary = "确认当前账号和已有路线。",
     )
-    Text(accountLabel, style = MaterialTheme.typography.titleSmall)
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(accountLabel, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
+            Text(statusLabel, Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelMedium)
+        }
+    }
     Text(
         status,
         style = MaterialTheme.typography.bodyMedium,
@@ -606,7 +659,9 @@ private fun CurrentOpeningStep(
     }
     val readInProgress = state.isWorking && readStatus == LabyrinthCurrentOpeningReadStatus.READING
     ChoiceRow {
-        Button(onClick = onCheckStatus, enabled = !state.isWorking && !externalTaskActive) {
+        if (state.selectedAccount == null) {
+            Button(onClick = onOpenAccounts) { Text("选择账号") }
+        } else Button(onClick = onCheckStatus, enabled = !state.isWorking && !externalTaskActive) {
             Text(
                 if (readStatus in setOf(
                         LabyrinthCurrentOpeningReadStatus.PENDING_VERIFICATION,
@@ -677,12 +732,6 @@ private fun AuxiliaryToolsSection(
         !batchActive &&
         !entryRecognitionState.running
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-        Text("辅助工具", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text(
-            "这些操作不属于日常两步流程，用于单独准备开局或诊断识别。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         Text("单独刷开局 · 本次公会", style = MaterialTheme.typography.labelLarge)
         ChoiceRow {
             state.guildOptions.forEach { guild ->
@@ -820,6 +869,7 @@ private fun BatchRunCard(
     entryRecognitionRunning: Boolean,
     onStart: (List<LabyrinthBatchGoal>) -> Unit,
     onStop: () -> Unit,
+    goalCardReferenceExtraWidth: Dp? = null,
 ) {
     val guildOptions = state.guildOptions
     val selectedDifficulty = state.selectedDifficulty
@@ -838,8 +888,8 @@ private fun BatchRunCard(
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
         WorkflowStepHeader(
             number = "2",
-            title = "自动执行",
-            summary = "设置目标后连续执行；每轮均按批量目标准备新开局。",
+            title = "执行计划",
+            summary = "设置目标后连续执行，每轮准备新开局。",
         )
         Text(
             "难度 $selectedDifficulty · 后续轮次自动刷开局、重置客户端会话、执行并记录结果。",
@@ -904,60 +954,82 @@ private fun BatchRunCard(
             fun GoalEditor(guild: LabyrinthGuildOption, modifier: Modifier = Modifier) {
                 val text = counts.value[guild.guildId].orEmpty()
                 val mode = modes.value[guild.guildId] ?: LabyrinthBatchGoalMode.CLEARS
-                BoxWithConstraints(modifier = modifier) {
-                    val compact = maxWidth < 480.dp
-                    @Composable fun CountField(modifier: Modifier) {
-                        OutlinedTextField(
-                            value = text,
-                            onValueChange = { value ->
-                                counts.value = counts.value + (guild.guildId to value.filter(Char::isDigit).take(2))
-                            },
-                            label = { Text(guild.name) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = modifier,
+                Surface(
+                    modifier = modifier,
+                    shape = MaterialTheme.shapes.medium,
+                    color = if (text.toIntOrNull()?.let { it >= 1 } == true) MaterialTheme.colorScheme.secondaryContainer
+                        else MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            guild.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                    }
-                    @Composable fun ModeChip() {
-                        FilterChip(
-                            selected = mode == LabyrinthBatchGoalMode.CLEARS,
-                            onClick = {
-                                modes.value = modes.value + (
-                                    guild.guildId to if (mode == LabyrinthBatchGoalMode.CLEARS) {
-                                        LabyrinthBatchGoalMode.ATTEMPTS
-                                    } else {
-                                        LabyrinthBatchGoalMode.CLEARS
-                                    }
-                                    )
-                            },
-                            label = { Text(if (mode == LabyrinthBatchGoalMode.CLEARS) "按通关计" else "按开局计") },
-                        )
-                    }
-                    if (compact) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            CountField(Modifier.fillMaxWidth())
-                            ModeChip()
-                        }
-                    } else {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            CountField(Modifier.weight(1f))
-                            ModeChip()
+                            FilterChip(
+                                selected = mode == LabyrinthBatchGoalMode.CLEARS,
+                                onClick = {
+                                    modes.value = modes.value + (
+                                        guild.guildId to if (mode == LabyrinthBatchGoalMode.CLEARS) {
+                                            LabyrinthBatchGoalMode.ATTEMPTS
+                                        } else {
+                                            LabyrinthBatchGoalMode.CLEARS
+                                        }
+                                    )
+                                },
+                                label = { Text(if (mode == LabyrinthBatchGoalMode.CLEARS) "按通关计" else "按开局计") },
+                            )
+                            OutlinedTextField(
+                                value = text,
+                                onValueChange = { value ->
+                                    counts.value = counts.value + (guild.guildId to value.filter(Char::isDigit).take(2))
+                                },
+                                label = { Text("目标") },
+                                placeholder = { Text("跳过") },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.titleMedium,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.width(80.dp),
+                            )
                         }
                     }
                 }
             }
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                if (maxWidth >= 720.dp) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                val columnGap = 12.dp
+                // Preserve room for the mode chip, 80dp input, padding, and larger fonts.
+                val minCardWidth = 120.dp + 80.dp * LocalConfiguration.current.fontScale.coerceAtLeast(1f)
+                val minTwoColumnWidth = if (goalCardReferenceExtraWidth != null) {
+                    minCardWidth * 2 + columnGap
+                } else {
+                    500.dp
+                }
+                if (maxWidth >= minTwoColumnWidth) {
+                    val gridWidth = goalCardReferenceExtraWidth?.let { extraWidth ->
+                        // Shrink from the original card width, not the already narrower pane.
+                        val referenceCardWidth = (maxWidth + extraWidth - columnGap) / 2
+                        val cardWidth = (referenceCardWidth * 0.80f).coerceAtLeast(minCardWidth)
+                        (cardWidth * 2 + columnGap).coerceAtMost(maxWidth)
+                    } ?: maxWidth
+                    Column(
+                        modifier = Modifier.width(gridWidth),
+                        verticalArrangement = Arrangement.spacedBy(columnGap),
+                    ) {
                         guildOptions.chunked(2).forEach { pair ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(columnGap),
+                                verticalAlignment = Alignment.Top,
                             ) {
                                 pair.forEach { guild -> GoalEditor(guild, Modifier.weight(1f)) }
                                 if (pair.size == 1) Box(modifier = Modifier.weight(1f))
@@ -965,7 +1037,7 @@ private fun BatchRunCard(
                         }
                     }
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(columnGap)) {
                         guildOptions.forEach { guild -> GoalEditor(guild, Modifier.fillMaxWidth()) }
                     }
                 }
@@ -990,6 +1062,7 @@ private fun BatchRunCard(
             Button(
                 onClick = { onStart(goals) },
                 enabled = enabled && goals.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
             ) {
                 Text(
                     when {
@@ -1013,14 +1086,15 @@ private fun SelectionCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.large,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f),
+            containerColor = MaterialTheme.colorScheme.surface,
         ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Column(
-            modifier = Modifier.padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp),
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             description?.let { Text(it, style = MaterialTheme.typography.bodySmall) }

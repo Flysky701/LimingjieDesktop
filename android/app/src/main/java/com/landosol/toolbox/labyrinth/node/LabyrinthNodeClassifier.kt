@@ -271,8 +271,17 @@ class LabyrinthNodeClassifier(
     /** Candidate windows scored by [classifyNode] during the most recent [classifyMapNodes]. */
     var lastSearchWindowCount: Int = 0
         private set
+    /** Independent current-frame crop checks when search geometry is reused. */
+    var lastRevalidationCount: Int = 0
+        private set
+    var lastEvidenceSource: NodeFrameEvidenceSource = NodeFrameEvidenceSource.NONE
+        private set
 
     fun resetTracking() {
+        scanMemo = null
+        scanMemoFrames = 0
+        lastRevalidationCount = 0
+        lastEvidenceSource = NodeFrameEvidenceSource.NONE
         previousFrame = null
         previousTemplates = null
         previousNodes = emptyList()
@@ -593,6 +602,9 @@ class LabyrinthNodeClassifier(
         searchHint: NodeSearchHint? = null,
     ): List<NodeClassification> {
         com.landosol.toolbox.labyrinth.concurrent.LabyrinthFourThreadRuntime.cooperate()
+        lastEvidenceSource = NodeFrameEvidenceSource.NONE
+        lastRevalidationCount = 0
+        lastSearchWindowCount = 0
         if (templates.templates.isEmpty()) return emptyList()
         if (searchHint?.targetBlockId != hintedTargetBlockId) {
             hintedTargetBlockId = searchHint?.targetBlockId
@@ -637,6 +649,7 @@ class LabyrinthNodeClassifier(
         ) {
             val refreshed = previousNodes.mapNotNull { node ->
                 val rect = node.screenRect ?: return@mapNotNull null
+                lastRevalidationCount++
                 classifyNode(frame, rect, templates)?.copy(column = node.column, row = node.row)
             }
             lastSearchWindowCount = refreshed.size
@@ -644,16 +657,16 @@ class LabyrinthNodeClassifier(
                     now.blockType == old.blockType && now.isClickable == old.isClickable
                 }) {
                 lastSearchMode = "tracked"
+                lastEvidenceSource = NodeFrameEvidenceSource.TRACKED
                 trackedFrames++
                 previousNodes = refreshed
                 return refreshed
             }
         }
-        // Nothing about this scan depends on wall-clock time: same frame, same templates, same
-        // hint and same rung means the same detections. During a stall the map is static and the
-        // run pays for an identical answer every frame. Serve it from the last real scan instead,
-        // and let any real change in the viewport — including the activation glow's own pulse,
-        // which is what usually ends such a stall — invalidate it.
+        // Reuse only the expensive search geometry. The sampled viewport signature is not
+        // proof that each node is still visible/active: an unchanged memo must never manufacture
+        // three independent stable observations. Reclassify its crops against THIS frame before
+        // returning actionable evidence, without repeating the full candidate search.
         val memo = scanMemo
         if (
             memo != null &&
@@ -663,11 +676,21 @@ class LabyrinthNodeClassifier(
             scanMemoFrames < MAX_SCAN_MEMO_FRAMES &&
             isStableViewport(memo.signature, frame)
         ) {
-            scanMemoFrames++
-            lastSearchMode = searchMode.label
-            lastSearchWindowCount = 0
-            updateHintMissState(searchHint, searchMode)
-            return memo.result
+            val refreshed = revalidateMemoCrops(frame, memo.result, templates)
+            if (refreshed.size == memo.result.size && refreshed.zip(memo.result).all { (now, old) ->
+                    now.blockType == old.blockType && now.isClickable == old.isClickable
+                }) {
+                scanMemoFrames++
+                lastSearchMode = searchMode.label
+                lastSearchWindowCount = 0
+                lastEvidenceSource = if (refreshed.isEmpty()) NodeFrameEvidenceSource.NONE
+                    else NodeFrameEvidenceSource.MEMO_REVALIDATED
+                updateHintMissState(searchHint, searchMode)
+                return refreshed
+            }
+            // Lost/changed evidence cannot retain the old active crop. Use the existing search
+            // ladder to locate current candidates; do not alter route or retry policy here.
+            scanMemo = null
         }
         scanMemoFrames = 0
         lastSearchMode = searchMode.label
@@ -826,11 +849,30 @@ class LabyrinthNodeClassifier(
             previousNodes = result
             scanMemo = ScanMemo(signature, searchMode, searchHint, templates, result)
             lastSearchWindowCount = scoredWindows
+            lastEvidenceSource = NodeFrameEvidenceSource.SEARCH
             return result
         } finally {
             matcher.clearPreparedFrame()
             proposalMatcher.clearPreparedFrame()
             refinementMatcher.clearPreparedFrame()
+        }
+    }
+
+    private fun revalidateMemoCrops(
+        frame: PixelImage, nodes: List<NodeClassification>, templates: NodeTemplateSet,
+    ): List<NodeClassification> {
+        if (nodes.isEmpty()) return emptyList()
+        val borrowed = sharedFrameFeatures?.takeIf { it.hasPreparedFrame(frame) }
+        return try {
+            if (borrowed != null) matcher.sharePreparedFrame(borrowed) else matcher.prepareFrame(frame)
+            nodes.mapNotNull { node ->
+                val rect = node.screenRect ?: return@mapNotNull null
+                com.landosol.toolbox.labyrinth.concurrent.LabyrinthFourThreadRuntime.cooperate()
+                lastRevalidationCount++
+                classifyNode(frame, rect, templates)?.copy(column = node.column, row = node.row)
+            }
+        } finally {
+            matcher.clearPreparedFrame()
         }
     }
 

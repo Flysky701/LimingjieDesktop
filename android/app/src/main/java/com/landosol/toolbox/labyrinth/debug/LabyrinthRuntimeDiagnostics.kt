@@ -60,6 +60,8 @@ class LabyrinthRuntimeDiagnostics(context: Context) {
             put("processAgeMillis", elapsed - Process.getStartElapsedRealtime())
             put("processCpuMillis", cpu)
             put("sampleIntervalMillis", interval ?: JSONObject.NULL)
+            // Startup selection only: sampling must not initialize a pool or infer live workers.
+            put("threadBudgetSelection", JSONObject(labyrinthThreadBudgetSelectionPayload()))
             // A multi-threaded process can exceed 100%; this is not the host PC's CPU usage.
             put("processCpuPercentOfOneCore", if (interval != null && interval > 0 && cpuDelta != null && cpuDelta >= 0) {
                 cpuDelta * 100.0 / interval
@@ -125,11 +127,13 @@ class LabyrinthRuntimeDiagnostics(context: Context) {
             put("hardware", Build.HARDWARE)
             put("fingerprint", Build.FINGERPRINT)
             put("supportedAbis", JSONArray(Build.SUPPORTED_ABIS.toList()))
+            // Preserve the original export-time CPU observation; it is not the owned worker count.
             put("availableProcessors", Runtime.getRuntime().availableProcessors())
             put("uptimeMillis", SystemClock.uptimeMillis())
             put("elapsedRealtimeMillis", SystemClock.elapsedRealtime())
             put("timeZone", TimeZone.getDefault().id)
         })
+        put("threadBudgetSelection", JSONObject(labyrinthThreadBudgetSelectionPayload()))
         val resources = context.resources
         put("configuration", JSONObject().apply {
             put("densityDpi", resources.configuration.densityDpi)

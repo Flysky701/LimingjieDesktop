@@ -21,6 +21,8 @@ class Batch5FastDiagnosticPayloadTest {
     @Test fun fastAndDetailedEvidenceKeepIndependentSourcesAndCannotBecomeActionAck() {
         val state = LabyrinthEntryRecognitionSessionState(status = LabyrinthEntryRecognitionStatus.RUNNING,
             frameCount = 7, message = "后台规划中", balancedDiagnostics = LabyrinthBalancedDiagnostics(
+                // This fixture tests evidence separation, independently of the startup CPU choice.
+                businessThreadBudget = 4, cpuWorkerBudget = 2,
                 controlThread = true, fastObservationCount = 20, fastFrameSequence = 20,
                 fastTimestampMillis = 10_000, detailFrameSequence = 12, detailTimestampMillis = 8_000,
                 plannerPendingCount = 1))
