@@ -2318,14 +2318,15 @@ class LabyrinthTeamPlanSearcher(
         context: LabyrinthRoleDecisionContext,
         excludedTeamSignatures: Set<String> = emptySet(),
     ): LabyrinthTeamPlan {
-        if (roster.distinctBy(LabyrinthRoleProfile::characterId).size < 5) {
+        val unique = roster.distinctBy(LabyrinthRoleProfile::characterId)
+        if (unique.isEmpty()) {
             return LabyrinthTeamPlan(
                 LabyrinthTeamPlanKind.INSUFFICIENT_ROLES,
                 emptyList(),
-                "首战失败后可用角色不足五名，无法生成兜底队",
+                "没有可用于编组的可靠角色",
             )
         }
-        val ranked = optimizer.rankedBattleFormations(roster, context.copy(survivalRecovery = true))
+        val ranked = optimizer.rankedBattleFormations(unique, context.copy(survivalRecovery = true))
             .filterNot { evaluation ->
                 evaluation.members
                     .map(LabyrinthRoleProfile::characterId)
@@ -2334,10 +2335,12 @@ class LabyrinthTeamPlanSearcher(
                     .joinToString(",") in excludedTeamSignatures
             }
         if (ranked.isEmpty()) {
-            // First-area retries also use the opening-roster fallback. Other areas retain the
-            // existing refusal when a qualified vanguard is present.
-            if (!context.frontlineSurvivalGateEnabled || context.currentArea == 1 || !hasAnyEligibleVanguard(roster, context)) {
-                return vanguardlessPlan(roster, context, excludedTeamSignatures)
+            // Small rosters and first-area retries share the initial attempt's vanguardless
+            // fallback; larger pools in later areas retain the refusal when a tank exists.
+            if (!context.frontlineSurvivalGateEnabled || context.currentArea == 1 ||
+                unique.size <= TEAM_SIZE || !hasAnyEligibleVanguard(unique, context)
+            ) {
+                return vanguardlessPlan(unique, context, excludedTeamSignatures)
             }
             return LabyrinthTeamPlan(
                 LabyrinthTeamPlanKind.INSUFFICIENT_ROLES,

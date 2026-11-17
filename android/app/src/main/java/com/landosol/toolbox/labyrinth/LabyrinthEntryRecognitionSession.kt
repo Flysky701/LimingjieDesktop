@@ -308,6 +308,18 @@ internal fun labyrinthBatchOwnedRunEndsAtRetryLimit(
 ): Boolean = batchOwnsRun && battleRetryCount >= retryLimit
 
 /**
+ * Any positively recognized route page or modal overlay ends an earlier post-entry UNKNOWN stretch,
+ * even when that frame takes an early-return branch (such as map navigation or move confirmation)
+ * before reaching [LabyrinthEntryRecognitionSession.handlePostEntryPage].
+ */
+internal fun labyrinthClearsPostEntryUnknownTimer(result: LabyrinthEntryFrameResult): Boolean =
+    result.observation.state != LabyrinthEntryPageState.UNKNOWN ||
+        result.nodeMoveConfirmation != null ||
+        result.relicDetailObservation != null ||
+        result.relicRewardObservation != null ||
+        result.specialEquipment?.stage != null
+
+/**
  * Pages of the final settlement chain. When the entry planner reports one of them as "complete"
  * but no route executor is configured, the session must wait rather than stop: the game is still
  * inside a run and a stopped session would strand it on the score page.
@@ -1555,6 +1567,8 @@ class LabyrinthEntryRecognitionSession(
     private val failedBattleTeamSignatures = linkedSetOf<String>()
     @Volatile
     private var battleRetryCount = 0
+    /** True from a successful "重新挑战" tap until the next battle attempt actually starts. */
+    private var awaitingRetryBattleAfterFailure = false
     private var bossEditorTeamIndex: Int? = null
     private var pendingBossTeamAdvance: Pair<Int, List<String>>? = null
     private var bossEditorBlocked = false
@@ -2863,6 +2877,14 @@ class LabyrinthEntryRecognitionSession(
                     preservePendingNodeTransitionAcrossPage ||
                     preservePendingNodeTransitionForMismatch,
         )
+        if (labyrinthClearsPostEntryUnknownTimer(result)) {
+            postEntryUnknownSince = Long.MIN_VALUE
+        }
+        if (pageState == LabyrinthEntryPageState.BATTLE_IN_PROGRESS ||
+            pageState == LabyrinthEntryPageState.BATTLE_RESULT
+        ) {
+            awaitingRetryBattleAfterFailure = false
+        }
         if (!current.dryRun && pendingBattleTeamAction?.switchReceipt != null &&
             handleUnconfirmedBattleTeamActionFrame(sessionId, result, timestampMillis)) return
         synchronizeBossEditor(result)
@@ -3355,6 +3377,7 @@ class LabyrinthEntryRecognitionSession(
         activeNodeArea = null
         activeNodeArea = null
         eventActionAttempts = 0
+        awaitingRetryBattleAfterFailure = false
         combatContext = null
         lastBattleTeamRecommendationKey = null
         lastBattleTeamSelectionPlanLog = null
@@ -4229,6 +4252,12 @@ class LabyrinthEntryRecognitionSession(
             bossEditorPreparationStage != LabyrinthBossEditorPreparationStage.COMPLETE
         ) return
         val observation = result.battleTeamSelection ?: return
+        if (_state.value.joinedCharacters.isEmpty()) {
+            synchronized(effectiveExCharacterIds) { effectiveExCharacterIds.clear() }
+            effectiveCharacterScanStage = LabyrinthEffectiveCharacterScanStage.COMPLETE
+            effectiveCharacterScanRosterStamp = currentEffectiveScanRosterStamp()
+            return
+        }
 
         // A completed sweep survives the EX -> Boss hand-off of one encounter, but only while the
         // owned roster is unchanged, because the filtered list only shows roles this account owns.
@@ -5282,6 +5311,9 @@ class LabyrinthEntryRecognitionSession(
         if (pending.kind == LabyrinthBattleTeamExecutionKind.START_BATTLE) {
             // 这一下没被游戏收下，普通关卡的编组记忆还原成当次捕获的原值（最近一次派发之前的值）。
             lastNormalBattleTeamSignature = pending.previousNormalTeamSignature
+            if (battleRetryCount > 0) {
+                awaitingRetryBattleAfterFailure = true
+            }
         }
         if (pending.kind == LabyrinthBattleTeamExecutionKind.NEXT_BOSS_TEAM) {
             pendingBossTeamAdvance = null
@@ -6196,7 +6228,7 @@ class LabyrinthEntryRecognitionSession(
                 )
             }
         }
-        if (pageState == LabyrinthEntryPageState.UNKNOWN) {
+        if (!labyrinthClearsPostEntryUnknownTimer(result)) {
             if (postEntryUnknownSince == Long.MIN_VALUE) postEntryUnknownSince = timestampMillis
             if (!characterAcquisitionActive && postBossStage == LabyrinthPostBossStage.NONE &&
                 timestampMillis - postEntryUnknownSince > UNKNOWN_POST_ENTRY_TIMEOUT_MILLIS
@@ -6283,7 +6315,7 @@ class LabyrinthEntryRecognitionSession(
             // otherwise reroll or end the run that was just revived. The three-button page and the
             // defensive path for a missing observation keep their exact previous behaviour.
             val advanceOnly = result.battleFailure?.layout == LabyrinthBattleFailureLayout.TWO_BUTTON
-            if (!advanceOnly) {
+            if (!advanceOnly && !awaitingRetryBattleAfterFailure) {
                 if (!pendingSingleBossFallbackToMulti) {
                     pendingSingleBossFallbackToMulti = labyrinthShouldSwitchSingleBossToMulti(
                         enabled = singleBossFallbackToMultiAfterThreeFailures,
@@ -6346,10 +6378,32 @@ class LabyrinthEntryRecognitionSession(
                     )
                     return
                 }
-                if (result.battleFailure == null) {
-                    finishFromPlanner(sessionId, "战斗失败页按钮结构未达到安全线；不执行固定坐标重试")
-                    return
+                if (!pendingSingleBossFallbackToMulti) {
+                    val unrecoverableReason = unrecoverableBattleRetryReason(context)
+                    if (unrecoverableReason != null) {
+                        if (
+                            !_state.value.dryRun &&
+                            (currentRunId != null || (!singleBossFallbackOwnsFailurePolicy && rerollAfterThreeBattleFailures))
+                        ) {
+                            finishFromPlannerAndRequestReroll(
+                                sessionId,
+                                "${labyrinthBattleKindLabel(context.kind)}无可替换的未失败重试阵容" +
+                                    "（$unrecoverableReason）；本局按失败结束",
+                            )
+                        } else {
+                            finishFromPlanner(
+                                sessionId,
+                                "${labyrinthBattleKindLabel(context.kind)}无可替换的未失败重试阵容" +
+                                    "（$unrecoverableReason）；保留在失败页，不自动点击结束",
+                            )
+                        }
+                        return
+                    }
                 }
+            }
+            if (!advanceOnly && result.battleFailure == null) {
+                finishFromPlanner(sessionId, "战斗失败页按钮结构未达到安全线；不执行固定坐标重试")
+                return
             }
         }
         if (pageState == LabyrinthEntryPageState.BATTLE_TEAM_SELECTION) {
@@ -7183,7 +7237,38 @@ class LabyrinthEntryRecognitionSession(
                 }
             }
         } else {
-            val recommendation = _state.value.battleTeamRecommendation ?: return
+            val recommendation = _state.value.battleTeamRecommendation
+            if (recommendation == null) {
+                val unavailable = _state.value.battleTeamRecommendationUnavailableReason
+                if (
+                    unavailable != null &&
+                    pendingBattleTeamAction == null &&
+                    !bossSwitchRecoveryPending &&
+                    lastBattleTeamRecommendationKey != null &&
+                    postEntryStableFrames >= POST_ENTRY_STABLE_FRAMES
+                ) {
+                    val kindLabel = combatContext?.kind?.let(::labyrinthBattleKindLabel) ?: "当前战斗"
+                    val singleBossFallbackOwnsFailurePolicy =
+                        combatContext?.kind == LabyrinthCombatKind.BOSS &&
+                            bossTeamMode == LabyrinthBossTeamMode.SINGLE_TEAM &&
+                            singleBossFallbackToMultiAfterThreeFailures
+                    if (
+                        currentRunId != null ||
+                        (battleRetryCount > 0 && !singleBossFallbackOwnsFailurePolicy && rerollAfterThreeBattleFailures)
+                    ) {
+                        finishFromPlannerAndRequestReroll(
+                            sessionId,
+                            "${kindLabel}无法继续自动编组（$unavailable）；本局按失败结束",
+                        )
+                    } else {
+                        finishFromPlanner(
+                            sessionId,
+                            "${kindLabel}无法继续自动编组：$unavailable；已停止并保留编组页",
+                        )
+                    }
+                }
+                return
+            }
             val plan = _state.value.battleTeamSelectionPlan ?: return
             if (!plan.isStillValid(sessionId, recommendation, observation)) return
             val search = battleRosterSearch.observe(sessionId, observation, plan.recommendedIds)
@@ -7918,6 +8003,7 @@ class LabyrinthEntryRecognitionSession(
                     }
                     if (step.kind == LabyrinthBattleTeamExecutionKind.START_BATTLE) {
                         battleWait.onStartExecuted(clock())
+                        awaitingRetryBattleAfterFailure = false
                         if (step.confirmedTeamIds.isNotEmpty()) {
                             synchronized(currentBattleTeamSignatures) {
                                 currentBattleTeamSignatures += labyrinthBattleTeamSignature(step.confirmedTeamIds)
@@ -8052,8 +8138,77 @@ class LabyrinthEntryRecognitionSession(
         _state.value.joinedCharacters.map(LabyrinthJoinedCharacter::characterId),
     )
 
+    private fun unrecoverableBattleRetryReason(context: LabyrinthCombatContext): String? {
+        val planner = battleTeamRecommendationPlanner ?: return null
+        val currentSignatures = synchronized(currentBattleTeamSignatures) { currentBattleTeamSignatures.toSet() }
+        if (currentSignatures.isEmpty()) return null
+        if (
+            context.kind in setOf(LabyrinthCombatKind.EX, LabyrinthCombatKind.BOSS) &&
+            effectiveCharacterScanStage != LabyrinthEffectiveCharacterScanStage.COMPLETE
+        ) {
+            return null
+        }
+        val current = _state.value
+        val acquiredCharacterIds = current.joinedCharacters
+            .map(LabyrinthJoinedCharacter::characterId)
+            .map(::canonicalLabyrinthRoleId)
+            .distinct()
+        val battleArea = labyrinthBattleTeamArea(
+            activeNodeArea, context.kind, validatedRoute, current.routeProgress?.currentArea,
+        )
+        val encounterStrategy = when (context.kind) {
+            LabyrinthCombatKind.EX -> currentExEncounterStrategy
+            LabyrinthCombatKind.BOSS -> labyrinthBossEncounterStrategy(validatedRoute)
+            else -> null
+        }
+        val preferCohesiveDamageSystem = when (context.kind) {
+            LabyrinthCombatKind.EX -> true
+            LabyrinthCombatKind.BOSS -> preferPureBossDamageSystem
+            else -> false
+        }
+        val defenseStacks = relicChoicePolicy.markStacks(
+            current.observedRelics,
+            relicMarkStackCalibration,
+        ).getValue(LabyrinthRelicMark.DEFENSE)
+        val targetCount = encounterStrategy?.targetCount ?: context.targetCount
+        val decisionContext = LabyrinthRoleDecisionContext(
+            defenseMarkStacks = defenseStacks,
+            targetCount = targetCount,
+            optimizeBossVanguardSynergy = context.kind == LabyrinthCombatKind.BOSS,
+            preferSingleDamageSystem = preferCohesiveDamageSystem,
+            encounterStrategy = encounterStrategy,
+            effectiveCharacterIds = synchronized(effectiveExCharacterIds) { effectiveExCharacterIds.toSet() },
+            relaxedVanguardGate = context.kind == LabyrinthCombatKind.BOSS && bossFallbackMultiTeamActive,
+            currentArea = battleArea,
+            frontlineSurvivalGateEnabled = battleStrategySettingsSnapshot.frontlineSurvivalGateEnabled,
+        )
+        val nextFailedSignatures = LinkedHashSet<String>().apply {
+            synchronized(failedBattleTeamSignatures) { addAll(failedBattleTeamSignatures) }
+            addAll(currentSignatures)
+        }
+        val requestedBossTeamCount = if (
+            context.kind == LabyrinthCombatKind.BOSS &&
+            bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM
+        ) {
+            3
+        } else {
+            1
+        }
+        val nextResult = planner.retryRecommendation(
+            acquiredCharacterIds = acquiredCharacterIds,
+            context = decisionContext,
+            failedTeamSignatures = nextFailedSignatures,
+            retryNumber = battleRetryCount + 1,
+            lastFailedTeamSignature = nextFailedSignatures.lastOrNull(),
+            requestedBossTeamCount = requestedBossTeamCount,
+            allowSupplementLead = false,
+        )
+        return (nextResult as? LabyrinthBattleTeamRecommendationResult.Unavailable)?.reason
+    }
+
     private fun resetBattleRetryTracking() {
         battleRetryCount = 0
+        awaitingRetryBattleAfterFailure = false
         synchronized(currentBattleTeamSignatures) { currentBattleTeamSignatures.clear() }
         synchronized(failedBattleTeamSignatures) { failedBattleTeamSignatures.clear() }
         // 提交与签名是一体的：只清签名会把两者留在不一致的状态（提交还在、签名没了），下一次失败重试
@@ -8351,23 +8506,26 @@ class LabyrinthEntryRecognitionSession(
                         LabyrinthPostEntryActionKind.BATTLE_RETRY,
                         LabyrinthPostEntryActionKind.BATTLE_RETRY_SWITCH_MULTI,
                         -> {
-                            synchronized(failedBattleTeamSignatures) {
-                                failedBattleTeamSignatures += currentBattleTeamSignatures
-                            }
-                            synchronized(currentBattleTeamSignatures) {
-                                currentBattleTeamSignatures.clear()
-                            }
-                            synchronized(committedBattleCharacterIds) {
-                                committedBattleCharacterIds.clear()
-                            }
-                            if (pendingSingleBossFallbackToMulti) {
-                                bossTeamMode = LabyrinthBossTeamMode.MULTI_TEAM
-                                bossFallbackMultiTeamActive = true
-                                pendingSingleBossFallbackToMulti = false
-                                battleRetryCount = 0
-                                synchronized(failedBattleTeamSignatures) { failedBattleTeamSignatures.clear() }
-                            } else {
-                                battleRetryCount++
+                            if (!awaitingRetryBattleAfterFailure) {
+                                synchronized(failedBattleTeamSignatures) {
+                                    failedBattleTeamSignatures += currentBattleTeamSignatures
+                                }
+                                synchronized(currentBattleTeamSignatures) {
+                                    currentBattleTeamSignatures.clear()
+                                }
+                                synchronized(committedBattleCharacterIds) {
+                                    committedBattleCharacterIds.clear()
+                                }
+                                if (pendingSingleBossFallbackToMulti) {
+                                    bossTeamMode = LabyrinthBossTeamMode.MULTI_TEAM
+                                    bossFallbackMultiTeamActive = true
+                                    pendingSingleBossFallbackToMulti = false
+                                    battleRetryCount = 0
+                                    synchronized(failedBattleTeamSignatures) { failedBattleTeamSignatures.clear() }
+                                } else {
+                                    battleRetryCount++
+                                }
+                                awaitingRetryBattleAfterFailure = true
                             }
                             battleWait.reset()
                             bossEditorTeamIndex = null

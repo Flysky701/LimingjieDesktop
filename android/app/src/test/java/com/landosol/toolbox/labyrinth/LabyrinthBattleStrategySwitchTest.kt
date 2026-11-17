@@ -113,10 +113,16 @@ class LabyrinthBattleStrategySwitchTest {
         assertEquals(scorer.evaluate(roster, on), scorer.evaluate(roster, off))
     }
 
-    @Test fun `disabled gate does not relax boss or retry full-team requirements`() {
+    @Test fun `disabled gate keeps boss multi-team requirement and aligns short-roster retry with initial`() {
         val roster = (1..4).map { role("r$it", it) }
         assertTrue(searcher.bossMultiTeamSearch(roster, off).teams.isEmpty())
-        assertTrue(planner(roster).retryRecommendation(roster.map { it.characterId }, off, emptySet())
+        val retry = planner(roster).retryRecommendation(roster.map { it.characterId }, off, emptySet())
+            as LabyrinthBattleTeamRecommendationResult.Ready
+        assertEquals(4, retry.recommendation.members.size)
+        val exhausted = labyrinthBattleTeamSignature(roster.map { it.characterId })
+        assertTrue(planner(roster).retryRecommendation(roster.map { it.characterId }, off, setOf(exhausted))
+            is LabyrinthBattleTeamRecommendationResult.Unavailable)
+        assertTrue(planner(roster).retryRecommendation(emptyList(), off, emptySet())
             is LabyrinthBattleTeamRecommendationResult.Unavailable)
     }
 

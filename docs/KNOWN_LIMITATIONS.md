@@ -6,10 +6,9 @@
 
 以下问题涉及 `android/` 中的共享业务流程，修复时需同时兼顾桌面与 Android 端行为：
 
-- [ ] **FIX-01：重新挑战后的残留失败画面可能被误计为第三次战败**
+- [ ] **FIX-01：重新挑战时序与挑战页回收（已完成离线回放，待实机连续战败回归）**
   - **现象**：单局记录“EX战连续3次挑战失败”并停止，随后重置接手时画面已处于 `BATTLE_CHALLENGE`，因重置阶段无挑战页推进路径而超时。
-  - **原因**：[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 在“重新挑战”点击返回成功时立即递增 `battleRetryCount`，仅重置稳定帧数而未等待离开失败页；连续两帧残留失败画面即可再次触发计数，且三次失败终止判断位于点击冷却检查之前。
-  - **修复方向**：要求离开失败页或进入新一轮战斗后再计入下一次战败，并核对 [SessionExpiryFrameTracker.kt](../android/app/src/main/java/com/landosol/toolbox/automation/session/SessionExpiryFrameTracker.kt) 在挑战页的回收衔接。
+  - **本次修复**：[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 在点击“重新挑战”后标记等待新一轮战斗启动，在进入新战斗或执行开战前不对残留失败帧再次累计重试次数或触发三次战败终止；[SessionExpiryFrameTracker.kt](../android/app/src/main/java/com/landosol/toolbox/automation/session/SessionExpiryFrameTracker.kt) 补充编组页取消、挑战页查看地图及地图页撤退确认的会话失效触发链。该修复同时作用于桌面与 Android；残留失败帧与挑战页撤退链的定向离线回放已通过，实机连续战败交接仍待复测。
 
 - [ ] **FIX-02：启动阶段公告前 45 秒总时限可能在慢加载时提前终止任务**
   - **现象**：从标题页点击后若加载漫画或过渡页耗时较长，任务在正常加载中被终止并笼统记录为“会话重置失败”。
@@ -25,10 +24,9 @@
   - **原因**：[LabyrinthBattleWaitPolicy.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthBattleWaitPolicy.kt) 采用固定 300,000 ms 现实时间上限，未结合多队接力、倒计时或血量变化判断战斗进展。
   - **修复方向**：结合战斗进展信号调整多队 Boss 战等待预算，同时保留卡死保护上限与诊断状态。
 
-- [ ] **FIX-05：地图恢复后未重置未知页面计时，后续过场可能提前终止（下一轮优先修复）**
-  - **现象**：2026-11-14 的 1920 × 1080 运行在 15:29:47 点击普通战斗节点的移动确认，约 1.8 秒后以“路线阶段未知页面超过限定时间”停止；此前已有约半分钟的地图识别、点击重试和视角恢复。
-  - **已确认缺陷**：[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 的 `postEntryUnknownSince` 仅在部分页面处理路径重置；`NODE_SELECTION` 走独立地图分支，移动确认也可提前返回，导致已恢复的地图流程未清空旧计时。该缺陷与本次停止时间线吻合。
-  - **修复与验证**：在确认恢复到已识别页面时清空旧的未知页面计时，覆盖地图与移动确认的分流路径。补充“未知页 → 地图停留及重试 → 移动确认 → 新过场”的离线回放，验证新过场不会继承旧计时，同时保留持续未知页面的 30 秒停止保护。
+- [ ] **FIX-05：地图恢复与移动确认后重置未知页面计时（已完成离线回放，待实机回归）**
+  - **现象**：2026-11-14 的 1920 × 1080 运行在点击普通战斗节点移动确认约 1.8 秒后，以“路线阶段未知页面超过限定时间”提前停止。
+  - **本次修复**：[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 在任意已识别路线页面及移动确认、遗物详情/奖励、特别装备弹窗帧统一清空旧的 `postEntryUnknownSince`，保留连续未知页面满 30 秒的停止保护。桌面与 Android 共享此修复；“未知页 → 地图停留 → 移动确认 → 新过场”的离线回放已通过，待实机复核。
 
 - [ ] **FIX-06：普通战斗节点连续点击未确认，移动视角后才恢复（下一轮核对）**
   - **现象**：同次运行的普通战斗节点 `20303` 最初使用置信度约 0.405 的语义补全匹配，连续三次点击均未出现移动确认；向后挪动地图后改用置信度 0.940 的拓扑匹配，随后成功点击移动确认。
@@ -36,10 +34,9 @@
   - **当前进展**：已合入上游当前帧点击证据与弱候选限制，阻止低置信语义补全和旧缓存直接派发点击；原场景仍需对应画面回放核对，不据此认定问题已闭环。
   - **核对与验证**：核对节点身份、可达集合与屏幕位置的绑定，重点检查低置信语义补全与拓扑匹配切换。取得对应画面后建立定向离线回放，确认问题再修复，保留现有点击守卫及有界重试。
 
-- [ ] **FIX-07：不足五人的 EX 战首次编组可用，失败重试却被人数门槛阻断（下一轮修复）**
-  - **现象**：2026-11-14 15:47:50 首次推荐为三人队伍；15:50:15 起重复提示“战斗失败后可用角色不足5名，无法生成完整重试队伍”，编组页未再派发动作，15:52:15 因连续 120 秒无进展停止，单局结果记为 `ABORTED_UNKNOWN`。
-  - **已确认缺陷**：[LabyrinthBattleTeamRecommendation.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthBattleTeamRecommendation.kt) 的 `initialRecommendation` 使用 `minOf(5, resolved.size)` 接受不足五人的队伍，而 `retryRecommendation` 直接拒绝不足五人的角色池，并在规划结果处再次要求完整五人。两条路径的人数规则不一致；[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 最后由编组页的 120 秒停滞保护收尾。
-  - **修复与验证**：统一首次与重试的合法人数规则，检查失败队伍记录、重试搜索和执行器对不足五人队伍的支持；无法继续时沿用批次策略明确结束或交接。补充三人、四人、正常五人及无可用角色的定向离线回放，保留重试次数与点击守卫，并与 FIX-01 的失败计数问题分别验证。
+- [ ] **FIX-07：统一不足五人队伍的首战与失败重试规则（已完成离线回放，待实机回归）**
+  - **现象**：首次编组推荐三人队伍出战后失利，重试阶段重复提示“可用角色不足5名”并在编组页等待 120 秒后以 `ABORTED_UNKNOWN` 停止。
+  - **本次修复**：[LabyrinthBattleTeamRecommendation.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthBattleTeamRecommendation.kt) 与 [LabyrinthRoleDecisionPolicy.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthRoleDecisionPolicy.kt) 统一首战与单队重试的 `minOf(5, resolved.size)` 合法人数及小角色池兜底规则（Boss 多队仍保持五人要求，已失败阵容仍禁止重复提交）；当失败页或编组页确认已无可替换的未失败阵容时，[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 立即按批次 `FAILED_MAX_RETRY` 交接或按单局策略保留页面停止，不再空等 120 秒。桌面与 Android 共享此修复；三/四/五人及空角色池离线回放已通过，待实机复核。
 
 - [ ] **FIX-08：普通战编组提示一号位生存资格不足后停滞（下一轮核对）**
   - **现象**：2026-11-14 15:55:33 进入普通战斗节点 `10402`；15:55:35 起持续提示“自动战斗要求实际一号位满足生存资格；当前角色池无法组成满足条件的队伍”，没有派发编组动作，15:57:35 因连续 120 秒无进展停止，单局记为 `ABORTED_UNKNOWN`。此前同局普通战斗节点 `10202` 曾成功生成三人推荐，随后经过连结节点 `10302`。

@@ -23,6 +23,8 @@ class SessionExpiryFrameTracker {
     @Volatile
     private var battleEndConfirmationPoint: ScreenPoint? = null
     @Volatile
+    private var nodeMoveConfirmationPoint: ScreenPoint? = null
+    @Volatile
     private var width: Int = 0
     @Volatile
     private var height: Int = 0
@@ -34,6 +36,7 @@ class SessionExpiryFrameTracker {
         pageState = result.observation.state
         battleFailureEndPoint = result.battleFailure?.endButtonRect?.let(::centre)
         battleEndConfirmationPoint = result.battleEndConfirmation?.advanceButtonRect?.let(::centre)
+        nodeMoveConfirmationPoint = result.nodeMoveConfirmation?.confirmButtonRect?.let(::centre)
     }
 
     private fun centre(rect: EntryPixelRect) = ScreenPoint(
@@ -49,12 +52,24 @@ class SessionExpiryFrameTracker {
      *   「我的主页」会请求主页数据，旧 enter 被拒即弹会话失效提示；
      * - 战斗失败页：没有底栏。「重新挑战」只回到 EX 挑战页、不联网（2026-09-17 实测），所以走
      *   结束 → 撤退（无报酬） → 确认 三步：确认才向服务端撤退，旧 enter 被拒即弹会话失效提示。
-     *   每一步都按当前帧识别到的对话框阶段给出按钮，识别不到不点。
+     *   每一步都按当前帧识别到的对话框阶段给出按钮，识别不到不点；
+     * - 编组页 / 挑战页 / 地图页：编组页点「取消」回到挑战页，挑战页点「查看地图」打开地图视图，
+     *   地图页点「撤退（无报酬）」→ 二键确认弹窗点「确认」向服务端发起撤退，触发旧会话失效弹窗。
      */
     val sessionInvalidationTrigger: ScreenPoint?
         get() = when (pageState) {
             LabyrinthEntryPageState.BATTLE_FAILED, LabyrinthEntryPageState.UNKNOWN ->
                 battleEndConfirmationPoint ?: battleFailureEndPoint.takeIf { pageState == LabyrinthEntryPageState.BATTLE_FAILED }
+            LabyrinthEntryPageState.BATTLE_TEAM_SELECTION ->
+                anchorCenter(EntryAnchorId.BATTLE_TEAM_CANCEL_BUTTON, TRIGGER_MIN_SCORE)
+            LabyrinthEntryPageState.BATTLE_CHALLENGE ->
+                anchorCenter(EntryAnchorId.BATTLE_CHALLENGE_VIEW_MAP_BUTTON, TRIGGER_MIN_SCORE)
+            LabyrinthEntryPageState.NODE_SELECTION,
+            LabyrinthEntryPageState.NODE_MAP_VIEW,
+            -> nodeMoveConfirmationPoint
+                ?: battleEndConfirmationPoint
+                ?: anchorCenter(EntryAnchorId.NODE_RETREAT_STANDARD, TRIGGER_MIN_SCORE)
+                ?: anchorCenter(EntryAnchorId.NODE_RETREAT, TRIGGER_MIN_SCORE)
             LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE,
             LabyrinthEntryPageState.DAWN_REALM_HOME_ACTIVE,
             -> anchorCenter(EntryAnchorId.DAWN_HOME_MY_HOME_TAB, TRIGGER_MIN_SCORE)
@@ -77,8 +92,15 @@ class SessionExpiryFrameTracker {
      * 「撤退」上，随后卡在确认页）。只要当前帧结构上识别为结束确认对话框，就不是失效弹窗。
      */
     val popupVisible: Boolean
-        get() = battleEndConfirmationPoint == null &&
-            (scores[EntryAnchorId.SESSION_ERROR_TITLE] ?: 0.0) >= POPUP_MIN_SCORE
+        get() {
+            val mapConfirmationVisible = (
+                pageState == LabyrinthEntryPageState.NODE_SELECTION ||
+                    pageState == LabyrinthEntryPageState.NODE_MAP_VIEW
+                ) && nodeMoveConfirmationPoint != null
+            return battleEndConfirmationPoint == null &&
+                !mapConfirmationVisible &&
+                (scores[EntryAnchorId.SESSION_ERROR_TITLE] ?: 0.0) >= POPUP_MIN_SCORE
+        }
 
     /** 已回到标题页（点击屏幕开始游戏） */
     val titleReached: Boolean

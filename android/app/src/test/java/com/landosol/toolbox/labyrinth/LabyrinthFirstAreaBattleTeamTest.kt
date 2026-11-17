@@ -109,8 +109,18 @@ class LabyrinthFirstAreaBattleTeamTest {
                 val again = planner.retryRecommendation(expanded, context, setOf(failed), requestedBossTeamCount = teamCount)
                 assertFalse(again is LabyrinthBattleTeamRecommendationResult.Ready &&
                     labyrinthBattleTeamSignature(again.recommendation.members.map { it.characterId }) == failed)
-                assertTrue(planner.retryRecommendation(opening, context, emptySet(), requestedBossTeamCount = teamCount)
-                    is LabyrinthBattleTeamRecommendationResult.Unavailable)
+                val shortRetry = planner.retryRecommendation(opening, context, emptySet(), requestedBossTeamCount = teamCount)
+                if (teamCount == 1) {
+                    val ready = shortRetry as LabyrinthBattleTeamRecommendationResult.Ready
+                    assertEquals(opening.size, ready.recommendation.members.size)
+                    val openingSig = labyrinthBattleTeamSignature(opening)
+                    assertTrue(
+                        planner.retryRecommendation(opening, context, setOf(openingSig), requestedBossTeamCount = 1)
+                            is LabyrinthBattleTeamRecommendationResult.Unavailable,
+                    )
+                } else {
+                    assertTrue(shortRetry is LabyrinthBattleTeamRecommendationResult.Unavailable)
+                }
             }
         }
     }

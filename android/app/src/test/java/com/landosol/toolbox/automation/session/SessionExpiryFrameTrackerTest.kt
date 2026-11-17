@@ -10,6 +10,7 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthBattleFailureObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
+import com.landosol.toolbox.labyrinth.vision.LabyrinthNodeMoveConfirmationObservation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -20,6 +21,7 @@ class SessionExpiryFrameTrackerTest {
         failure: LabyrinthBattleFailureObservation? = null,
         anchors: Map<String, EntryAnchorMatch> = emptyMap(),
         endConfirmation: LabyrinthBattleEndConfirmationObservation? = null,
+        moveConfirmation: LabyrinthNodeMoveConfirmationObservation? = null,
     ) = LabyrinthEntryFrameResult(
         observation = LabyrinthEntryPageObservation(
             state = state,
@@ -32,6 +34,7 @@ class SessionExpiryFrameTrackerTest {
         anchorMatches = anchors,
         battleFailure = failure,
         battleEndConfirmation = endConfirmation,
+        nodeMoveConfirmation = moveConfirmation,
     )
 
     private val tab = EntryAnchorId.DAWN_HOME_MY_HOME_TAB to
@@ -124,5 +127,60 @@ class SessionExpiryFrameTrackerTest {
 
         tracker.record(result(LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE, null))
         assertNull(tracker.sessionInvalidationTrigger)
+    }
+
+    @Test
+    fun `team selection and challenge pages walk cancel then view map then retreat confirmation`() {
+        val tracker = SessionExpiryFrameTracker()
+        val cancel = EntryAnchorId.BATTLE_TEAM_CANCEL_BUTTON to
+            EntryAnchorMatch(score = 0.99, rect = EntryPixelRect(1285, 850, 270, 110))
+        val viewMap = EntryAnchorId.BATTLE_CHALLENGE_VIEW_MAP_BUTTON to
+            EntryAnchorMatch(score = 0.91, rect = EntryPixelRect(975, 850, 440, 125))
+        val retreat = EntryAnchorId.NODE_RETREAT_STANDARD to
+            EntryAnchorMatch(score = 0.93, rect = EntryPixelRect(1200, 928, 323, 95))
+        val errorTitle = EntryAnchorId.SESSION_ERROR_TITLE to
+            EntryAnchorMatch(score = 0.70, rect = EntryPixelRect(859, 272, 200, 44))
+        val twoButtonConfirm = LabyrinthNodeMoveConfirmationObservation(
+            confidence = 0.88,
+            confirmButtonRect = EntryPixelRect(975, 690, 415, 105),
+            cancelButtonRect = EntryPixelRect(545, 690, 415, 105),
+        )
+
+        tracker.record(result(LabyrinthEntryPageState.BATTLE_TEAM_SELECTION, anchors = mapOf(cancel)))
+        val cancelPoint = requireNotNull(tracker.sessionInvalidationTrigger)
+        assertEquals(1420f, cancelPoint.x, 0.01f)
+        assertEquals(905f, cancelPoint.y, 0.01f)
+
+        // Weak challenge anchor never fires a blind tap.
+        tracker.record(
+            result(
+                LabyrinthEntryPageState.BATTLE_CHALLENGE,
+                anchors = mapOf(viewMap.first to viewMap.second.copy(score = 0.55)),
+            ),
+        )
+        assertNull(tracker.sessionInvalidationTrigger)
+
+        tracker.record(result(LabyrinthEntryPageState.BATTLE_CHALLENGE, anchors = mapOf(viewMap)))
+        val viewMapPoint = requireNotNull(tracker.sessionInvalidationTrigger)
+        assertEquals(1195f, viewMapPoint.x, 0.01f)
+        assertEquals(912.5f, viewMapPoint.y, 0.01f)
+
+        tracker.record(result(LabyrinthEntryPageState.NODE_MAP_VIEW, anchors = mapOf(retreat)))
+        val retreatPoint = requireNotNull(tracker.sessionInvalidationTrigger)
+        assertEquals(1361.5f, retreatPoint.x, 0.01f)
+        assertEquals(975.5f, retreatPoint.y, 0.01f)
+
+        // Two-button confirmation over NODE_MAP_VIEW / NODE_SELECTION clicks 确认 and suppresses popup false positives.
+        tracker.record(
+            result(
+                LabyrinthEntryPageState.NODE_MAP_VIEW,
+                anchors = mapOf(retreat, errorTitle),
+                moveConfirmation = twoButtonConfirm,
+            ),
+        )
+        assertEquals(false, tracker.popupVisible)
+        val confirmPoint = requireNotNull(tracker.sessionInvalidationTrigger)
+        assertEquals(1182.5f, confirmPoint.x, 0.01f)
+        assertEquals(742.5f, confirmPoint.y, 0.01f)
     }
 }

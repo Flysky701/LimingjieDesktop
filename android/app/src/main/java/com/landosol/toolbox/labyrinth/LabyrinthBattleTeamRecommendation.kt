@@ -315,15 +315,14 @@ class LabyrinthBattleTeamRecommendationPlanner(
         val canonicalIds = acquiredCharacterIds.map(::canonicalLabyrinthRoleId).distinct()
         val knownProfiles = profiles.withKnownRoleIdentities(canonicalIds)
         val resolved = canonicalIds.map(knownProfiles::getValue)
-        if (resolved.size < TEAM_SIZE) {
-            return LabyrinthBattleTeamRecommendationResult.Unavailable(
-                "战斗失败后可用角色不足${TEAM_SIZE}名，无法生成完整重试队伍",
-            )
+        if (resolved.isEmpty()) {
+            return LabyrinthBattleTeamRecommendationResult.Unavailable("没有已获得的可用角色")
         }
-        // A retry with a vanguard-less team beats leaving the run parked on the failure page
-        // (2026-09-19, by request; same fallback as the first attempt).
+        // A retry with a vanguard-less or short team beats leaving the run parked on the failure
+        // or formation page (same legal team-size and small-roster rules as initialRecommendation).
         val retryPoolHasVanguard = resolved.any { it.isEligibleBattleVanguard(context) }
-        val retrySupplementLead = allowSupplementLead || !retryPoolHasVanguard || context.currentArea == 1
+        val retrySupplementLead = allowSupplementLead || !retryPoolHasVanguard ||
+            resolved.size <= TEAM_SIZE || context.currentArea == 1
 
         val isolatedRetryPlan = if (context.encounterStrategy?.vanguardIsolationRadius != null) {
             teamPlanSearcher.fallbackSearch(resolved, context, failedTeamSignatures)
@@ -374,9 +373,10 @@ class LabyrinthBattleTeamRecommendationPlanner(
         val retryLeadIsSupplement = plan.safeTeamCount == 0
         val evaluation = plan.teams.firstOrNull()
             ?: return LabyrinthBattleTeamRecommendationResult.Unavailable(plan.reason)
-        if (evaluation.members.size != TEAM_SIZE) {
+        val expectedTeamSize = minOf(TEAM_SIZE, resolved.size)
+        if (evaluation.members.size != expectedTeamSize) {
             return LabyrinthBattleTeamRecommendationResult.Unavailable(
-                "失败重试规划未返回完整${TEAM_SIZE}人队伍：${plan.reason}",
+                "失败重试规划未返回预期的${expectedTeamSize}人队伍：${plan.reason}",
             )
         }
         val signature = labyrinthBattleTeamSignature(
