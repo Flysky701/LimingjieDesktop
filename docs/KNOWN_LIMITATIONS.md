@@ -10,19 +10,17 @@
   - **现象**：单局记录“EX战连续3次挑战失败”并停止，随后重置接手时画面已处于 `BATTLE_CHALLENGE`，因重置阶段无挑战页推进路径而超时。
   - **本次修复**：[LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt) 在点击“重新挑战”后标记等待新一轮战斗启动，在进入新战斗或执行开战前不对残留失败帧再次累计重试次数或触发三次战败终止；[SessionExpiryFrameTracker.kt](../android/app/src/main/java/com/landosol/toolbox/automation/session/SessionExpiryFrameTracker.kt) 补充编组页取消、挑战页查看地图及地图页撤退确认的会话失效触发链。该修复同时作用于桌面与 Android；残留失败帧与挑战页撤退链的定向离线回放已通过，实机连续战败交接仍待复测。
 
-- [ ] **FIX-02：启动阶段公告前 45 秒总时限可能在慢加载时提前终止任务**
-  - **现象**：从标题页点击后若加载漫画或过渡页耗时较长，任务在正常加载中被终止并笼统记录为“会话重置失败”。
-  - **原因**：[LabyrinthEntryActionPlanner.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryActionPlanner.kt) 从首次标题页动作起累计公告前 45 秒固定上限，页面变化不重置或延长预算；[GameSessionResetWorkflow.kt](../android/app/src/main/java/com/landosol/toolbox/automation/session/GameSessionResetWorkflow.kt) 捕获失败后未向上层保留具体超时原因。
-  - **修复方向**：区分页面仍有进展的正常加载与持续卡死，并将具体停止原因传递到运行记录。
+- [ ] **FIX-02：启动阶段慢加载时限与重置失败原因透传（已完成离线回放，待实机冷启动复测）**
+  - **现象**：从标题页点击后若加载漫画或数据同步耗时较长，任务在正常加载中被 45 秒上限终止并笼统记录为“会话重置失败”。
+  - **本次修复**：[LabyrinthEntryActionPlanner.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryActionPlanner.kt) 将已识别的 `GAME_LOADING_PROGRESS` / `PRE_HOME_DATA_LOADING` 与未知页面受限点击分开计时，单阶段给予最长 90 秒加载预算且不消耗公告前点击次数（仍受 120 秒入口总超时约束），进入主页公告及后续页面后清除公告前点击武装；[GameSessionResetWorkflow.kt](../android/app/src/main/java/com/landosol/toolbox/automation/session/GameSessionResetWorkflow.kt) 与 [LabyrinthAutoRunWorkflow.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthAutoRunWorkflow.kt) 向上层透传具体阶段失败原因，[LandosolToolboxApplication.kt](../android/app/src/main/java/com/landosol/toolbox/LandosolToolboxApplication.kt) 与桌面装配同步校验 `READY_FOR_NEXT_ROUND` 终态。桌面与 Android 共享此修复；慢加载阶段切换与失败原因透传的离线回放已通过，待实机慢速冷启动复测。
 
 - [ ] **FIX-03：通关结算阶段衔接（待实机连续多局回归）**
   - **现象**：关闭分数后若停留在 `SCORE_RESULT` 阶段，进入 `RUN_CLEAR_CHEST_RESULT` 时不触发确认点击，导致连续多局在宝箱结果页超时中断。
   - **当前进展**：已在共享会话中补充宝箱动画、宝箱结果与最终道具页的阶段推进恢复，并通过残留分数帧与漏帧的连续两局离线回放；待实机连续多局验证后闭环。
 
-- [ ] **FIX-04：长耗时 Boss 战受固定 5 分钟等待上限截断**
+- [ ] **FIX-04：长耗时与多队 Boss 战进展感知等待上限（已完成离线回放，待实机多队 Boss 复测）**
   - **现象**：多队或高血量 Boss 战（如 `Boss#30701`）在战斗仍正常进行、倒计时未结束时满 5 分钟被强制终止。
-  - **原因**：[LabyrinthBattleWaitPolicy.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthBattleWaitPolicy.kt) 采用固定 300,000 ms 现实时间上限，未结合多队接力、倒计时或血量变化判断战斗进展。
-  - **修复方向**：结合战斗进展信号调整多队 Boss 战等待预算，同时保留卡死保护上限与诊断状态。
+  - **本次修复**：[LabyrinthEntryFrameProcessor.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthEntryFrameProcessor.kt) 在 `BATTLE_IN_PROGRESS` 帧对顶部血条与倒计时 HUD 区域计算量化摘要；[LabyrinthBattleWaitPolicy.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthBattleWaitPolicy.kt) 在画面静止或无战斗进展时保持 5 分钟基础上限，仅当 HUD 持续变化时将等待上限按“最近一次进展 + 60 秒停滞保护”顺延至 `5 + 3 × 计划队伍数` 分钟硬上限（单队 8 分钟、双队 11 分钟、三队 Boss 14 分钟），桌面运行台同步匹配动态分钟数的超时解释。桌面与 Android 共享此修复；静止超时、HUD 推进顺延及停滞保护的离线测试已通过，待实机多队 Boss 战复测。
 
 - [ ] **FIX-05：地图恢复与移动确认后重置未知页面计时（已完成离线回放，待实机回归）**
   - **现象**：2026-11-14 的 1920 × 1080 运行在点击普通战斗节点移动确认约 1.8 秒后，以“路线阶段未知页面超过限定时间”提前停止。
@@ -45,6 +43,11 @@
   - **核对与验证**：核对进入 `10402` 时的可用角色、站位与生存资格，以及连结节点前后的角色池变化；区分拒绝原因并明确编组不可用时的后续处理。补充角色池跨过五人、前排站位冲突及资料不足的定向离线回放，保留现有资格判定与点击守卫，并与 FIX-07 的重试人数门槛分别跟踪。
 
 ## 下一版本待发布修复
+
+- **桌面端运行中短暂 ADB 离线复核与稳定截图选型**（已修复，纳入下一版本）
+  - 运行中若遇到短暂 ADB 离线、连接重置或启动身份读取超时，保持当前设备租约并在最多 30 秒内复核同一模拟器的 `boot_id`，确认未重启后继续原任务；触控通道恢复成功后重置单次重连预算，避免独立偶发断连直接判失联。
+  - 截图基准测速优先在 `p95 ≤ 600 ms` 的稳定模式中选择最低 `p50` 方案，避免偶发长尾卡顿的 `Raw` 通道压过更稳定的 `Png`。
+  - 验证：20 秒短暂离线恢复、启动身份超时恢复、独立触控中断恢复与测速选型的定向回归通过。仅影响桌面端。
 
 - **桌面端首次校验游戏安装信息时 ADB 超时**（已修复，纳入下一版本）
   - 安装包复制的时限由 60 秒延长至 10 分钟，移除总控连接请求的 3 分钟提前中断限制，保留各步骤超时、断线检测和主动取消。

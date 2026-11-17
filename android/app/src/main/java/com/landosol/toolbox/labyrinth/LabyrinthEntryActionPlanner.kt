@@ -44,6 +44,9 @@ data class LabyrinthEntryActionPlannerConfig(
     /** A stable map seen without any opening roster page is treated as a mid-run handoff. */
     val midRunNodeSelectionStableFrames: Int = 6,
     val totalTimeoutMillis: Long = 120_000L,
+    /** Per-stage ceiling for positively recognized loading pages (comic / pre-home data sync). */
+    val preAnnouncementLoadingTimeoutMillis: Long =
+        maxOf(preAnnouncementTimeoutMillis, 90_000L.coerceAtMost(totalTimeoutMillis)),
 ) {
     init {
         require(stableFrames > 0)
@@ -53,6 +56,7 @@ data class LabyrinthEntryActionPlannerConfig(
         require(maxPageActionAttempts > 0)
         require(maxPreAnnouncementClicks > 0)
         require(preAnnouncementTimeoutMillis > 0)
+        require(preAnnouncementLoadingTimeoutMillis >= preAnnouncementTimeoutMillis)
         require(characterSelectionClickIntervalMillis > 0)
         require(openingSelectionFeedbackTimeoutMillis > 0)
         require(openingSelectionFeedbackStableFrames > 0)
@@ -66,6 +70,7 @@ data class LabyrinthEntryActionPlannerConfig(
         require(selectionReadyMinScore in 0.0..1.0)
         require(midRunNodeSelectionStableFrames >= stableFrames)
         require(totalTimeoutMillis >= preAnnouncementTimeoutMillis)
+        require(totalTimeoutMillis >= preAnnouncementLoadingTimeoutMillis)
         require(totalTimeoutMillis >= characterAcquisitionTimeoutMillis)
     }
 }
@@ -106,7 +111,9 @@ class LabyrinthEntryActionPlanner(
 ) {
     private val characterSelectionTargets = characterSelectionOrder.distinct().take(REQUIRED_INITIAL_CHARACTERS)
     private var startedAt = Long.MIN_VALUE
+    private var preAnnouncementArmed = false
     private var preAnnouncementStartedAt = Long.MIN_VALUE
+    private var preAnnouncementLoadingSince = Long.MIN_VALUE
     private var lastState: LabyrinthEntryPageState? = null
     private var stableFrameCount = 0
     private var attemptsForState = 0
@@ -138,7 +145,9 @@ class LabyrinthEntryActionPlanner(
 
     fun start(nowMillis: Long) {
         startedAt = nowMillis
+        preAnnouncementArmed = false
         preAnnouncementStartedAt = Long.MIN_VALUE
+        preAnnouncementLoadingSince = Long.MIN_VALUE
         lastState = null
         stableFrameCount = 0
         attemptsForState = 0
@@ -203,6 +212,7 @@ class LabyrinthEntryActionPlanner(
         if (nowMillis - startedAt > config.totalTimeoutMillis) {
             return LabyrinthEntryActionDecision.Stop("入口流程超过总超时")
         }
+        val previousState = lastState
         observe(state)
         if (
             state == LabyrinthEntryPageState.NODE_SELECTION &&
@@ -217,6 +227,9 @@ class LabyrinthEntryActionPlanner(
         if (characterAcquisitionActive) {
             return planCharacterAcquisition(state, nowMillis, frameWidth, frameHeight)
         }
+        if (state in POST_PRE_ANNOUNCEMENT_STATES) {
+            clearPreAnnouncementTracking()
+        }
         return when (state) {
             LabyrinthEntryPageState.TITLE_WAITING_TAP -> planPageAction(
                 nowMillis,
@@ -229,20 +242,23 @@ class LabyrinthEntryActionPlanner(
                 anchorMatches = anchorMatches,
                 anchorIds = listOf(EntryAnchorId.TITLE_TAP_PROMPT),
             ).also { decision ->
-                if (decision is LabyrinthEntryActionDecision.Execute && preAnnouncementStartedAt == Long.MIN_VALUE) {
-                    preAnnouncementStartedAt = nowMillis
+                if (decision is LabyrinthEntryActionDecision.Execute) {
+                    preAnnouncementArmed = true
+                    preAnnouncementStartedAt = Long.MIN_VALUE
+                    preAnnouncementLoadingSince = Long.MIN_VALUE
                 }
             }
 
             LabyrinthEntryPageState.GAME_LOADING_PROGRESS,
             LabyrinthEntryPageState.PRE_HOME_DATA_LOADING,
-            -> planPreAnnouncementClick(nowMillis, frameWidth, frameHeight, allowStartingPhase = true)
+            -> planPreAnnouncementLoading(state, previousState, nowMillis)
 
-            LabyrinthEntryPageState.UNKNOWN ->
-                planPreAnnouncementClick(nowMillis, frameWidth, frameHeight, allowStartingPhase = false)
+            LabyrinthEntryPageState.UNKNOWN -> {
+                preAnnouncementLoadingSince = Long.MIN_VALUE
+                planPreAnnouncementClick(nowMillis, frameWidth, frameHeight)
+            }
 
             LabyrinthEntryPageState.HOME_ANNOUNCEMENT -> {
-                preAnnouncementStartedAt = Long.MIN_VALUE
                 planPageAction(
                     nowMillis,
                     frameWidth,
@@ -785,14 +801,38 @@ class LabyrinthEntryActionPlanner(
             )
         }
 
+    private fun clearPreAnnouncementTracking() {
+        preAnnouncementArmed = false
+        preAnnouncementStartedAt = Long.MIN_VALUE
+        preAnnouncementLoadingSince = Long.MIN_VALUE
+        preAnnouncementClicks = 0
+    }
+
+    private fun planPreAnnouncementLoading(
+        state: LabyrinthEntryPageState,
+        previousState: LabyrinthEntryPageState?,
+        nowMillis: Long,
+    ): LabyrinthEntryActionDecision {
+        preAnnouncementArmed = true
+        preAnnouncementStartedAt = Long.MIN_VALUE
+        if (previousState != state || preAnnouncementLoadingSince == Long.MIN_VALUE) {
+            preAnnouncementLoadingSince = nowMillis
+        }
+        if (nowMillis - preAnnouncementLoadingSince > config.preAnnouncementLoadingTimeoutMillis) {
+            return LabyrinthEntryActionDecision.Stop("启动加载页面（${state.name}）等待超时")
+        }
+        return LabyrinthEntryActionDecision.Wait("正在加载游戏数据（${state.name}）")
+    }
+
     private fun planPreAnnouncementClick(
         nowMillis: Long,
         frameWidth: Int,
         frameHeight: Int,
-        allowStartingPhase: Boolean,
     ): LabyrinthEntryActionDecision {
+        if (!preAnnouncementArmed) {
+            return LabyrinthEntryActionDecision.Wait("未知页面禁止启动点击")
+        }
         if (preAnnouncementStartedAt == Long.MIN_VALUE) {
-            if (!allowStartingPhase) return LabyrinthEntryActionDecision.Wait("未知页面禁止启动点击")
             preAnnouncementStartedAt = nowMillis
         }
         if (nowMillis - preAnnouncementStartedAt > config.preAnnouncementTimeoutMillis) {
@@ -864,6 +904,15 @@ class LabyrinthEntryActionPlanner(
             ScreenPoint(850f, 430f),
             ScreenPoint(1065f, 430f),
             ScreenPoint(1275f, 430f),
+        )
+        val POST_PRE_ANNOUNCEMENT_STATES = setOf(
+            LabyrinthEntryPageState.HOME_ANNOUNCEMENT,
+            LabyrinthEntryPageState.HOME,
+            LabyrinthEntryPageState.ADVENTURE,
+            LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE,
+            LabyrinthEntryPageState.DAWN_REALM_HOME_ACTIVE,
+            LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION,
+            LabyrinthEntryPageState.NODE_SELECTION,
         )
     }
 }

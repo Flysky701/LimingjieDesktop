@@ -5155,17 +5155,21 @@ class LabyrinthEntryRecognitionSession(
         // 「编组页动作派发后画面没动」的兜底必须先于战斗等待判定：编组页在战斗等待的 3 秒宽限内是
         // WAIT，宽限一过又变成 NONE，两条路都会把这一帧继续交下去，而卡住的运行永远等不到结果。
         if (handleUnconfirmedBattleTeamActionFrame(sessionId, result, timestampMillis)) return true
+        val plannedTeams = plannedBattleTeamsForWait(restartSafeBossContext)
         when (battleWait.observe(
             page = result.observation.state,
             now = timestampMillis,
             battleResultNextReady = battleResultNextReady,
+            hudDigest = result.battleHudDigest,
+            plannedTeams = plannedTeams,
         )) {
             LabyrinthBattleWaitDecision.NONE -> {
                 acknowledgeBattleTeamActionProgress(result)
                 return false
             }
             LabyrinthBattleWaitDecision.TIMED_OUT -> {
-                finishFromPlanner(sessionId, "等待战斗结算超过5分钟，已停止并保留诊断状态")
+                val limitMinutes = battleWait.effectiveLimitMinutes()
+                finishFromPlanner(sessionId, "等待战斗结算超过${limitMinutes}分钟，已停止并保留诊断状态")
                 return true
             }
             LabyrinthBattleWaitDecision.WAIT -> {
@@ -5179,14 +5183,23 @@ class LabyrinthEntryRecognitionSession(
                 postEntryStableFrames = 0
                 postEntryAttempts = 0
                 if (activeSessionId == sessionId) {
+                    val maxMinutes = battleWait.currentMaxMinutes()
                     _state.value = _state.value.copy(
-                        message = "等待战斗结算（最长5分钟）；暂停动画补点",
+                        message = "等待战斗结算（最长${maxMinutes}分钟）；暂停动画补点",
                     )
                     overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
                 }
                 return true
             }
         }
+    }
+
+    private fun plannedBattleTeamsForWait(context: LabyrinthCombatContext? = combatContext): Int {
+        if (context?.kind != LabyrinthCombatKind.BOSS || bossTeamMode != LabyrinthBossTeamMode.MULTI_TEAM) {
+            return 1
+        }
+        val committed = synchronized(currentBattleTeamSignatures) { currentBattleTeamSignatures.size }
+        return (bossMultiTeamTargetCount ?: committed.takeIf { it > 0 } ?: 3).coerceIn(1, 3)
     }
 
     /**
@@ -8002,7 +8015,6 @@ class LabyrinthEntryRecognitionSession(
                         pendingBossTeamAdvance = (tabReceipt?.expectedIndex ?: ((bossEditorTeamIndex ?: 1) + 1)) to step.confirmedTeamIds
                     }
                     if (step.kind == LabyrinthBattleTeamExecutionKind.START_BATTLE) {
-                        battleWait.onStartExecuted(clock())
                         awaitingRetryBattleAfterFailure = false
                         if (step.confirmedTeamIds.isNotEmpty()) {
                             synchronized(currentBattleTeamSignatures) {
@@ -8012,6 +8024,7 @@ class LabyrinthEntryRecognitionSession(
                         synchronized(committedBattleCharacterIds) {
                             committedBattleCharacterIds += step.confirmedTeamIds
                         }
+                        battleWait.onStartExecuted(clock(), plannedBattleTeamsForWait())
                     }
                     val current = _state.value
                     _state.value = current.copy(

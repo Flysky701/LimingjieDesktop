@@ -1,7 +1,11 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.clanbattle.recognition.PixelImage
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState as Page
+import com.landosol.toolbox.labyrinth.vision.computeBattleHudDigest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 
 class LabyrinthBattleWaitPolicyTest {
@@ -100,6 +104,61 @@ class LabyrinthBattleWaitPolicyTest {
         policy.onStartExecuted(60_000)
         assertEquals(LabyrinthBattleWaitDecision.WAIT, policy.observe(Page.UNKNOWN, 359_999))
         assertEquals(LabyrinthBattleWaitDecision.TIMED_OUT, policy.observe(Page.UNKNOWN, 360_000))
+    }
+
+    @Test
+    fun `static battle hud still stops at five minutes even for multi team boss`() {
+        val policy = LabyrinthBattleWaitPolicy().apply { onStartExecuted(0L, plannedTeams = 3) }
+        assertEquals(LabyrinthBattleWaitDecision.WAIT, policy.observe(Page.BATTLE_IN_PROGRESS, 10_000L, hudDigest = 42L))
+        assertEquals(LabyrinthBattleWaitDecision.WAIT, policy.observe(Page.BATTLE_IN_PROGRESS, 299_999L, hudDigest = 42L))
+        assertEquals(LabyrinthBattleWaitDecision.TIMED_OUT, policy.observe(Page.BATTLE_IN_PROGRESS, 300_000L, hudDigest = 42L))
+        assertEquals(5, policy.effectiveLimitMinutes())
+    }
+
+    @Test
+    fun `progressing hud extends single team and multi team boss bounds but stops sixty seconds after stall`() {
+        val singleTeam = LabyrinthBattleWaitPolicy().apply { onStartExecuted(0L, plannedTeams = 1) }
+        assertEquals(LabyrinthBattleWaitDecision.WAIT, singleTeam.observe(Page.BATTLE_IN_PROGRESS, 10_000L, hudDigest = 1L))
+        assertEquals(LabyrinthBattleWaitDecision.WAIT, singleTeam.observe(Page.BATTLE_IN_PROGRESS, 280_000L, hudDigest = 2L))
+        assertEquals(8, singleTeam.currentMaxMinutes())
+        // Post-kill fade-out / UNKNOWN summary transition beyond 5 minutes survives within 60 s of HUD progress.
+        assertEquals(LabyrinthBattleWaitDecision.WAIT, singleTeam.observe(Page.UNKNOWN, 315_000L))
+        assertEquals(LabyrinthBattleWaitDecision.TIMED_OUT, singleTeam.observe(Page.UNKNOWN, 340_000L))
+
+        val multiTeam = LabyrinthBattleWaitPolicy().apply { onStartExecuted(0L, plannedTeams = 3) }
+        var tick = 10_000L
+        var digest = 100L
+        while (tick < 840_000L) {
+            assertEquals(
+                "tick=$tick",
+                LabyrinthBattleWaitDecision.WAIT,
+                multiTeam.observe(Page.BATTLE_IN_PROGRESS, tick, hudDigest = digest++),
+            )
+            tick += 30_000L
+        }
+        assertEquals(14, multiTeam.currentMaxMinutes())
+        assertEquals(LabyrinthBattleWaitDecision.TIMED_OUT, multiTeam.observe(Page.BATTLE_IN_PROGRESS, 840_000L, hudDigest = digest))
+        assertEquals(14, multiTeam.effectiveLimitMinutes())
+    }
+
+    @Test
+    fun `battle hud digest reflects quantized top hud changes`() {
+        val first = PixelImage(1920, 1080, IntArray(1920 * 1080) { 0xff202020.toInt() })
+        val minorNoise = PixelImage(1920, 1080, IntArray(1920 * 1080) { 0xff222222.toInt() })
+        val progressedPixels = IntArray(1920 * 1080) { 0xff202020.toInt() }
+        for (y in 32 until 96) {
+            for (x in 300 until 900) {
+                progressedPixels[y * 1920 + x] = 0xffe05040.toInt()
+            }
+        }
+        val progressed = PixelImage(1920, 1080, progressedPixels)
+
+        val d1 = computeBattleHudDigest(first)
+        val dNoise = computeBattleHudDigest(minorNoise)
+        val d2 = computeBattleHudDigest(progressed)
+        assertNotNull(d1)
+        assertEquals(d1, dNoise)
+        assertNotEquals(d1, d2)
     }
 
     private fun started() = LabyrinthBattleWaitPolicy().apply { onStartExecuted(0) }

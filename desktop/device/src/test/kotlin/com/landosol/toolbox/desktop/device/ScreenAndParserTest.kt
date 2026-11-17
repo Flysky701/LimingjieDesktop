@@ -6,6 +6,15 @@ import org.junit.Test
 import org.xml.sax.SAXException
 
 class ScreenAndParserTest {
+    @Test fun benchmarkUsesTheFasterStableModeWhenRawHasLongStalls() {
+        val png = CaptureTiming(CaptureMode.Png, 468, 497)
+        val raw = CaptureTiming(CaptureMode.Raw, 264, 1483)
+        assertEquals(png, ScreenCapturer.selectCaptureTiming(listOf(raw, png)))
+        val stableRaw = raw.copy(p95Millis = 342)
+        assertEquals(stableRaw, ScreenCapturer.selectCaptureTiming(listOf(stableRaw, png)))
+        assertEquals(raw, ScreenCapturer.selectCaptureTiming(listOf(raw)))
+    }
+
     @Test fun rawAllHeadersAndFormats() {
         for (header in listOf(12, 16)) for (format in listOf(1, 2, 5)) {
             val frame = ScreenCapturer.decodeRaw(FakeAdb.raw(header, format), 42)

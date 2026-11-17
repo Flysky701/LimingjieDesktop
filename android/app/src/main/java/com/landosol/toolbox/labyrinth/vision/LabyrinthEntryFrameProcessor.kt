@@ -408,6 +408,8 @@ data class LabyrinthEntryFrameResult(
     val finalBossPlatforms: List<FinalBossPlatformMatch> = emptyList(),
     val finalBossPlatformCandidates: List<FinalBossPlatformMatch> = emptyList(),
     val runResultScore: Long? = null,
+    /** Quantized top-HUD digest sampled only on BATTLE_IN_PROGRESS frames for stall/progress bounds. */
+    val battleHudDigest: Long? = null,
 )
 
 data class EntryAnchorMatch(
@@ -536,6 +538,7 @@ class LabyrinthEntryFrameProcessor(
         var nodeRevalidationCount = 0
         var nodeViewportSignature = ""
         var nodeViewportPixels: com.landosol.toolbox.labyrinth.node.NodeViewportPixels? = null
+        var battleHudDigest: Long? = null
         val elapsedNanos = measureNanoTime {
             val measurements = measureLabyrinthEntryAnchors(frame, templates, matcher, preScaledTemplates)
             val scores = measurements.mapValues { (_, measurement) -> measurement?.score ?: 0.0 }
@@ -692,6 +695,9 @@ class LabyrinthEntryFrameProcessor(
                     dialogState = observation.state.toShopDialogState(),
                 )
             }
+            if (observation.state == LabyrinthEntryPageState.BATTLE_IN_PROGRESS) {
+                battleHudDigest = computeBattleHudDigest(frame)
+            }
             matchedFeatures = scores.entries
                 .filter { it.value >= MATCHED_FEATURE_MIN_SCORE }
                 .sortedByDescending(Map.Entry<String, Double>::value)
@@ -736,6 +742,7 @@ class LabyrinthEntryFrameProcessor(
             specialEquipment = specialEquipment,
             frameWidth = frame.width,
             frameHeight = frame.height,
+            battleHudDigest = battleHudDigest,
         )
     }
 
@@ -762,6 +769,8 @@ class LabyrinthEntryFrameProcessor(
         const val MATCHED_FEATURE_MIN_SCORE = 0.45
         val WIDE_REFERENCE = EntryReferenceSize(2780, 1264)
         val STANDARD_REFERENCE = EntryReferenceSize(1920, 1080)
+        /** Covers Boss/enemy HP bar and battle countdown timer to the left of the MENU button. */
+        val BATTLE_HUD_REFERENCE_RECT = EntryReferenceRect(240, 24, 1440, 84)
 
         fun wide(id: String, x: Int, y: Int, width: Int, height: Int) =
             EntryAnchorDefinition(id, WIDE_REFERENCE, EntryReferenceRect(x, y, width, height))
@@ -943,6 +952,31 @@ class LabyrinthEntryFrameProcessor(
         )
         val DEFINITIONS_BY_ID = DEFINITIONS.groupBy(EntryAnchorDefinition::id)
     }
+}
+
+internal fun computeBattleHudDigest(frame: PixelImage): Long? {
+    val rect = ReferenceFitMapper.map(
+        frameWidth = frame.width,
+        frameHeight = frame.height,
+        referenceSize = LabyrinthEntryFrameProcessor.STANDARD_REFERENCE,
+        referenceRect = LabyrinthEntryFrameProcessor.BATTLE_HUD_REFERENCE_RECT,
+    ) ?: return null
+    val cols = 24
+    val rows = 6
+    var hash = -3750763034362895579L
+    for (row in 0 until rows) {
+        val y = rect.top + ((row * 2 + 1) * rect.height) / (rows * 2)
+        val rowOffset = y * frame.width
+        for (col in 0 until cols) {
+            val x = rect.left + ((col * 2 + 1) * rect.width) / (cols * 2)
+            val argb = frame.pixels[rowOffset + x]
+            val quantized = ((argb ushr 20) and 0x0f shl 8) or
+                ((argb ushr 12) and 0x0f shl 4) or
+                ((argb ushr 4) and 0x0f)
+            hash = (hash xor quantized.toLong()) * 1099511628211L
+        }
+    }
+    return hash
 }
 
 /**

@@ -30,6 +30,7 @@ class AdbDeviceService(
     private class Session(val serial: String, val touchMode: TouchMode, val capturer: ScreenCapturer, @Volatile var ready: DeviceReady, val bootId: String, @Volatile var touch: TouchConnection?, val lease: ResourceLease) {
         val captures = Mutex()
         @Volatile var capturePaused = false
+        @Volatile var checkingTransport = false
         var failures = 0
         var failureSince = 0L
         var lastCaptureCompleted = 0L
@@ -147,7 +148,8 @@ class AdbDeviceService(
             if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "测试截图速度")
             val (timing, selected) = capturer.benchmark()
             timing.forEach { emit("截图 ${it.mode}：p50 ${it.p50Millis} ms，p95 ${it.p95Millis} ms") }
-            if (timing.any { it.p95Millis > 600 }) emit("截图耗时较长，可尝试调整模拟器渲染模式或关闭高帧率")
+            emit("已选择截图方式：$selected")
+            if (timing.first { it.mode == selected }.p95Millis > ScreenCapturer.SLOW_CAPTURE_MILLIS) emit("截图耗时较长，可尝试调整模拟器渲染模式或关闭高帧率")
             if (maxOf(size.first, size.second) != 1920 || minOf(size.first, size.second) != 1080) emit("上游只在 1920×1080 下验证过")
             if (!awake) emit("模拟器屏幕已休眠，请先在模拟器中唤醒")
             if (initial) mutableState.value = DeviceConnectionState.Verifying(serial, "连接触控服务")
@@ -171,14 +173,7 @@ class AdbDeviceService(
             while (isActive && session === value) {
                 queryForeground()
                 if (iteration++ % 4 == 0) {
-                    val status = adb.execute(listOf("get-state"), value.serial, timeoutMillis = 3000)
-                    if (status is AdbResult.Failure && status.kind == AdbFailureKind.ServerVersionConflict) { lose(value, status.detail, retry = false); break }
-                    if (status !is AdbResult.Success || status.text().trim() != "device") {
-                        val detail = when (status) { is AdbResult.Failure -> status.detail; is AdbResult.Success -> status.text().trim() }
-                        lose(value, "ADB 设备状态检查失败，任务已停止：$detail")
-                        break
-                    }
-                    if (!lifecycle.withLock { session === value && verifiedSession() === value }) break
+                    if (!lifecycle.withLock { session === value && verifiedSession(checkState = true) === value }) break
                     val power = shellText(value.serial, "dumpsys", "power")
                     if (power != null) lifecycle.withLock {
                         if (session !== value) return@withLock
@@ -190,16 +185,17 @@ class AdbDeviceService(
                         }
                     }
                 }
-                if (value.touchMode == TouchMode.MaaTouch && value.touch?.alive != true) recoverTouch(value)
+                if (value.touchMode == TouchMode.MaaTouch && value.touch?.alive != true) {
+                    lifecycle.withLock { recoverTouchLocked(value) }
+                }
                 delay(500)
             }
         }
     }
 
-    private suspend fun recoverTouch(value: Session) = lifecycle.withLock {
-        if (session !== value) return@withLock
-        if (verifiedSession() !== value) return@withLock
-        if (value.touchRestarted) { loseLocked(value, "触控服务已断开，任务已停止"); return@withLock }
+    private suspend fun recoverTouchLocked(value: Session) {
+        if (session !== value || value.touch?.alive == true || verifiedSession() !== value) return
+        if (value.touchRestarted) { loseLocked(value, "触控服务已断开，任务已停止"); return }
         value.touchRestarted = true
         value.touch?.close(); value.touch = null
         try {
@@ -278,6 +274,7 @@ class AdbDeviceService(
     override suspend fun capture(): DeviceFrame {
         val value = session ?: throw DeviceOperationException("设备未连接")
         return value.captures.withLock {
+            if (value.checkingTransport) lifecycle.withLock { requireCurrent(value) }
             requireCurrent(value)
             val started = System.nanoTime()
             if (started - value.lastCaptureCompleted > 1_000_000_000L) value.failureSince = 0
@@ -305,7 +302,10 @@ class AdbDeviceService(
             }
             requireCurrent(value)
             if (value.capturePaused) acceptRecoveredFrame(value, mode, frame)
-            else value.frameSize = frame.width to frame.height
+            else {
+                if (value.checkingTransport) lifecycle.withLock { requireCurrent(value) }
+                value.frameSize = frame.width to frame.height
+            }
             value.failures = 0
             value.failureSince = 0
             frame
@@ -317,9 +317,9 @@ class AdbDeviceService(
     }
 
     /** Called under lifecycle. A reboot during the capture must invalidate the returned frame too. */
-    private suspend fun requireVerifiedCaptureSession(value: Session) {
+    private suspend fun requireVerifiedCaptureSession(value: Session, checkState: Boolean = false) {
         requireCurrent(value)
-        if (verifiedSession() !== value) throw DeviceOperationException("截图恢复无法确认原设备")
+        if (verifiedSession(checkState) !== value) throw DeviceOperationException("截图恢复无法确认原设备")
     }
 
     private fun captureFailure(mode: CaptureMode, started: Long, error: IOException): String {
@@ -329,16 +329,7 @@ class AdbDeviceService(
 
     private suspend fun recoverCapture(value: Session, mode: CaptureMode, usingBackup: Boolean, kind: AdbFailureKind?, firstFailure: String): DeviceFrame {
         lifecycle.withLock {
-            requireCurrent(value)
-            val status = adb.execute(listOf("get-state"), value.serial, timeoutMillis = 3000)
-            currentCoroutineContext().ensureActive()
-            if (status !is AdbResult.Success || status.text().trim() != "device") {
-                val detail = when (status) { is AdbResult.Failure -> status.detail; is AdbResult.Success -> status.text().trim() }
-                val reason = "截图恢复时设备状态检查失败：$detail"
-                loseLocked(value, reason, retry = (status as? AdbResult.Failure)?.kind != AdbFailureKind.ServerVersionConflict)
-                throw DeviceOperationException(reason)
-            }
-            requireVerifiedCaptureSession(value)
+            requireVerifiedCaptureSession(value, checkState = true)
         }
         emit("设备在线，启动身份一致。" + if (usingBackup) "尝试备用截图 $mode" else "无已验证备用方式，重试 $mode")
         val started = System.nanoTime()
@@ -381,6 +372,8 @@ class AdbDeviceService(
         val permit = currentCoroutineContext()[DeviceDispatchPermit]
         if (permit?.allowed?.invoke() == false) return@withLock TouchResult.Rejected(DEVICE_DISPATCH_SUPPRESSED)
         val value = controlSession() ?: return@withLock TouchResult.Rejected("触控服务未连接")
+        if (value.touchMode == TouchMode.MaaTouch && value.touch?.alive != true) recoverTouchLocked(value)
+        if (session !== value) return@withLock TouchResult.Rejected("触控服务未连接")
         if (queryForeground() != expectedPackage) return@withLock TouchResult.Rejected("游戏不在前台")
         if (session !== value || value.capturePaused) return@withLock TouchResult.Rejected("设备或画面尚未就绪")
         if (permit?.allowed?.invoke() == false) return@withLock TouchResult.Rejected(DEVICE_DISPATCH_SUPPRESSED)
@@ -392,6 +385,7 @@ class AdbDeviceService(
                 if (!MaaTouchProtocol.matchesDimensions(touch.header, value.frameSize.first, value.frameSize.second)) return@withLock TouchResult.Rejected("触控坐标系与截图尺寸不一致")
                 if (permit == null) touch.send(commands, durationMillis)
                 else if (!touch.sendGuarded(commands, durationMillis, permit.allowed)) return@withLock TouchResult.Rejected(DEVICE_DISPATCH_SUPPRESSED)
+                value.touchRestarted = false
             }
             TouchResult.Completed
         } catch (_: IOException) { TouchResult.Rejected("触控服务已断开") }
@@ -416,7 +410,12 @@ class AdbDeviceService(
         val value = controlSession() ?: return@withLock false
         try {
             if (value.touchMode == TouchMode.Compatibility) adb.shell(value.serial, listOf("input", "keyevent", "3")).requireSuccess()
-            else (value.touch ?: return@withLock false).send(MaaTouchProtocol.key(3), 0)
+            else {
+                if (value.touch?.alive != true) recoverTouchLocked(value)
+                if (session !== value) return@withLock false
+                (value.touch ?: return@withLock false).send(MaaTouchProtocol.key(3), 0)
+                value.touchRestarted = false
+            }
             true
         } catch (_: IOException) { false }
     }
@@ -492,24 +491,75 @@ class AdbDeviceService(
         return verifiedSession()?.takeUnless { it.capturePaused }
     }
 
-    private suspend fun verifiedSession(): Session? {
+    private suspend fun verifyTransport(value: Session, checkState: Boolean) {
+        if (checkState) {
+            val status = adb.execute(listOf("get-state"), value.serial, timeoutMillis = 3000).requireSuccess().text().trim()
+            if (status != "device") {
+                val kind = when (status) {
+                    "offline" -> AdbFailureKind.DeviceOffline
+                    "unauthorized" -> AdbFailureKind.Unauthorized
+                    else -> AdbFailureKind.NonZeroExit
+                }
+                throw DeviceOperationException("ADB 设备状态：$status", kind)
+            }
+        }
+        verifyBoot(readBootId(value.serial), value.bootId)
+    }
+
+    /** Hold the existing lease and serialize control while the same transport is being verified. */
+    private suspend fun verifyWithRetry(value: Session, checkState: Boolean) {
+        var failure = try {
+            verifyTransport(value, checkState)
+            return
+        } catch (error: DeviceOperationException) {
+            if (error.adbFailure !in transientTransportFailures) throw error
+            error
+        }
+        value.checkingTransport = true
+        emit("ADB 通信暂时中断，最多等待 ${TRANSPORT_RECOVERY_MILLIS / 1000} 秒复核原设备：${failure.message}")
+        var requestedConnection = false
+        val recovered = withTimeoutOrNull(TRANSPORT_RECOVERY_MILLIS) {
+            while (true) {
+                delay(1_000)
+                try {
+                    if (!requestedConnection && ':' in value.serial &&
+                        (failure.adbFailure == AdbFailureKind.DeviceOffline || failure.adbFailure == AdbFailureKind.DeviceNotFound)) {
+                        requestedConnection = true
+                        adb.execute(listOf("connect", value.serial), timeoutMillis = 3000).requireSuccess()
+                    }
+                    verifyTransport(value, checkState)
+                    break
+                } catch (error: DeviceOperationException) {
+                    if (error.adbFailure !in transientTransportFailures) throw error
+                    failure = error
+                }
+            }
+            true
+        }
+        if (recovered != true) throw failure
+        emit("ADB 通信已恢复，已确认原模拟器启动身份")
+    }
+
+    private suspend fun verifiedSession(checkState: Boolean = false): Session? {
         val value = session ?: return null
         if (!value.lease.isValid) {
             loseLocked(value, "设备占用锁已失效，任务已停止", retry = false)
             return null
         }
         try {
-            verifyBoot(readBootId(value.serial), value.bootId)
+            verifyWithRetry(value, checkState)
         } catch (changed: BootChanged) {
             loseLocked(value, changed.message.orEmpty(), retry = false)
             return null
         } catch (error: DeviceOperationException) {
             currentCoroutineContext().ensureActive()
-            loseLocked(value, "无法读取模拟器启动身份，任务已停止：${error.message}", retry = error.adbFailure != AdbFailureKind.ServerVersionConflict)
+            loseLocked(value, "无法确认原设备的 ADB 连接与启动身份，任务已停止：${error.message}", retry = error.adbFailure != AdbFailureKind.ServerVersionConflict)
             return null
         } catch (_: IllegalArgumentException) {
             loseLocked(value, "模拟器返回了无效的启动身份，任务已停止")
             return null
+        } finally {
+            value.checkingTransport = false
         }
         return value
     }
@@ -518,6 +568,11 @@ class AdbDeviceService(
     private fun validCoordinates(vararg coordinates: Float): Boolean = coordinates.all { it.isFinite() && it >= 0 }
     private fun emit(message: String) { try { onEvent(message) } catch (_: Exception) { /* Observers cannot break device cleanup. */ } }
     private fun notifyLost(reason: String) { try { onLost(reason) } catch (_: Exception) { emit("任务停止通知失败") } }
+    private companion object {
+        const val TRANSPORT_RECOVERY_MILLIS = 30_000L
+        val transientTransportFailures = setOf(AdbFailureKind.Timeout, AdbFailureKind.DeviceOffline,
+            AdbFailureKind.DeviceNotFound, AdbFailureKind.ConnectionRefused)
+    }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         try { runBlocking { disconnect() } }

@@ -453,11 +453,12 @@ class GameSessionResetWorkflow(
             )
         } else {
             val error = outcome.exceptionOrNull()
+            val detail = error?.message?.takeIf(String::isNotBlank) ?: "未知错误"
             finishFlow(
                 sessionId = sessionId,
                 status = GameSessionResetStatus.ERROR,
                 terminalStage = GameSessionResetStage.FAILED,
-                message = "会话重置失败：${error?.message ?: "未知错误"}",
+                message = if (detail.startsWith("会话重置")) detail else "会话重置失败：$detail",
             )
         }
     }
@@ -502,7 +503,9 @@ class GameSessionResetWorkflow(
                 // the total timeout (for example a rotation that outlasted the capture grace).
                 error(CaptureStateRegistry.lastStopReason() ?: "屏幕捕获已停止，请重新授权")
             }
-            if (stage == GameSessionResetStage.FAILED) error("会话重置失败")
+            if (stage == GameSessionResetStage.FAILED) {
+                error(_state.value.message?.takeIf(String::isNotBlank) ?: "会话重置失败")
+            }
             if (stage == GameSessionResetStage.SESSION_BLOCKED) {
                 onBlocked(sessionId, _state.value.lastBlock)
                 error("会话被阻塞：${_state.value.lastBlock}")

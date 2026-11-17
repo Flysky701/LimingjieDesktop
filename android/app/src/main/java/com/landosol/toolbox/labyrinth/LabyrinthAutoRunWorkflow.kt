@@ -55,6 +55,7 @@ class LabyrinthAutoRunWorkflow(
     private val startRun: suspend (accountId: Long?) -> Boolean,
     private val awaitRunFinished: suspend () -> LabyrinthAutoRunRoundOutcome,
     private val resetSession: suspend () -> Boolean,
+    private val resetFailureReason: () -> String? = { null },
 ) {
     private val _progress = MutableStateFlow(LabyrinthAutoRunProgress())
     val progress: StateFlow<LabyrinthAutoRunProgress> = _progress.asStateFlow()
@@ -84,7 +85,8 @@ class LabyrinthAutoRunWorkflow(
                 if (runs < config.targetRuns) {
                     publish(runs, config.targetRuns, "重置游戏会话中", running = true)
                     if (!resetSession()) {
-                        return LabyrinthAutoRunResult.Failure(runs, "会话重置失败").also {
+                        val reason = resetFailureReason()?.takeIf(String::isNotBlank) ?: "会话重置失败"
+                        return LabyrinthAutoRunResult.Failure(runs, reason).also {
                             publish(runs, config.targetRuns, it.message, running = false)
                         }
                     }

@@ -210,6 +210,64 @@ class AdbDeviceServiceTest {
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun truncatedScreenshotAndTwentySecondOutageRecoverOnTheSameTcpEndpoint() = kotlinx.coroutines.test.runTest {
+        val adb = FakeAdb()
+        val touch = RecordingTouch()
+        val events = CopyOnWriteArrayList<String>()
+        val lost = CopyOnWriteArrayList<String>()
+        val serial = "127.0.0.1:16416"
+        val captures = AtomicInteger()
+        // Isolate the capture recovery; the monitor's independent probe has its own test.
+        adb.handler = { call -> if (call.arguments == listOf("dumpsys", "window")) awaitCancellation() else adb.default(call) }
+        service(adb, touch, events, lost).use { device ->
+            device.connect(serial)
+            adb.calls.clear()
+            val started = testScheduler.currentTime
+            adb.handler = { call -> when {
+                call.arguments == listOf("dumpsys", "window") -> awaitCancellation()
+                call.screenshot && captures.incrementAndGet() == 1 -> {
+                    AdbResult.Failure(AdbFailureKind.ConnectionRefused, "ADB 数据帧不完整")
+                }
+                call.arguments == listOf("connect", serial) -> {
+                    FakeAdb.success("connected to $serial")
+                }
+                testScheduler.currentTime - started < 20_000 -> AdbResult.Failure(AdbFailureKind.DeviceOffline, "device offline")
+                else -> adb.default(call)
+            } }
+            assertEquals(2, device.capture().width)
+            assertEquals(20_000L, testScheduler.currentTime - started)
+            assertEquals(1, adb.calls.count { it.arguments == listOf("connect", serial) })
+            assertFalse(adb.calls.any { it.arguments == listOf("getprop", "sys.boot_completed") })
+            assertTrue(lost.isEmpty() && device.state.value is DeviceConnectionState.Ready)
+            assertTrue(touch.gestures.isEmpty())
+            assertTrue(events.any { it.contains("已确认原模拟器启动身份") })
+        }
+    }
+
+    @Test fun transientBootTimeoutKeepsLeaseAndMonitorWithoutStoppingTheTask() = runBlocking {
+        val adb = FakeAdb()
+        val touch = RecordingTouch()
+        val timedOut = CompletableDeferred<Unit>()
+        val recovered = CompletableDeferred<Unit>()
+        val lost = CopyOnWriteArrayList<String>()
+        AdbDeviceService(adb, directory.root.toPath(), emptySet(), onEvent = {
+            if (it.contains("已确认原模拟器启动身份")) recovered.complete(Unit)
+        }, onLost = lost::add, touchFactory = TouchConnectionFactory { _, _, _ -> touch },
+            leases = UserResourceLeases(directory.root.toPath().resolve("user-runtime"))).use { device ->
+            device.connect("fixture")
+            adb.handler = { call ->
+                if (call.arguments == listOf("cat", "/proc/sys/kernel/random/boot_id") && timedOut.complete(Unit))
+                    AdbResult.Failure(AdbFailureKind.Timeout, "ADB 命令超时（3000ms）")
+                else adb.default(call)
+            }
+            withTimeout(6_000) { timedOut.await(); recovered.await() }
+            assertEquals(1, adb.calls.count { it.arguments == listOf("getprop", "sys.boot_completed") })
+            assertTrue(lost.isEmpty() && device.state.value is DeviceConnectionState.Ready)
+            assertTrue(touch.gestures.isEmpty())
+        }
+    }
+
     @Test fun rebootDuringBackupDiscardsFrameAndRequiresNewSession() = runBlocking {
         val adb = FakeAdb()
         val lost = CopyOnWriteArrayList<String>()
@@ -377,6 +435,23 @@ class AdbDeviceServiceTest {
             assertEquals(DeviceConnectionState.Disconnected, device.state.value)
         }
     }
+    @Test fun independentTouchInterruptionsSendEachRequestedGestureOnlyOnce() = runBlocking {
+        val adb = FakeAdb()
+        val channels = CopyOnWriteArrayList<RecordingTouch>()
+        val lost = CopyOnWriteArrayList<String>()
+        AdbDeviceService(adb, directory.root.toPath(), emptySet(), onLost = lost::add,
+            leases = UserResourceLeases(directory.root.toPath().resolve("user-runtime")),
+            touchFactory = TouchConnectionFactory { _, _, _ -> RecordingTouch().also(channels::add) }).use { device ->
+            device.connect("fixture")
+            repeat(2) {
+                channels.last().alive = false
+                assertEquals(TouchResult.Completed, device.back(FakeAdb.GAME))
+            }
+            assertEquals(listOf(0, 1, 1), channels.map { it.gestures.size })
+            assertTrue(lost.isEmpty())
+        }
+    }
+
     @Test fun failedTouchRestartLosesConnectionAndReconnectDoesNotSendActions() = runBlocking {
         val adb = FakeAdb(); val lost = CopyOnWriteArrayList<String>(); val first = RecordingTouch(); val opens = AtomicInteger()
         AdbDeviceService(adb, directory.root.toPath(), emptySet(), onLost = lost::add, leases=UserResourceLeases(directory.root.toPath().resolve("user-runtime")), touchFactory = TouchConnectionFactory { _, _, _ ->

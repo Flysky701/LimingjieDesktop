@@ -962,12 +962,14 @@ class DesktopAppGraph(
                         gameSessionResetWorkflow.state.first { it.running }
                         val final = gameSessionResetWorkflow.state.first { !it.running }
                         final.status == GameSessionResetStatus.STOPPED &&
+                            final.stage == com.landosol.toolbox.automation.session.GameSessionResetStage.READY_FOR_NEXT_ROUND &&
                             final.lastBlock == SessionBlockKind.NONE
                     }
 
                     else -> false
                 }
             },
+            resetFailureReason = { gameSessionResetWorkflow.state.value.message },
         )
     }
 

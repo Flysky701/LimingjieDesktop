@@ -895,6 +895,60 @@ class LabyrinthEntryActionPlannerTest {
         assertTrue(decide(planner, LabyrinthEntryPageState.UNKNOWN, 3L) is LabyrinthEntryActionDecision.Stop)
     }
 
+    @Test
+    fun `recognized pre announcement loading stages extend beyond unknown click timeout without spending clicks`() {
+        val planner = LabyrinthEntryActionPlanner(
+            LabyrinthEntryActionPlannerConfig(
+                stableFrames = 1,
+                pageActionIntervalMillis = 1L,
+                preAnnouncementClickIntervalMillis = 1L,
+                maxPreAnnouncementClicks = 2,
+                preAnnouncementTimeoutMillis = 45_000L,
+                preAnnouncementLoadingTimeoutMillis = 90_000L,
+                totalTimeoutMillis = 120_000L,
+            ),
+        )
+        planner.start(0L)
+
+        assertTrue(decide(planner, LabyrinthEntryPageState.TITLE_WAITING_TAP, 1_000L) is LabyrinthEntryActionDecision.Execute)
+        assertTrue(decide(planner, LabyrinthEntryPageState.PRE_HOME_DATA_LOADING, 10_000L) is LabyrinthEntryActionDecision.Wait)
+        assertTrue(decide(planner, LabyrinthEntryPageState.PRE_HOME_DATA_LOADING, 55_000L) is LabyrinthEntryActionDecision.Wait)
+        // Distinct loading stage refreshes stage budget while remaining bounded by totalTimeoutMillis.
+        assertTrue(decide(planner, LabyrinthEntryPageState.GAME_LOADING_PROGRESS, 56_000L) is LabyrinthEntryActionDecision.Wait)
+        assertTrue(decide(planner, LabyrinthEntryPageState.GAME_LOADING_PROGRESS, 110_000L) is LabyrinthEntryActionDecision.Wait)
+
+        // Subsequent UNKNOWN pre-announcement transition still has its full click budget.
+        assertTrue(decide(planner, LabyrinthEntryPageState.UNKNOWN, 111_000L) is LabyrinthEntryActionDecision.Execute)
+        assertTrue(decide(planner, LabyrinthEntryPageState.UNKNOWN, 112_000L) is LabyrinthEntryActionDecision.Execute)
+        val stop = decide(planner, LabyrinthEntryPageState.UNKNOWN, 113_000L) as LabyrinthEntryActionDecision.Stop
+        assertEquals("公告前点击达到次数上限", stop.reason)
+    }
+
+    @Test
+    fun `frozen loading stage stops when pre announcement loading budget expires and post announcement clears arming`() {
+        val planner = LabyrinthEntryActionPlanner(
+            LabyrinthEntryActionPlannerConfig(
+                stableFrames = 1,
+                pageActionIntervalMillis = 1L,
+                preAnnouncementTimeoutMillis = 10_000L,
+                preAnnouncementLoadingTimeoutMillis = 20_000L,
+                totalTimeoutMillis = 60_000L,
+            ),
+        )
+        planner.start(0L)
+
+        assertTrue(decide(planner, LabyrinthEntryPageState.GAME_LOADING_PROGRESS, 0L) is LabyrinthEntryActionDecision.Wait)
+        assertTrue(decide(planner, LabyrinthEntryPageState.GAME_LOADING_PROGRESS, 20_000L) is LabyrinthEntryActionDecision.Wait)
+        val stop = decide(planner, LabyrinthEntryPageState.GAME_LOADING_PROGRESS, 20_001L) as LabyrinthEntryActionDecision.Stop
+        assertTrue(stop.reason.contains("GAME_LOADING_PROGRESS"))
+
+        planner.start(0L)
+        assertTrue(decide(planner, LabyrinthEntryPageState.TITLE_WAITING_TAP, 1L) is LabyrinthEntryActionDecision.Execute)
+        assertTrue(decide(planner, LabyrinthEntryPageState.HOME_ANNOUNCEMENT, 2_000L) is LabyrinthEntryActionDecision.Execute)
+        val afterAnnouncement = decide(planner, LabyrinthEntryPageState.UNKNOWN, 3_000L)
+        assertTrue(afterAnnouncement is LabyrinthEntryActionDecision.Wait)
+    }
+
     private fun decide(
         planner: LabyrinthEntryActionPlanner,
         state: LabyrinthEntryPageState,
