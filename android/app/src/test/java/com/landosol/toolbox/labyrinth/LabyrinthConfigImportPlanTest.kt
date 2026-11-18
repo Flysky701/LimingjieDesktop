@@ -89,7 +89,7 @@ class LabyrinthConfigImportPlanTest {
             rerollAfterThreeBattleFailures = false, baselineLastArea = 0, baselineTarget = 3,
             debuffPivotMinimum = 10, debuffPivotTolerance = 1, buyRelics = false, refreshShop = false,
             refreshFromArea = 4, normalWinRate = 80, extremeWinRate = 60, eventCustomizationEnabled = true,
-            responseIntervalMillis = RESPONSE_INTERVAL_FAST))
+            responseIntervalMillis = RESPONSE_INTERVAL_STANDARD))
         assertTrue(changes.contains("玩家评分占比：70% → 45%"))
         assertTrue(changes.contains("属性配队增伤：开启 → 关闭"))
         assertTrue(changes.contains("重复纯职能扣分：8 分 → 4 分"))
@@ -98,7 +98,7 @@ class LabyrinthConfigImportPlanTest {
         assertTrue(changes.contains("允许刷新起始区域：区域 5 → 区域 4"))
         assertTrue(changes.contains("普通战估计胜率：95% → 80%"))
         assertTrue(changes.contains("单队重新挑战次数：2 次 → 3 次"))
-        assertTrue(changes.contains("响应速度：500 毫秒（最慢） → 300 毫秒（最快）"))
+        assertTrue(changes.contains("响应速度：300 毫秒（最快） → 500 毫秒（最慢）"))
         assertFalse(changes.any { "true" in it || "false" in it || "属性配对增伤" in it })
     }
 

@@ -1,5 +1,2 @@
 # Retain the upstream release-code floor; desktop uses its own exact display version.
 com/landosol/toolbox/AppVersionTest.kt|AppVersion.name.startsWith("1.0.18-mod.")|AppVersion.name == "@DESKTOP_VERSION@"|1
-# Desktop intentionally retains its 300 ms response default.
-com/landosol/toolbox/labyrinth/LabyrinthConfigImportPlanTest.kt|响应速度：500 毫秒（最慢） → 300 毫秒（最快）|响应速度：300 毫秒（最快） → 500 毫秒（最慢）|1
-com/landosol/toolbox/labyrinth/LabyrinthConfigImportPlanTest.kt|responseIntervalMillis = RESPONSE_INTERVAL_FAST|responseIntervalMillis = RESPONSE_INTERVAL_STANDARD|1

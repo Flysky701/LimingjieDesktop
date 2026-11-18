@@ -144,6 +144,7 @@ class GameSessionResetWorkflow(
     private val channelPrompts: ChannelLoginPromptAssistant? = null,
     private val actionScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val configurationGate: com.landosol.toolbox.automation.TaskConfigurationGate = com.landosol.toolbox.automation.TaskConfigurationGate(),
+    private val debugLog: (String) -> Unit = { Log.d(LOG_TAG, it) },
 ) {
     private val mutex = Mutex()
     private val inFlight = AtomicBoolean(false)
@@ -379,8 +380,7 @@ class GameSessionResetWorkflow(
                 val channelPrompt = if (clientHardClosed) null else channelPrompts?.peek()
                 val skipTermination = clientHardClosed || channelPrompt != null ||
                     gameSessionResetSkipsTermination(observedPage, clientObserved)
-                Log.d(
-                    LOG_TAG,
+                debugLog(
                     "peek page=$observedPage clientObserved=$clientObserved hardClosed=$clientHardClosed " +
                         "channelPrompt=${channelPrompt?.rule?.id} skipTermination=$skipTermination",
                 )
@@ -410,7 +410,7 @@ class GameSessionResetWorkflow(
                     }
                     transitionTo(sessionId, GameSessionResetStage.TERMINATING, terminationLabel)
                     val termination = backend.terminateClient()
-                    Log.d(LOG_TAG, "terminate kind=${backend.kind} result=$termination")
+                    debugLog("terminate kind=${backend.kind} result=$termination")
                     if (
                         termination != ClientTerminationResult.TERMINATED &&
                         termination != ClientTerminationResult.ALREADY_GONE
