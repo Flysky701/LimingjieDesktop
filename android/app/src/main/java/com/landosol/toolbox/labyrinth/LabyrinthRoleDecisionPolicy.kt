@@ -1304,6 +1304,7 @@ class LabyrinthTeamOptimizer(
     fun bestBattleFormation(
         roster: Collection<LabyrinthRoleProfile>,
         context: LabyrinthRoleDecisionContext,
+        excludedTeamSignatures: Set<String> = emptySet(),
     ): LabyrinthTeamEvaluation? {
         if (context.preferSingleDamageSystem && context.encounterStrategy?.vanguardIsolationRadius == null) {
             val cohesive = rankedFormationsInternal(
@@ -1314,6 +1315,7 @@ class LabyrinthTeamOptimizer(
                 limit = 1,
                 requireFrontmostTank = context.frontlineSurvivalGateEnabled,
                 forbidMixedDamageSystem = true,
+                excludedTeamSignatures = excludedTeamSignatures,
             ).firstOrNull()
             if (cohesive != null) return cohesive
         }
@@ -1324,6 +1326,7 @@ class LabyrinthTeamOptimizer(
             systemOnly = false,
             limit = 1,
             requireFrontmostTank = context.frontlineSurvivalGateEnabled,
+            excludedTeamSignatures = excludedTeamSignatures,
         ).firstOrNull()
     }
 
@@ -1335,6 +1338,7 @@ class LabyrinthTeamOptimizer(
     fun bestSupplementFormation(
         roster: Collection<LabyrinthRoleProfile>,
         context: LabyrinthRoleDecisionContext,
+        excludedTeamSignatures: Set<String> = emptySet(),
     ): LabyrinthTeamEvaluation? = rankedFormationsInternal(
         roster = roster,
         context = context,
@@ -1342,6 +1346,7 @@ class LabyrinthTeamOptimizer(
         systemOnly = false,
         limit = 1,
         requireFrontmostTank = false,
+        excludedTeamSignatures = excludedTeamSignatures,
     ).firstOrNull()
 
     fun bestSystemFormation(
@@ -1372,12 +1377,14 @@ class LabyrinthTeamOptimizer(
     fun rankedBattleFormations(
         roster: Collection<LabyrinthRoleProfile>,
         context: LabyrinthRoleDecisionContext,
+        excludedTeamSignatures: Set<String> = emptySet(),
     ): List<LabyrinthTeamEvaluation> = rankedFormationsInternal(
         roster = roster,
         context = context,
         requiredCharacterId = null,
         systemOnly = false,
         requireFrontmostTank = context.frontlineSurvivalGateEnabled,
+        excludedTeamSignatures = excludedTeamSignatures,
     )
 
     private fun rankedFormationsInternal(
@@ -1390,6 +1397,7 @@ class LabyrinthTeamOptimizer(
         forbidMixedDamageSystem: Boolean = false,
         requiredCharacterIds: Set<String> = emptySet(),
         preparedScoring: LabyrinthPreparedSearchScorer? = null,
+        excludedTeamSignatures: Set<String> = emptySet(),
     ): List<LabyrinthTeamEvaluation> {
         LabyrinthFourThreadRuntime.cooperate()
         val unique = roster.distinctBy(LabyrinthRoleProfile::characterId)
@@ -1442,6 +1450,7 @@ class LabyrinthTeamOptimizer(
             forbidMixedDamageSystem = forbidMixedDamageSystem,
             systemOnly = systemOnly,
             numeric = numeric,
+            excludedTeamSignatures = excludedTeamSignatures,
         )
         val ranked = if (searchThreads > 1 && comboCount >= PARALLEL_MIN_COMBINATIONS) {
             searchFormationsParallel(searchPool, combinationPool, combinationSize, requiredIndex,
@@ -1494,6 +1503,7 @@ class LabyrinthTeamOptimizer(
         private val forbidMixedDamageSystem: Boolean,
         private val systemOnly: Boolean,
         val numeric: LabyrinthPreparedSearchScorer,
+        private val excludedTeamSignatures: Set<String>,
     ) {
         fun offer(team: List<LabyrinthRoleProfile>, ordinal: Long, best: PriorityQueue<RankedCandidate>, limit: Int,
             scratch: LabyrinthPreparedSearchScorer.Scratch, counts: LabyrinthSearchWorkCounts?) {
@@ -1516,6 +1526,9 @@ class LabyrinthTeamOptimizer(
             // zero/NaN. Constrained ordinals preserve the original filtered lexicographic order.
             val improves = worst != null && isBetter(score, formationRisk, ordinal, worst)
             if (best.size < limit || improves) {
+                if (excludedTeamSignatures.isNotEmpty() &&
+                    labyrinthBattleTeamSignature(team.map(LabyrinthRoleProfile::characterId)) in excludedTeamSignatures
+                ) return
                 if (best.size == limit) best.poll()
                 if (counts != null) counts.retained++
                 // A shard owns its reusable work list; only retained candidates need a copy.
@@ -2084,7 +2097,7 @@ class LabyrinthTeamPlanSearcher(
                 LabyrinthTeamPlan(
                     LabyrinthTeamPlanKind.INSUFFICIENT_ROLES,
                     emptyList(),
-                    "自动战斗要求实际一号位满足生存资格；当前角色池无法组成满足条件的队伍",
+                    frontlineGateRefusalReason(roster, context),
                 )
             } else {
                 vanguardlessPlan(roster, context)
@@ -2140,8 +2153,7 @@ class LabyrinthTeamPlanSearcher(
             )
         }
         val searchContext = if (survivalRecovery) context.copy(survivalRecovery = true) else context
-        val ranked = optimizer.rankedBattleFormations(unique, searchContext)
-            .filterNot { evaluation -> evaluation.teamSignature() in excludedTeamSignatures }
+        val ranked = optimizer.rankedBattleFormations(unique, searchContext, excludedTeamSignatures)
         if (ranked.isEmpty()) {
             if (supplementTeams) {
                 val fill = supplementFill(emptyList(), unique, searchContext, requestedTeams, excludedTeamSignatures)
@@ -2268,19 +2280,44 @@ class LabyrinthTeamPlanSearcher(
         return roster.any { it.isEligibleBattleVanguard(context, gate) }
     }
 
+    private fun frontlineGateRefusalReason(
+        roster: Collection<LabyrinthRoleProfile>,
+        context: LabyrinthRoleDecisionContext,
+    ): String {
+        val unique = roster.distinctBy(LabyrinthRoleProfile::characterId)
+        val missingPosition = unique.filter { it.position == null }
+        if (unique.size - missingPosition.size < TEAM_SIZE) {
+            return "自动战斗要求实际一号位满足生存资格；部分角色缺少站位数据（" +
+                "${missingPosition.joinToString { it.displayName }}），可用完整站位角色不足${TEAM_SIZE}名"
+        }
+        val gate = optimizer.scoringConfig.vanguardGate(context)
+        val vanguards = unique.filter { it.isEligibleBattleVanguard(context, gate) }
+        return "自动战斗要求实际一号位满足生存资格；角色池虽有合格前排（" +
+            "${vanguards.joinToString { it.displayName }}），但按现有站位无法组成${TEAM_SIZE}人安全队伍"
+    }
+
     private fun vanguardlessPlan(
         roster: Collection<LabyrinthRoleProfile>,
         context: LabyrinthRoleDecisionContext,
         excludedTeamSignatures: Set<String> = emptySet(),
     ): LabyrinthTeamPlan {
         val unique = roster.distinctBy(LabyrinthRoleProfile::characterId)
-        val team = optimizer.bestSupplementFormation(unique, context)
-            ?.takeUnless { it.teamSignature() in excludedTeamSignatures }
-            ?: return LabyrinthTeamPlan(
+        if (unique.isEmpty()) {
+            return LabyrinthTeamPlan(
                 LabyrinthTeamPlanKind.INSUFFICIENT_ROLES,
                 emptyList(),
-                "自动战斗要求实际一号位满足生存资格；当前角色池无法组成满足条件的队伍",
+                "没有可用于编组的可靠角色",
             )
+        }
+        val team = optimizer.bestSupplementFormation(unique, context, excludedTeamSignatures) ?: return LabyrinthTeamPlan(
+            LabyrinthTeamPlanKind.INSUFFICIENT_ROLES,
+            emptyList(),
+            if (excludedTeamSignatures.isNotEmpty()) {
+                "无T兜底编组未找到尚未挑战失败的可替换阵容"
+            } else {
+                "当前角色池无法生成无T补充编组方案"
+            },
+        )
         return LabyrinthTeamPlan(
             LabyrinthTeamPlanKind.SUPPLEMENT_FILL,
             listOf(team),
@@ -2301,9 +2338,7 @@ class LabyrinthTeamPlanSearcher(
         while (safeTeams.size + fill.size < requestedTeams) {
             val remaining = unique.filterNot { it.characterId in used }
             if (remaining.size < TEAM_SIZE) break
-            val next = optimizer.bestSupplementFormation(remaining, context)
-                ?.takeUnless { it.teamSignature() in excludedTeamSignatures }
-                ?: break
+            val next = optimizer.bestSupplementFormation(remaining, context, excludedTeamSignatures) ?: break
             fill += next
             next.members.forEach { used += it.characterId }
         }
@@ -2326,14 +2361,7 @@ class LabyrinthTeamPlanSearcher(
                 "没有可用于编组的可靠角色",
             )
         }
-        val ranked = optimizer.rankedBattleFormations(unique, context.copy(survivalRecovery = true))
-            .filterNot { evaluation ->
-                evaluation.members
-                    .map(LabyrinthRoleProfile::characterId)
-                    .map(::canonicalLabyrinthRoleId)
-                    .sorted()
-                    .joinToString(",") in excludedTeamSignatures
-            }
+        val ranked = optimizer.rankedBattleFormations(unique, context.copy(survivalRecovery = true), excludedTeamSignatures)
         if (ranked.isEmpty()) {
             // Small rosters and first-area retries share the initial attempt's vanguardless
             // fallback; larger pools in later areas retain the refusal when a tank exists.
@@ -2431,9 +2459,7 @@ class LabyrinthTeamPlanSearcher(
             val used = seed.members.mapTo(hashSetOf(), LabyrinthRoleProfile::characterId)
             while (teams.size < targetTeams) {
                 val remaining = unique.filterNot { it.characterId in used }
-                val next = optimizer.bestBattleFormation(remaining, context)
-                    ?.takeUnless { it.teamSignature() in excludedTeamSignatures }
-                    ?: break
+                val next = optimizer.bestBattleFormation(remaining, context, excludedTeamSignatures) ?: break
                 teams += next
                 next.members.forEach { used += it.characterId }
             }
@@ -2552,12 +2578,6 @@ internal fun labyrinthEncounterGuideCore(
 }
 
 private const val ENCOUNTER_GUIDE_CORE_MAX = 3
-
-private fun LabyrinthTeamEvaluation.teamSignature(): String = members
-    .map(LabyrinthRoleProfile::characterId)
-    .map(::canonicalLabyrinthRoleId)
-    .sorted()
-    .joinToString(",")
 
 private fun LabyrinthTeamDamageType.label(): String = when (this) {
     LabyrinthTeamDamageType.PHYSICAL -> "物理"
