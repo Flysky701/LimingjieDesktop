@@ -1,8 +1,10 @@
 package com.landosol.toolbox.automation.session
 
+import com.landosol.toolbox.automation.AutomationBackendResult
 import com.landosol.toolbox.automation.AutomationMode
 import com.landosol.toolbox.automation.AutomationSessionId
 import com.landosol.toolbox.automation.AutomationSessionManager
+import com.landosol.toolbox.automation.SessionBoundActionExecutor
 import com.landosol.toolbox.labyrinth.LabyrinthAutoRunConfig
 import com.landosol.toolbox.labyrinth.LabyrinthAutoRunRoundOutcome
 import com.landosol.toolbox.labyrinth.LabyrinthAutoRunResult
@@ -15,8 +17,8 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
@@ -150,9 +152,9 @@ class GameSessionResetWorkflowTest {
     }
 
     @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun `planner failure reason is preserved through reset workflow and auto run failure`() = runTest {
         val manager = AutomationSessionManager()
-        val now = AtomicLong(0L)
         val planner = LabyrinthEntryActionPlanner(
             LabyrinthEntryActionPlannerConfig(
                 stableFrames = 1,
@@ -168,13 +170,14 @@ class GameSessionResetWorkflowTest {
             processorFactory = { { error("unused") } },
             blockClassifier = { SessionBlockKind.NONE },
             presence = FixedGameClientPresenceObserver(foreground = true),
-            clock = now::get,
+            clock = { testScheduler.currentTime },
+            actionScope = this,
+            actionExecutor = SessionBoundActionExecutor(manager) { AutomationBackendResult.Completed },
+            debugLog = {},
             entryActionPlannerFactory = { planner },
         )
         val handleObservation = GameSessionResetWorkflow::class.java.declaredMethods
             .single { it.name.startsWith("handleObservation") }
-            .apply { isAccessible = true }
-        val inFlightField = GameSessionResetWorkflow::class.java.getDeclaredField("inFlight")
             .apply { isAccessible = true }
 
         fun invokeObservation(sessionId: AutomationSessionId, result: LabyrinthEntryFrameResult) {
@@ -204,23 +207,16 @@ class GameSessionResetWorkflowTest {
 
         try {
             val started = session.start(clientHardClosed = true) as GameSessionResetStartResult.Started
-            withContext(Dispatchers.Default.limitedParallelism(1)) {
-                withTimeout(2_000L) {
-                    while (session.state.value.stage != GameSessionResetStage.WAITING_LOGIN) delay(10L)
-                }
-                val inFlight = inFlightField.get(session) as java.util.concurrent.atomic.AtomicBoolean
-                now.set(10L)
-                invokeObservation(started.sessionId, frame(LabyrinthEntryPageState.TITLE_WAITING_TAP))
-                withTimeout(2_000L) { while (inFlight.get()) delay(5L) }
-                now.set(50L)
-                invokeObservation(started.sessionId, frame(LabyrinthEntryPageState.GAME_LOADING_PROGRESS))
-                withTimeout(2_000L) { while (inFlight.get()) delay(5L) }
-                now.set(300L)
-                invokeObservation(started.sessionId, frame(LabyrinthEntryPageState.GAME_LOADING_PROGRESS))
-                withTimeout(2_000L) {
-                    while (session.state.value.running) delay(10L)
-                }
-            }
+            testScheduler.runCurrent()
+            assertEquals(GameSessionResetStage.WAITING_LOGIN, session.state.value.stage)
+            invokeObservation(started.sessionId, frame(LabyrinthEntryPageState.TITLE_WAITING_TAP))
+            testScheduler.runCurrent()
+            assertEquals(1, session.state.value.actionCount)
+            invokeObservation(started.sessionId, frame(LabyrinthEntryPageState.GAME_LOADING_PROGRESS))
+            testScheduler.runCurrent()
+            testScheduler.advanceTimeBy(201L) // Cross the planner's 200 ms loading deadline.
+            invokeObservation(started.sessionId, frame(LabyrinthEntryPageState.GAME_LOADING_PROGRESS))
+            testScheduler.advanceUntilIdle()
 
             assertEquals(GameSessionResetStatus.ERROR, session.state.value.status)
             assertEquals(GameSessionResetStage.FAILED, session.state.value.stage)

@@ -36,7 +36,8 @@ class NodeClickSessionEvidenceTest {
         val nativeRelease = CompletableDeferred<Unit>()
         val rect = EntryPixelRect(540, 140, 186, 233)
         val bossLabel = EntryPixelRect(720, 400, 81, 31)
-        private var issuedAt = 0L
+        // The first detailed frame must be captured strictly after session startup.
+        private var issuedAt = clock.get()
         private var sequence = 0L
         var lastAcceptedAt = 0L
             private set
