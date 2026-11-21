@@ -17,7 +17,8 @@ class KernelActionPermit<K : Any>(
         if (key != current) {
             revoke("target_changed")
             key = current
-            onTransition?.invoke(true, current, revision.incrementAndGet(), reason)
+            val rev = revision.incrementAndGet()
+            onTransition?.invoke(true, current, rev, reason)
         }
         capturedAt = capturedAtMillis
         return Token(revision, revision.get(), capturedAt, maxAgeMillis)
@@ -30,7 +31,8 @@ class KernelActionPermit<K : Any>(
         val previous = key ?: return
         key = null
         capturedAt = -1
-        onTransition?.invoke(false, previous, revision.incrementAndGet(), reason)
+        val rev = revision.incrementAndGet()
+        onTransition?.invoke(false, previous, rev, reason)
     }
 
     class Token internal constructor(private val revision: AtomicLong, private val expected: Long,

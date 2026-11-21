@@ -188,4 +188,18 @@ class KernelContractsAndJournalTest {
         runtime.addSink(KernelEventSink { throw CancellationException() })
         assertThrows(CancellationException::class.java) { runtime.resetSession() }
     }
+
+    @Test fun actionPermitInvalidatesOldTokensWithoutTransitionCallback() {
+        val permit = KernelActionPermit<String>()
+        val firstToken = permit.issue("first", 100L)
+        assertTrue(firstToken.isCurrent(200L))
+
+        val secondToken = permit.issue("second", 200L)
+        assertFalse(firstToken.isCurrent(200L))
+        assertTrue(secondToken.isCurrent(300L))
+
+        permit.revoke("revoked")
+        assertFalse(secondToken.isCurrent(300L))
+        assertNull(permit.capture("second", 300L))
+    }
 }
