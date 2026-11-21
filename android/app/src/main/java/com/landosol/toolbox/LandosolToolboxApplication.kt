@@ -241,6 +241,12 @@ class LandosolToolboxApplication : Application() {
             ?.mapValues { (_, profile) -> profile.attribute }
             .orEmpty()
         LabyrinthEntryRecognitionSession(
+            eventPackProvider = {
+                com.landosol.toolbox.labyrinth.kernel.event.EventPackRepository(java.io.File(filesDir, "event-packs")) {
+                    com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthEventRecognitionDataLoader(this).load().events
+                }.loadCompiled()
+            },
+            journalDirectoryProvider = { java.io.File(cacheDir, "kernel-journals") },
             configurationGate = taskConfigurationGate,
             strategyProvider = {
                 val settings = labyrinthConfiguration.state.value.strategy

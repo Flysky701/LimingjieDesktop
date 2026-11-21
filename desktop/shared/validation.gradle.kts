@@ -58,9 +58,13 @@ val checkUpstreamDrift = tasks.register("checkUpstreamDrift") {
     doLast {
         val kernel = upstreamMain.resolve("com/landosol/toolbox/labyrinth/kernel")
         val platformReference = Regex("""\b(?:android|androidx|com\.google\.mlkit|org\.json)\.""")
+        val reverseDependency = Regex("""LabyrinthEntryRecognitionSession|com\.landosol\.toolbox\.ui\.""")
         kernel.walkTopDown().filter { it.isFile && it.extension == "kt" }.forEach { source ->
             source.useLines { lines ->
                 lines.forEachIndexed { index, line ->
+                    check(!reverseDependency.containsMatchIn(line)) {
+                        "Session or UI reference in JVM kernel: ${source.relativeTo(upstreamMain)}:${index + 1}"
+                    }
                     check(!platformReference.containsMatchIn(line)) {
                         "Platform reference in JVM kernel: ${source.relativeTo(upstreamMain)}:${index + 1}"
                     }

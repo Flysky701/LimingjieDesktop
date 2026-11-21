@@ -4,6 +4,7 @@ import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.labyrinth.kernel.*
 import com.landosol.toolbox.labyrinth.kernel.event.*
 import java.util.WeakHashMap
+import java.io.File
 
 import com.landosol.toolbox.labyrinth.concurrent.LabyrinthFourThreadRuntime
 import com.landosol.toolbox.labyrinth.vision.LabyrinthFastFrameObservation
@@ -1200,8 +1201,14 @@ class LabyrinthEntryRecognitionSession(
     private val fastProcessorFactory: (() -> (CapturedFrame) -> LabyrinthFastFrameObservation)? = null,
     private val fastFramePublisher: ((LabyrinthFastFrameObservation, LabyrinthEntryRecognitionSessionState) -> Unit)? = null,
     val kernelRuntime: KernelRuntime = KernelRuntime(clock = clock),
+    private val eventPackProvider: (() -> CompiledEventPackSet)? = null,
+    private val journalDirectoryProvider: (() -> File?)? = null,
 ) {
     private val eventDomain = EventDomainModule(kernelRuntime).also(kernelRuntime::registerModule)
+    val encounterStack = KernelEncounterStack(kernelRuntime)
+    @Volatile private var sessionPacks = CompiledEventPackSet()
+    val currentEventPackSet: CompiledEventPackSet get() = sessionPacks.detachedCopy()
+    private var journalSink: KernelJournalSink? = null
     private val dispatchCauses = java.util.Collections.synchronizedMap(WeakHashMap<LabyrinthEventActionPermit.Token, KernelEvent>())
     private var eventCapturedAt = 0L
     private var eventFrameGeometryValid = true
@@ -1213,9 +1220,29 @@ class LabyrinthEntryRecognitionSession(
     }
 
     suspend fun updateEventExtensionPack(pack: KernelEventExtensionPack) = changeEventConfiguration("extension_pack_updated") {
-        eventDomain.install(pack)
-        eventChoicePlanner = eventChoicePlanner?.withExtensionPack(pack)
+        check(eventPackProvider == null || activeSessionId == null) { "当前任务的事件包已冻结" }
+        installEventPacks(CompiledEventPackSet(pack))
         eventPlanning.invalidate("EXTENSION_PACK_UPDATED")
+    }
+
+    private fun installEventPacks(compiled: CompiledEventPackSet) {
+        val snapshot = compiled.detachedCopy()
+        eventDomain.install(snapshot)
+        eventChoicePlanner = eventChoicePlanner?.withExtensionPack(snapshot.extensionPack, snapshot.ruleProvenance)
+        sessionPacks = snapshot
+    }
+
+    private fun stopKernelSession(reason: String) {
+        try {
+            encounterStack.clear(reason)
+            eventDomain.stopped(reason)
+        } finally {
+            journalSink?.let { sink ->
+                kernelRuntime.removeSink(sink)
+                journalSink = null
+                sink.close()
+            }
+        }
     }
 
     suspend fun registerKernelHook(hook: KernelEventHook) = changeEventConfiguration("hook_registered") {
@@ -2028,8 +2055,13 @@ class LabyrinthEntryRecognitionSession(
         } else {
             null
         }
+        val journalDirectory: File?
         val strategySnapshot = try {
+            journalDirectory = journalDirectoryProvider?.invoke()
+            eventPackProvider?.invoke()?.let(::installEventPacks)
             strategyProvider?.invoke()
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
         } catch (failure: Exception) {
             requestCaptureStop()
             val reason = "策略配置加载失败：${failure.message}"
@@ -2074,7 +2106,8 @@ class LabyrinthEntryRecognitionSession(
                 ?.associate { it.characterId to it.displayName }
                 .orEmpty()
             roleRewardChoicePlanner = snapshot.roleRuntime?.rewardChoicePlanner
-            eventChoicePlanner = snapshot.roleRuntime?.eventChoicePlanner?.withExtensionPack(eventDomain.extensionPack)
+            eventChoicePlanner = snapshot.roleRuntime?.eventChoicePlanner?.withExtensionPack(
+                sessionPacks.extensionPack, sessionPacks.ruleProvenance)
             battleTeamRecommendationPlanner = snapshot.roleRuntime?.battleTeamRecommendationPlanner
             battleTeamSelectionPlanner = snapshot.roleRuntime?.battleTeamSelectionPlanner
         }
@@ -2128,8 +2161,16 @@ class LabyrinthEntryRecognitionSession(
         // otherwise complete before the batch run id is attached.
         currentRunId = if (dryRun) null else runId
         pendingTerminalOutcome = null
+        synchronized(kernelRuntime) {
+            encounterStack.resetSilent()
+            var traceId = "labyrinth-" + session.id.value
+            if (journalDirectory != null) {
+                traceId += "-" + java.util.UUID.randomUUID()
+                journalSink = KernelJournalSink(journalDirectory).also(kernelRuntime::addSink)
+            }
+            eventDomain.started(kernelRuntime.resetSession(traceId))
+        }
         activeSessionId = session.id
-        eventDomain.started(kernelRuntime.resetSession("labyrinth-" + session.id.value))
         activeRunAccountId = accountId
         shopImprintRewardConfirmedAt = Long.MIN_VALUE
         confirmedNodeEntryReceipt = null
@@ -2221,7 +2262,7 @@ class LabyrinthEntryRecognitionSession(
             },
         )
         if (!attached) {
-            eventDomain.stopped("overlay_unavailable")
+            stopKernelSession("overlay_unavailable")
             lease?.let(CaptureFrameBus::unregister)
             lease = null
             activeSessionId = null
@@ -2241,7 +2282,7 @@ class LabyrinthEntryRecognitionSession(
         armFirstFrameWatchdog(session.id)
         if (!dryRun) startChannelPromptPoll(session.id)
         if (!dryRun && !gameLauncher()) {
-            eventDomain.stopped("launcher_unavailable")
+            stopKernelSession("launcher_unavailable")
             firstFrameWatchdog?.cancel()
             firstFrameWatchdog = null
             lease?.let(CaptureFrameBus::unregister)
@@ -2342,7 +2383,7 @@ class LabyrinthEntryRecognitionSession(
         }
         stopRequested.set(true)
         invalidateEventPermission("session_stopped")
-        eventDomain.stopped(reason)
+        stopKernelSession(reason)
         balancedPipeline?.close()
         diagnosticLane.clear()
         invalidateBalancedPlanning()

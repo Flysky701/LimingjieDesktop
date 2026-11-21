@@ -22,6 +22,7 @@ sealed interface LabyrinthEventChoiceDecision {
         /** False means utility is only an internal placeholder, not an estimated reward. */
         val utilityEstimated: Boolean = true,
         val policyRuleId: String? = null,
+        val ruleProvenance: String? = null,
     ) : LabyrinthEventChoiceDecision
 
     data class Wait(val reason: String) : LabyrinthEventChoiceDecision
@@ -30,6 +31,7 @@ sealed interface LabyrinthEventChoiceDecision {
 data class LabyrinthEventEvaluation(
     val decision: LabyrinthEventChoiceDecision, val rules: GameEventRuleEvaluation,
     val primitives: Map<String, List<GameEventEffectPrimitive>>,
+    val ruleProvenance: String? = null,
 )
 
 /** Android port of the event utility model used by role-team-review/index.html. */
@@ -39,12 +41,21 @@ class LabyrinthEventChoicePlanner(
     private val strategy: LabyrinthStrategySettings = LabyrinthStrategySettings(),
     private val extensionPack: KernelEventExtensionPack,
     private val catalogRegistry: GameEventCatalogRegistry? = null,
+    private val ruleProvenance: Map<String, String> = emptyMap(),
 ) {
     constructor(profiles: Map<String, LabyrinthRoleProfile>, optimizer: LabyrinthTeamOptimizer,
                 strategy: LabyrinthStrategySettings = LabyrinthStrategySettings()) :
         this(profiles, optimizer, strategy, KernelEventExtensionPack(), null)
 
-    fun withExtensionPack(pack: KernelEventExtensionPack) = LabyrinthEventChoicePlanner(profiles, optimizer, strategy, pack, catalogRegistry)
+    fun withExtensionPack(pack: KernelEventExtensionPack) = withExtensionPack(pack, emptyMap())
+    fun withExtensionPack(pack: KernelEventExtensionPack, ruleProvenance: Map<String, String>) =
+        LabyrinthEventChoicePlanner(profiles, optimizer, strategy, pack, catalogRegistry, ruleProvenance)
+
+    fun provenanceFor(ruleId: String?): String? = when {
+        ruleId == null -> null
+        ruleId.startsWith("builtin/") -> "builtin#$ruleId"
+        else -> ruleProvenance[ruleId]
+    }
     private val engine = GameEventRuleEngine(extensionPack.rules + GameEventRuleEngine.buildDefaultRules(strategy))
     private val patches = extensionPack.overlay.events.associateBy { it.id }
 
@@ -65,7 +76,8 @@ class LabyrinthEventChoicePlanner(
         rejectedChoiceIds: Set<String> = emptySet(), alphaCoin: Int? = null): LabyrinthEventEvaluation {
         val rules = ruleEvaluation(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds, alphaCoin)
         return LabyrinthEventEvaluation(choose(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds, rules),
-            rules, observation.event.choices.associate { it.id to effects(observation.event.id, it) })
+            rules, observation.event.choices.associate { it.id to effects(observation.event.id, it) },
+            provenanceFor(rules.rule?.id).takeIf { observation.catalogMatched })
     }
 
     private fun explicitEffects(eventId: String, choice: EventChoiceResource): List<GameEventEffectPrimitive> =
@@ -83,7 +95,8 @@ class LabyrinthEventChoicePlanner(
             ?: return LabyrinthEventChoiceDecision.Wait("规则 $policyId 缺少唯一的当前帧按钮")
         return revalidateDecision(LabyrinthEventChoiceDecision.Select(observation.event.id, visual.choice.id,
             visual.choice.name, visual.buttonRect, 0.0, "按规则 $policyId 选择", false,
-            utilityEstimated = false, policyRuleId = policyId), observation, acquired, rejected)
+            utilityEstimated = false, policyRuleId = policyId,
+            ruleProvenance = provenanceFor(policyId).takeIf { observation.catalogMatched }), observation, acquired, rejected)
     }
     private data class EstimateKey(
         val event: com.landosol.toolbox.gamedata.EventResource, val acquired: Set<String>,
@@ -159,6 +172,7 @@ class LabyrinthEventChoicePlanner(
                 utility = 0.0,
                 explanation = "石板固定选择左分支，不比较收益，不选择消费2000的分支",
                 actionSafe = true,
+                ruleProvenance = provenanceFor(rule?.id),
             )
         }
         val fixedGuildChoice = fixedGuildChoiceFor(event.id)
@@ -189,6 +203,7 @@ class LabyrinthEventChoicePlanner(
                 utility = 0.0,
                 explanation = "公会固定选择：$name；不比较角色收益",
                 actionSafe = true,
+                ruleProvenance = provenanceFor(rule?.id),
             )
         }
         if (event.id == LabyrinthArenaEvent.ID) {
@@ -221,6 +236,7 @@ class LabyrinthEventChoicePlanner(
                     observation.choices.map { it.choice.id }.toSet() ==
                         LabyrinthArenaEvent.event.choices.map { it.id }.toSet(),
                 safetyNote = if (!observation.trusted) "斗技场标题尚未连续稳定确认" else null,
+                ruleProvenance = provenanceFor(rule?.id),
             )
         }
         if (event.choices.isEmpty()) return LabyrinthEventChoiceDecision.Wait("事件${event.id}没有可选项")
@@ -247,6 +263,7 @@ class LabyrinthEventChoicePlanner(
                     explanation = "按自定义选择，未做自动收益估值",
                     actionSafe = false,
                     utilityEstimated = false,
+                    ruleProvenance = provenanceFor(rule?.id),
                 ), observation, acquiredCharacterIds, rejectedChoiceIds,
             )
         }
@@ -293,6 +310,7 @@ class LabyrinthEventChoicePlanner(
                 explanation = best.detail,
                 actionSafe = false,
                 policyRuleId = externalRule?.id,
+                ruleProvenance = provenanceFor(externalRule?.id),
             ), observation, acquiredCharacterIds, rejectedChoiceIds,
         )
     }

@@ -14,6 +14,7 @@ class EventDomainModule(private val runtime: KernelRuntime) : KernelDomainModule
     override val domain = KernelDomain.EVENT
     @Volatile var extensionPack = KernelEventExtensionPack()
         private set
+    private var ruleProvenance: Map<String, String> = emptyMap()
     private var base: List<EventResource>? = null
     @Volatile private var catalog: GameEventCatalogRegistry? = null
     internal fun isCurrent(source: GameEventCatalogRegistry?) = source == null || source === catalog
@@ -25,11 +26,14 @@ class EventDomainModule(private val runtime: KernelRuntime) : KernelDomainModule
         }
         return requireNotNull(catalog)
     }
-    @Synchronized internal fun install(pack: KernelEventExtensionPack) {
+    @Synchronized internal fun install(pack: KernelEventExtensionPack, provenance: Map<String, String> = emptyMap()) {
         val replacement = base?.let { GameEventCatalogRegistry(it).apply { addOverlay(pack.overlay) } }
         catalog = replacement
         extensionPack = pack
+        ruleProvenance = provenance.toMap()
     }
+
+    internal fun install(compiled: CompiledEventPackSet) = install(compiled.extensionPack, compiled.ruleProvenance)
 
     private var sessionRoot: KernelEvent? = null
     private var frame: KernelEvent? = null
@@ -114,7 +118,8 @@ class EventDomainModule(private val runtime: KernelRuntime) : KernelDomainModule
         val ruleId = if (observation.catalogMatched) rules?.rule?.id else extensionPack.unknownEventPolicy.name
         val evaluation = runtime.emit(domain, K.EVENT_RULE_EVALUATED, PolicyRuleEvaluatedPayload(ruleId,
             if (observation.catalogMatched) rules?.action?.javaClass?.simpleName ?: "Wait" else extensionPack.unknownEventPolicy.name,
-            rules?.examinedRuleIds.orEmpty()), parent ?: observed)
+            rules?.examinedRuleIds.orEmpty(), if (observation.catalogMatched)
+                ruleProvenance[ruleId] ?: planner?.provenanceFor(ruleId) else null), parent ?: observed)
         val selected = original as? LabyrinthEventChoiceDecision.Select
         val description = when (original) {
             is LabyrinthEventChoiceDecision.Select -> original.safetyNote ?: original.explanation

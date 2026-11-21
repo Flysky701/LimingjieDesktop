@@ -3,6 +3,8 @@ package com.landosol.toolbox.labyrinth.kernel
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.util.concurrent.CancellationException
+import java.util.concurrent.CopyOnWriteArraySet
 
 typealias KernelEvent = KernelEventEnvelope<KernelEventPayload>
 
@@ -23,11 +25,26 @@ class KernelEventLog(val maxCapacity: Int = 2_000) : KernelEventSink {
     init { require(maxCapacity > 0) }
     private val ring = ArrayDeque<KernelEvent>()
     private var total = 0L
+    private val sinks = CopyOnWriteArraySet<KernelEventSink>()
+    @Volatile var sinkFailureCount = 0L
+        private set
+
+    fun addSink(sink: KernelEventSink) { require(sink !== this); sinks.add(sink) }
+    @Synchronized fun removeSink(sink: KernelEventSink) { sinks.remove(sink) }
 
     @Synchronized override fun append(event: KernelEvent) {
         if (ring.size == maxCapacity) ring.removeFirst()
         ring.addLast(event)
         total++
+        for (sink in sinks) {
+            try {
+                sink.append(event)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                sinkFailureCount++
+            }
+        }
     }
 
     @Synchronized fun recent(limit: Int = maxCapacity) = ring.takeLast(limit)

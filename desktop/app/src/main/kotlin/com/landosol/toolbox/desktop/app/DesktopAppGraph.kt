@@ -468,6 +468,12 @@ class DesktopAppGraph(
             ?.mapValues { (_, profile) -> profile.attribute }
             .orEmpty()
         LabyrinthEntryRecognitionSession(
+            eventPackProvider = {
+                com.landosol.toolbox.labyrinth.kernel.event.EventPackRepository(dataDirectory.resolve("event-packs").toFile()) {
+                    com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthEventRecognitionDataLoader(context).load().events
+                }.loadCompiled()
+            },
+            journalDirectoryProvider = { dataDirectory.resolve("kernel-journals").toFile() },
             strategyProvider = {
                 val settings = taskStrategy?.settings ?: labyrinthStrategySettings.state.value
                 com.landosol.toolbox.labyrinth.LabyrinthStrategySnapshot(

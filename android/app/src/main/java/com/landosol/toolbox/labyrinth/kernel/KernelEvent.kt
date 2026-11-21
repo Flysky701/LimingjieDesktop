@@ -38,13 +38,22 @@ data class KernelEventEnvelope<out P : KernelEventPayload>(
 @Serializable sealed interface KernelEventPayload
 @Serializable data class SessionLifecyclePayload(val sessionId: String, val phase: String) : KernelEventPayload
 @Serializable data class FrameObservedPayload(val pageState: String, val capturedAtMillis: Long) : KernelEventPayload
-@Serializable data class StateReducedPayload(val pageState: String) : KernelEventPayload
+@Serializable data class StateReducedPayload(
+    val pageState: String,
+    val encounterId: String? = null,
+    val parentId: String? = null,
+    val depth: Int? = null,
+    val detail: Map<String, String> = emptyMap(),
+) : KernelEventPayload
 @Serializable data class GameEventObservedPayload(val eventId: String, val stableFrames: Int, val trusted: Boolean) : KernelEventPayload
 @Serializable data class UnknownGameEventObservedPayload(
     val rawTextExcerpt: String, val parsedPrimitives: List<String> = emptyList(),
     val choiceTextExcerpts: Map<String, String> = emptyMap(),
 ) : KernelEventPayload
-@Serializable data class PolicyRuleEvaluatedPayload(val ruleId: String?, val action: String, val examinedRuleIds: List<String> = emptyList()) : KernelEventPayload
+@Serializable data class PolicyRuleEvaluatedPayload(
+    val ruleId: String?, val action: String, val examinedRuleIds: List<String> = emptyList(),
+    val ruleProvenance: String? = null,
+) : KernelEventPayload
 @Serializable data class DecisionProposedPayload(val eventId: String, val choiceId: String?, val actionSafe: Boolean, val reason: String) : KernelEventPayload
 @Serializable data class PermitTransitionPayload(val choiceId: String?, val permitRevision: Long, val reason: String) : KernelEventPayload
 @Serializable data class ActionDispatchedPayload(val choiceId: String) : KernelEventPayload

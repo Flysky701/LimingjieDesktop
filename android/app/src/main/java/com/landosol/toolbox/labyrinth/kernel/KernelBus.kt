@@ -30,6 +30,8 @@ data class KernelIntervention(val eventSeq: Long, val cause: KernelEvent, val ve
 class KernelRuntime(private val clock: () -> Long = System::currentTimeMillis, maxLogCapacity: Int = 2_000) {
     companion object { const val MAX_REENTRANCY_DEPTH = 8 }
     val log = KernelEventLog(maxLogCapacity)
+    fun addSink(sink: KernelEventSink) = log.addSink(sink)
+    fun removeSink(sink: KernelEventSink) = log.removeSink(sink)
     @Volatile var traceId: String = UUID.randomUUID().toString()
         private set
     private val modules = linkedMapOf<String, KernelDomainModule>()
