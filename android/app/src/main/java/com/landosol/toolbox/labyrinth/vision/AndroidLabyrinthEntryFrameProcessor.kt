@@ -310,6 +310,8 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
             eventChoiceOverrides: Map<String, String> = emptyMap(),
             eventCustomizationEnabled: Boolean = false,
             allowInitial1088GeometryRefinement: () -> Boolean = { false },
+            eventCatalogSource: ((List<com.landosol.toolbox.gamedata.EventResource>) -> com.landosol.toolbox.labyrinth.kernel.event.GameEventCatalogRegistry)? = null,
+            readUnknownOptionText: () -> Boolean = { false },
         ): AndroidLabyrinthEntryFrameProcessor {
             val entryTemplates = AndroidLabyrinthEntryTemplateLoader(context).load()
             val preScaledTemplates = captureFrameSize()?.let { (width, height) ->
@@ -341,13 +343,15 @@ class AndroidLabyrinthEntryFrameProcessor private constructor(
                     preScaledTemplates = preScaledTemplates,
                 ),
                 exEncounterResolver = AndroidLabyrinthExEncounterResolver(),
-                eventChoiceResolver = runCatching {
+                eventChoiceResolver = runCatching { AndroidLabyrinthEventRecognitionDataLoader(context).load() }.getOrNull()?.let { data ->
                     AndroidLabyrinthEventChoiceResolver(
-                        AndroidLabyrinthEventRecognitionDataLoader(context).load(),
+                        data,
                         eventChoiceOverrides = eventChoiceOverrides,
+                        catalogSource = eventCatalogSource,
+                        readUnknownOptionText = readUnknownOptionText,
                         eventCustomizationEnabled = eventCustomizationEnabled,
                     )
-                }.getOrNull(),
+                },
                 shopItemResolver = AndroidLabyrinthShopItemResolver(),
                 roleRewardNameResolver = AndroidLabyrinthRoleRewardNameResolver(
                     names = characterIconMatcher.characterNames(),

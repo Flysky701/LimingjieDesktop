@@ -6,6 +6,7 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthEventOcrDiagnostics
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEventVisualIdentity
 import com.landosol.toolbox.labyrinth.vision.canRetainEventCalculationDuringOcrExpiry
 import kotlinx.coroutines.CoroutineScope
+import com.landosol.toolbox.labyrinth.kernel.event.GameEventRuleEvaluation
 
 /** Current qualification changes recompute the winner; trust/confirmation/geometry are action gates. */
 internal fun labyrinthEventPlanningSemanticKey(
@@ -50,7 +51,10 @@ internal class LabyrinthEventPlanningLane(
     private val now: () -> Long,
     private val changed: () -> Unit,
 ) {
-    private val slot = LabyrinthBalancedPlanningSlot<List<Any?>, LabyrinthEventChoiceDecision>(scope, now, changed)
+    data class Calculation(val decision: LabyrinthEventChoiceDecision, val rules: GameEventRuleEvaluation? = null)
+    var confirmedRules: GameEventRuleEvaluation? = null
+        private set
+    private val slot = LabyrinthBalancedPlanningSlot<List<Any?>, Calculation>(scope, now, changed)
     private var trustedKey: List<Any?>? = null
     private var trustedVisual: LabyrinthEventVisualIdentity? = null
     var heldObservation: LabyrinthEventChoiceObservation? = null
@@ -95,6 +99,16 @@ internal class LabyrinthEventPlanningLane(
         calculate: () -> LabyrinthEventChoiceDecision,
         revalidate: (LabyrinthEventChoiceDecision) -> LabyrinthEventChoiceDecision,
     ): LabyrinthEventChoiceDecision {
+        return updateEvaluated(key, observation, visual, capturedAt, { Calculation(calculate()) }, revalidate)
+    }
+
+    fun updateEvaluated(
+        key: List<Any?>, observation: LabyrinthEventChoiceObservation,
+        visual: LabyrinthEventVisualIdentity?, capturedAt: Long?,
+        calculate: () -> Calculation,
+        revalidate: (LabyrinthEventChoiceDecision) -> LabyrinthEventChoiceDecision,
+    ): LabyrinthEventChoiceDecision {
+        confirmedRules = null
         // A candidate is not a calculation request or a live action. After a genuine soft refresh,
         // a same-key stable-1 frame may keep work; any different evidence hard-invalidates it.
         if (!observation.trusted || observation.stableFrames < 2) {
@@ -124,7 +138,8 @@ internal class LabyrinthEventPlanningLane(
             return LabyrinthEventChoiceDecision.Wait("事件规划已返回，等待规划完成后的新详细帧")
         }
         phase = "READY_REVALIDATED"
-        return revalidate(ready)
+        confirmedRules = ready.rules
+        return revalidate(ready.decision)
     }
 
     fun diagnostics(): LabyrinthEventPlanningDiagnostics = LabyrinthEventPlanningDiagnostics(

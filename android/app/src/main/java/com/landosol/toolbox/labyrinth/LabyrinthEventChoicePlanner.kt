@@ -5,6 +5,7 @@ import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEventChoiceObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEventChoiceVisual
 import com.landosol.toolbox.labyrinth.vision.LabyrinthArenaEvent
+import com.landosol.toolbox.labyrinth.kernel.event.*
 import kotlin.math.max
 
 sealed interface LabyrinthEventChoiceDecision {
@@ -20,19 +21,75 @@ sealed interface LabyrinthEventChoiceDecision {
         val safetyNote: String? = null,
         /** False means utility is only an internal placeholder, not an estimated reward. */
         val utilityEstimated: Boolean = true,
+        val policyRuleId: String? = null,
     ) : LabyrinthEventChoiceDecision
 
     data class Wait(val reason: String) : LabyrinthEventChoiceDecision
 }
+
+data class LabyrinthEventEvaluation(
+    val decision: LabyrinthEventChoiceDecision, val rules: GameEventRuleEvaluation,
+    val primitives: Map<String, List<GameEventEffectPrimitive>>,
+)
 
 /** Android port of the event utility model used by role-team-review/index.html. */
 class LabyrinthEventChoicePlanner(
     private val profiles: Map<String, LabyrinthRoleProfile>,
     private val optimizer: LabyrinthTeamOptimizer,
     private val strategy: LabyrinthStrategySettings = LabyrinthStrategySettings(),
+    private val extensionPack: KernelEventExtensionPack,
+    private val catalogRegistry: GameEventCatalogRegistry? = null,
 ) {
-    private val evaluationCache = linkedMapOf<String, List<EvaluatedChoice>>()
-    private val effectiveOverrides = strategy.effectiveEventChoiceOverrides()
+    constructor(profiles: Map<String, LabyrinthRoleProfile>, optimizer: LabyrinthTeamOptimizer,
+                strategy: LabyrinthStrategySettings = LabyrinthStrategySettings()) :
+        this(profiles, optimizer, strategy, KernelEventExtensionPack(), null)
+
+    fun withExtensionPack(pack: KernelEventExtensionPack) = LabyrinthEventChoicePlanner(profiles, optimizer, strategy, pack, catalogRegistry)
+    private val engine = GameEventRuleEngine(extensionPack.rules + GameEventRuleEngine.buildDefaultRules(strategy))
+    private val patches = extensionPack.overlay.events.associateBy { it.id }
+
+    internal fun ruleEvaluation(observation: LabyrinthEventChoiceObservation, acquired: Set<String>,
+        context: LabyrinthRoleDecisionContext, stacks: Map<LabyrinthRelicMark, Int>, rejected: Set<String>,
+        alphaCoin: Int? = null): GameEventRuleEvaluation {
+        val event = observation.event
+        val patch = patches[event.id]
+        return engine.evaluate(GameEventContext(event.id, patch?.familyId ?: catalogRegistry?.familyId(event.id)
+            ?: GameEventCatalogRegistry.builtinFamily(event.id), event.name, event.area, observation.rawText,
+            observation.catalogMatched, acquired, stacks, context.defenseMarkStacks, context.targetCount, alphaCoin,
+            event.choices.size, observation.choices.filter { it.enabledConfidence >= MINIMUM_ENABLED_BUTTON_CONFIDENCE }
+                .map { it.choice.id }.toSet(), rejected, patch?.tags.orEmpty() + catalogRegistry?.tags(event.id).orEmpty()))
+    }
+
+    fun evaluate(observation: LabyrinthEventChoiceObservation, acquiredCharacterIds: Set<String>,
+        context: LabyrinthRoleDecisionContext, relicStacks: Map<LabyrinthRelicMark, Int>,
+        rejectedChoiceIds: Set<String> = emptySet(), alphaCoin: Int? = null): LabyrinthEventEvaluation {
+        val rules = ruleEvaluation(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds, alphaCoin)
+        return LabyrinthEventEvaluation(choose(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds, rules),
+            rules, observation.event.choices.associate { it.id to effects(observation.event.id, it) })
+    }
+
+    private fun explicitEffects(eventId: String, choice: EventChoiceResource): List<GameEventEffectPrimitive> =
+        patches[eventId]?.choices?.find { it.id == choice.id }?.effects.orEmpty().ifEmpty {
+            catalogRegistry?.effects(eventId, choice.id).orEmpty()
+        }
+
+    private fun effects(eventId: String, choice: EventChoiceResource) = explicitEffects(eventId, choice).ifEmpty {
+        GameEventEffectParser.parse(choice.description, choice.conditionType, choice.conditionValue).primitives
+    }
+
+    internal fun policyChoice(policyId: String, choice: EventChoiceResource?, observation: LabyrinthEventChoiceObservation,
+        acquired: Set<String>, rejected: Set<String>): LabyrinthEventChoiceDecision {
+        val visual = choice?.let { currentVisual(observation, it) }
+            ?: return LabyrinthEventChoiceDecision.Wait("规则 $policyId 缺少唯一的当前帧按钮")
+        return revalidateDecision(LabyrinthEventChoiceDecision.Select(observation.event.id, visual.choice.id,
+            visual.choice.name, visual.buttonRect, 0.0, "按规则 $policyId 选择", false,
+            utilityEstimated = false, policyRuleId = policyId), observation, acquired, rejected)
+    }
+    private data class EstimateKey(
+        val event: com.landosol.toolbox.gamedata.EventResource, val acquired: Set<String>,
+        val context: LabyrinthRoleDecisionContext, val relicStacks: Map<LabyrinthRelicMark, Int>, val catalogRevision: Long,
+    )
+    private val evaluationCache = linkedMapOf<EstimateKey, List<EvaluatedChoice>>()
 
     fun decide(
         observation: LabyrinthEventChoiceObservation,
@@ -46,16 +103,43 @@ class LabyrinthEventChoicePlanner(
          * refusal -- only the refusal itself can. Retiring them turns a hang into the next choice.
          */
         rejectedChoiceIds: Set<String> = emptySet(),
-    ): LabyrinthEventChoiceDecision {
+    ): LabyrinthEventChoiceDecision = choose(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds,
+        ruleEvaluation(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds))
+
+    private fun choose(observation: LabyrinthEventChoiceObservation, acquiredCharacterIds: Set<String>,
+        context: LabyrinthRoleDecisionContext, relicStacks: Map<LabyrinthRelicMark, Int>,
+        rejectedChoiceIds: Set<String>, evaluation: GameEventRuleEvaluation): LabyrinthEventChoiceDecision {
         val event = observation.event
-        if (event.id == "1107") {
+        if (!observation.catalogMatched) {
+            val choice = event.choices.sortedBy { it.slot }.firstOrNull {
+                it.id !in rejectedChoiceIds && (currentVisual(observation, it)?.enabledConfidence ?: 0.0) >= MINIMUM_ENABLED_BUTTON_CONFIDENCE &&
+                    extensionPack.unknownEventPolicy.allows(it)
+            } ?: return LabyrinthEventChoiceDecision.Wait("未收录事件，等待可确认的选项：" + extensionPack.unknownEventPolicy)
+            return policyChoice(extensionPack.unknownEventPolicy.name, choice, observation, acquiredCharacterIds, rejectedChoiceIds)
+        }
+        val rule = evaluation.rule
+        val externalRule = rule?.takeUnless { it.id.startsWith("builtin/") }
+        if (externalRule != null) {
+            val choice = when (val action = externalRule.action) {
+                is GameEventRuleAction.SelectByChoiceId -> event.choices.singleOrNull { it.id == action.choiceId }
+                is GameEventRuleAction.SelectByChoiceName -> event.choices.singleOrNull { it.name == action.name }
+                is GameEventRuleAction.SelectBySlot -> event.choices.singleOrNull { it.slot == action.slot }
+                is GameEventRuleAction.SelectByChoiceRegex -> event.choices.singleOrNull { Regex(action.pattern).containsMatchIn(it.name) }
+                is GameEventRuleAction.WaitWithReason -> return LabyrinthEventChoiceDecision.Wait(action.reason)
+                GameEventRuleAction.UseUtilityModel -> null
+            }
+            if (externalRule.action != GameEventRuleAction.UseUtilityModel)
+                return policyChoice(externalRule.id, choice, observation, acquiredCharacterIds, rejectedChoiceIds)
+        }
+        val fixedId = (rule?.action as? GameEventRuleAction.SelectByChoiceId)?.choiceId?.takeIf { externalRule == null }
+        if (fixedId != null && event.id == "1107") {
             // Independent fixed policy: retain upstream OCR, never choose the paid branches.
             // This rule applies regardless of the event-customization switch.
             if (event.name != "发现了不可思议的石板！要怎么办？") {
                 return LabyrinthEventChoiceDecision.Wait("石板事件名称与目录不一致")
             }
             val visual = observation.choices.singleOrNull {
-                it.choice.id == "11073" && it.choice.slot == 1 &&
+                it.choice.id == fixedId && it.choice.slot == 1 &&
                     it.choice.name == "摸一下 应该没关系吧？"
             } ?: return LabyrinthEventChoiceDecision.Wait("石板固定左分支没有有效按钮映射")
             if (!observation.trusted || observation.stableFrames < 2) {
@@ -78,7 +162,7 @@ class LabyrinthEventChoicePlanner(
             )
         }
         val fixedGuildChoice = fixedGuildChoiceFor(event.id)
-        if (fixedGuildChoice != null) {
+        if (fixedGuildChoice != null && fixedId == fixedGuildChoice.first) {
             // Retain upstream full OCR to distinguish the four identically titled guild events.
             // Fixed choices are independent of customization and never use role-pool ranking.
             if (event.name != "这里是公会管理协会！请问要找什么样的伙伴？") {
@@ -110,7 +194,7 @@ class LabyrinthEventChoicePlanner(
         if (event.id == LabyrinthArenaEvent.ID) {
             // Title OCR establishes the family, not a numeric reward variant. Never estimate
             // rewards using an invented regional id; select the saved branch directly.
-            val name = effectiveOverrides[LabyrinthArenaEvent.NAME]
+            val name = (rule?.action as? GameEventRuleAction.SelectByChoiceName)?.name
                 ?: return LabyrinthEventChoiceDecision.Wait("斗技场自定义未配置，等待完整事件识别")
             if (name !in setOf(LabyrinthArenaEvent.NORMAL, LabyrinthArenaEvent.EXTREME)) {
                 return LabyrinthEventChoiceDecision.Wait("斗技场自定义分支无效")
@@ -147,7 +231,7 @@ class LabyrinthEventChoicePlanner(
         }
         // A valid saved choice already settles the ranking. Do not enumerate role profiles or
         // estimate random rewards/continuations just to select the same configured branch.
-        val overrideChoice = effectiveOverrides[event.name]
+        val overrideChoice = (rule?.action as? GameEventRuleAction.SelectByChoiceName)?.name
             ?.let { name -> event.choices.singleOrNull { it.name == name } }
         val overrideVisual = overrideChoice?.let { currentVisual(observation, it) }
         if (overrideChoice != null && overrideVisual != null &&
@@ -167,21 +251,15 @@ class LabyrinthEventChoicePlanner(
             )
         }
         val canonicalAcquired = acquiredCharacterIds.map(::canonicalLabyrinthRoleId).toSet()
-        val cacheKey = buildString {
-            append(event.id)
-            append('|')
-            append(canonicalAcquired.sorted().joinToString(","))
-            append("|def=")
-            append(context.defenseMarkStacks)
-            append("|targets=")
-            append(context.targetCount)
-            append("|marks=")
-            append(LabyrinthRelicMark.entries.joinToString(",") { relicStacks[it].orZero().toString() })
-        }
+        val cacheKey = EstimateKey(event, canonicalAcquired, context, relicStacks.toMap(), catalogRegistry?.revision ?: 0L)
         val ranked = evaluationCache.getOrPut(cacheKey) {
             val evaluation = EvaluationContext(canonicalAcquired, context, relicStacks)
             event.choices.map { choice ->
-                val utility = optionUtility(choice.id.toIntOrNull(), evaluation, mutableSetOf())
+                val explicit = explicitEffects(event.id, choice)
+                val utility = if (explicit.isNotEmpty()) parsedUtility(explicit, evaluation)
+                    else optionUtility(choice.id.toIntOrNull(), evaluation, mutableSetOf()) {
+                        parsedUtility(effects(event.id, choice), evaluation)
+                    }
                 EvaluatedChoice(choice, utility.value, utility.detail)
             }.sortedWith(
                 compareByDescending<EvaluatedChoice>(EvaluatedChoice::utility)
@@ -214,6 +292,7 @@ class LabyrinthEventChoicePlanner(
                 utility = best.utility,
                 explanation = best.detail,
                 actionSafe = false,
+                policyRuleId = externalRule?.id,
             ), observation, acquiredCharacterIds, rejectedChoiceIds,
         )
     }
@@ -245,11 +324,11 @@ class LabyrinthEventChoicePlanner(
         // Fixed guild/slate policies intentionally do not perform role-pool estimation or require
         // owned profile coverage. Revalidation must not silently reintroduce that old gate.
         val guildChoice = fixedGuildChoiceFor(event.id)
-        if (event.id == "1107" && (event.name != "发现了不可思议的石板！要怎么办？" ||
+        if (decision.policyRuleId == null && event.id == "1107" && (event.name != "发现了不可思议的石板！要怎么办？" ||
                 choice.id != "11073" || choice.slot != 1 || choice.name != "摸一下 应该没关系吧？")) {
             return LabyrinthEventChoiceDecision.Wait("石板固定分支与当前目录不一致")
         }
-        if (guildChoice != null && (event.name != "这里是公会管理协会！请问要找什么样的伙伴？" ||
+        if (decision.policyRuleId == null && guildChoice != null && (event.name != "这里是公会管理协会！请问要找什么样的伙伴？" ||
                 choice.id != guildChoice.first || choice.slot != guildChoice.second || choice.name != guildChoice.third)) {
             return LabyrinthEventChoiceDecision.Wait("公会固定分支与当前目录不一致")
         }
@@ -310,8 +389,9 @@ class LabyrinthEventChoicePlanner(
         choiceId: Int?,
         evaluation: EvaluationContext,
         visiting: MutableSet<Int>,
+        fallback: () -> Utility = { Utility(0.0, "未收录的后续选项") },
     ): Utility {
-        choiceId ?: return Utility(0.0, "选项ID无效")
+        choiceId ?: return fallback()
         ROLE_CLASS_BY_CHOICE[choiceId]?.let { roleClass ->
             val pool = rolePool(roleClass, evaluation)
             return Utility(
@@ -398,8 +478,35 @@ class LabyrinthEventChoicePlanner(
                 "老虎机第2段：50%α币4000并继续；失败500α币",
             )
             33161 -> Utility(0.5 * coins(8000) + 0.5 * coins(CHAIN_FAILURE_COIN), "老虎机第3段：50%α币8000；失败500α币")
-            else -> Utility(0.0, "已收录，暂无跨资源效用规则")
+            else -> fallback()
         }
+    }
+
+    private fun parsedUtility(effects: List<GameEventEffectPrimitive>, evaluation: EvaluationContext): Utility {
+        val battle = effects.filterIsInstance<GameEventEffectPrimitive.BattleChallenge>().firstOrNull()
+        val winRate = battle?.let { (if (it.extreme) strategy.extremeWinRate else strategy.normalWinRate) / 100.0 } ?: 1.0
+        val value = effects.sumOf { effect ->
+            val reward = when (effect) {
+                is GameEventEffectPrimitive.AlphaCoin -> coinUtility(effect.amount, evaluation.relicStacks) * winRate
+                is GameEventEffectPrimitive.CostCondition -> -coinUtility(effect.amount ?: 0, evaluation.relicStacks)
+                is GameEventEffectPrimitive.Relic -> (1..3).filter { it in effect.minStars..effect.maxStars }
+                    .map { randomRelicUtility(it, evaluation.relicStacks) }.averageOrZero() * effect.count
+                is GameEventEffectPrimitive.RoleImprint -> {
+                    fun marginal(count: Int) = when (effect.scope) {
+                        RoleImprintScope.SPECIFIC_ROLE -> specificRoleUtility(effect.name, evaluation)
+                        RoleImprintScope.ALL_RANDOM -> allRandomRoleUtility(count, evaluation)
+                        RoleImprintScope.ALL_SELECTABLE -> allSelectableRoleUtility(count, evaluation)
+                        RoleImprintScope.RANDOM_CLASS_RANDOM -> randomClassRandomRoleUtility(count, evaluation)
+                        RoleImprintScope.RANDOM_CLASS_SELECTABLE -> randomClassSelectableRoleUtility(count, evaluation)
+                        RoleImprintScope.NAMED_CLASS_RANDOM -> rolePool(ROLE_NAMES[effect.name] ?: effect.name, evaluation).average * count
+                    }
+                    (marginal(effect.count) + marginal(effect.maxCount)) / 2.0
+                }
+                else -> 0.0
+            }
+            reward * effect.probability
+        }
+        return Utility(value, effects.joinToString())
     }
 
     private fun continuation(
@@ -551,6 +658,8 @@ class LabyrinthEventChoicePlanner(
     private data class EvaluatedChoice(val choice: EventChoiceResource, val utility: Double, val detail: String)
 
     private companion object {
+        val ROLE_NAMES = mapOf("坦克" to "掩护者", "治疗" to "治疗者", "强化" to "增幅者", "增益" to "增益者",
+            "减益" to "减益者", "干扰" to "妨碍者", "攻击" to "攻击者", "破防" to "破防者")
         val ROLE_CLASS_BY_CHOICE = mapOf(
             11011 to "掩护者", 11012 to "治疗者",
             11021 to "增幅者", 11022 to "增益者",

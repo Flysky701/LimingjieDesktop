@@ -529,6 +529,8 @@ class DesktopAppGraph(
                     readResultScore = false,
                     captureFrameSize = com.landosol.toolbox.automation.capture.CaptureStateRegistry::captureSize,
                     eventChoiceOverrides = labyrinthEntryRecognitionSession.eventChoiceOverridesSnapshot,
+                    eventCatalogSource = labyrinthEntryRecognitionSession::eventCatalogFor,
+                    readUnknownOptionText = labyrinthEntryRecognitionSession::needsUnknownOptionText,
                     eventCustomizationEnabled = labyrinthEntryRecognitionSession.eventCustomizationEnabledSnapshot,
                     allowInitial1088GeometryRefinement = {
                         com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.allowInitial1088GeometryRefinement
@@ -606,7 +608,7 @@ class DesktopAppGraph(
                     runBlocking(Dispatchers.IO) { actionDevice.launch(target) }
                 }
             },
-        )
+        ).also { debugDashboard?.attachKernelEventSource(it.kernelRuntime.log) }
     }
 
     val database: AppDatabase by lazy { openedDatabase ?: AppDatabase.create(context) }

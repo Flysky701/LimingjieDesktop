@@ -3,7 +3,10 @@ package com.landosol.toolbox.labyrinth.vision
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import com.landosol.toolbox.gamedata.EventChoiceResource
 import com.landosol.toolbox.gamedata.EventResource
+import com.landosol.toolbox.labyrinth.kernel.event.GameEventCatalogRegistry
+import java.util.UUID
 import com.landosol.toolbox.gamedata.LabyrinthEventOcrDocument
 import kotlin.math.roundToInt
 import kotlinx.serialization.Serializable
@@ -50,24 +53,38 @@ class AndroidLabyrinthEventRecognitionDataLoader(
  * catalog event is observed repeatedly. Button pixel evidence remains a separate click gate.
  */
 class AndroidLabyrinthEventChoiceResolver(
-    data: AndroidLabyrinthEventRecognitionData,
+    private val data: AndroidLabyrinthEventRecognitionData,
     private val submitTextRead: (Bitmap, (String?) -> Unit) -> Unit = AndroidChineseRoleNameOcr::readAsync,
-    eventChoiceOverrides: Map<String, String> = emptyMap(),
+    private val eventChoiceOverrides: Map<String, String> = emptyMap(),
     private val eventCustomizationEnabled: Boolean = false,
+    private val catalogSource: ((List<EventResource>) -> GameEventCatalogRegistry)? = null,
+    private val readUnknownOptionText: () -> Boolean = { false },
 ) {
     private var fullOcrFallback = false
-    private val recognizer = LabyrinthEventTextRecognizer(data.events)
-    private val customTitleEvents = if (eventCustomizationEnabled) {
+    private var catalog = catalogSource?.invoke(data.events)
+    private var recognizer = LabyrinthEventTextRecognizer(data.events, catalogRegistry = catalog)
+    private var customTitleEvents = titleEvents()
+    private fun titleEvents() = if (eventCustomizationEnabled) {
         recognizer.customTitleEvents(eventChoiceOverrides)
     } else emptyList()
     private val layoutMapper = LabyrinthEventLayoutMapper(data.ocr.layouts)
     private val ocrCache = LabyrinthEventOcrCache()
+    private var unknownPageId: String? = null
+    private var slotCaches = emptyList<LabyrinthEventOcrCache>()
+    private var nextSlotRead = 0
     private var lastEventId: String? = null
     private var stableFrames = 0
     private var lastOcrRequestAtMillis = Long.MIN_VALUE
 
     @Synchronized
     fun resolve(bitmap: Bitmap, result: LabyrinthEntryFrameResult): LabyrinthEntryFrameResult {
+        val current = catalogSource?.invoke(data.events)
+        if (current !== catalog) {
+            clearPageState()
+            catalog = current
+            recognizer = LabyrinthEventTextRecognizer(data.events, catalogRegistry = current)
+            customTitleEvents = titleEvents()
+        }
         if (result.nodeMoveConfirmation != null || result.observation.state !in ELIGIBLE_STATES) {
             clearPageState()
             return result.copy(eventOcrDiagnostics = LabyrinthEventOcrDiagnostics("INELIGIBLE_PAGE_OR_MOVE_DIALOG"))
@@ -161,9 +178,9 @@ class AndroidLabyrinthEventChoiceResolver(
         val match = if (titleOnly || familyMatched) requireNotNull(titleMatch)
             else recognizer.recognize(observedText)
         val event = match.event ?: run {
-            lastEventId = null
-            stableFrames = 0
             if (titleOnly) {
+                lastEventId = null
+                stableFrames = 0
                 fullOcrFallback = true
                 ocrCache.clear()
                 return result.copy(eventOcrDiagnostics = diagnostic.copy(
@@ -171,6 +188,27 @@ class AndroidLabyrinthEventChoiceResolver(
                     candidateScore = match.score, rivalMargin = match.margin,
                 ))
             }
+            // An unmatched OCR block on an UNKNOWN animation cannot establish an event page.
+            // Only a verified event page and a complete layout supply actionable slot geometry.
+            if (result.observation.state == LabyrinthEntryPageState.EVENT_CHOICE && completeLayoutCount != null &&
+                lookup.diagnostics.fingerprintDistance == 0) {
+                val id = "ocr/$completeLayoutCount/" + UUID.nameUUIDFromBytes(observedText.toByteArray(Charsets.UTF_8))
+                stableFrames = if (lastEventId == id) stableFrames + 1 else 1
+                lastEventId = id
+                val descriptions = if (readUnknownOptionText()) unknownChoiceDescriptions(bitmap, id, completeLayoutCount) else emptyList()
+                val visuals = layoutMapper.buttonRects(completeLayoutCount, bitmap.width, bitmap.height).mapIndexed { index, rect ->
+                    val choice = EventChoiceResource(id = "$id/${index + 1}", slot = index + 1, name = "选项${index + 1}",
+                        description = descriptions.getOrNull(index).orEmpty())
+                    LabyrinthEventChoiceVisual(choice, rect, blueButtonConfidence(bitmap, rect), enabledButtonConfidence(bitmap, rect))
+                }
+                val unknown = EventResource(id = id, name = observedText.lineSequence().first().take(100), choices = visuals.map { it.choice })
+                return result.copy(eventChoiceSelection = LabyrinthEventChoiceObservation(unknown, visuals, observedText,
+                    result.observation.confidence, 0.0, stableFrames, stableFrames >= REQUIRED_STABLE_FRAMES, catalogMatched = false, sourceCatalog = catalog),
+                    eventOcrDiagnostics = diagnostic.copy(status = "NO_CATALOG_MATCH", rawText = observedText.take(MAX_DIAGNOSTIC_TEXT_LENGTH),
+                        stableFrames = stableFrames))
+            }
+            lastEventId = null
+            stableFrames = 0
             val scheduled = retryOcr(bitmap, cropRect, fingerprint)
             return result.copy(eventOcrDiagnostics = diagnostic.copy(
                 status = "NO_CATALOG_MATCH", requestScheduled = scheduled,
@@ -178,6 +216,7 @@ class AndroidLabyrinthEventChoiceResolver(
                 candidateScore = match.score, rivalMargin = match.margin,
             ))
         }
+        unknownPageId = null
         stableFrames = if (lastEventId == event.id) stableFrames + 1 else 1
         lastEventId = event.id
         val orderedChoices = event.choices.sortedBy { it.slot }
@@ -206,6 +245,7 @@ class AndroidLabyrinthEventChoiceResolver(
             rivalMargin = match.margin,
             stableFrames = stableFrames,
             trusted = trusted,
+            sourceCatalog = catalog,
         )
         val anchorScore = match.score.coerceIn(0.0, 1.0)
         val updatedAnchors = LabyrinthAnchorScores(
@@ -247,24 +287,49 @@ class AndroidLabyrinthEventChoiceResolver(
         )
     }
 
-    private fun schedule(bitmap: Bitmap, rect: EntryPixelRect, fingerprint: Long): Boolean {
+    private fun unknownChoiceDescriptions(bitmap: Bitmap, id: String, count: Int): List<String?> {
+        val rects = layoutMapper.optionBounds(count, bitmap.width, bitmap.height)
+        if (rects.isEmpty()) return emptyList()
+        if (unknownPageId != id) {
+            unknownPageId = id
+            slotCaches = List(count) { LabyrinthEventOcrCache() }
+            nextSlotRead = 0
+        }
         val now = android.os.SystemClock.elapsedRealtime()
-        val requestId = ocrCache.begin(LabyrinthEventOcrCache.Key(fingerprint, rect), now) ?: return false
+        val fingerprints = rects.map { titleFingerprint(bitmap, it) }
+        val texts = rects.mapIndexed { slot, rect ->
+            val lookup = slotCaches[slot].lookup(LabyrinthEventOcrCache.Key(fingerprints[slot], rect), now)
+            lookup.text.takeIf { lookup.diagnostics.fingerprintDistance == 0 }
+        }
+        // One extra submission per detail frame, only for a policy which needs slot-local text.
+        for (offset in rects.indices) {
+            val slot = (nextSlotRead + offset) % count
+            if (texts[slot] == null && schedule(bitmap, rects[slot], fingerprints[slot], slotCaches[slot])) {
+                nextSlotRead = (slot + 1) % count
+                break
+            }
+        }
+        return texts
+    }
+
+    private fun schedule(bitmap: Bitmap, rect: EntryPixelRect, fingerprint: Long, cache: LabyrinthEventOcrCache = ocrCache): Boolean {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val requestId = cache.begin(LabyrinthEventOcrCache.Key(fingerprint, rect), now) ?: return false
         val crop = Bitmap.createBitmap(bitmap, rect.left, rect.top, rect.width, rect.height)
-        lastOcrRequestAtMillis = now
+        if (cache === ocrCache) lastOcrRequestAtMillis = now
         Log.d(LOG_TAG, "ocr-request id=$requestId elapsedMillis=$now crop=$rect fingerprint=${java.lang.Long.toHexString(fingerprint)}")
         runCatching {
             submitTextRead(crop) { text ->
                 val completedAt = android.os.SystemClock.elapsedRealtime()
                 val applied = synchronized(this) {
-                    ocrCache.complete(requestId, text, completedAt)
+                    cache.complete(requestId, text, completedAt)
                 }
                 Log.d(LOG_TAG, "ocr-result id=$requestId applied=$applied elapsedMillis=$completedAt durationMillis=${completedAt - now} textLength=${text?.trim()?.length ?: 0}")
                 if (!crop.isRecycled) crop.recycle()
             }
         }.onFailure {
             Log.w(LOG_TAG, "ocr-request-failed id=$requestId", it)
-            ocrCache.complete(requestId, null, android.os.SystemClock.elapsedRealtime())
+            cache.complete(requestId, null, android.os.SystemClock.elapsedRealtime())
             if (!crop.isRecycled) crop.recycle()
         }
         return true
@@ -325,6 +390,8 @@ class AndroidLabyrinthEventChoiceResolver(
     }
 
     private fun clearPageState() {
+        unknownPageId = null
+        slotCaches = emptyList()
         fullOcrFallback = false
         ocrCache.clear()
         lastEventId = null

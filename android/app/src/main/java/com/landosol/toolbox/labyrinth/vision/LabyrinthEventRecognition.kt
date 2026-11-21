@@ -5,6 +5,7 @@ import com.landosol.toolbox.gamedata.EventLayoutTemplateResource
 import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.gamedata.NormalizedOcrRect
 import com.landosol.toolbox.labyrinth.LabyrinthCustomEventCatalog
+import com.landosol.toolbox.labyrinth.kernel.event.GameEventCatalogRegistry
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -47,6 +48,8 @@ data class LabyrinthEventChoiceObservation(
     val rivalMargin: Double,
     val stableFrames: Int,
     val trusted: Boolean,
+    val catalogMatched: Boolean = true,
+    val sourceCatalog: GameEventCatalogRegistry? = null,
 )
 
 data class LabyrinthEventOcrCacheDiagnostics(
@@ -114,14 +117,18 @@ object LabyrinthArenaEvent {
  * arena variants and four guild-recruit variants can be separated.
  */
 class LabyrinthEventTextRecognizer(
-    private val events: List<EventResource>,
+    events: List<EventResource>,
     private val minimumCandidateScore: Double = 0.62,
     private val minimumTrustedScore: Double = 0.72,
     private val minimumTrustedMargin: Double = 0.045,
+    private val catalogRegistry: GameEventCatalogRegistry? = null,
 ) {
+    private val baseEvents = events
+    private val events get() = catalogRegistry?.toEventResources() ?: baseEvents
     init {
-        require(events.isNotEmpty())
-        require(events.map(EventResource::id).distinct().size == events.size)
+        val catalog = this.events
+        require(catalog.isNotEmpty())
+        require(catalog.map(EventResource::id).distinct().size == catalog.size)
     }
 
     fun recognize(observedText: String): LabyrinthEventTextMatch {
@@ -205,7 +212,8 @@ class LabyrinthEventTextRecognizer(
     }
 
     private fun score(event: EventResource, observed: String): ScoredEvent {
-        val titleScore = fuzzyContainedScore(normalizeEventText(event.name), observed)
+        val titleScore = (catalogRegistry?.aliasesFor(event.id).orEmpty() + event.name)
+            .maxOf { fuzzyContainedScore(normalizeEventText(it), observed) }
         val choiceScores = event.choices.map { choice ->
             val label = normalizeEventText(choice.name)
             val description = normalizeEventText(choice.description)
@@ -304,6 +312,17 @@ class LabyrinthEventLayoutMapper(
         val layout = layoutsByCount[optionCount] ?: return emptyList()
         if (layout.calibrationRequired || layout.selectButtonRois.size != optionCount) return emptyList()
         return layout.selectButtonRois.mapNotNull { it.toPixelRect(frameWidth, frameHeight) }
+    }
+
+    /** Keep cost text on the button and the reward above it in the same OCR request. */
+    fun optionBounds(optionCount: Int, frameWidth: Int, frameHeight: Int): List<EntryPixelRect> {
+        val layout = layoutsByCount[optionCount] ?: return emptyList()
+        if (layout.calibrationRequired || layout.optionTextRois.size != optionCount || layout.selectButtonRois.size != optionCount)
+            return emptyList()
+        return layout.optionTextRois.zip(layout.selectButtonRois).mapNotNull { (text, button) ->
+            NormalizedOcrRect(minOf(text.left, button.left), minOf(text.top, button.top),
+                maxOf(text.right, button.right), maxOf(text.bottom, button.bottom)).toPixelRect(frameWidth, frameHeight)
+        }.takeIf { it.size == optionCount }.orEmpty()
     }
 
     fun titleBounds(optionCount: Int, frameWidth: Int, frameHeight: Int): EntryPixelRect? {

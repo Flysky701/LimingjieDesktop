@@ -56,6 +56,17 @@ val checkUpstreamDrift = tasks.register("checkUpstreamDrift") {
     group = "verification"
     dependsOn("prepareUpstreamMain", checkUpstreamContracts, scanAndroidCoupling, "kspKotlin")
     doLast {
+        val kernel = upstreamMain.resolve("com/landosol/toolbox/labyrinth/kernel")
+        val platformReference = Regex("""\b(?:android|androidx|com\.google\.mlkit|org\.json)\.""")
+        kernel.walkTopDown().filter { it.isFile && it.extension == "kt" }.forEach { source ->
+            source.useLines { lines ->
+                lines.forEachIndexed { index, line ->
+                    check(!platformReference.containsMatchIn(line)) {
+                        "Platform reference in JVM kernel: ${source.relativeTo(upstreamMain)}:${index + 1}"
+                    }
+                }
+            }
+        }
         val expected = file("upstream-coupling.txt").readLines().filter { it.isNotBlank() }.toSet()
         val actual = sourceFiles().filter { Regex("(?m)^import (android\\.|androidx\\.|com.google.mlkit\\.)").containsMatchIn(it.readText()) }.map { it.relativeTo(upstreamMain).invariantSeparatorsPath }.toSet()
         check(expected == actual) { "Android coupling changed. Added=${actual - expected}; removed=${expected - actual}" }

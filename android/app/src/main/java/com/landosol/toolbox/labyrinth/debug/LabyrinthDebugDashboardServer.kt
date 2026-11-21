@@ -26,6 +26,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import com.landosol.toolbox.labyrinth.kernel.KernelEventLog
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -47,6 +50,9 @@ class LabyrinthDebugDashboardServer(
     private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
     private val allowAddressReuse: Boolean = true,
 ) : AutoCloseable {
+    @Volatile private var kernelSource: KernelEventLog? = null
+    fun attachKernelEventSource(source: KernelEventLog?) { kernelSource = source }
+
     private data class Snapshot(
         val json: ByteArray,
         val jpeg: ByteArray?,
@@ -250,11 +256,23 @@ class LabyrinthDebugDashboardServer(
                 val line = readLine(input) ?: break
                 if (line.isEmpty()) break
             }
-            val path = requestLine.split(' ').getOrNull(1)?.substringBefore('?') ?: "/"
+            val target = requestLine.split(' ').getOrNull(1) ?: "/"
+            val path = target.substringBefore('?')
             when (path) {
                 "/", "/index.html" -> respond(output, "text/html; charset=utf-8", DASHBOARD_HTML)
                 "/api/state" -> respond(output, "application/json; charset=utf-8", stateResponse())
                 "/api/fast-state" -> respond(output, "application/json; charset=utf-8", latestFast.get())
+                "/api/kernel/events" -> {
+                    val source = kernelSource
+                    if (!requestLine.startsWith("GET ")) {
+                        respond(output, "text/plain", "GET only", status = "405 Method Not Allowed")
+                    } else if ("format=ndjson" in target.substringAfter('?', "").split('&')) {
+                        respond(output, "application/x-ndjson; charset=utf-8", source?.toNdjson().orEmpty())
+                    } else {
+                        respond(output, "application/json; charset=utf-8",
+                            source?.snapshot()?.let { Json.encodeToString(it) } ?: """{"summary":null,"events":[]}""")
+                    }
+                }
                 "/api/route-preview" -> respond(
                     output,
                     "application/json; charset=utf-8",
@@ -375,6 +393,7 @@ class LabyrinthDebugDashboardServer(
                     appendLine("logs/logcat.txt: 当前 App 进程最近日志")
                 }.toByteArray(Charsets.UTF_8),
             )
+            kernelSource?.let { entry("kernel/events.ndjson", it.toNdjson().toByteArray(Charsets.UTF_8)) }
             entry("state/latest.json", snapshot.json)
             entry("fast/latest.json", latestFast.get())
             val fastHistory = synchronized(fastHistoryLock) { recentFastStates.toList() }

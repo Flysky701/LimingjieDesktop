@@ -299,6 +299,8 @@ class LandosolToolboxApplication : Application() {
                     },
                     captureFrameSize = CaptureStateRegistry::captureSize,
                     eventChoiceOverrides = labyrinthEntryRecognitionSession.eventChoiceOverridesSnapshot,
+                    eventCatalogSource = labyrinthEntryRecognitionSession::eventCatalogFor,
+                    readUnknownOptionText = labyrinthEntryRecognitionSession::needsUnknownOptionText,
                     eventCustomizationEnabled = labyrinthEntryRecognitionSession.eventCustomizationEnabledSnapshot,
                     allowInitial1088GeometryRefinement = {
                         val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
@@ -380,7 +382,7 @@ class LandosolToolboxApplication : Application() {
                     }
                 }
             },
-        )
+        ).also { debugDashboard?.attachKernelEventSource(it.kernelRuntime.log) }
     }
 
     /**
