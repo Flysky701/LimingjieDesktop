@@ -48,10 +48,14 @@ class KernelRuntime(private val clock: () -> Long = System::currentTimeMillis, m
 
     @Synchronized fun resetSession(sessionId: String = UUID.randomUUID().toString()): KernelEvent {
         check(stack.isEmpty())
+        resetDomains(sessionId)
         traceId = sessionId
-        latestIntervention = null
-        modules.values.toList().forEach { it.reset(sessionId) }
         return emit(KernelDomain.RUNTIME, KernelEventKinds.SESSION_LIFECYCLE, SessionLifecyclePayload(sessionId, "start"))
+    }
+
+    @Synchronized internal fun resetDomains(nextTraceId: String = traceId) {
+        modules.values.toList().forEach { it.reset(nextTraceId) }
+        latestIntervention = null
     }
 
     @Synchronized fun emit(domain: KernelDomain, kind: String, payload: KernelEventPayload,

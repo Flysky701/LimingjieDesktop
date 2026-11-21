@@ -49,6 +49,13 @@ internal data class ShopPlanOutcome(
     val completedPurchaseRelic: LabyrinthRelicMatch? = null,
 )
 
+internal data class ShopVisitProgress(
+    val purchases: Int, val refreshes: Int, val purchaseId: String?, val imprint: String?,
+    val purchaseStartedAt: Long, val purchaseCounted: Boolean, val choiceImprintPending: Boolean,
+    val refreshStartedAt: Long, val refreshConfirmedAt: Long, val focus: LabyrinthRelicMark?,
+    val closedFrames: Int, val closedAt: Long,
+)
+
 class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule {
     override val id = "shop"
     override val domain = KernelDomain.SHOP
@@ -168,6 +175,27 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         observedIdentityGate = null
     }
 
+    internal fun restoreVisit(progress: ShopVisitProgress) = synchronized(runtime) {
+        relicPurchasesThisCycle = progress.purchases
+        refreshesUsedInVisit = progress.refreshes
+        plannedPurchaseRelicId = progress.purchaseId
+        plannedRoleImprintLabel = progress.imprint
+        plannedPurchaseStartedAt = progress.purchaseStartedAt
+        plannedPurchaseCounted = progress.purchaseCounted
+        choiceImprintRolePending = progress.choiceImprintPending
+        plannedRefreshStartedAt = progress.refreshStartedAt
+        plannedRefreshConfirmedAt = progress.refreshConfirmedAt
+        focusMark = progress.focus
+        shopConfirmClosedFrames = progress.closedFrames
+        shopConfirmClosedAt = progress.closedAt
+    }
+
+    internal fun visitProgress() = synchronized(runtime) {
+        ShopVisitProgress(relicPurchasesThisCycle, refreshesUsedInVisit, plannedPurchaseRelicId,
+            plannedRoleImprintLabel, plannedPurchaseStartedAt, plannedPurchaseCounted, choiceImprintRolePending,
+            plannedRefreshStartedAt, plannedRefreshConfirmedAt, focusMark, shopConfirmClosedFrames, shopConfirmClosedAt)
+    }
+
     internal fun authorize(
         key: ShopActionKey,
         capturedAtMillis: Long,
@@ -210,9 +238,11 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         sessionId: String = runtime.traceId,
         observedAlphaCoin: Int? = null,
         scrollStage: Int? = null,
+        cause: KernelEvent? = null,
+        purchaseAlreadyObserved: Boolean = false,
     ): ShopPlanOutcome = synchronized(runtime) {
         val previous = lastObservedPage
-        val observed = observeFrame(page, timestampMillis)
+        val observed = observeFrame(page, timestampMillis, cause)
         if (page == SHOP) {
             this.observedAlphaCoin = observedAlphaCoin
             this.scrollStage = scrollStage
@@ -220,14 +250,16 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         val shop = result.shopObservation
         val candidate = shop?.purchaseCandidate
         observedIdentityGate = relicIdentityGate
-        relicIdentityGate.observe(page, timestampMillis, when (page) {
+        if (!purchaseAlreadyObserved) relicIdentityGate.observe(page, timestampMillis, when (page) {
             SHOP -> shop?.items.orEmpty().mapNotNull { it.relicMatch }
             SHOP_PURCHASE_CONFIRMATION -> listOfNotNull(candidate)
             else -> emptyList()
         })
         val wasCounted = plannedPurchaseCounted
-        val completedRelic = observePurchase(page, shop?.dialogState, candidate, relicIdentityGate,
-            timestampMillis, cancelRelicLedger)
+        val completedRelic = if (purchaseAlreadyObserved) {
+            lastObservedPage = page
+            null
+        } else observePurchase(page, shop?.dialogState, candidate, relicIdentityGate, timestampMillis, cancelRelicLedger)
         val purchaseCommitted = !wasCounted && plannedPurchaseCounted
         val parent = if (previous != page || purchaseCommitted) {
             runtime.emit(domain, K.STATE_REDUCED, StateReducedPayload(page.name,
@@ -516,6 +548,16 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         }
     }
 
+    internal fun recordActionNotExecuted(dispatch: KernelEvent, verdict: String): KernelEvent? =
+        synchronized(runtime) {
+            if (dispatch.traceId != runtime.traceId || lastReceipt?.causeEventSeq == dispatch.eventSeq) {
+                return@synchronized null
+            }
+            val action = (dispatch.payload as? ActionDispatchedPayload)?.choiceId ?: return@synchronized null
+            runtime.emit(domain, K.ACTION_RECEIPT_OBSERVED, ActionReceiptPayload(action, verdict), dispatch, verdict)
+                .also { revoke(verdict, it) }
+        }
+
     /** An executed receipt without a key may come from a caller that already checked the permit. */
     internal fun recordActionExecuted(
         actionKind: LabyrinthPostEntryActionKind,
@@ -595,6 +637,13 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         plannedRefreshConfirmedAt = Long.MIN_VALUE
     }
 
+    internal fun recordCompletedPurchase(cause: KernelEvent?): Unit = synchronized(runtime) {
+        if (countRelicPurchase()) runtime.emit(domain, K.STATE_REDUCED,
+            StateReducedPayload(SHOP_PURCHASE_COMPLETE.name,
+                detail = mapOf("relicPurchasesThisCycle" to relicPurchasesThisCycle.toString())),
+            cause ?: lastReceipt ?: lastDispatch ?: nodeEntry, "purchase_committed")
+    }
+
     private fun countRelicPurchase(): Boolean {
         if (plannedPurchaseRelicId == null || plannedPurchaseCounted) return false
         relicPurchasesThisCycle++
@@ -637,7 +686,7 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
             val intervention = runtime.latestIntervention?.takeIf { it.eventSeq == proposal.eventSeq }
             val veto = intervention?.verdict as? KernelHookVerdict.Veto
             if (veto != null) {
-                revoke("shop_action_vetoed", intervention.cause ?: proposal)
+                revoke("shop_action_vetoed", intervention.cause)
                 return ShopPlanOutcome(null, KernelDecision.Wait(veto.reason), veto.reason,
                     decisionEvent = proposal, completedPurchaseRelic = completedRelic)
             }

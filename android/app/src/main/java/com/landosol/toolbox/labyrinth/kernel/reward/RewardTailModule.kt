@@ -40,6 +40,7 @@ import com.landosol.toolbox.labyrinth.kernel.KernelEvent
 import com.landosol.toolbox.labyrinth.kernel.KernelEventPayload
 import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds as K
 import com.landosol.toolbox.labyrinth.kernel.KernelHookVerdict
+import com.landosol.toolbox.labyrinth.kernel.KernelFrameAction
 import com.landosol.toolbox.labyrinth.kernel.KernelRuntime
 import com.landosol.toolbox.labyrinth.kernel.PermitTransitionPayload
 import com.landosol.toolbox.labyrinth.kernel.PolicyRuleEvaluatedPayload
@@ -52,6 +53,7 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthCharacterMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState as Page
+import com.landosol.toolbox.labyrinth.vision.LabyrinthLinkChoiceMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthLinkChoiceObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthNodeRelicStackObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthRelicChoiceObservation
@@ -165,10 +167,20 @@ class RewardTailModule(
     override val id = "reward-tail"
     override val domain = KernelDomain.REWARD
 
+    private val frameActions = KernelFrameAction(runtime, domain)
+    internal fun revokeFrameAction(reason: String) = frameActions.revoke(reason)
+
+    /** A host-planned choice has already passed the roster, ledger and round checks. */
+    internal fun authorizeRewardAction(
+        frame: KernelEvent?, page: Page, capturedAt: Long, checkedAt: Long,
+        action: KernelDecision.Act, state: Map<String, String>,
+    ) = frameActions.authorize(page.name, capturedAt, checkedAt, frame, action, state)
+
+
     private val ledger = LabyrinthRelicStackLedger()
     private val relicIdentityGate = LabyrinthRelicIdentityGate(allowSpecial = false)
     private val relicRewardIdentityGate = LabyrinthRelicIdentityGate(allowSpecial = true)
-    private val roleRewardRound = LabyrinthRoleRewardRound()
+    internal val roleRewardRound = LabyrinthRoleRewardRound()
 
     private var frame: KernelEvent? = null
     private var parent: KernelEvent? = null
@@ -289,6 +301,7 @@ class RewardTailModule(
 
     /** Use the runtime session reset to change the shared trace ID and reset registered domains. */
     override fun reset(traceId: String) = synchronized(runtime) {
+        frameActions.revoke("session_reset")
         revokePermit("session_reset")
         frame = null
         parent = null
@@ -472,12 +485,17 @@ class RewardTailModule(
 
     fun prepareRelicAcquisition(
         relic: LabyrinthRelicMatch, observedRelics: List<LabyrinthObservedRelic>, openingRelicBaselineKnown: Boolean,
+    ): Boolean = prepareRelicAcquisition(relic, observedRelics, openingRelicBaselineKnown, ledger, relicChoicePolicy)
+
+    internal fun prepareRelicAcquisition(
+        relic: LabyrinthRelicMatch, observedRelics: List<LabyrinthObservedRelic>, openingRelicBaselineKnown: Boolean,
+        ledger: LabyrinthRelicStackLedger, policy: LabyrinthRelicChoicePolicy,
     ): Boolean = synchronized(runtime) {
         val relicId = relic.relicId ?: return false
         if (observedRelics.any { it.relicId == relicId }) return false
         val mark = LabyrinthRelicMark.fromLabel(relic.attribute) ?: return false
         val bonus = relic.attributeBonus?.trim()?.toIntOrNull()?.takeIf { it > 0 } ?: return false
-        val before = if (openingRelicBaselineKnown) relicChoicePolicy.markStacks(observedRelics).getValue(mark) else null
+        val before = if (openingRelicBaselineKnown) policy.markStacks(observedRelics).getValue(mark) else null
         ledger.prepare(relicId, mark, bonus, before)
     }
 
@@ -516,12 +534,15 @@ class RewardTailModule(
     fun waitingForMap(nowMillis: Long): Boolean = synchronized(runtime) { ledger.waitingForMap(nowMillis) }
     fun beginMapReread() = synchronized(runtime) { ledger.beginMapReread() }
 
+    internal fun selectLinkChoice(observation: LabyrinthLinkChoiceObservation?): LabyrinthLinkChoiceMatch? =
+        observation?.let { it.preferredChoice ?: it.choices.firstOrNull() }
+
     fun evaluateLinkChoice(
         observation: LabyrinthLinkChoiceObservation?, frameWidth: Int, frameHeight: Int, atMillis: Long,
     ): RewardStep = synchronized(runtime) {
         val rule = "link_choice"
         if (!isCurrentFrame(Page.LINK_CHOICE, atMillis)) return staleFrame()
-        val choice = observation?.let { it.preferredChoice ?: it.choices.firstOrNull() }
+        val choice = selectLinkChoice(observation)
         if (choice == null || !choice.selectionButtonRect.fits(frameWidth, frameHeight)) {
             return waitFor(rule, "等待连结印记和有效的选择按钮")
         }
@@ -754,6 +775,13 @@ class RewardTailModule(
             recordActionReceipt(dispatch, false, atMillis, reason)
         } else null
 
+    internal fun reconcileFreeRoleSelection(
+        rememberedIds: Collection<String>, visibleSelectedIds: List<String>, visibleIds: List<String>,
+    ): List<String> = synchronized(runtime) {
+        labyrinthEventFreeRoleReconcileSelection(rememberedIds, visibleSelectedIds, visibleIds)
+            .also { freeRoleSelectedIds = it }
+    }
+
     fun evaluateEventFreeRole(input: EventFreeRoleFrameInput): RewardStep = synchronized(runtime) {
         val result = input.result
         val currentPage = result.observation.state
@@ -772,7 +800,7 @@ class RewardTailModule(
             return blockedFreeRole(input.atMillis, "事件自由选角：等待当前视口角色稳定识别")
         }
         val visible = viewport.visibleCharacters
-        val selected = labyrinthEventFreeRoleReconcileSelection(
+        val selected = reconcileFreeRoleSelection(
             rememberedIds = freeRoleSelectedIds,
             visibleSelectedIds = visible.filter { it.selected && it.trusted }.mapNotNull { it.characterId?.takeIf(String::isNotBlank) },
             visibleIds = visible.mapNotNull { it.characterId?.takeIf(String::isNotBlank) },

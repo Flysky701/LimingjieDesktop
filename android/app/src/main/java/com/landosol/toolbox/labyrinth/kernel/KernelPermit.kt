@@ -1,5 +1,6 @@
 package com.landosol.toolbox.labyrinth.kernel
 
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 class KernelActionPermit<K : Any>(
@@ -37,6 +38,12 @@ class KernelActionPermit<K : Any>(
 
     class Token internal constructor(private val revision: AtomicLong, private val expected: Long,
                                     private val capturedAt: Long, private val maxAge: Long) {
+        private val issuedAtNanos = System.nanoTime()
+
+        internal fun isDispatchCurrent(): Boolean =
+            revision.get() == expected &&
+                System.nanoTime() - issuedAtNanos <= TimeUnit.MILLISECONDS.toNanos(maxAge)
+
         fun isCurrent(nowMillis: Long = System.currentTimeMillis()) =
             revision.get() == expected && nowMillis >= capturedAt && nowMillis - capturedAt <= maxAge
     }

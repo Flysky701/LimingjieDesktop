@@ -95,6 +95,14 @@ internal class SettlementDomainModule(private val runtime: KernelRuntime) : Kern
         pending = null
     }
 
+    internal fun restoreProgress(
+        stage: LabyrinthPostBossStage, startedAt: Long, unknownAttempts: Int,
+    ) = synchronized(runtime) {
+        this.stage = stage
+        this.startedAt = startedAt
+        this.unknownAttempts = unknownAttempts
+    }
+
     /** Call when route completion is confirmed, even if the score page is still loading. */
     fun beginFinalSettlement(timestampMillis: Long, parentEvent: KernelEvent? = null): KernelEvent? =
         synchronized(runtime) {
@@ -219,7 +227,9 @@ internal class SettlementDomainModule(private val runtime: KernelRuntime) : Kern
     }
 
     /** Consume the current frame's authorization when the caller accepts the dispatch. */
-    fun recordTapDispatched(plan: SettlementPlan, timestampMillis: Long): KernelEvent? = synchronized(runtime) {
+    fun recordTapDispatched(
+        plan: SettlementPlan, timestampMillis: Long, keepPermitUntilReceipt: Boolean = false,
+    ): KernelEvent? = synchronized(runtime) {
         if (plan !== proposal || pending != null) return@synchronized null
         val tap = plan.tapPlan ?: return@synchronized null
         val token = plan.permit ?: return@synchronized null
@@ -230,7 +240,7 @@ internal class SettlementDomainModule(private val runtime: KernelRuntime) : Kern
         if (tap.kind == ActionKind.ADVANCE_FINAL_SETTLEMENT) unknownAttempts++
         val event = emit(K.ACTION_DISPATCHED, ActionDispatchedPayload(tap.kind.name), tap.kind.name, cause = plan.event)
         pending = SettlementDispatch(event, stage, tap.kind, timestampMillis)
-        revoke("settlement_tap_dispatched")
+        if (keepPermitUntilReceipt) proposal = null else revoke("settlement_tap_dispatched")
         event
     }
 
@@ -242,6 +252,7 @@ internal class SettlementDomainModule(private val runtime: KernelRuntime) : Kern
         val action = pending?.takeIf { it.event == dispatch && dispatch.traceId == runtime.traceId }
             ?: return@synchronized null
         pending = null
+        revoke("settlement_tap_receipt")
         val verdict = if (suppressed) "SUPPRESSED" else result.javaClass.simpleName
         val event = emit(K.ACTION_RECEIPT_OBSERVED, ActionReceiptPayload(action.kind.name, verdict), verdict, cause = dispatch)
         if (stage != action.stage) return@synchronized event
@@ -320,6 +331,8 @@ internal class SettlementDomainModule(private val runtime: KernelRuntime) : Kern
         revoke("settlement_tap_wait")
         return SettlementPlan(KernelDecision.Wait(reason))
     }
+
+    internal fun invalidateTap(reason: String) = synchronized(runtime) { revoke(reason) }
 
     private fun revoke(reason: String) {
         proposal = null

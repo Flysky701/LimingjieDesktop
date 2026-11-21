@@ -18,12 +18,17 @@ data class KernelEncounterFrame(
 
 class KernelEncounterStack(private val runtime: KernelRuntime) {
     private val frames = ArrayDeque<KernelEncounterFrame>()
+    private var lastChange: KernelEvent? = null
 
-    fun push(frame: KernelEncounterFrame): KernelEncounterFrame = synchronized(runtime) {
+    internal fun lastTransition(): KernelEvent? = synchronized(runtime) {
+        lastChange?.takeIf { it.traceId == runtime.traceId }
+    }
+
+    fun push(frame: KernelEncounterFrame, cause: KernelEvent? = null): KernelEncounterFrame = synchronized(runtime) {
         require(frames.none { it.id == frame.id }) { "Duplicate encounter id: " + frame.id }
         val next = frame.copy(parentId = frame.parentId ?: frames.lastOrNull()?.id, metadata = frame.metadata.toMap())
         frames.addLast(next)
-        record(next, "push", "encounter_push")
+        record(next, "push", "encounter_push", cause)
         next
     }
 
@@ -31,24 +36,27 @@ class KernelEncounterStack(private val runtime: KernelRuntime) {
     fun depth(): Int = synchronized(runtime) { frames.size }
     fun snapshot(): List<KernelEncounterFrame> = synchronized(runtime) { frames.toList() }
 
-    fun pop(reason: String = "encounter_pop"): KernelEncounterFrame? = synchronized(runtime) {
-        frames.removeLastOrNull()?.also { record(it, "pop", reason) }
+    fun pop(reason: String = "encounter_pop", cause: KernelEvent? = null): KernelEncounterFrame? = synchronized(runtime) {
+        frames.removeLastOrNull()?.also { record(it, "pop", reason, cause) }
     }
 
-    fun popExpected(id: String, reason: String = "encounter_pop_expected"): KernelEncounterFrame? = synchronized(runtime) {
-        if (frames.lastOrNull()?.id == id) pop(reason) else null
+    fun popExpected(id: String, reason: String = "encounter_pop_expected", cause: KernelEvent? = null): KernelEncounterFrame? = synchronized(runtime) {
+        if (frames.lastOrNull()?.id == id) pop(reason, cause) else null
     }
 
     fun clear(reason: String = "encounter_clear"): List<KernelEncounterFrame> = synchronized(runtime) {
         buildList { while (frames.isNotEmpty()) add(checkNotNull(pop(reason))) }
     }
 
-    internal fun resetSilent() = synchronized(runtime) { frames.clear() }
+    internal fun resetSilent() = synchronized(runtime) {
+        frames.clear()
+        lastChange = null
+    }
 
-    private fun record(frame: KernelEncounterFrame, op: String, reason: String) {
-        runtime.emit(KernelDomain.RUNTIME, KernelEventKinds.STATE_REDUCED, StateReducedPayload(
+    private fun record(frame: KernelEncounterFrame, op: String, reason: String, cause: KernelEvent?) {
+        lastChange = runtime.emit(KernelDomain.RUNTIME, KernelEventKinds.STATE_REDUCED, StateReducedPayload(
             frame.kind.name, frame.id, frame.parentId, frames.size,
             mapOf("op" to op, "kind" to frame.kind.name, "reason" to reason),
-        ), reasonCode = reason)
+        ), cause, reasonCode = reason)
     }
 }

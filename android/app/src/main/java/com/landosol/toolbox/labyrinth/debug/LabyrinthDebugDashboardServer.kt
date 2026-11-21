@@ -123,7 +123,7 @@ class LabyrinthDebugDashboardServer(
             return
         }
         boundSocket = server
-        Log.i(LOG_TAG, "debug dashboard listening on http://$IPV4_LOOPBACK:${server.localPort}/")
+        runCatching { Log.i(LOG_TAG, "debug dashboard listening on http://$IPV4_LOOPBACK:${server.localPort}/") }
         runtimeDiagnostics?.start()
         Thread({ runServer(server) }, "labyrinth-debug-dashboard").apply {
             isDaemon = true

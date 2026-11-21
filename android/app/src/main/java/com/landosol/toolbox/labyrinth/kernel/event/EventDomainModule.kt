@@ -73,16 +73,18 @@ class EventDomainModule(private val runtime: KernelRuntime) : KernelDomainModule
         }
     }
 
+    internal val currentFrame get() = frame
+
     internal fun started(root: KernelEvent) { sessionRoot = root }
-    internal fun stopped(reason: String) {
+    internal fun stopped(reason: String, cause: KernelEvent? = frame ?: sessionRoot) {
         revoke("session_stopped")
-        runtime.emit(KernelDomain.RUNTIME, K.SESSION_LIFECYCLE, SessionLifecyclePayload(runtime.traceId, "stop"), frame ?: sessionRoot, summary = reason)
+        runtime.emit(KernelDomain.RUNTIME, K.SESSION_LIFECYCLE, SessionLifecyclePayload(runtime.traceId, "stop"), cause, summary = reason)
     }
     internal fun beginFrame(seq: Long, capturedAt: Long, epoch: Long, page: String,
-                            observation: LabyrinthEventChoiceObservation?, unknownText: String?, width: Int, height: Int) {
+                            observation: LabyrinthEventChoiceObservation?, unknownText: String?, width: Int, height: Int, cause: KernelEvent? = null) {
         frameSize = width to height
         frame = runtime.emit(KernelDomain.ENTRY, K.FRAME_OBSERVED, FrameObservedPayload(page, capturedAt),
-            replanCause ?: sessionRoot, frameSeq = seq, sceneEpoch = epoch)
+            replanCause ?: cause ?: sessionRoot, frameSeq = seq, sceneEpoch = epoch)
         replanCause = null
         if (page != lastPage) {
             runtime.emit(KernelDomain.ENTRY, K.STATE_REDUCED, StateReducedPayload(page), frame)

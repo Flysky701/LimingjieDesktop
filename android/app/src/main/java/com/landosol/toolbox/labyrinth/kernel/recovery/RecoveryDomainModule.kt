@@ -65,7 +65,7 @@ class RecoveryDomainModule(private val runtime: KernelRuntime) : KernelDomainMod
     private var lastEvent: KernelEvent? = null
     private var proposal: RecoveryEvaluation? = null
     private var pending: ReturnTitleDispatch? = null
-    private var postEntryUnknownSince = Long.MIN_VALUE
+    internal var postEntryUnknownSince = Long.MIN_VALUE
     private val actionPermit = KernelActionPermit<RecoveryActionKey> { issued, _, revision, reason ->
         emit(
             if (issued) K.PERMIT_ISSUED else K.PERMIT_REVOKED,
@@ -81,6 +81,16 @@ class RecoveryDomainModule(private val runtime: KernelRuntime) : KernelDomainMod
         pending = null
         postEntryUnknownSince = Long.MIN_VALUE
         lastEvent = null
+    }
+
+    internal fun restoreTracking(
+        kind: SessionBlockKind, blockFrames: Int, titleFrames: Int, attempts: Int, lastActionAt: Long,
+    ) = synchronized(runtime) {
+        lastBlockKind = kind
+        blockStableFrames = blockFrames
+        returnTitleStableFrames = titleFrames
+        returnTitleAttempts = attempts
+        lastReturnTitleActionAt = lastActionAt
     }
 
     fun resetTracking(): Unit = synchronized(runtime) {
@@ -181,7 +191,9 @@ class RecoveryDomainModule(private val runtime: KernelRuntime) : KernelDomainMod
     }
 
     /** Consume the current frame's authorization when the caller accepts the dispatch. */
-    fun recordReturnTitleDispatched(evaluation: RecoveryEvaluation, timestampMillis: Long): KernelEvent? =
+    fun recordReturnTitleDispatched(
+        evaluation: RecoveryEvaluation, timestampMillis: Long, keepPermitUntilReceipt: Boolean = false,
+    ): KernelEvent? =
         synchronized(runtime) {
             if (evaluation !== proposal || pending != null) return@synchronized null
             val token = evaluation.permit ?: return@synchronized null
@@ -193,7 +205,7 @@ class RecoveryDomainModule(private val runtime: KernelRuntime) : KernelDomainMod
             lastReturnTitleActionAt = timestampMillis
             val event = emit(K.ACTION_DISPATCHED, ActionDispatchedPayload(RETURN_TITLE), RETURN_TITLE, cause = evaluation.event)
             pending = ReturnTitleDispatch(event)
-            revoke("return_title_dispatched")
+            if (keepPermitUntilReceipt) proposal = null else revoke("return_title_dispatched")
             event
         }
 
@@ -210,6 +222,7 @@ class RecoveryDomainModule(private val runtime: KernelRuntime) : KernelDomainMod
             lastReturnTitleActionAt = Long.MIN_VALUE
         }
         pending = null
+        revoke("return_title_receipt")
         val verdict = if (suppressed) "SUPPRESSED" else result.javaClass.simpleName
         emit(K.ACTION_RECEIPT_OBSERVED, ActionReceiptPayload(RETURN_TITLE, verdict), verdict, cause = dispatch)
     }
@@ -272,6 +285,8 @@ class RecoveryDomainModule(private val runtime: KernelRuntime) : KernelDomainMod
         returnTitleAttempts = 0
         lastReturnTitleActionAt = Long.MIN_VALUE
     }
+
+    internal fun invalidateReturnTitle(reason: String) = synchronized(runtime) { revoke(reason) }
 
     private fun revoke(reason: String) {
         proposal = null

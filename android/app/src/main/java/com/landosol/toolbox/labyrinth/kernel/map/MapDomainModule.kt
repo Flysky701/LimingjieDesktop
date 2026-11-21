@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth.kernel.map
 import com.landosol.toolbox.labyrinth.LabyrinthBalancedEvidence
 import com.landosol.toolbox.labyrinth.MAX_ORPHAN_MOVE_CONFIRMATION_DISMISS_ATTEMPTS
 import com.landosol.toolbox.labyrinth.labyrinthCanRecoverOrphanNodeMoveConfirmation
+import com.landosol.toolbox.labyrinth.labyrinthNodeClickRectsAreStable
 import com.landosol.toolbox.labyrinth.labyrinthNodeMoveConfirmationOwnsFrame
 import com.landosol.toolbox.labyrinth.labyrinthOrphanMoveConfirmationBudgetRestored
 import com.landosol.toolbox.labyrinth.labyrinthPreservesPendingNodeTransitionForMoveConfirmation
@@ -20,6 +21,7 @@ import com.landosol.toolbox.labyrinth.kernel.KernelErrorCategory
 import com.landosol.toolbox.labyrinth.kernel.KernelEvent
 import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds as K
 import com.landosol.toolbox.labyrinth.kernel.KernelHookVerdict
+import com.landosol.toolbox.labyrinth.kernel.KernelFrameAction
 import com.landosol.toolbox.labyrinth.kernel.KernelRuntime
 import com.landosol.toolbox.labyrinth.kernel.PageStabilityRegistry
 import com.landosol.toolbox.labyrinth.kernel.StateReducedPayload
@@ -107,6 +109,8 @@ data class MapDomainSnapshot(
     val nudgeAttempts: Int,
 )
 
+internal data class MapRouteStability(val nodeId: Long, val rect: EntryPixelRect?, val frames: Int)
+
 /** Feed each verified detail capture once, then claim the suggested action and report its executor receipt. */
 class MapDomainModule(
     private val runtime: KernelRuntime,
@@ -114,6 +118,67 @@ class MapDomainModule(
 ) : KernelDomainModule {
     override val id: String = "map"
     override val domain: KernelDomain = KernelDomain.MAP
+
+    private val frameActions = KernelFrameAction(runtime, domain)
+    internal fun revokeFrameAction(reason: String) = frameActions.revoke(reason)
+
+    /** The route scanner owns topology, viewport and gesture geometry in a live capture. */
+    internal fun authorizeRouteAction(
+        frame: KernelEvent?, page: LabyrinthEntryPageState, capturedAt: Long, checkedAt: Long,
+        action: KernelDecision.Act, transition: PendingNodeTransition?, nodeStableFrames: Int,
+        confirmationFrames: Int, scrollAttempts: Int, nudgeAttempts: Int, direction: LabyrinthMapScanDirection?,
+    ): KernelFrameAction.Authorization? = synchronized(runtime) {
+        pending = transition
+        stableFrames = nodeStableFrames
+        this.scrollAttempts = scrollAttempts
+        this.nudgeAttempts = nudgeAttempts
+        frameActions.authorize(page.name, capturedAt, checkedAt, frame, action,
+            transition?.details().orEmpty() + mapOf(
+                "stableFrames" to stableFrames.toString(),
+                "confirmationFrames" to confirmationFrames.toString(),
+                "scrollAttempts" to scrollAttempts.toString(),
+                "nudgeAttempts" to nudgeAttempts.toString(),
+                "direction" to direction?.name.orEmpty(),
+            ))
+    }
+
+    internal fun trackRouteTarget(
+        previous: MapRouteStability, target: MapNodeTarget, rect: EntryPixelRect?,
+    ): MapRouteStability = synchronized(runtime) {
+        val next = if (previous.nodeId == target.nodeId && labyrinthNodeClickRectsAreStable(previous.rect, rect)) {
+            previous.copy(frames = previous.frames + 1)
+        } else MapRouteStability(target.nodeId, rect, 1)
+        stableFrames = next.frames
+        next
+    }
+
+    internal fun acceptRouteClick(target: MapNodeTarget, at: Long): PendingNodeTransition =
+        synchronized(runtime) { startTransition(target, at, at) }
+
+    internal fun acceptRouteConfirmation(targetId: Long, at: Long): PendingNodeTransition? = synchronized(runtime) {
+        pending?.takeIf { it.targetNodeId == targetId }?.let {
+            it.copy(confirmedAtMillis = at, confirmationAttempts = it.confirmationAttempts + 1).also { next ->
+                pending = next
+            }
+        }
+    }
+
+    internal fun recordRouteArrival(
+        frame: KernelEvent?, receipt: KernelEvent?, target: MapNodeTarget, page: LabyrinthEntryPageState, capturedAt: Long,
+    ): KernelEvent = synchronized(runtime) {
+        val parent = runtime.emit(domain, K.FRAME_OBSERVED,
+            FrameObservedPayload(page.name, capturedAt),
+            receipt ?: frame, KernelFrameAction.HOST_FRAME, frameSeq = frame?.frameSeq, sceneEpoch = frame?.sceneEpoch ?: 0)
+        committedNode = MapNodeArrival(target.nodeId, target.nodeType, page)
+        clearTransition()
+        val arrival = runtime.emit(domain, K.STATE_REDUCED, StateReducedPayload(page.name,
+            detail = mapOf("targetNodeId" to target.nodeId.toString(), "actualNodeType" to target.nodeType.toString())),
+            parent, "node_arrived")
+        val map = encounterStack?.peek()?.takeIf { it.kind == KernelEncounterKind.MAP }
+        if (map != null) encounterStack?.popExpected(map.id, "node_arrived", arrival)
+        arrival
+    }
+
 
     private data class Frame(val observation: MapFrameObservation, val number: Long, val event: KernelEvent)
     private data class Proposal(val key: MapActionKey, val target: MapNodeTarget?, val event: KernelEvent)
@@ -179,6 +244,7 @@ class MapDomainModule(
     }
 
     override fun reset(traceId: String): Unit = synchronized(runtime) {
+        frameActions.revoke("session_reset")
         val previous = frameTail
         val revoked = takePermit()
         clearNodeStability()
@@ -234,7 +300,8 @@ class MapDomainModule(
 
     override fun onKernelEvent(event: KernelEvent, ctx: KernelRuntime): Unit = synchronized(runtime) {
         if (ctx !== runtime || event.domain != domain || event.traceId != runtime.traceId ||
-            event.kind != K.FRAME_OBSERVED || event.reasonCode == OBSERVED_FRAME
+            event.kind != K.FRAME_OBSERVED || event.reasonCode == OBSERVED_FRAME ||
+            event.reasonCode == KernelFrameAction.HOST_FRAME
         ) return@synchronized
         val observed = event.payload as? FrameObservedPayload ?: return@synchronized
         // A bare frame event can fence work, but lacks the geometry and verification to authorize it.

@@ -138,6 +138,45 @@ class BattleDomainModule(
     override val id: String = "battle"
     override val domain: KernelDomain = KernelDomain.BATTLE
 
+    private val frameActions = KernelFrameAction(runtime, domain)
+    internal fun revokeFrameAction(reason: String) = frameActions.revoke(reason)
+
+    /** The host supplies the selection made by its asynchronous team planner and editor guards. */
+    internal fun authorizeEditorAction(
+        frame: KernelEvent?, page: LabyrinthEntryPageState, capturedAt: Long, checkedAt: Long,
+        action: KernelDecision.Act, state: BattleDomainSnapshot,
+    ): KernelFrameAction.Authorization? = synchronized(runtime) {
+        combatContext = state.combatContext ?: combatContext.takeIf { nested != null }
+        activeArea = state.activeArea
+        battleRetryCount = state.battleRetryCount
+        awaitingRetryBattleAfterFailure = state.awaitingRetryBattleAfterFailure
+        currentTeamSignatures.apply { clear(); addAll(state.currentTeamSignatures) }
+        failedTeamSignatures.apply { clear(); addAll(state.failedTeamSignatures) }
+        committedCharacterIds.apply { clear(); addAll(state.committedCharacterIds) }
+        bossTeamMode = state.bossTeamMode
+        bossEditorPreparationStage = state.bossEditorPreparationStage
+        equipmentStage = LabyrinthSpecialEquipmentFlowStage.valueOf(state.specialEquipmentPhase.name)
+        currentExEncounterStrategy = state.exEncounterStrategy
+        exEncounterFallbackApproved = state.exEncounterFallbackApproved
+        exSlot3ProbePending = state.exSlot3ProbePending
+        exSlot3ProbeAttempts = state.exSlot3ProbeAttempts
+        exEncounterProbeStartedAt = state.exEncounterProbeStartedAt
+        lastNormalBattleTeamSignature = state.lastNormalBattleTeamSignature
+        bossEditorBlocked = state.bossEditorBlocked
+        bossTabDiagnostic = state.bossTabDiagnostic
+        unconfirmedTeamActions = state.unconfirmedTeamActions
+        unfindableCharacterIds.apply { clear(); addAll(state.unfindableCharacterIds) }
+        frameActions.authorize(page.name, capturedAt, checkedAt, frame ?: cause, action, mapOf(
+            "combatKind" to combatContext?.kind?.name.orEmpty(),
+            "teamIndex" to combatContext?.teamIndex?.toString().orEmpty(),
+            "retryCount" to battleRetryCount.toString(),
+            "awaitingRetry" to awaitingRetryBattleAfterFailure.toString(),
+            "equipmentStage" to equipmentStage.name,
+            "encounterId" to nested?.id.orEmpty(),
+        ))
+    }
+
+
     companion object {
         const val EX_ENCOUNTER_OPEN_DETAIL_TIMEOUT_MILLIS = 5_000L
         const val EX_ENCOUNTER_DETAIL_TIMEOUT_MILLIS = 10_000L
@@ -197,6 +236,7 @@ class BattleDomainModule(
     )
 
     private var cause: KernelEvent? = null
+    internal val currentCause get() = synchronized(runtime) { cause }
     private var nested: KernelEncounterFrame? = null
     private var proposal: Proposal? = null
     private var dispatch: Dispatch? = null
@@ -214,7 +254,23 @@ class BattleDomainModule(
     private var lastPostEntryActionAt: Long? = null
     private var combatContext: LabyrinthCombatContext? = null
     private var activeArea: Int? = null
-    private val battleWait = LabyrinthBattleWaitPolicy()
+    internal val battleWait = LabyrinthBattleWaitPolicy()
+    private var lastHostBattleWait = LabyrinthBattleWaitDecision.NONE
+
+    internal fun observeBattleWait(
+        result: LabyrinthEntryFrameResult, capturedAt: Long, resultNextReady: Boolean,
+        plannedTeams: Int, frame: KernelEvent?,
+    ): Pair<LabyrinthBattleWaitDecision, KernelEvent?> = synchronized(runtime) {
+        val page = result.observation.state
+        val decision = battleWait.observe(page, capturedAt, resultNextReady, result.battleHudDigest, plannedTeams)
+        val previous = lastHostBattleWait
+        lastHostBattleWait = decision
+        val event = if (decision != previous) runtime.emit(domain, K.STATE_REDUCED,
+            StateReducedPayload(page.name, nested?.id, nested?.parentId, detail = mapOf("wait" to decision.name)),
+            frame ?: cause, "battle_wait_${decision.name.lowercase()}").also { cause = it }
+        else null
+        decision to event
+    }
     private var battleRetryCount = 0
     private var awaitingRetryBattleAfterFailure = false
     private val currentTeamSignatures = linkedSetOf<String>()
@@ -279,6 +335,8 @@ class BattleDomainModule(
     }
 
     override fun reset(traceId: String) = synchronized(runtime) {
+        frameActions.revoke("session_reset")
+        lastHostBattleWait = LabyrinthBattleWaitDecision.NONE
         exitNestedBattleIfActive("session_reset")
         clearBattle()
         cause = null
@@ -311,7 +369,7 @@ class BattleDomainModule(
         Unit
     }
 
-    fun enterNestedBattle(parentEventEncounterId: String, combatKind: LabyrinthCombatKind, area: Int?): KernelEncounterFrame =
+    fun enterNestedBattle(parentEventEncounterId: String, combatKind: LabyrinthCombatKind, area: Int?, parentEvent: KernelEvent? = null): KernelEncounterFrame =
         synchronized(runtime) {
             require(parentEventEncounterId.isNotBlank())
             check(nested == null) { "An event-owned battle is already active" }
@@ -325,7 +383,7 @@ class BattleDomainModule(
             val parentCause = runtime.log.byTraceId(runtime.traceId).lastOrNull {
                 (it.payload as? StateReducedPayload)?.encounterId == parentEventEncounterId
             }
-            cause = parentCause ?: cause
+            cause = parentEvent ?: parentCause ?: cause
             val frame = KernelEncounterFrame(
                 id = "battle-${UUID.randomUUID()}",
                 kind = KernelEncounterKind.BATTLE,
@@ -336,19 +394,22 @@ class BattleDomainModule(
                     if (area != null) put("area", area.toString())
                 },
             )
-            nested = encounterStack?.push(frame) ?: frame
+            nested = encounterStack?.push(frame, cause) ?: frame
+            cause = encounterStack?.lastTransition() ?: cause
             combatContext = LabyrinthCombatContext(combatKind)
             activeArea = area
             reduce("BATTLE_ENTERED", frame.metadata)
             requireNotNull(nested)
         }
 
-    fun exitNestedBattleIfActive(outcome: String): KernelEncounterFrame? = synchronized(runtime) {
+    fun exitNestedBattleIfActive(outcome: String, parentEvent: KernelEvent? = null): KernelEncounterFrame? = synchronized(runtime) {
         val frame = nested ?: return@synchronized null
         if (encounterStack != null && encounterStack.peek()?.id != frame.id) return@synchronized null
+        cause = parentEvent ?: cause
         reduce("BATTLE_EXITED", mapOf("outcome" to outcome))
         clearBattle()
-        encounterStack?.popExpected(frame.id, "BATTLE_EXITED")
+        encounterStack?.popExpected(frame.id, "BATTLE_EXITED", cause)
+        cause = encounterStack?.lastTransition() ?: cause
         nested = null
         frame
     }
@@ -882,7 +943,14 @@ class BattleDomainModule(
         return postTap(frame, at, plan.kind, plan.label, plan.rect) { commitRetry(switchToMulti) }
     }
 
-    private fun commitRetry(switchToMulti: Boolean) {
+    internal fun commitHostRetry(switchToMulti: Boolean, receipt: KernelEvent?): BattleDomainSnapshot =
+        synchronized(runtime) {
+            cause = receipt ?: cause
+            if (!awaitingRetryBattleAfterFailure) commitRetryRoster(switchToMulti)
+            snapshot()
+        }
+
+    private fun commitRetryRoster(switchToMulti: Boolean) {
         failedTeamSignatures += currentTeamSignatures
         currentTeamSignatures.clear()
         committedCharacterIds.clear()
@@ -896,6 +964,12 @@ class BattleDomainModule(
             battleRetryCount++
         }
         awaitingRetryBattleAfterFailure = true
+        reduce(if (switchToMulti) "BATTLE_RETRY_SWITCHED_MULTI" else "BATTLE_RETRY_EXECUTED",
+            mapOf("retryCount" to battleRetryCount.toString()))
+    }
+
+    private fun commitRetry(switchToMulti: Boolean) {
+        commitRetryRoster(switchToMulti)
         battleWait.reset()
         resetBossEditor()
         if (combatContext?.kind == LabyrinthCombatKind.BOSS) bossEditorPreparationStage = LabyrinthBossEditorPreparationStage.TEAM_1
@@ -904,8 +978,6 @@ class BattleDomainModule(
         resetEquipment()
         lastTeamProgressAt = null
         stableFrames = 0
-        reduce(if (switchToMulti) "BATTLE_RETRY_SWITCHED_MULTI" else "BATTLE_RETRY_EXECUTED",
-            mapOf("retryCount" to battleRetryCount.toString()))
     }
 
     private fun roster(policy: BattleRetryPolicyContext): List<String> =
