@@ -10,21 +10,27 @@ import java.util.logging.Logger
 import kotlin.math.max
 import kotlin.math.min
 
-/** Native model ownership and inference, confined to the engine's single worker thread. */
-internal class OnnxBackend : OcrBackend {
-    private val environment: OrtEnvironment
-    private val detection: OrtSession
-    private val recognition: OrtSession
-    private val dictionary: List<String>
-
-    init {
+/** Shared by OCR and battle inference, including when the battle model loads first. */
+object DesktopOrtEnvironment {
+    val instance: OrtEnvironment by lazy {
         if (System.getProperty("os.name").startsWith("Windows")) {
             listOf("msvcp140.dll", "vcruntime140_1.dll").forEach { name ->
                 val library = Path.of(System.getProperty("java.home"), "bin", name)
                 if (Files.isRegularFile(library)) System.load(library.toAbsolutePath().toString())
             }
         }
-        environment = OrtEnvironment.getEnvironment()
+        OrtEnvironment.getEnvironment()
+    }
+}
+
+/** Native model ownership and inference, confined to the engine's single worker thread. */
+internal class OnnxBackend : OcrBackend {
+    private val environment = DesktopOrtEnvironment.instance
+    private val detection: OrtSession
+    private val recognition: OrtSession
+    private val dictionary: List<String>
+
+    init {
         val options = OrtSession.SessionOptions().apply {
             // Each active device has its own inference worker and model sessions.
             setIntraOpNumThreads(min(3, max(1, Runtime.getRuntime().availableProcessors() / 2)))

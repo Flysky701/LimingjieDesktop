@@ -176,6 +176,14 @@ import javax.swing.filechooser.FileNameExtensionFilter
             Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(14.dp)) {
         Message(actions.message)
         if(group=="外观与通知")AppearanceSettings(graph)
+        if (group == "运行环境") Panel("迷宫战斗价值估计") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(saved.battleOnnxEnabled, { enabled ->
+                    actions.run { graph.settings.update { it.copy(battleOnnxEnabled = enabled) } }
+                })
+                Text("使用本地 ONNX 模型（下局生效）")
+            }
+        }
         if(group=="运行环境"&&shared)Panel("运行环境"){
             Text("各设备的连接、画面尺寸、触控和游戏客户端信息统一在设备管理中查看。",color=Muted)
             OutlinedButton(onClick=openDevices){Text("打开设备管理")}

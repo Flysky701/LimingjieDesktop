@@ -1,5 +1,8 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.kernel.strategy.LabyrinthBattleValueEstimator
+import com.landosol.toolbox.labyrinth.kernel.strategy.RuleBattleValueEstimator
+
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -44,6 +47,7 @@ data class LabyrinthRoleDecisionRuntime(
     val teamPlanSearcher: LabyrinthTeamPlanSearcher,
     val battleTeamRecommendationPlanner: LabyrinthBattleTeamRecommendationPlanner,
     val battleTeamSelectionPlanner: LabyrinthBattleTeamSelectionPlanner,
+    val battleValueEstimator: LabyrinthBattleValueEstimator,
 )
 
 sealed interface LabyrinthRoleDecisionDataResult {
@@ -98,6 +102,7 @@ object LabyrinthRoleDecisionDataParser {
                 teamPlanSearcher = teamPlanSearcher,
             ),
             battleTeamSelectionPlanner = LabyrinthBattleTeamSelectionPlanner(profiles),
+            battleValueEstimator = RuleBattleValueEstimator(scorer),
         )
     }
 }
