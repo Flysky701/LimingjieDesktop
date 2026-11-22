@@ -17,4 +17,5 @@ import kotlinx.serialization.Serializable
     val windowY: Int? = null,
     val wizardCompleted: Boolean = false,
     val gameSettingsConfirmed: Boolean = false,
+    val battleOnnxEnabled: Boolean = false,
 )

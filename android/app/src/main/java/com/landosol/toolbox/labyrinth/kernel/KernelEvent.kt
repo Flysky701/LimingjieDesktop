@@ -1,6 +1,7 @@
 package com.landosol.toolbox.labyrinth.kernel
 
 import kotlinx.serialization.Serializable
+import com.landosol.toolbox.labyrinth.kernel.strategy.ShadowBattleSample
 
 @Serializable
 enum class KernelDomain { RUNTIME, ENTRY, MAP, EVENT, BATTLE, SHOP, REWARD, SETTLEMENT, RECOVERY, CUSTOM_HOOK }
@@ -18,6 +19,7 @@ object KernelEventKinds {
     const val ACTION_DISPATCHED = "ACTION_DISPATCHED"
     const val ACTION_RECEIPT_OBSERVED = "ACTION_RECEIPT_OBSERVED"
     const val HOOK_INVOKED = "HOOK_INVOKED"
+    const val BATTLE_SAMPLE_OBSERVED = "BATTLE_SAMPLE_OBSERVED"
 }
 
 @Serializable
@@ -36,6 +38,7 @@ data class KernelEventEnvelope<out P : KernelEventPayload>(
 )
 
 @Serializable sealed interface KernelEventPayload
+@Serializable data class BattleSamplePayload(val sample: ShadowBattleSample) : KernelEventPayload
 @Serializable data class SessionLifecyclePayload(val sessionId: String, val phase: String) : KernelEventPayload
 @Serializable data class FrameObservedPayload(val pageState: String, val capturedAtMillis: Long) : KernelEventPayload
 @Serializable data class StateReducedPayload(

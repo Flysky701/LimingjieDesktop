@@ -13,6 +13,7 @@ import com.landosol.toolbox.desktop.app.adapters.captcha.*
 import com.landosol.toolbox.desktop.app.adapters.cndb.*
 import com.landosol.toolbox.desktop.app.adapters.device.*
 import com.landosol.toolbox.desktop.app.control.*
+import com.landosol.toolbox.desktop.app.strategy.DesktopBattleModel
 import com.landosol.toolbox.desktop.app.adapters.storage.RunHistoryStore
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
 import com.landosol.toolbox.security.CredentialStore
@@ -108,6 +109,7 @@ class DesktopAppGraph(
     private val suppliedGameGateway: ((GameServer) -> BilibiliGameGateway)? = null,
 ) : AutoCloseable {
     val log = UserLog()
+    private val battleModel = DesktopBattleModel { log.add(it) }
     val ux by lazy { com.landosol.toolbox.desktop.app.ui.DesktopUxController(this) }
     private val noticeState = MutableStateFlow<List<String>>(emptyList())
     val notices = noticeState.asStateFlow()
@@ -479,9 +481,11 @@ class DesktopAppGraph(
                 com.landosol.toolbox.labyrinth.LabyrinthStrategySnapshot(
                     settings,
                     roleDecisionRuntime?.document?.let { document ->
-                        com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionDataParser.createRuntime(
+                        val runtime = com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionDataParser.createRuntime(
                             settings.applyTo(document), settings,
                         )
+                        runtime.copy(battleValueEstimator = battleModel.select(
+                            this.settings.state.value.battleOnnxEnabled, runtime.battleValueEstimator))
                     },
                 )
             },
@@ -1194,7 +1198,7 @@ class DesktopAppGraph(
                 sharedHistoryScope.cancel()
                 withContext(Dispatchers.Main) { viewModels.clear() }
                 databaseUpdateScope.cancel(); accountServerScope.cancel(); autoRunScope.cancel(); mainScope.cancel(); recognitionScope.cancel(); resetScope.cancel()
-                listOf<() -> Unit>({ captureService.close() }, { device.close() }, { ocr.close() }, { captchaHost.close() },
+                listOf<() -> Unit>({ captureService.close() }, { device.close() }, { ocr.close() }, { battleModel.close() }, { captchaHost.close() },
                     { labyrinthDebugDashboard?.close(); Unit }, { diagnostics.close() }, { database.close() }, { power.close() }, { network.close() })
                     .forEach { release -> runCatching(release).onFailure { Log.e(APP_LOG_TAG, "释放桌面资源失败", it) } }
                 DesktopBindings.release(installedServices)

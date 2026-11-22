@@ -2,6 +2,7 @@ package com.landosol.toolbox.labyrinth
 
 import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.labyrinth.kernel.*
+import com.landosol.toolbox.labyrinth.kernel.strategy.LabyrinthBattleValueEstimator
 import com.landosol.toolbox.labyrinth.kernel.event.*
 import com.landosol.toolbox.labyrinth.kernel.battle.BattleDomainModule
 import com.landosol.toolbox.labyrinth.kernel.battle.BattleDomainSnapshot
@@ -1221,6 +1222,8 @@ class LabyrinthEntryRecognitionSession(
     private val eventPackProvider: (() -> CompiledEventPackSet)? = null,
     private val journalDirectoryProvider: (() -> File?)? = null,
 ) {
+    @Volatile var battleValueEstimator: LabyrinthBattleValueEstimator? = null
+        private set
     private val eventDomain = EventDomainModule(kernelRuntime).also(kernelRuntime::registerModule)
     val encounterStack = KernelEncounterStack(kernelRuntime)
     private val recoveryDomain = RecoveryDomainModule(kernelRuntime).also(kernelRuntime::registerModule)
@@ -2280,6 +2283,7 @@ class LabyrinthEntryRecognitionSession(
             eventChoicePlanner = snapshot.roleRuntime?.eventChoicePlanner?.withExtensionPack(
                 sessionPacks.extensionPack, sessionPacks.ruleProvenance)
             battleTeamRecommendationPlanner = snapshot.roleRuntime?.battleTeamRecommendationPlanner
+            battleValueEstimator = snapshot.roleRuntime?.battleValueEstimator
             battleTeamSelectionPlanner = snapshot.roleRuntime?.battleTeamSelectionPlanner
         }
         val initialRunSnapshot = try {

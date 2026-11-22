@@ -84,6 +84,10 @@ private class ProcessWorkerLink(
                 .redirectErrorStream(true)
             builder.environment()[WorkerProtocol.TOKEN_ENV] = token
             builder.environment()[WorkerProtocol.PORT_ENV] = listener.localPort.toString()
+            // Packaged workers start a new JVM. Carry explicit model locations across that boundary.
+            for (key in listOf("limingjie.nn.bundle", "limingjie.nn.catalog")) {
+                System.getProperty(key)?.let { builder.environment()[key] = it }
+            }
             sharedData?.let {
                 builder.environment()[SharedDataEndpoint.PORT_ENV] = it.port.toString()
                 builder.environment()[SharedDataEndpoint.TOKEN_ENV] = it.token
