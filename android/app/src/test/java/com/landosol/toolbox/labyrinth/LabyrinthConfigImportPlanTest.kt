@@ -53,8 +53,14 @@ class LabyrinthConfigImportPlanTest {
     @Test fun `new battle switches can be previewed in imported configurations`() {
         val defaults = LabyrinthStrategySettings()
         val enabled = defaults.copy(frontlineSurvivalGateEnabled = true, normalBattleSkipTeamSelectionEnabled = true)
-        assertEquals(2, strategySummary(defaults, enabled).count { it.endsWith("关闭 → 开启") })
-        assertEquals(2, strategySummary(enabled, defaults).count { it.endsWith("开启 → 关闭") })
+        val forward = strategySummary(defaults, enabled)
+        assertTrue(forward.contains("前排生存门槛：稳定 → 贪生怕死"))
+        assertTrue(forward.contains("普战跳编队：关闭 → 开启"))
+        val backward = strategySummary(enabled, defaults)
+        assertTrue(backward.contains("前排生存门槛：贪生怕死 → 稳定"))
+        assertTrue(backward.contains("普战跳编队：开启 → 关闭"))
+        val aggressive = strategySummary(defaults, defaults.withFrontlineSurvivalMode(LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE))
+        assertTrue(aggressive.contains("前排生存门槛：稳定 → 非常激进"))
     }
 
     @Test fun `reroll fields resolve guild bosses modes and units`() {

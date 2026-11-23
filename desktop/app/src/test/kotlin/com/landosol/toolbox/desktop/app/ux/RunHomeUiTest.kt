@@ -67,6 +67,7 @@ class RunHomeUiTest {
             compose.onNodeWithContentDescription("美食殿堂 次数").assertTextEquals("3")
             compose.onNodeWithText("刷开局").performClick()
             compose.waitUntil(5000){graph.ux.preferences.state.value.selectedTask=="REROLL"}
+            compose.waitUntil(5000){compose.onAllNodes(hasText("开始 F5") and isEnabled()).fetchSemanticsNodes().size==1}
             compose.onNodeWithText("开始 F5").assertIsEnabled()
             compose.onNodeWithText("2").performClick()
             compose.onNodeWithText("3").performClick()

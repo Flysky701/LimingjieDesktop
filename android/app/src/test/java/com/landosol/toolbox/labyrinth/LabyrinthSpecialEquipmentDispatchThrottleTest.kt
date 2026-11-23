@@ -106,7 +106,7 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
         assertEquals(pastInterval, lastSessionActionAt(session))
 
         // 补发**只补一次**：下一帧不得再点同一个入口（stage 已经前进了）。
-        releaseActionLatch(session)
+        awaitActionLatch(session)
         assertTrue(flowFrame(session, teamFrame(teamPageObservation()), pastInterval + 100L))
         assertNull("the entry must not be re-clicked after it was dispatched", frameActionLabel(session))
         assertEquals(LabyrinthSpecialEquipmentFlowStage.AWAIT_MAIN_DIALOG, flowStage(session))
@@ -218,7 +218,7 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
         assertEquals(1, stepAttempts(session))
         assertEquals(pastInterval, lastSessionActionAt(session))
 
-        releaseActionLatch(session)
+        awaitActionLatch(session)
         assertTrue(
             flowFrame(
                 session,
@@ -284,7 +284,7 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
         assertEquals("特别装备：点击「取消」", frameActionLabel(session))
         assertEquals(setOf(LabyrinthSpecialEquipmentStage.AUTO_DIALOG), spentEscapeStages(session))
         assertEquals(pastInterval, lastSessionActionAt(session))
-        releaseActionLatch(session)
+        awaitActionLatch(session)
 
         // 弹窗2 关掉后弹窗1 还开着：同一轮里按弹窗1 再挂一次，把它也关掉才能回到编组页。
         val secondClose = pastInterval + BATTLE_TEAM_ACTION_INTERVAL_MILLIS + 100L
@@ -295,7 +295,7 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
             spentEscapeStages(session),
         )
         assertEquals(secondClose, lastSessionActionAt(session))
-        releaseActionLatch(session)
+        awaitActionLatch(session)
 
         // 两层都点过之后回到编组页：帧交还给编组/开战路径，不再有任何点击。
         assertFalse(flowFrame(session, teamFrame(teamPageObservation()), secondClose + 100L))
@@ -332,7 +332,7 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
         assertTrue(flowFrame(session, teamFrame(dialog), 9_600L))
         assertEquals("特别装备：点击「取消」", frameActionLabel(session))
         assertNull(pendingEscape(session))
-        releaseActionLatch(session)
+        awaitActionLatch(session)
         assertTrue(flowFrame(session, teamFrame(dialog), 10_800L))
         assertNull("the escape must not be repeated", frameActionLabel(session))
         assertEquals(9_600L, lastSessionActionAt(session))
