@@ -1851,6 +1851,9 @@ class LabyrinthEntryRecognitionSession(
     private var preferPureBossDamageSystem: Boolean = true
     /** Immutable user settings captured at start; saving during a run applies to the next run. */
     private var battleStrategySettingsSnapshot = LabyrinthStrategySettings()
+    private val battleFormationState = LabyrinthBattleFormationState()
+    private val currentNormalTeamHoldPlanner = LabyrinthBattleTeamSelectionPlanner(emptyMap())
+    private var battleFormationExhaustedReason: String? = null
     /**
      * 启动时抓取的设置快照，只用来回答「本次战斗的关卡类型要不要自动穿戴特别装备」：
      * 运行中保存新配置不改变本轮，只影响下一次启动。
@@ -3231,7 +3234,7 @@ class LabyrinthEntryRecognitionSession(
         if (activeSessionId != sessionId || _state.value.paused || stopRequested.get()) return
         refreshEventChoiceDecision(sessionId, result)
         refreshEffectiveCharacterScan(sessionId, result, frameWidth, frameHeight, timestampMillis)
-        refreshBattleTeamRecommendation(sessionId, pageState)
+        refreshBattleTeamRecommendation(sessionId, pageState, result.battleTeamSelection)
         refreshBattleTeamSelectionPlan(sessionId, pageState, result.battleTeamSelection)
         overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
         if (!current.dryRun && entryPhaseComplete &&
@@ -4842,9 +4845,11 @@ class LabyrinthEntryRecognitionSession(
     private fun refreshBattleTeamRecommendation(
         sessionId: AutomationSessionId,
         pageState: LabyrinthEntryPageState,
+        observation: LabyrinthBattleTeamObservation?,
     ) {
         if (activeSessionId != sessionId) return
         if (pageState != LabyrinthEntryPageState.BATTLE_TEAM_SELECTION) {
+            battleFormationExhaustedReason = null
             if (balancedMode) battlePlanning.invalidate()
             if (
                 lastBattleTeamRecommendationKey != null ||
@@ -4910,6 +4915,7 @@ class LabyrinthEntryRecognitionSession(
             return
         }
 
+        if (publishCurrentNormalTeamHold(sessionId, observation)) return
         val current = _state.value
         val currentCombatContext = combatContext
         val battleArea = labyrinthBattleTeamArea(
@@ -4944,8 +4950,37 @@ class LabyrinthEntryRecognitionSession(
             .map(LabyrinthJoinedCharacter::characterId)
             .map(::canonicalLabyrinthRoleId)
             .distinct()
+        val usedCharacterIds = synchronized(committedBattleCharacterIds) { committedBattleCharacterIds.toSet() }
+        val eligibleCharacterIds = acquiredCharacterIds.filterNot(usedCharacterIds::contains)
+        val planner = battleTeamRecommendationPlanner
+        val savedFrontlineMode = battleStrategySettingsSnapshot.effectiveFrontlineSurvivalMode
+        val requestedFrontlineMode = battleFormationState.requestedMode(savedFrontlineMode)
+        val candidateSelection = planner?.formationCandidateSelection(eligibleCharacterIds, requestedFrontlineMode)
+        val reducedBossTarget = labyrinthAggressiveBossRemainingTeamTarget(
+            savedFrontlineMode, bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM &&
+                currentCombatContext?.kind == LabyrinthCombatKind.BOSS,
+            currentCombatContext?.teamIndex ?: 1, eligibleCharacterIds.size, usedCharacterIds.size,
+        )
+        if (reducedBossTarget != null) {
+            bossMultiTeamTargetCount = reducedBossTarget
+            battleFormationExhaustedReason = null
+            lastBattleTeamRecommendationKey = null
+            if (balancedMode) battlePlanning.invalidate()
+            _state.value = current.copy(
+                battleTeamRecommendation = null,
+                battleTeamSelectionPlan = null,
+                battleTeamRecommendationUnavailableReason =
+                    "Boss剩余角色不足5人；保留已确认的${reducedBossTarget}队，核验剩余空队后开始挑战",
+            )
+            return
+        }
         val cacheKey = buildString {
             append(acquiredCharacterIds.sorted().joinToString(","))
+            append("|roleGeneration=").append(roleDecisionGeneration.get())
+            append("|savedFrontlineMode=").append(savedFrontlineMode.name)
+            append("|requestedFrontlineMode=").append(requestedFrontlineMode.name)
+            append("|effectiveFrontlineMode=").append(candidateSelection?.effectiveMode?.name ?: "pending")
+            append("|candidatePool=").append(candidateSelection?.characterIds?.sorted()?.joinToString(",") ?: "pending")
             append("|area=")
             append(battleArea)
             append("|defense=")
@@ -4955,7 +4990,7 @@ class LabyrinthEntryRecognitionSession(
             append("|team=")
             append(currentCombatContext?.teamIndex ?: 1)
             append("|frontlineGate=")
-            append(battleStrategySettingsSnapshot.frontlineSurvivalGateEnabled)
+            append(requestedFrontlineMode.requiresFrontlineSurvivalGate)
             append("|bossMode=")
             append(bossTeamMode.name)
             append("|fallbackMulti=")
@@ -4975,11 +5010,7 @@ class LabyrinthEntryRecognitionSession(
             append("|failedTeams=")
             append(synchronized(failedBattleTeamSignatures) { failedBattleTeamSignatures.sorted().joinToString(";") })
             append("|used=")
-            append(
-                synchronized(committedBattleCharacterIds) {
-                    committedBattleCharacterIds.sorted().joinToString(",")
-                },
-            )
+            append(usedCharacterIds.sorted().joinToString(","))
         }
         if (
             !balancedMode && cacheKey == lastBattleTeamRecommendationKey &&
@@ -4995,11 +5026,6 @@ class LabyrinthEntryRecognitionSession(
             return
         }
 
-        val usedCharacterIds = synchronized(committedBattleCharacterIds) {
-            committedBattleCharacterIds.toSet()
-        }
-        val eligibleCharacterIds = acquiredCharacterIds.filterNot(usedCharacterIds::contains)
-        val planner = battleTeamRecommendationPlanner
         // 「不可用」是否由 cacheKey 的输入唯一决定。规划器自己的结论（没有可用角色、没有合格一号位
         // 等）是输入的纯函数，可以缓存；真正的瞬时故障（资料未加载、计算抛错）不是，缓存住就等于把
         // 一次瞬时失败固定成终态、每帧都命中同一条原因。内存不足是唯一的例外：按既有注释，它绝不
@@ -5011,7 +5037,8 @@ class LabyrinthEntryRecognitionSession(
             effectiveCharacterIds = synchronized(effectiveExCharacterIds) { effectiveExCharacterIds.toSet() },
             relaxedVanguardGate = currentCombatContext?.kind == LabyrinthCombatKind.BOSS && bossFallbackMultiTeamActive,
             currentArea = battleArea,
-            frontlineSurvivalGateEnabled = battleStrategySettingsSnapshot.frontlineSurvivalGateEnabled,
+            frontlineSurvivalGateEnabled = requestedFrontlineMode.requiresFrontlineSurvivalGate,
+            frontlineSurvivalMode = requestedFrontlineMode,
         )
         val allowSupplementLead = currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
             bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM && currentCombatContext.teamIndex > 1
@@ -5030,9 +5057,10 @@ class LabyrinthEntryRecognitionSession(
                 acquiredCharacterIds.toList(), eligibleCharacterIds.toList(), decisionContext,
                 failedSignatures.toList(), lastFailedSignature, retryNumber, requestedBossTeamCount,
                 allowSupplementLead, bossTeamMode, bossMultiTeamTargetCount, currentCombatContext,
-                usedCharacterIds.toList())
+                usedCharacterIds.toList(), savedFrontlineMode, requestedFrontlineMode, candidateSelection)
             val ready = battlePlanning.request(key, computeRecommendation)
             if (ready == null || (balancedDetailCapturedAt ?: Long.MIN_VALUE) <= battlePlanning.readyAt) {
+                battleFormationExhaustedReason = null
                 _state.value = current.copy(battleTeamRecommendation = null,
                     battleTeamRecommendationUnavailableReason = null, battleTeamSelectionPlan = null,
                     message = "编组规划进行中，等待规划返回后的新详细帧")
@@ -5048,7 +5076,25 @@ class LabyrinthEntryRecognitionSession(
         lastBattleTeamRecommendationKey = cacheKey.takeIf { recommendationResultCacheable }
         when (recommendationResult) {
             is LabyrinthBattleTeamRecommendationResult.Ready -> {
-                val recommendation = recommendationResult.recommendation
+                battleFormationExhaustedReason = null
+                val originalPlan = recommendationResult.recommendation
+                val plannedCount = labyrinthAggressiveBossPlannedRemainingTeams(
+                    savedFrontlineMode, currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
+                        bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM,
+                    requestedBossTeamCount, eligibleCharacterIds.size, originalPlan.plannedBossTeamCount,
+                )
+                val planned = originalPlan.copy(
+                    plannedBossTeamCount = plannedCount,
+                    safeBossTeamCount = minOf(originalPlan.safeBossTeamCount, plannedCount),
+                )
+                battleFormationState.observe(
+                    savedFrontlineMode, teamIndex, planned.formationMode, planned.formationFallbackReason,
+                )
+                val note = battleFormationState.fallbackNote
+                val recommendation = if (note == null) planned else planned.copy(
+                    reasons = (planned.reasons + note).distinct(),
+                    formationFallbackReason = planned.formationFallbackReason ?: battleFormationState.stableFallbackReason,
+                )
                 if (
                     currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
                     bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM
@@ -5057,6 +5103,8 @@ class LabyrinthEntryRecognitionSession(
                     val absoluteTarget = (teamIndex - 1 + recommendation.plannedBossTeamCount).coerceIn(teamIndex, 3)
                     if (bossMultiTeamTargetCount == null || teamIndex == 1) {
                         bossMultiTeamTargetCount = absoluteTarget
+                    } else if (savedFrontlineMode == LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE) {
+                        bossMultiTeamTargetCount = minOf(bossMultiTeamTargetCount!!, absoluteTarget)
                     }
                 }
                 _state.value = current.copy(
@@ -5072,6 +5120,20 @@ class LabyrinthEntryRecognitionSession(
             }
 
             is LabyrinthBattleTeamRecommendationResult.Unavailable -> {
+                battleFormationState.observe(
+                    savedFrontlineMode, teamIndex, recommendationResult.formationMode,
+                    recommendationResult.formationFallbackReason,
+                )
+                val stableFallback = battleFormationState.stableFallbackReason != null ||
+                    recommendationResult.formationFallbackReason != null
+                val exhausted = savedFrontlineMode == LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE &&
+                    recommendationResultCacheable && stableFallback &&
+                    recommendationResult.formationMode == LabyrinthFrontlineSurvivalMode.STABLE &&
+                    recommendationResult.failureKind in setOf(
+                        LabyrinthBattleFormationFailure.NO_LEGAL_FORMATION,
+                        LabyrinthBattleFormationFailure.EXHAUSTED_AFTER_STABLE,
+                    )
+                battleFormationExhaustedReason = recommendationResult.reason.takeIf { exhausted }
                 _state.value = current.copy(
                     battleTeamRecommendation = null,
                     battleTeamRecommendationUnavailableReason = recommendationResult.reason,
@@ -5088,12 +5150,47 @@ class LabyrinthEntryRecognitionSession(
         }
     }
 
+    /** Reuses only the verified ordinary first-attempt team; a new score recommendation is not required. */
+    internal fun publishCurrentNormalTeamHold(
+        sessionId: AutomationSessionId,
+        observation: LabyrinthBattleTeamObservation?,
+    ): Boolean {
+        if (activeSessionId != sessionId || observation == null || !labyrinthRequestsCurrentNormalBattleTeam(
+                battleStrategySettingsSnapshot, combatContext?.kind, battleRetryCount,
+            )
+        ) return false
+        val plan = (battleTeamSelectionPlanner ?: currentNormalTeamHoldPlanner).plan(
+            sessionId = sessionId,
+            recommendation = null,
+            observation = observation,
+            holdCurrentTeamRequested = true,
+        )
+        if (!plan.holdCurrentTeam || !plan.teamReady) return false
+        battleFormationExhaustedReason = null
+        lastBattleTeamRecommendationKey = null
+        if (balancedMode) battlePlanning.invalidate()
+        _state.value = _state.value.copy(
+            battleTeamRecommendation = null,
+            battleTeamRecommendationUnavailableReason = null,
+            battleTeamSelectionPlan = plan,
+            message = "普通战沿用已确认的满5人现队，普战跳编队优先生效，准备开始战斗",
+        )
+        val log = plan.logText()
+        if (lastBattleTeamSelectionPlanLog != log) {
+            lastBattleTeamSelectionPlanLog = log
+            runCatching { Log.i(TEAM_SELECTION_PLAN_LOG_TAG, log) }
+        }
+        return true
+    }
+
     private fun refreshBattleTeamSelectionPlan(
         sessionId: AutomationSessionId,
         pageState: LabyrinthEntryPageState,
         observation: com.landosol.toolbox.labyrinth.vision.LabyrinthBattleTeamObservation?,
     ) {
         if (activeSessionId != sessionId) return
+        if (pageState == LabyrinthEntryPageState.BATTLE_TEAM_SELECTION &&
+            publishCurrentNormalTeamHold(sessionId, observation)) return
         val recommendation = _state.value.battleTeamRecommendation
         val planner = battleTeamSelectionPlanner
         if (
@@ -7379,6 +7476,34 @@ class LabyrinthEntryRecognitionSession(
             )
             return
         }
+        val exhaustedReason = battleFormationExhaustedReason
+        if (exhaustedReason != null && preparationStep == null) {
+            if (!publishCurrentNormalTeamHold(sessionId, observation)) {
+                if (observation.recognitionState != LabyrinthBattleTeamRecognitionState.STABLE ||
+                    observation.selectedCharacters.any { it.characterId == null ||
+                        it.confidence < LABYRINTH_BATTLE_CHARACTER_SAFE_CONFIDENCE }) return
+                when (labyrinthExhaustedFormationAction(
+                    battleStrategySettingsSnapshot.effectiveFrontlineSurvivalMode,
+                    LabyrinthBattleFormationFailure.EXHAUSTED_AFTER_STABLE,
+                    rerollAfterThreeBattleFailures, _state.value.dryRun,
+                )) {
+                    LabyrinthExhaustedFormationAction.REROLL -> {
+                        finishFromPlannerAndRequestReroll(
+                            sessionId, "非常激进已临时按稳定重新推荐，仍无新的可用阵容；" + exhaustedReason,
+                        )
+                        return
+                    }
+                    LabyrinthExhaustedFormationAction.PROMPT -> {
+                        pendingTerminalOutcome = LabyrinthRunTerminalOutcome.FAILED_MAX_RETRY
+                        finishFromPlanner(
+                            sessionId, "稳定仍无新的可用阵容，未允许自动重刷，请手动处理；" + exhaustedReason,
+                        )
+                        return
+                    }
+                    LabyrinthExhaustedFormationAction.NONE -> Unit
+                }
+            }
+        }
         // 「特别装备」闸门：Boss 预处理完成之后、产出任何编组执行步（含三条路径各自的 START_BATTLE）
         // 之前。本轮没结束时这一帧由特别装备流程接管并 return，于是下面三个调用点都无法产出动作；
         // 本轮结束（成功 / 未变更 / 超限放弃）或不适用时返回 false，原有编组/开战路径逐字继续。
@@ -7431,7 +7556,7 @@ class LabyrinthEntryRecognitionSession(
             }
         } else {
             val recommendation = _state.value.battleTeamRecommendation
-            if (recommendation == null) {
+            if (recommendation == null && _state.value.battleTeamSelectionPlan?.holdCurrentTeam != true) {
                 val unavailable = _state.value.battleTeamRecommendationUnavailableReason
                 if (
                     unavailable != null &&
@@ -8407,6 +8532,9 @@ class LabyrinthEntryRecognitionSession(
             relicMarkStackCalibration,
         ).getValue(LabyrinthRelicMark.DEFENSE)
         val targetCount = encounterStrategy?.targetCount ?: context.targetCount
+        val requestedFrontlineMode = battleFormationState.requestedMode(
+            battleStrategySettingsSnapshot.effectiveFrontlineSurvivalMode,
+        )
         val decisionContext = LabyrinthRoleDecisionContext(
             defenseMarkStacks = defenseStacks,
             targetCount = targetCount,
@@ -8416,7 +8544,8 @@ class LabyrinthEntryRecognitionSession(
             effectiveCharacterIds = synchronized(effectiveExCharacterIds) { effectiveExCharacterIds.toSet() },
             relaxedVanguardGate = context.kind == LabyrinthCombatKind.BOSS && bossFallbackMultiTeamActive,
             currentArea = battleArea,
-            frontlineSurvivalGateEnabled = battleStrategySettingsSnapshot.frontlineSurvivalGateEnabled,
+            frontlineSurvivalGateEnabled = requestedFrontlineMode.requiresFrontlineSurvivalGate,
+            frontlineSurvivalMode = requestedFrontlineMode,
         )
         val nextFailedSignatures = LinkedHashSet<String>().apply {
             synchronized(failedBattleTeamSignatures) { addAll(failedBattleTeamSignatures) }
@@ -8456,6 +8585,7 @@ class LabyrinthEntryRecognitionSession(
                 planner,
                 acquiredCharacterIds,
                 decisionContext,
+                requestedFrontlineMode,
                 nextFailedSignatures.toList(),
                 lastFailedSignature,
                 nextRetryNumber,
@@ -8491,6 +8621,8 @@ class LabyrinthEntryRecognitionSession(
     }
 
     private fun resetBattleRetryTracking() {
+        battleFormationState.reset()
+        battleFormationExhaustedReason = null
         battleRetryCount = 0
         awaitingRetryBattleAfterFailure = false
         if (balancedMode && (battleRetryPlanning.busy || battleRetryPlanning.hasReady)) {

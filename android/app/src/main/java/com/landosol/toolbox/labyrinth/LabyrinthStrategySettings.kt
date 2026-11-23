@@ -3,6 +3,34 @@ package com.landosol.toolbox.labyrinth
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
+/** 战斗编队三档；稳定是新配置与旧关闭配置的实际默认档。 */
+@Serializable
+enum class LabyrinthFrontlineSurvivalMode(
+    val requiresFrontlineSurvivalGate: Boolean,
+    val label: String,
+    val summary: String,
+    val description: String,
+) {
+    VERY_AGGRESSIVE(
+        requiresFrontlineSurvivalGate = false,
+        label = "非常激进",
+        summary = "排除掩护者，优先输出",
+        description = "配队不选择任何掩护者（坦克），优先输出；非掩护者不足 5 人时，本轮自动按「稳定」编队",
+    ),
+    STABLE(
+        requiresFrontlineSurvivalGate = false,
+        label = "稳定",
+        summary = "保留生存评分与开战安全，不强制前排",
+        description = "默认。保留生存评分与开战安全检查，不强制前排生存位，按综合评分编队。",
+    ),
+    CAUTIOUS(
+        requiresFrontlineSurvivalGate = true,
+        label = "贪生怕死",
+        summary = "前排生存门槛 55/40，保留原有兜底",
+        description = "沿用原前排生存门槛：一号位生存线为 55 分，单队 Boss 失败切多队时放宽到 40 分；保留原有无T兜底和补刀例外，不保证必胜。",
+    ),
+}
+
 @Serializable
 enum class LabyrinthBossTeamMode {
     MULTI_TEAM,
@@ -58,7 +86,7 @@ data class LabyrinthStrategySettings(
     val effectiveCharacterSystemBonus: Int = 8,
     val secondTeamWeight: Int = 35,
     val thirdTeamWeight: Int = 20,
-    /** Opt-in hard frontline eligibility for newly generated battle teams; legacy settings default off. */
+    /** 旧 JSON 与 constructor/copy 源码兼容字段；新逻辑读取 effectiveFrontlineSurvivalMode。 */
     val frontlineSurvivalGateEnabled: Boolean = false,
     /** Opt-in reuse of a confirmed full team on the first attempt of a normal battle. */
     val normalBattleSkipTeamSelectionEnabled: Boolean = false,
@@ -125,7 +153,20 @@ data class LabyrinthStrategySettings(
      * 旧配置缺这个字段时取 [DEFAULT_RESPONSE_INTERVAL_MILLIS]，与本项目当前行为一致。
      */
     val responseIntervalMillis: Int = DEFAULT_RESPONSE_INTERVAL_MILLIS,
+    /** 显式三档优先；null 保留旧布尔配置语义，追加于尾部以兼容旧位置参数。 */
+    val frontlineSurvivalMode: LabyrinthFrontlineSurvivalMode? = null,
 ) {
+    val effectiveFrontlineSurvivalMode: LabyrinthFrontlineSurvivalMode
+        get() = frontlineSurvivalMode ?: if (frontlineSurvivalGateEnabled) {
+            LabyrinthFrontlineSurvivalMode.CAUTIOUS
+        } else {
+            LabyrinthFrontlineSurvivalMode.STABLE
+        }
+
+    /** 设置页选档同时同步兼容字段，避免旧读取方与新档位产生分歧。 */
+    fun withFrontlineSurvivalMode(mode: LabyrinthFrontlineSurvivalMode): LabyrinthStrategySettings =
+        copy(frontlineSurvivalMode = mode, frontlineSurvivalGateEnabled = mode.requiresFrontlineSurvivalGate)
+
     /** 始终以默认分支补齐旧配置，再由用户保存的同名分支覆盖；供设置界面展示。 */
     fun configuredEventChoiceOverrides(): Map<String, String> =
         DEFAULT_EVENT_CHOICE_OVERRIDES + eventChoiceOverrides

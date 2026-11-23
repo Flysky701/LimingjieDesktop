@@ -39,6 +39,14 @@ class StrategyShareCodecTest {
         assertEquals(setOf("format", "version", "name", "note", "settings"), document(encoded).keys)
     }
 
+    @Test fun shareRoundTripPreservesVeryAggressiveFrontlineSurvivalMode() {
+        val settings = LabyrinthStrategySettings().withFrontlineSurvivalMode(LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE)
+        val encoded = StrategyShareCodec.encode(StrategyProfile("id", "策略", settings = settings))
+        val imported = StrategyShareCodec.decode(encoded)
+        assertEquals(settings, imported.settings)
+        assertEquals(LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE, imported.settings.effectiveFrontlineSurvivalMode)
+    }
+
     @Test fun malformedIncompatibleAndOversizedInputCannotBecomeDefaultStrategy() {
         val valid = document(StrategyShareCodec.encode(StrategyProfile("id", "策略")))
         rejects { StrategyShareCodec.decode("LMJ1:broken") }
@@ -129,9 +137,10 @@ class StrategyShareCodecTest {
         assertEquals(settings, StrategyShareCodec.decode(encoded).settings)
         val root = document(encoded)
         val oldSettings = JsonObject(root.getValue("settings").jsonObject - setOf("eventCustomizationEnabled", "eventChoiceOverrides",
-            "frontlineSurvivalGateEnabled", "normalBattleSkipTeamSelectionEnabled"))
+            "frontlineSurvivalGateEnabled", "normalBattleSkipTeamSelectionEnabled", "frontlineSurvivalMode"))
         val legacy = StrategyShareCodec.decode(code(JsonObject(root + ("settings" to oldSettings)).toString())).settings
         assertFalse(legacy.eventCustomizationEnabled)
+        assertEquals(LabyrinthFrontlineSurvivalMode.STABLE, legacy.effectiveFrontlineSurvivalMode)
         assertEquals(LabyrinthStrategySettings().eventChoiceOverrides, legacy.eventChoiceOverrides)
         assertEquals(settings.openingRosters, legacy.openingRosters)
     }

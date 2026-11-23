@@ -88,11 +88,12 @@ class ResponsiveLayoutTest {
         assertFalse(beforeContent.contains("draft.normalBattleSkipTeamSelectionEnabled"))
         val battleContent = screen.substringAfter("\"战斗设置\" -> StrategyPanel")
             .substringBefore("\"Boss编组\" -> StrategyPanel")
-        assertTrue(battleContent.contains("前排生存门槛"))
+        // 2026-11-21: the survival gate became a three-mode editor with its own component.
+        assertTrue(battleContent.contains("FrontlineSurvivalModeEditor("))
+        assertTrue(screen.contains("前排生存门槛："))
         assertTrue(battleContent.contains("普战跳编队"))
-        assertTrue(battleContent.contains("draft = draft.copy(frontlineSurvivalGateEnabled = it)"))
         assertTrue(battleContent.contains("draft = draft.copy(normalBattleSkipTeamSelectionEnabled = it)"))
-        assertTrue(battleContent.contains("默认关闭 · 保存后下次启动生效"))
+        assertTrue(battleContent.contains("默认稳定 · 保存后下次任务生效"))
     }
 
     @Test

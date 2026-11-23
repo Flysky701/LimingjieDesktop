@@ -171,7 +171,7 @@ data class LabyrinthBattleTeamSelectionPlan(
 
     fun isStillValid(
         currentSessionId: AutomationSessionId,
-        recommendation: LabyrinthBattleTeamRecommendation,
+        recommendation: LabyrinthBattleTeamRecommendation?,
         observation: LabyrinthBattleTeamObservation,
     ): Boolean {
         if (!readyToExecute || currentSessionId != sessionId) return false
@@ -182,14 +182,18 @@ data class LabyrinthBattleTeamSelectionPlan(
         // fail every frame. The viewport, filter and selected-team checks still apply, so a team
         // change or page change invalidates the plan as before.
         if (!holdCurrentTeam) {
-            val currentRecommendationIds = recommendation.members
-                .map { canonicalLabyrinthRoleId(it.characterId) }
+            val currentRecommendationIds = recommendation?.members
+                ?.map { canonicalLabyrinthRoleId(it.characterId) } ?: return false
             if (currentRecommendationIds != recommendedIds) return false
         }
-        val selectedIds = observation.effectiveSelectedCharacters().map { match ->
+        val selectedMatches = observation.effectiveSelectedCharacters()
+        if (selectedMatches.any { it.confidence < minimumCharacterConfidence }) return false
+        val selectedIds = selectedMatches.map { match ->
             match.characterId?.let(::canonicalLabyrinthRoleId) ?: return false
         }
         if (selectedIds != currentlySelectedIds) return false
+        if (holdCurrentTeam && (selectedIds.size != LABYRINTH_TEAM_SIZE ||
+                selectedIds.distinct().size != selectedIds.size || selectedIds != recommendedIds)) return false
         return (visibleSelectTargets + visibleDeselectTargets).all { target ->
             val source = when (target.kind) {
                 LabyrinthBattleTeamSelectionTargetKind.SELECT -> observation.visibleCharacters
@@ -344,7 +348,7 @@ data class LabyrinthBattleTeamExecutionStep(
 fun labyrinthBattleTeamExecutionStep(
     plan: LabyrinthBattleTeamSelectionPlan,
     sessionId: AutomationSessionId,
-    recommendation: LabyrinthBattleTeamRecommendation,
+    recommendation: LabyrinthBattleTeamRecommendation?,
     observation: LabyrinthBattleTeamObservation,
     startButtonRect: EntryPixelRect?,
     frameWidth: Int,
@@ -585,7 +589,7 @@ class LabyrinthBattleTeamSelectionPlanner(
      */
     fun plan(
         sessionId: AutomationSessionId,
-        recommendation: LabyrinthBattleTeamRecommendation,
+        recommendation: LabyrinthBattleTeamRecommendation?,
         observation: LabyrinthBattleTeamObservation,
         exhaustedFilters: Set<LabyrinthBattleElementFilter> = emptySet(),
         holdCurrentTeamRequested: Boolean = false,
@@ -613,12 +617,12 @@ class LabyrinthBattleTeamSelectionPlanner(
         val recommendedIds = if (holdCurrentTeam) {
             selectedIds
         } else {
-            recommendation.members.map { canonicalLabyrinthRoleId(it.characterId) }
+            recommendation?.members.orEmpty().map { canonicalLabyrinthRoleId(it.characterId) }
         }
         val recommendedNames = if (holdCurrentTeam) {
             selectedNames
         } else {
-            recommendation.members.associate { member ->
+            recommendation?.members.orEmpty().associate { member ->
                 canonicalLabyrinthRoleId(member.characterId) to member.displayName
             }
         }
@@ -699,6 +703,7 @@ class LabyrinthBattleTeamSelectionPlanner(
             notCurrentlyVisibleIds.any { id -> currentFilterMayContain(observation.currentFilter, id) }
 
         val blockReasons = buildList {
+            if (recommendation == null && !holdCurrentTeam) add("现队不满足沿用条件，等待可用推荐")
             if (observation.recognitionState == LabyrinthBattleTeamRecognitionState.WAITING_FOR_STABILITY) {
                 add("角色列表变化中，等待稳定")
             }

@@ -79,8 +79,14 @@ object LabyrinthConfigShareCodec {
     private const val MAX_SCORES = 2_048
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = false; isLenient = false }
     private val strategyTemplate by lazy {
-        JsonObject(json.encodeToJsonElement(LabyrinthStrategySettings()).jsonObject - "personalRoleScores")
+        // personalRoleScores is a separate module; frontlineSurvivalMode is a newer optional
+        // strategy field, so old share codes without it remain readable with the default null.
+        JsonObject(
+            json.encodeToJsonElement(LabyrinthStrategySettings()).jsonObject -
+                "personalRoleScores" - "frontlineSurvivalMode",
+        )
     }
+    private val optionalStrategyFields = setOf("frontlineSurvivalMode")
     private val rerollTemplate by lazy {
         json.encodeToJsonElement(LabyrinthRerollSettings()).jsonObject
     }
@@ -115,7 +121,12 @@ object LabyrinthConfigShareCodec {
     fun encode(configuration: LabyrinthSharedConfiguration): String {
         validate(configuration)
         val modules = linkedMapOf<String, JsonElement>()
-        configuration.strategy?.let { modules["strategy"] = JsonObject(json.encodeToJsonElement(it).jsonObject - "personalRoleScores") }
+        configuration.strategy?.let { settings ->
+            val strategyFields = json.encodeToJsonElement(settings).jsonObject - "personalRoleScores"
+            modules["strategy"] = JsonObject(
+                if (settings.frontlineSurvivalMode == null) strategyFields - "frontlineSurvivalMode" else strategyFields,
+            )
+        }
         configuration.personalScores?.let { modules["personalScores"] = json.encodeToJsonElement(it) }
         configuration.reroll?.let { modules["reroll"] = json.encodeToJsonElement(it) }
         val text = json.encodeToString(Envelope("labyrinth-config", 1, configuration.appVersion, configuration.exportedAtMillis, JsonObject(modules)))
@@ -164,7 +175,8 @@ object LabyrinthConfigShareCodec {
             // Older strategy shares predate these switches. Only these known additions may be absent.
             val addedFields = setOf("frontlineSurvivalGateEnabled", "normalBattleSkipTeamSelectionEnabled")
             val compatible = JsonObject(strategyTemplate.filterKeys { it in addedFields } + supplied)
-            val fields = requireFields(compatible, strategyTemplate)
+            val fields = requireFields(compatible, strategyTemplate, optionalStrategyFields)
+            fields["frontlineSurvivalMode"]?.let { requirePrimitive(it, true) }
             validateStrategyTypes(fields)
             decodeValue<LabyrinthStrategySettings>(fields)
         }
@@ -210,9 +222,15 @@ object LabyrinthConfigShareCodec {
         configuration.reroll?.validationError()?.let { throw IllegalArgumentException(it) }
     }
 
-    private fun requireFields(element: JsonElement, template: JsonObject): JsonObject {
+    private fun requireFields(
+        element: JsonElement,
+        template: JsonObject,
+        optionalKeys: Set<String> = emptySet(),
+    ): JsonObject {
         val fields = element as? JsonObject ?: throw IllegalArgumentException("配置模块结构无效")
-        require(fields.keys == template.keys) { "配置模块字段缺失或不受当前版本支持，请使用兼容版本重新导出" }
+        require(fields.keys.containsAll(template.keys) && fields.keys.all { it in template.keys || it in optionalKeys }) {
+            "配置模块字段缺失或不受当前版本支持，请使用兼容版本重新导出"
+        }
         template.forEach { (key, sample) ->
             when (sample) {
                 is JsonPrimitive -> requirePrimitive(fields[key], sample.isString)

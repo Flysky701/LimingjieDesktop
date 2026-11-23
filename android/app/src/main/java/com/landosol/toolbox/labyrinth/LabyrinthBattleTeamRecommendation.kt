@@ -20,6 +20,8 @@ data class LabyrinthBattleTeamRecommendation(
     /** Leading teams that passed the vanguard survival gate; the rest of [plannedBossTeamCount] are supplements. */
     val safeBossTeamCount: Int = plannedBossTeamCount,
     val excludedIncompleteCharacterIds: List<String> = emptyList(),
+    val formationMode: LabyrinthFrontlineSurvivalMode? = null,
+    val formationFallbackReason: LabyrinthBattleFormationFallbackReason? = null,
 ) {
     init {
         require(members.size in 1..5)
@@ -80,7 +82,14 @@ sealed interface LabyrinthBattleTeamRecommendationResult {
     data class Ready(val recommendation: LabyrinthBattleTeamRecommendation) :
         LabyrinthBattleTeamRecommendationResult
 
-    data class Unavailable(val reason: String) : LabyrinthBattleTeamRecommendationResult
+    data class Unavailable(
+        val reason: String,
+        val failureKind: LabyrinthBattleFormationFailure = LabyrinthBattleFormationFailure.OTHER,
+        val formationMode: LabyrinthFrontlineSurvivalMode? = null,
+        val formationFallbackReason: LabyrinthBattleFormationFallbackReason? = null,
+        /** A normal empty search may try stable once even if data is insufficient for terminal exhaustion. */
+        val canRetryWithStable: Boolean = false,
+    ) : LabyrinthBattleTeamRecommendationResult
 }
 
 /** Bridges persisted run-state IDs to the production team planner. */
@@ -88,6 +97,13 @@ class LabyrinthBattleTeamRecommendationPlanner(
     private val profiles: Map<String, LabyrinthRoleProfile>,
     private val teamPlanSearcher: LabyrinthTeamPlanSearcher,
 ) {
+    /** The caller supplies the available pool, already excluding committed Boss members. */
+    fun formationCandidateSelection(
+        acquiredCharacterIds: Collection<String>,
+        mode: LabyrinthFrontlineSurvivalMode,
+    ): LabyrinthBattleCandidateSelection =
+        selectLabyrinthBattleFormationCandidates(acquiredCharacterIds, profiles, mode)
+
     fun initialRecommendation(
         acquiredCharacterIds: Collection<String>,
         context: LabyrinthRoleDecisionContext,
@@ -96,6 +112,75 @@ class LabyrinthBattleTeamRecommendationPlanner(
          * Boss follow-up slot (team 2/3): the tank-led teams are already committed, so the team
          * for this slot may lead without a qualified vanguard rather than leave the slot empty.
          */
+        allowSupplementLead: Boolean = false,
+    ): LabyrinthBattleTeamRecommendationResult = withFormationMode(acquiredCharacterIds, context) { ids, effectiveContext ->
+        initialRecommendationCore(ids, effectiveContext, requestedBossTeamCount, allowSupplementLead)
+    }
+
+    fun retryRecommendation(
+        acquiredCharacterIds: Collection<String>,
+        context: LabyrinthRoleDecisionContext,
+        failedTeamSignatures: Set<String>,
+        retryNumber: Int = 1,
+        lastFailedTeamSignature: String? = null,
+        requestedBossTeamCount: Int = 1,
+        allowSupplementLead: Boolean = false,
+    ): LabyrinthBattleTeamRecommendationResult = withFormationMode(acquiredCharacterIds, context) { ids, effectiveContext ->
+        retryRecommendationCore(
+            ids, effectiveContext, failedTeamSignatures, retryNumber, lastFailedTeamSignature,
+            requestedBossTeamCount, allowSupplementLead,
+        )
+    }
+
+    private fun withFormationMode(
+        acquiredCharacterIds: Collection<String>,
+        context: LabyrinthRoleDecisionContext,
+        recommend: (List<String>, LabyrinthRoleDecisionContext) -> LabyrinthBattleTeamRecommendationResult,
+    ): LabyrinthBattleTeamRecommendationResult {
+        val completePool = acquiredCharacterIds.map(::canonicalLabyrinthRoleId).distinct()
+        // Null mode is the old bool API, not an alias for VERY_AGGRESSIVE. Preserve its pool,
+        // scoring context and refusal/fallback behavior exactly, including gate-off protectors.
+        val requestedMode = context.frontlineSurvivalMode ?: return recommend(completePool, context)
+        var selection = formationCandidateSelection(completePool, requestedMode)
+        var result = recommend(selection.characterIds, context.withFrontlineSurvivalMode(selection.effectiveMode))
+        if (selection.effectiveMode == LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE &&
+            result is LabyrinthBattleTeamRecommendationResult.Unavailable &&
+            (result.failureKind == LabyrinthBattleFormationFailure.NO_LEGAL_FORMATION || result.canRetryWithStable)) {
+            selection = LabyrinthBattleCandidateSelection(
+                completePool,
+                LabyrinthFrontlineSurvivalMode.STABLE,
+                LabyrinthBattleFormationFallbackReason.NO_UNFAILED_FORMATION,
+            )
+            // Retry exactly once with the same original pool and the same failed signatures.
+            result = recommend(completePool, context.withFrontlineSurvivalMode(selection.effectiveMode))
+        }
+        val modeReason = "实际编组模式：${selection.effectiveMode.label}" +
+            selection.fallbackReason?.let { "；${it.description}" }.orEmpty()
+        return when (val finalResult = result) {
+            is LabyrinthBattleTeamRecommendationResult.Ready -> finalResult.copy(
+                recommendation = finalResult.recommendation.copy(
+                    reasons = (listOf(modeReason) + finalResult.recommendation.reasons).distinct(),
+                    formationMode = selection.effectiveMode,
+                    formationFallbackReason = selection.fallbackReason,
+                ),
+            )
+            is LabyrinthBattleTeamRecommendationResult.Unavailable -> finalResult.copy(
+                reason = "$modeReason；${finalResult.reason}",
+                failureKind = if (requestedMode == LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE &&
+                    selection.fallbackReason != null &&
+                    finalResult.failureKind == LabyrinthBattleFormationFailure.NO_LEGAL_FORMATION) {
+                    LabyrinthBattleFormationFailure.EXHAUSTED_AFTER_STABLE
+                } else finalResult.failureKind,
+                formationMode = selection.effectiveMode,
+                formationFallbackReason = selection.fallbackReason,
+            )
+        }
+    }
+
+    private fun initialRecommendationCore(
+        acquiredCharacterIds: Collection<String>,
+        context: LabyrinthRoleDecisionContext,
+        requestedBossTeamCount: Int = 1,
         allowSupplementLead: Boolean = false,
     ): LabyrinthBattleTeamRecommendationResult {
         require(requestedBossTeamCount in 1..3)
@@ -130,6 +215,7 @@ class LabyrinthBattleTeamRecommendationPlanner(
         if (context.frontlineSurvivalGateEnabled && !supplementLead && plan.teams.isNotEmpty() && plan.safeTeamCount == 0) {
             return LabyrinthBattleTeamRecommendationResult.Unavailable(
                 "当前角色池中没有满足生存资格的一号位；不再仅按掩护者职阶强行上T",
+                failureKind = planningFailureKind(resolved, context),
             )
         }
         val evaluation = plan.teams.firstOrNull()
@@ -137,6 +223,11 @@ class LabyrinthBattleTeamRecommendationPlanner(
                 plan.reason + resolved.filter { it.position == null }.takeIf { it.isNotEmpty() }?.let {
                     "；无法确认一号位站位关系的角色：${it.joinToString { role -> role.displayName }}"
                 }.orEmpty(),
+                failureKind = planningFailureKind(
+                    resolved, context,
+                    requireFullTeam = requestedBossTeamCount > 1 || allowSupplementLead,
+                ),
+                canRetryWithStable = context.frontlineSurvivalMode != null,
             )
         val expectedTeamSize = minOf(TEAM_SIZE, resolved.size)
         if (evaluation.members.size != expectedTeamSize) {
@@ -302,7 +393,7 @@ class LabyrinthBattleTeamRecommendationPlanner(
         functions.pureHealer ?: 0.0,
     )
 
-    fun retryRecommendation(
+    private fun retryRecommendationCore(
         acquiredCharacterIds: Collection<String>,
         context: LabyrinthRoleDecisionContext,
         failedTeamSignatures: Set<String>,
@@ -368,11 +459,19 @@ class LabyrinthBattleTeamRecommendationPlanner(
         if (context.frontlineSurvivalGateEnabled && !retrySupplementLead && plan.teams.isNotEmpty() && plan.safeTeamCount == 0) {
             return LabyrinthBattleTeamRecommendationResult.Unavailable(
                 "战斗失败后角色池中没有满足生存资格的一号位；不能生成安全重试队伍",
+                failureKind = planningFailureKind(resolved, context),
             )
         }
         val retryLeadIsSupplement = plan.safeTeamCount == 0
         val evaluation = plan.teams.firstOrNull()
-            ?: return LabyrinthBattleTeamRecommendationResult.Unavailable(plan.reason)
+            ?: return LabyrinthBattleTeamRecommendationResult.Unavailable(
+                plan.reason,
+                failureKind = planningFailureKind(
+                    resolved, context,
+                    requireFullTeam = requestedBossTeamCount > 1 || allowSupplementLead,
+                ),
+                canRetryWithStable = context.frontlineSurvivalMode != null,
+            )
         val expectedTeamSize = minOf(TEAM_SIZE, resolved.size)
         if (evaluation.members.size != expectedTeamSize) {
             return LabyrinthBattleTeamRecommendationResult.Unavailable(
@@ -418,6 +517,24 @@ class LabyrinthBattleTeamRecommendationPlanner(
                 safeBossTeamCount = plan.safeTeamCount.coerceIn(0, plan.teams.size.coerceIn(1, 3)),
             ),
         )
+    }
+
+    /** Only normal planning refusal is classified here, never data loading or invariant failures. */
+    private fun planningFailureKind(
+        roster: List<LabyrinthRoleProfile>,
+        context: LabyrinthRoleDecisionContext,
+        requireFullTeam: Boolean = false,
+    ): LabyrinthBattleFormationFailure {
+        if (requireFullTeam && roster.size < TEAM_SIZE) {
+            return LabyrinthBattleFormationFailure.NO_LEGAL_FORMATION
+        }
+        if (context.frontlineSurvivalMode == null || roster.isEmpty() ||
+            roster.any { profiles[it.characterId] == null || it.position == null }) {
+            return LabyrinthBattleFormationFailure.OTHER
+        }
+        // Unknown job class is not a hard qualification. Existing search completed normally
+        // without a legal/unfailed team; do not add an expensive second enumeration walk.
+        return LabyrinthBattleFormationFailure.NO_LEGAL_FORMATION
     }
 
     private fun LabyrinthRoleProfile.toRecommendedMember() = LabyrinthRecommendedTeamMember(

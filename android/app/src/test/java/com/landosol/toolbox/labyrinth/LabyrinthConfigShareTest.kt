@@ -217,6 +217,53 @@ class LabyrinthConfigShareTest {
         assertEquals(values.rerolls, restored.rerolls)
     }
 
+    @Test fun `preview summary handles a differentiated frontline mode without crashing`() {
+        val target = LabyrinthConfigurationValues(
+            LabyrinthStrategySettings().withFrontlineSurvivalMode(LabyrinthFrontlineSurvivalMode.STABLE),
+            emptyMap(),
+        )
+        val incoming = LabyrinthConfigShareCodec.create(
+            LabyrinthConfigurationValues(
+                LabyrinthStrategySettings().withFrontlineSurvivalMode(LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE),
+                emptyMap(),
+            ),
+            setOf(LabyrinthConfigModule.STRATEGY), 7L, "test-version", 1000L,
+        )
+        val summary = LabyrinthConfigImportPlan(incoming, setOf(LabyrinthConfigModule.STRATEGY), 7L, target)
+            .changeSummary()
+        assertTrue(summary.any { it.contains("前排生存门槛") && it.contains("非常激进") })
+        assertFalse(summary.any { it.contains("frontlineSurvivalGateEnabled") })
+    }
+
+    @Test fun `old strategy share code without frontline mode remains importable`() {
+        val settings = LabyrinthStrategySettings(frontlineSurvivalGateEnabled = true, survivalWeight = 41)
+        val code = LabyrinthConfigShareCodec.encode(
+            LabyrinthConfigShareCodec.create(
+                LabyrinthConfigurationValues(settings, emptyMap()),
+                setOf(LabyrinthConfigModule.STRATEGY), 7L, "old-version", 1000L,
+            ),
+        )
+        val text = unpack(code)
+        assertFalse(text.contains("frontlineSurvivalMode"))
+        val imported = LabyrinthConfigShareCodec.decode(code).strategy!!
+        assertEquals(LabyrinthFrontlineSurvivalMode.CAUTIOUS, imported.effectiveFrontlineSurvivalMode)
+        assertEquals(41, imported.survivalWeight)
+    }
+
+    @Test fun `very aggressive strategy share code round trips its explicit mode`() {
+        val settings = LabyrinthStrategySettings().withFrontlineSurvivalMode(LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE)
+        val code = LabyrinthConfigShareCodec.encode(
+            LabyrinthConfigShareCodec.create(
+                LabyrinthConfigurationValues(settings, emptyMap()),
+                setOf(LabyrinthConfigModule.STRATEGY), 7L, "new-version", 1000L,
+            ),
+        )
+        assertTrue(unpack(code).contains("frontlineSurvivalMode"))
+        val imported = LabyrinthConfigShareCodec.decode(code).strategy!!
+        assertEquals(LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE, imported.frontlineSurvivalMode)
+        assertEquals(LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE, imported.effectiveFrontlineSurvivalMode)
+    }
+
     private fun reject(input: String) {
         assertThrows(IllegalArgumentException::class.java) { LabyrinthConfigShareCodec.decode(input) }
     }

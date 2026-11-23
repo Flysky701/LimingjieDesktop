@@ -395,7 +395,17 @@ data class LabyrinthRoleDecisionContext(
     val currentArea: Int? = null,
     /** Opt-in battle-only frontline hard gate; does not disable any survival scoring. */
     val frontlineSurvivalGateEnabled: Boolean = false,
+    /** Explicit battle mode; null preserves legacy callers using only the Boolean gate. */
+    val frontlineSurvivalMode: LabyrinthFrontlineSurvivalMode? = null,
 ) {
+    val effectiveFrontlineSurvivalMode: LabyrinthFrontlineSurvivalMode
+        get() = frontlineSurvivalMode ?: if (frontlineSurvivalGateEnabled) {
+            LabyrinthFrontlineSurvivalMode.CAUTIOUS
+        } else LabyrinthFrontlineSurvivalMode.STABLE
+
+    fun withFrontlineSurvivalMode(mode: LabyrinthFrontlineSurvivalMode): LabyrinthRoleDecisionContext =
+        copy(frontlineSurvivalMode = mode, frontlineSurvivalGateEnabled = mode.requiresFrontlineSurvivalGate)
+
     init {
         require(defenseMarkStacks >= 0)
         require(targetCount >= 1)

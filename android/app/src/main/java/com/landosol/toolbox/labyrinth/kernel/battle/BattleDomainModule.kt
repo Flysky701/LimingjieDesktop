@@ -47,6 +47,7 @@ data class BattleRetryPolicyContext(
     val preferPureBossDamageSystem: Boolean = true,
     val frontlineSurvivalGateEnabled: Boolean = false,
     val currentArea: Int? = null,
+    val frontlineSurvivalMode: LabyrinthFrontlineSurvivalMode? = null,
 )
 
 /** Live evidence and strategy supplied by the owner of the capture and run roster. */
@@ -998,6 +999,11 @@ class BattleDomainModule(
             LabyrinthCombatKind.BOSS -> labyrinthBossEncounterStrategy(policy.route)
             LabyrinthCombatKind.NORMAL -> null
         }
+        val effectiveMode = policy.frontlineSurvivalMode ?: if (policy.frontlineSurvivalGateEnabled) {
+            LabyrinthFrontlineSurvivalMode.CAUTIOUS
+        } else {
+            LabyrinthFrontlineSurvivalMode.STABLE
+        }
         val roleContext = LabyrinthRoleDecisionContext(
             defenseMarkStacks = policy.defenseMarkStacks,
             targetCount = strategy?.targetCount ?: combat.targetCount,
@@ -1007,7 +1013,8 @@ class BattleDomainModule(
             effectiveCharacterIds = policy.effectiveCharacterIds.toSet(),
             relaxedVanguardGate = boss && bossFallbackMultiTeamActive,
             currentArea = labyrinthBattleTeamArea(policy.activeNodeArea ?: activeArea, combat.kind, policy.route, policy.currentArea),
-            frontlineSurvivalGateEnabled = policy.frontlineSurvivalGateEnabled,
+            frontlineSurvivalGateEnabled = effectiveMode.requiresFrontlineSurvivalGate,
+            frontlineSurvivalMode = effectiveMode,
         )
         val teams = if (boss && bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM) {
             val total = bossMultiTeamTargetCount ?: requestedBossTeams ?: 3
