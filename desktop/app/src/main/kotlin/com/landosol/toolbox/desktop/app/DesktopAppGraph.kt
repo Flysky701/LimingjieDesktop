@@ -539,7 +539,9 @@ class DesktopAppGraph(
                     readUnknownOptionText = labyrinthEntryRecognitionSession::needsUnknownOptionText,
                     eventCustomizationEnabled = labyrinthEntryRecognitionSession.eventCustomizationEnabledSnapshot,
                     allowInitial1088GeometryRefinement = {
-                        com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.allowInitial1088GeometryRefinement
+                        val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
+                        com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.currentInitial1088RefinementContext()?.allowed
+                            ?: snapshot?.allowInitial1088GeometryRefinement
                             ?: labyrinthEntryRecognitionSession.allowInitial1088GeometryRefinement()
                     },
                 )::processDesktopFrame

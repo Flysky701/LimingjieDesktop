@@ -2,11 +2,21 @@ package com.landosol.toolbox.labyrinth.vision
 
 /** Called under the resolver's lock. Request identity is separate from visual similarity. */
 internal class LabyrinthEventOcrCache {
-    data class Key(val fingerprint: Long, val rect: EntryPixelRect)
+    data class Key(
+        val fingerprint: Long,
+        val rect: EntryPixelRect,
+        /** Request-source metadata only; generic cache similarity remains unchanged. */
+        val titleFingerprint: Long? = null,
+    )
     private data class Request(val id: Long, val key: Key, val startedAt: Long)
     private data class Result(val request: Request, val text: String, val completedAt: Long)
     private data class Completion(val id: Long, val durationMillis: Long, val textLength: Int, val status: String)
-    data class Lookup(val text: String?, val diagnostics: LabyrinthEventOcrCacheDiagnostics)
+    data class Lookup(
+        val text: String?,
+        val diagnostics: LabyrinthEventOcrCacheDiagnostics,
+        /** Comes from the request that produced cached text, never from the current lookup. */
+        val requestTitleFingerprint: Long? = null,
+    )
 
     private var sequence = 0L
     private var pending: Request? = null
@@ -40,7 +50,7 @@ internal class LabyrinthEventOcrCache {
             lastResultTextLength = lastCompletion?.textLength,
             lastResultStatus = lastCompletion?.status,
             cacheLifetimeMillis = CACHE_LIFETIME_MILLIS,
-        ))
+        ), requestTitleFingerprint = result?.request?.key?.titleFingerprint)
     }
 
     fun begin(key: Key, now: Long): Long? {

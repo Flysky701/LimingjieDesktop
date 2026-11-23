@@ -91,6 +91,8 @@ object EntryAnchorId {
     const val BATTLE_CHALLENGE_HEADER_NORMAL = "entry.battle_challenge.header.normal"
     const val BATTLE_CHALLENGE_SUFFIX_NORMAL = "entry.battle_challenge.suffix.normal"
     const val BATTLE_CHALLENGE_SUFFIX_EXTREME = "entry.battle_challenge.suffix.extreme"
+    /** Alternative 极难 template for the light-green title banner; matched together with the original. */
+    const val BATTLE_CHALLENGE_SUFFIX_EXTREME_ALT = "entry.battle_challenge.suffix.extreme_alt"
     const val BATTLE_CHALLENGE_BUTTON = "entry.battle_challenge.button"
     const val BATTLE_CHALLENGE_VIEW_MAP_BUTTON = "entry.battle_challenge.view_map_button"
     const val BATTLE_TEAM_HEADER = "entry.battle_team.header"
@@ -410,6 +412,8 @@ data class LabyrinthEntryFrameResult(
     val runResultScore: Long? = null,
     /** Quantized top-HUD digest sampled only on BATTLE_IN_PROGRESS frames for stall/progress bounds. */
     val battleHudDigest: Long? = null,
+    /** Exact request context, attached by the session after recognition; diagnostic only. */
+    val initial1088RefinementContext: com.landosol.toolbox.labyrinth.LabyrinthInitial1088RefinementContext? = null,
 )
 
 data class EntryAnchorMatch(
@@ -883,6 +887,7 @@ class LabyrinthEntryFrameProcessor(
             standard(EntryAnchorId.BATTLE_CHALLENGE_HEADER_NORMAL, 60, 60, 620, 100),
             standard(EntryAnchorId.BATTLE_CHALLENGE_SUFFIX_NORMAL, 305, 85, 135, 60),
             standard(EntryAnchorId.BATTLE_CHALLENGE_SUFFIX_EXTREME, 305, 85, 135, 60),
+            standard(EntryAnchorId.BATTLE_CHALLENGE_SUFFIX_EXTREME_ALT, 305, 85, 135, 60),
             standard(EntryAnchorId.BATTLE_CHALLENGE_VIEW_MAP_BUTTON, 975, 850, 440, 125),
             standard(EntryAnchorId.BATTLE_CHALLENGE_BUTTON, 1420, 850, 440, 125),
             standard(EntryAnchorId.BATTLE_TEAM_HEADER, 40, 35, 1840, 90),
@@ -945,7 +950,8 @@ class LabyrinthEntryFrameProcessor(
             // 迷宫遗物效果 popup (迷宫大师 opening relic). Same modal shell as 获得道具, but the
             // title and the two-line instruction differ; the close button is shared.
             standard(EntryAnchorId.RELIC_EFFECT_TITLE, 760, 50, 400, 75),
-            standard(EntryAnchorId.RELIC_EFFECT_INSTRUCTION, 770, 150, 380, 65),
+            // Shared fixed second line only: excludes the effect-source name for every guild.
+            standard(EntryAnchorId.RELIC_EFFECT_INSTRUCTION, 819, 186, 264, 36),
             // Centred dialog: both rects are centred on x=960, measured off the 2026-09-22 report.
             standard(EntryAnchorId.RELIC_EFFECT_RESULT_TITLE, 810, 262, 300, 62),
             standard(EntryAnchorId.RELIC_EFFECT_RESULT_CLOSE, 750, 690, 415, 102),

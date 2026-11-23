@@ -15,7 +15,7 @@ class AndroidLabyrinthRelicRewardResolver(
 
     fun resolve(bitmap: Bitmap, frame: PixelImage, result: LabyrinthEntryFrameResult,
         capturedAtMillis: Long): LabyrinthEntryFrameResult {
-        // Exact-pixel title/name reads belong to this popup and use its own read epoch.
+        // Exact-pixel content-name reads belong to this popup and use its own read epoch.
         // Recording these relics invalidates map counters; the receipt is read once.
         if (labyrinthSpecialEquipmentOwnsFrame(result)) {
             ocr.clear(); active = false; missingFrames = 0
@@ -23,7 +23,17 @@ class AndroidLabyrinthRelicRewardResolver(
         }
         if (!recognizer.candidate(frame, result)) {
             if (capturedAtMillis > missingAt) { missingFrames++; missingAt = capturedAtMillis }
-            if (active && (result.observation.state == LabyrinthEntryPageState.ITEM_REWARD || missingFrames < 2)) {
+            val effectTitle = result.observation.anchorScores[EntryAnchorId.RELIC_EFFECT_TITLE]
+            val otherTitle = maxOf(result.observation.anchorScores[EntryAnchorId.ITEM_REWARD_TITLE],
+                result.observation.anchorScores[EntryAnchorId.RELIC_EFFECT_RESULT_TITLE])
+            val otherReward = otherTitle >= 0.80 && otherTitle >= effectTitle
+            val itemRewardPage = result.observation.state == LabyrinthEntryPageState.ITEM_REWARD
+            val effectPage = itemRewardPage && effectTitle > otherTitle
+            // Page classification can still own this popup below the content-proof threshold.
+            // Keep its receipt held across weak frames; only a clear other reward releases it.
+            if (!otherReward && (effectTitle >= 0.80 || effectPage ||
+                    active && (itemRewardPage || missingFrames < 2))) {
+                active = true
                 return hold(result, LabyrinthRelicRewardObservation(capturedAtMillis = capturedAtMillis))
             }
             ocr.clear()
@@ -32,17 +42,9 @@ class AndroidLabyrinthRelicRewardResolver(
         }
         active = true
         missingFrames = 0
-        val rect = ReferenceFitMapper.map(bitmap.width, bitmap.height, EntryReferenceSize(1920, 1080),
-            EntryReferenceRect(780, 52, 360, 65)) ?: return result
-        val title = ocr.read(bitmap, "reward-title", rect, scale = 2, capturedAtMillis = capturedAtMillis)
-        if (title != null && title.confirmations >= 2 &&
-            (LabyrinthRelicRewardText.ordinaryTitle(title.text) || LabyrinthRelicRewardText.seriesTitle(title.text))) {
-            active = false
-            return result
-        }
-        val kind = LabyrinthRelicRewardText.kind(title?.text)
-        val confirmed = title != null && title.confirmations >= 2 && kind != null
-        if (!confirmed) return hold(result, LabyrinthRelicRewardObservation(capturedAtMillis = capturedAtMillis))
+        // candidate() already proves the exact effect window by its three templates.
+        // Crystal and Mercury now use the same path; OCR below is content classification only.
+        val kind = LabyrinthRelicRewardKind.RELIC_EFFECT
         val layout = recognizer.recognize(frame)
         var complete = layout.complete
         val relics = layout.rows.mapNotNull { row ->

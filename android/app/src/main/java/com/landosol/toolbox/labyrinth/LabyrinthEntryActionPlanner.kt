@@ -186,6 +186,20 @@ class LabyrinthEntryActionPlanner(
         openingRosterBottomMissFrames = 0
     }
 
+    /** Called only on the actual opening branch, before allowing a failed preferred-1088 fallback. */
+    fun shouldDeferInitial1088Fallback(matches: List<LabyrinthBattleCharacterMatch>): Boolean {
+        if (config.manualCharacterSelection) return false
+        if (matches.none { !it.trusted && it.suspectedCharacterId == "1088" }) return false
+        val policy = openingRosterPolicy ?: return false
+        val selected = selectedOpeningCharacterIds + matches.filter { it.selected }.mapNotNull { it.characterId }
+        if (pendingOpeningCharacterId != null && pendingOpeningCharacterId !in selected) return false
+        val pending = policy.pendingPreferredCandidateIds("1088", selected) ?: return false
+        val target = policy.nextVisibleCandidate(matches.mapNotNull { it.characterId }.toSet(), selected)
+        return target == null || (target.characterId == "1002" && "1002" in pending)
+    }
+
+    fun pendingInitialCharacterId(): String? = pendingOpeningCharacterId
+
     fun decide(
         state: LabyrinthEntryPageState,
         frameWidth: Int,

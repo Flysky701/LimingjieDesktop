@@ -91,6 +91,13 @@ class LabyrinthOpeningRosterPolicy(
         return null
     }
 
+    /** Diagnostic/recovery eligibility only; does not change candidate order or slot choice. */
+    fun pendingPreferredCandidateIds(preferredId: String, selectedCharacterIds: Set<String>): Set<String>? {
+        val slot = config.slots.firstOrNull { it.candidates.firstOrNull()?.characterId == preferredId } ?: return null
+        if (slot.candidates.any { it.characterId in selectedCharacterIds }) return null
+        return slot.candidates.map(LabyrinthOpeningCharacter::characterId).toSet()
+    }
+
     fun missingReason(selectedCharacterIds: Set<String>): String {
         val missing = missingSlotNumbers(selectedCharacterIds)
         return if (missing.isEmpty()) {
@@ -151,7 +158,7 @@ object LabyrinthOpeningRosterCatalog {
             guildName = "破晓之星",
             slots = listOf(
                 slot(character("1089", "怜(新年)")),
-                slot(character("1088", "优衣(新年)")),
+                slot(character("1088", "优衣(新年)"), character("1002", "优衣")),
                 slot(
                     character("1003", "怜"),
                     character("1801", "日和(公主)"),

@@ -477,21 +477,34 @@ internal fun labyrinthAllowsInitial1088GeometryRefinement(
     activeNodeType: Int?,
     shopChoiceImprintPending: Boolean,
     initialStartExecuted: Boolean = false,
-): Boolean {
-    if (hasNodeTransition || shopChoiceImprintPending) return false
-    if (activeNodeType != null && activeNodeType != LabyrinthNodeTypes.START) return false
+): Boolean = labyrinthInitial1088RefinementBlockReason(routeState, persistedNode, hasNodeTransition,
+    activeNodeType, shopChoiceImprintPending, initialStartExecuted) == null
+
+/** Same permission predicate, with explicit rejection reasons for diagnostic export. */
+internal fun labyrinthInitial1088RefinementBlockReason(
+    routeState: NodeSessionState?,
+    persistedNode: LabyrinthNodeJson?,
+    hasNodeTransition: Boolean,
+    activeNodeType: Int?,
+    shopChoiceImprintPending: Boolean,
+    initialStartExecuted: Boolean = false,
+): String? {
+    if (hasNodeTransition) return "NODE_TRANSITION_PENDING"
+    if (shopChoiceImprintPending) return "SHOP_IMPRINT_PENDING"
+    if (activeNodeType != null && activeNodeType != LabyrinthNodeTypes.START) return "ACTIVE_NODE_NOT_START"
     if (persistedNode != null &&
         (persistedNode.area != 1 || persistedNode.blockType != LabyrinthNodeTypes.START)
-    ) return false
-    if (routeState != null &&
-        (routeState.isComplete || labyrinthRouteHasPassedOpening(routeState) ||
-            (routeState.currentNodeId != null && routeState.currentNodeId !in routeState.visitedNodes))
-    ) return false
-    // Require a successful fresh start or positive first-start route evidence. Unknown cold
-    // restarts stay off rather than treating an event/shop picker as a new opening.
-    return initialStartExecuted || persistedNode != null ||
+    ) return "PERSISTED_NODE_NOT_FIRST_START"
+    if (routeState != null) {
+        if (routeState.isComplete) return "ROUTE_COMPLETE"
+        if (labyrinthRouteHasPassedOpening(routeState)) return "ROUTE_PASSED_OPENING"
+        if (routeState.currentNodeId != null && routeState.currentNodeId !in routeState.visitedNodes)
+            return "ROUTE_CURSOR_NOT_CONFIRMED"
+    }
+    return if (initialStartExecuted || persistedNode != null ||
         (routeState != null && routeState.currentArea == 1 && routeState.visitedNodes.size == 1 &&
-            routeState.currentNodeId == routeState.visitedNodes.single())
+            routeState.currentNodeId == routeState.visitedNodes.single())) null
+        else "NO_POSITIVE_START_EVIDENCE"
 }
 
 /** A real opening roster must reclaim the entry flow even after a premature map handoff. */

@@ -108,6 +108,8 @@ class AndroidLabyrinthEntryTemplateLoader(
                 "$ROOT/battle_challenge/battle_challenge_normal_suffix.png",
             EntryAnchorId.BATTLE_CHALLENGE_SUFFIX_EXTREME to
                 "$ROOT/battle_challenge/battle_challenge_extreme_suffix.png",
+            EntryAnchorId.BATTLE_CHALLENGE_SUFFIX_EXTREME_ALT to
+                "$ROOT/battle_challenge/battle_challenge_extreme_suffix_alt.png",
             EntryAnchorId.BATTLE_CHALLENGE_BUTTON to
                 "$ROOT/battle_challenge/battle_challenge_button.png",
             EntryAnchorId.BATTLE_CHALLENGE_VIEW_MAP_BUTTON to

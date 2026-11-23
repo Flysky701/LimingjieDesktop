@@ -66,6 +66,7 @@ data class LabyrinthBattleCharacterMatch(
     val suspectedCharacterId: String? = characterId,
     val suspectedDisplayName: String? = displayName,
     val detectedAttribute: LabyrinthCharacterAttribute? = null,
+    val initial1088RefinementEvidence: LabyrinthInitial1088RefinementEvidence? = null,
 )
 
 data class LabyrinthBattleTeamObservation(
@@ -268,6 +269,8 @@ class LabyrinthBattleTeamRecognizer(
                             layout.visibleSlots.firstOrNull { it.id == match.slotId }
                                 ?.let { mapSlotRect(frame, it) } ?: match.screenRect,
                         ),
+                        initial1088RefinementEvidence = match.initial1088RefinementEvidence
+                            ?.copy(cacheHit = true),
                     )
                 },
                 scrollbar = layout.scrollbar,
@@ -469,6 +472,7 @@ class LabyrinthBattleTeamRecognizer(
                     suspectedCharacterId = previous.suspectedCharacterId,
                     suspectedDisplayName = previous.suspectedDisplayName,
                     detectedAttribute = previous.detectedAttribute ?: observed.detectedAttribute,
+                    initial1088RefinementEvidence = previous.initial1088RefinementEvidence?.copy(cacheHit = true),
                 )
             } else {
                 observed
@@ -1070,6 +1074,7 @@ class LabyrinthBattleTeamRecognizer(
             requiredAttribute = requiredAttribute,
             rosterCharacterIds = candidateRoster,
         )
+        var originalMatchRoi = iconRect
         if (!character.trusted && screenRect != recognitionRect) {
             val detectedIconRect = EntryPixelRect(
                 left = screenRect.left + ICON_CARD_INSET_LEFT,
@@ -1102,11 +1107,13 @@ class LabyrinthBattleTeamRecognizer(
             // Never promote a merely "less bad" candidate into an actionable identity.
             if (detectedCharacter.trusted) {
                 character = detectedCharacter
+                originalMatchRoi = detectedIconRect
                 requiredAttribute = if (!selected && visibleScreenRect == screenRect) {
                     recognizeCardAttribute(frame, screenRect)
                 } else null
             }
         }
+        val beforeRefinement = character
         // Keep battle-editor recovery unchanged. Only a failed, fully visible suspected 1088
         // pays for recovery in a route-confirmed real opening; event/shop pickers remain excluded.
         val refineInitial1088 = labyrinthShouldRefineInitial1088Card(
@@ -1116,6 +1123,12 @@ class LabyrinthBattleTeamRecognizer(
             screenFullyVisible = visibleScreenRect == screenRect,
             recognitionFullyVisible = visibleRecognitionRect == recognitionRect,
         ) && openingRecoveryFitsViewport(frame, iconRect, viewport)
+        // Observe only the existing opening recovery; do not add crops or scoring calls.
+        val refinementCrops = if (refineInitial1088) {
+            mutableListOf(iconRect to beforeRefinement)
+        } else {
+            null
+        }
         if (!character.trusted && (!openingCard || refineInitial1088)) {
             character = iconMatcher.refineMemberGeometry(
                 frame = frame,
@@ -1124,7 +1137,48 @@ class LabyrinthBattleTeamRecognizer(
                 mask = characterMask,
                 requiredAttribute = requiredAttribute,
                 rosterCharacterIds = candidateRoster,
+                onCandidateMatch = refinementCrops?.let { crops ->
+                    { rect: EntryPixelRect, match: LabyrinthCharacterIconMatch ->
+                        crops.add(rect to match)
+                        Unit
+                    }
+                },
             )
+        }
+        val initial1088Evidence = if (openingCard &&
+            (beforeRefinement.isInitial1088RefinementSubject() || character.isInitial1088RefinementSubject())
+        ) {
+            val outcome = when {
+                beforeRefinement.trusted -> LabyrinthInitial1088RefinementOutcome.SKIPPED_TRUSTED
+                !allowInitial1088GeometryRefinement -> LabyrinthInitial1088RefinementOutcome.BLOCKED_PERMISSION
+                visibleScreenRect != screenRect || visibleRecognitionRect != recognitionRect ->
+                    LabyrinthInitial1088RefinementOutcome.BLOCKED_CLIPPED
+                !refineInitial1088 -> LabyrinthInitial1088RefinementOutcome.BLOCKED_VIEWPORT
+                character.trusted -> LabyrinthInitial1088RefinementOutcome.EXECUTED_TRUSTED
+                else -> LabyrinthInitial1088RefinementOutcome.EXECUTED_UNTRUSTED
+            }
+            val winnerId = character.characterId ?: character.suspectedCharacterId
+            val bestCrop = refinementCrops?.mapNotNull { (rect, match) ->
+                match.candidates.firstOrNull { it.characterId == winnerId }
+                    ?.let { candidate -> rect to candidate.confidence }
+            }?.maxByOrNull { (_, score) -> score }?.first
+            LabyrinthInitial1088RefinementEvidence(
+                outcome = outcome,
+                before = beforeRefinement.initial1088RefinementSnapshot(),
+                after = character.initial1088RefinementSnapshot(),
+                originalMatchRoi = originalMatchRoi,
+                bestCrop = bestCrop,
+                attempts = refinementCrops?.size ?: 0,
+                cacheHit = false,
+                permitReason = if (!allowInitial1088GeometryRefinement) "PERMISSION_NOT_GRANTED" else null,
+                searchTopCandidates = refinementCrops?.flatMap { (_, match) -> match.candidates }
+                    ?.groupBy { it.characterId }?.values?.map { variants -> variants.maxBy { it.confidence } }
+                    ?.sortedByDescending { it.confidence }?.take(2)?.map { candidate ->
+                        LabyrinthInitial1088RefinementCandidate(candidate.characterId, candidate.confidence)
+                    }.orEmpty(),
+            )
+        } else {
+            null
         }
         return LabyrinthBattleCharacterMatch(
             slotId = slot.id,
@@ -1142,6 +1196,7 @@ class LabyrinthBattleTeamRecognizer(
             suspectedCharacterId = character.suspectedCharacterId,
             suspectedDisplayName = character.suspectedDisplayName,
             detectedAttribute = requiredAttribute,
+            initial1088RefinementEvidence = initial1088Evidence,
         )
     }
 

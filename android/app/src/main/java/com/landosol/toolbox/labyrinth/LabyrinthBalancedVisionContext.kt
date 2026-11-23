@@ -18,11 +18,28 @@ object LabyrinthBalancedVisionContext {
         val allowInitial1088GeometryRefinement: Boolean,
         val lifecycleEpoch: Long = 0,
         val sceneEpoch: Long = 0,
+        val initial1088RefinementContext: LabyrinthInitial1088RefinementContext? = null,
     )
     private val local = ThreadLocal<RequestSnapshot?>()
     private val query = ThreadLocal<Boolean?>()
     private val owner = ThreadLocal<WorkToken?>()
+    private val initialRefinement = ThreadLocal<LabyrinthInitial1088RefinementContext?>()
+    private val initialRefinementOwner = ThreadLocal<WorkToken?>()
     fun current(): RequestSnapshot? = if (owner.get() === LabyrinthFourThreadRuntime.currentToken()) local.get() else null
+    /** Non-balanced recognition freezes only this permission; unrelated callbacks stay unchanged. */
+    fun currentInitial1088RefinementContext(): LabyrinthInitial1088RefinementContext? =
+        current()?.initial1088RefinementContext ?: if (initialRefinementOwner.get() === LabyrinthFourThreadRuntime.currentToken())
+            initialRefinement.get() else null
+    fun <T> withInitial1088RefinementContext(context: LabyrinthInitial1088RefinementContext, body: () -> T): T {
+        val previous = initialRefinement.get()
+        val previousOwner = initialRefinementOwner.get()
+        initialRefinement.set(context)
+        initialRefinementOwner.set(LabyrinthFourThreadRuntime.currentToken())
+        return try { body() } finally {
+            if (previous == null) initialRefinement.remove() else initialRefinement.set(previous)
+            if (previousOwner == null) initialRefinementOwner.remove() else initialRefinementOwner.set(previousOwner)
+        }
+    }
     fun markNodeScanQuery() { if (current() != null) query.set(true) }
     fun nodeScanQueryUsed(): Boolean = current() != null && query.get() == true
     fun <T> withSnapshot(snapshot: RequestSnapshot, body: () -> T): T {

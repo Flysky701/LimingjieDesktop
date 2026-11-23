@@ -1158,6 +1158,7 @@ data class LabyrinthEntryRecognitionSessionState(
     /** Identity for passive record observers; never used for page or action decisions. */
     val runId: String? = null,
     val frameTiming: LabyrinthFrameTiming? = null,
+    val initial1088Recovery: LabyrinthInitial1088RecoveryDiagnostic? = null,
     val balancedDiagnostics: LabyrinthBalancedDiagnostics? = null,
 ) {
     val running: Boolean get() = status == LabyrinthEntryRecognitionStatus.RUNNING
@@ -1595,18 +1596,40 @@ class LabyrinthEntryRecognitionSession(
         .map(LabyrinthJoinedCharacter::characterId)
         .toSet()
 
-    fun allowInitial1088GeometryRefinement(): Boolean {
+    fun allowInitial1088GeometryRefinement(): Boolean = initial1088RefinementContext().allowed
+
+    private fun initial1088RefinementContext(): LabyrinthInitial1088RefinementContext {
         val routeState = nodeSession?.getState()
         val route = validatedRoute
-        return labyrinthAllowsInitial1088GeometryRefinement(
-            routeState = routeState,
-            persistedNode = labyrinthPersistedCurrentNode(route) ?: routeState?.currentNodeId?.let { id ->
-                route?.nodes?.firstOrNull { it.blockId == id }
+        val persisted = labyrinthPersistedCurrentNode(route) ?: routeState?.currentNodeId?.let { id ->
+            route?.nodes?.firstOrNull { it.blockId == id }
+        }
+        val retained = entryPhaseComplete && initial1088HandoffEvidence.retained(clock())
+        val acceptedStart = initialStartExecuted && (!entryPhaseComplete || retained)
+        val transition = pendingNodeTransition != null || confirmedNodeEntryReceipt != null
+        val rejection = labyrinthInitial1088RefinementBlockReason(routeState, persisted, transition,
+            activeNodeType, shopChoiceImprintRolePending, acceptedStart)
+        val reason = rejection ?: when {
+            acceptedStart && retained -> "SUCCESSFUL_START_RETAINED_OVER_HANDOFF"
+            acceptedStart -> "SUCCESSFUL_START"
+            labyrinthPersistedCurrentNode(route) != null -> "PERSISTED_FIRST_START"
+            route?.currentBlockId == null && routeState != null -> "ROUTE_START_DEFAULT_NOT_OBSERVED"
+            else -> "CONFIRMED_ROUTE_FIRST_START"
+        }
+        return LabyrinthInitial1088RefinementContext(
+            allowed = rejection == null, reason = reason,
+            freshStartExecuted = initialStartExecuted, retainedHandoffStart = retained,
+            entryPhaseComplete = entryPhaseComplete,
+            initializationState = when {
+                nodeInitFailedReason != null -> "FAILED"
+                nodeSession != null -> "RESULT_READY"
+                nodeInitStarted.get() -> "STARTED_NO_RESULT"
+                else -> "NOT_STARTED"
             },
-            hasNodeTransition = pendingNodeTransition != null || confirmedNodeEntryReceipt != null,
-            activeNodeType = activeNodeType,
-            shopChoiceImprintPending = shopChoiceImprintRolePending,
-            initialStartExecuted = initialStartExecuted && !entryPhaseComplete,
+            routeArea = routeState?.currentArea, currentNodeId = routeState?.currentNodeId,
+            visitedCount = routeState?.visitedNodes?.size ?: 0, persistedNodeId = route?.currentBlockId,
+            activeNodeType = activeNodeType, transitionPending = transition,
+            imprintPending = shopChoiceImprintRolePending,
         )
     }
 
@@ -1957,6 +1980,10 @@ class LabyrinthEntryRecognitionSession(
     @Volatile
     private var nodeSession: LabyrinthNodeSession? = null
     private val nodeInitStarted = AtomicBoolean(false)
+    private val initial1088HandoffEvidence = LabyrinthInitial1088HandoffEvidence()
+    private val initial1088RecoveryGate = LabyrinthInitial1088RecoveryGate()
+    private val initial1088EvidenceLogs = LabyrinthInitial1088LogDeduplicator()
+    private val initial1088RecoveryLogs = LabyrinthInitial1088LogDeduplicator()
     @Volatile
     private var nodeInitFailedReason: String? = null
     @Volatile
@@ -2647,18 +2674,23 @@ class LabyrinthEntryRecognitionSession(
      * replace older waiting frames (latest-frame-wins), so an occasional expensive frame can add
      * at most one recognition-duration of latency instead of creating an unbounded stale queue.
      */
-    private fun balancedVisionSnapshot(frame: CapturedFrame) = LabyrinthBalancedVisionContext.RequestSnapshot(
-        finalBossOnly = nodeSession?.directFinalBossTarget() != null,
-        skipJoinedCharacters = skipRoleRewardJoinedRecognition,
-        relicEvidenceVersion = relicEvidenceVersion,
-        relicVerificationMarks = relicStackLedger.priorityVerificationMarks(frame.timestampMillis).map { it.label }.toSet(),
-        nodeScanRequested = nodeSession != null,
-        nodeScanConsumable = peekNodeScanConsumableAt(frame.timestampMillis),
-        nodeSearchHint = currentNodeSearchHint(),
-        rosterCharacterIds = rosterCharacterIds().toSet(),
-        allowInitial1088GeometryRefinement = allowInitial1088GeometryRefinement(),
-        lifecycleEpoch = lifecycleEpoch.get(), sceneEpoch = balancedSceneEpoch,
-    )
+    private fun balancedVisionSnapshot(frame: CapturedFrame): LabyrinthBalancedVisionContext.RequestSnapshot {
+        val refinementContext = initial1088RefinementContext().copy(
+            capturedAtMillis = frame.timestampMillis, frameSequence = frame.frameSequence)
+        return LabyrinthBalancedVisionContext.RequestSnapshot(
+            finalBossOnly = nodeSession?.directFinalBossTarget() != null,
+            skipJoinedCharacters = skipRoleRewardJoinedRecognition,
+            relicEvidenceVersion = relicEvidenceVersion,
+            relicVerificationMarks = relicStackLedger.priorityVerificationMarks(frame.timestampMillis).map { it.label }.toSet(),
+            nodeScanRequested = nodeSession != null,
+            nodeScanConsumable = peekNodeScanConsumableAt(frame.timestampMillis),
+            nodeSearchHint = currentNodeSearchHint(),
+            rosterCharacterIds = rosterCharacterIds().toSet(),
+            allowInitial1088GeometryRefinement = refinementContext.allowed,
+            initial1088RefinementContext = refinementContext,
+            lifecycleEpoch = lifecycleEpoch.get(), sceneEpoch = balancedSceneEpoch,
+        )
+    }
 
     private fun balancedRequestCurrent(request: LabyrinthBalancedVisionContext.RequestSnapshot): Boolean =
         request.lifecycleEpoch == lifecycleEpoch.get() && request.sceneEpoch == balancedSceneEpoch &&
@@ -2689,9 +2721,10 @@ class LabyrinthEntryRecognitionSession(
                 balancedDetailWidth = frame.bitmap.width; balancedDetailHeight = frame.bitmap.height
                 balancedDetailEpoch = request.sceneEpoch
                 val handlingStarted = System.nanoTime()
+                val enrichedResult = completed.result.copy(initial1088RefinementContext = request.initial1088RefinementContext)
                 lastNodeScanHoldReason = null
                 lastNodeScanQueryTimestampMillis = if (completed.queryUsed) frame.timestampMillis else null
-                processFrameResult(sessionId, completed.result, balancedDetailWidth, balancedDetailHeight, frame.timestampMillis)
+                processFrameResult(sessionId, enrichedResult, balancedDetailWidth, balancedDetailHeight, frame.timestampMillis)
                 if (activeSessionId == sessionId && !_state.value.paused && !manualPauseRequested.get() &&
                     request.lifecycleEpoch == lifecycleEpoch.get()) {
                     _state.value = _state.value.copy(frameTiming = LabyrinthFrameTiming(
@@ -2714,7 +2747,7 @@ class LabyrinthEntryRecognitionSession(
                         val presentation = buildOverlayPresentation(sessionId)
                         val diagnosticLease = frameLease.retain()
                         diagnosticLane.offer(close = { diagnosticLease.close() }) {
-                            publisher(diagnosticLease.value, stateSnapshot, completed.result, presentation)
+                            publisher(diagnosticLease.value, stateSnapshot, enrichedResult, presentation)
                         }
                     }
                 }
@@ -2883,10 +2916,14 @@ class LabyrinthEntryRecognitionSession(
         runCatching {
             lastNodeScanHoldReason = null
             lastNodeScanQueryTimestampMillis = null
+            val refinementContext = initial1088RefinementContext().copy(
+                capturedAtMillis = frame.timestampMillis, frameSequence = frame.frameSequence)
             val visionStarted = System.nanoTime()
             val result = try {
                 nodeScanFrameTimestampMillis = frame.timestampMillis
-                processor(frame)
+                LabyrinthBalancedVisionContext.withInitial1088RefinementContext(refinementContext) {
+                    processor(frame)
+                }.copy(initial1088RefinementContext = refinementContext)
             } finally { nodeScanFrameTimestampMillis = null }
             val measuredVisionMillis = (System.nanoTime() - visionStarted) / 1_000_000
             val handlingStarted = System.nanoTime()
@@ -2944,6 +2981,7 @@ class LabyrinthEntryRecognitionSession(
     ) {
         if (activeSessionId != sessionId || (balancedMode && (_state.value.paused || manualPauseRequested.get() || stopRequested.get() ||
                 balancedDetailEpoch != balancedSceneEpoch))) return
+        logInitial1088Refinement(result, timestampMillis)
         eventCapturedAt = timestampMillis
         eventFrameGeometryValid = frameWidth > 0 && frameHeight > 0 && result.frameWidth == frameWidth && result.frameHeight == frameHeight
         eventDomain.beginFrame(balancedDetailSequence ?: (_state.value.frameCount + 1), timestampMillis, balancedSceneEpoch,
@@ -3000,6 +3038,7 @@ class LabyrinthEntryRecognitionSession(
         _state.value = current.copy(
             frameCount = current.frameCount + 1,
             lastResult = result,
+            initial1088Recovery = null,
             message = if (result.observation.state == LabyrinthEntryPageState.UNKNOWN) {
                 "未知或低置信度页面，动作已禁用"
             } else {
@@ -5183,6 +5222,7 @@ class LabyrinthEntryRecognitionSession(
         if (actionInFlight.get() || activeSessionId != sessionId) return
         if (!balancedFreshInput()) { traceReject("STALE_DETAILED_EVIDENCE"); return }
         val planner = actionPlanner ?: return
+        if (holdInitial1088Recovery(result, timestampMillis)) return
         val decision = synchronized(actionPlannerLock) {
             planner.decide(
                 state = result.observation.state,
@@ -5201,7 +5241,17 @@ class LabyrinthEntryRecognitionSession(
                     _state.value = _state.value.copy(message = decision.reason)
                 }
             }
-            is LabyrinthEntryActionDecision.Execute -> dispatchAction(sessionId, decision)
+            is LabyrinthEntryActionDecision.Execute -> {
+                if (decision.kind == LabyrinthEntryActionKind.SELECT_INITIAL_CHARACTER) {
+                    val chosen = synchronized(actionPlannerLock) { planner.pendingInitialCharacterId() }
+                    if (chosen == "1088" || chosen == "1002") {
+                        nodeLog("initial-1088-selection 选人 frame=" + (result.initial1088RefinementContext?.frameSequence ?: 0) +
+                            " capturedAt=" + timestampMillis + " chosen=" + chosen + " label=" + decision.label +
+                            " recovery=" + _state.value.initial1088Recovery?.status)
+                    }
+                }
+                dispatchAction(sessionId, decision)
+            }
             is LabyrinthEntryActionDecision.Complete ->
                 if (!nodeExecutionConfigured() && labyrinthCompletionWaitsWithoutRoute(decision.state)) {
                     // The run-clear settlement chain is owned by route execution. Without a
@@ -5213,6 +5263,8 @@ class LabyrinthEntryRecognitionSession(
                 } else if (nodeExecutionConfigured() && shouldHandOffToRouteExecution(decision.state)) {
                     // A live session can be started on the map or on a route-owned page. Hand it
                     // to the route executor instead of treating the entry planner as finished.
+                    initial1088HandoffEvidence.record(decision.state, initialStartExecuted,
+                        allowInitial1088GeometryRefinement(), timestampMillis)
                     entryPhaseComplete = true
                     existingRunResumeHandoffArmed = false
                     _state.value = _state.value.copy(
@@ -8951,6 +9003,10 @@ class LabyrinthEntryRecognitionSession(
         finalBossLocalizationStartedAt = Long.MIN_VALUE
         entryPhaseComplete = false
         initialStartExecuted = false
+        initial1088HandoffEvidence.reset()
+        initial1088RecoveryGate.reset()
+        initial1088EvidenceLogs.reset()
+        initial1088RecoveryLogs.reset()
         resetPendingNodeClickStability()
         resetStrongRouteTargetBinding()
         pendingNodeTransition = null
@@ -11441,6 +11497,53 @@ class LabyrinthEntryRecognitionSession(
                 ":rect=${rect?.left},${rect?.top},${rect?.width},${rect?.height}" +
                 ":template=${classification.templateId}"
         }.ifBlank { "none" }
+
+    private fun logInitial1088Refinement(result: LabyrinthEntryFrameResult, timestampMillis: Long) {
+        if (result.observation.state != LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION) {
+            initial1088RecoveryGate.reset()
+            initial1088EvidenceLogs.reset()
+            initial1088RecoveryLogs.reset()
+            return
+        }
+        result.openingCharacterMatches.forEach { match ->
+            val evidence = match.initial1088RefinementEvidence ?: return@forEach
+            val context = result.initial1088RefinementContext
+            val key = labyrinthInitial1088RefinementLogKey(result.openingCharacterSelection?.viewportRevision, context, evidence)
+            if (initial1088EvidenceLogs.accept(key, match.slotId)) {
+                nodeLog("initial-1088-refinement 精修 frame=" + (context?.frameSequence ?: 0) +
+                    " capturedAt=" + timestampMillis + " viewport=" + result.openingCharacterSelection?.viewportRevision +
+                    " " + com.landosol.toolbox.labyrinth.debug.labyrinthInitial1088RefinementPayload(match.slotId, evidence, context))
+            }
+        }
+    }
+
+    private fun holdInitial1088Recovery(result: LabyrinthEntryFrameResult, timestampMillis: Long): Boolean {
+        if (result.observation.state != LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION ||
+            !com.landosol.toolbox.labyrinth.vision.labyrinthOpeningRosterOwnsInitialSelection(result.observation.anchorScores) ||
+            labyrinthIsRoleRewardPage(result)) return false
+        val eligible = synchronized(actionPlannerLock) {
+            actionPlanner?.shouldDeferInitial1088Fallback(result.openingCharacterMatches) == true
+        }
+        val currentContext = initial1088RefinementContext()
+        val evidence = result.openingCharacterMatches.firstOrNull { !it.trusted && it.suspectedCharacterId == "1088" }
+            ?.initial1088RefinementEvidence
+        val diagnostic = initial1088RecoveryGate.evaluate(eligible, timestampMillis,
+            result.initial1088RefinementContext, currentContext, evidence)
+        if (eligible || diagnostic.waitedMillis > 0) {
+            _state.value = _state.value.copy(initial1088Recovery = diagnostic)
+            val key = listOf(diagnostic.status, diagnostic.reason, result.openingCharacterSelection?.viewportRevision,
+                currentContext.reason).joinToString("|")
+            if (initial1088RecoveryLogs.accept(key)) {
+                nodeLog("initial-1088-recovery 恢复 frame=" + (result.initial1088RefinementContext?.frameSequence ?: 0) +
+                    " capturedAt=" + timestampMillis + " status=" + diagnostic.status + " reason=" + diagnostic.reason +
+                    " waitedMillis=" + diagnostic.waitedMillis + " requiredNewerThan=" + diagnostic.requiredNewerThanMillis)
+            }
+        }
+        if (diagnostic.shouldWait) {
+            _state.value = _state.value.copy(message = "疑似新年优衣，开局权限已恢复，等待新帧精修后再决定替补")
+        }
+        return diagnostic.shouldWait
+    }
 
     private fun nodeLog(message: String, warning: Boolean = false) {
         runCatching {

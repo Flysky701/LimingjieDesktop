@@ -28,6 +28,28 @@ class LabyrinthExChallengeDetectorTest {
     }
 
     @Test
+    fun `alternative extreme template resolves the green banner without lowering the floor`() {
+        // Reproduces the 2026-11-19 report: original extreme template only reaches 0.702.
+        assertTrue(
+            LabyrinthChallengeDifficultyResolver.resolve(0.332, 0.702) ==
+                LabyrinthChallengeDifficulty.UNKNOWN,
+        )
+        assertTrue(
+            LabyrinthChallengeDifficultyResolver.resolve(0.332, 0.702, 0.95) ==
+                LabyrinthChallengeDifficulty.EXTREME,
+        )
+        assertTrue(
+            LabyrinthChallengeDifficultyResolver.resolve(0.33, 0.10, 0.90) ==
+                LabyrinthChallengeDifficulty.EXTREME,
+        )
+        // A strong normal title still wins when both extreme templates are weak.
+        assertTrue(
+            LabyrinthChallengeDifficultyResolver.resolve(0.92, 0.30, 0.60) ==
+                LabyrinthChallengeDifficulty.NORMAL,
+        )
+    }
+
+    @Test
     fun `challenge title must be positively recognized before difficulty is considered resolved`() {
         assertTrue(LabyrinthExEncounterText.isChallengeTitle("战斗格子（极难）"))
         assertTrue(LabyrinthExEncounterText.isChallengeTitle("戰鬥格子（極難）"))

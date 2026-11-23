@@ -36,13 +36,20 @@ data class LabyrinthRelicRewardLayout(val rows: List<LabyrinthRelicRewardRow>, v
 class LabyrinthRelicRewardRecognizer(private val templates: List<LabyrinthRelicTemplate>) {
     private val matcher = AlignedRgbRelicMatcher()
 
+    /** Same title/instruction/close template proof as the classifier; no guild-specific OCR route. */
+    fun templateConfirmed(result: LabyrinthEntryFrameResult): Boolean =
+        !labyrinthSpecialEquipmentOwnsFrame(result) && listOf(EntryAnchorId.RELIC_EFFECT_TITLE,
+            EntryAnchorId.RELIC_EFFECT_INSTRUCTION, EntryAnchorId.ITEM_REWARD_CLOSE)
+            .all { result.observation.anchorScores[it] >= 0.80 }
+
     fun candidate(frame: PixelImage, result: LabyrinthEntryFrameResult): Boolean {
+        if (!templateConfirmed(result)) return false
         if (labyrinthSpecialEquipmentOwnsFrame(result)) return false
         if (result.observation.state !in setOf(LabyrinthEntryPageState.UNKNOWN,
                 LabyrinthEntryPageState.ITEM_REWARD, LabyrinthEntryPageState.NODE_SELECTION,
                 LabyrinthEntryPageState.NODE_MAP_VIEW)) return false
         if (result.observation.anchorScores[EntryAnchorId.ITEM_REWARD_CLOSE] < 0.55) return false
-        // Structural cue; the title is confirmed by two independent OCR reads.
+        // Structural cues supplement the title/instruction/close template proof above.
         if (!listOf(600, 1320).all { x ->
                 val rect = map(frame, EntryReferenceRect(x, 75, 8, 8)) ?: return@all false
                 blue(frame[rect.left, rect.top])

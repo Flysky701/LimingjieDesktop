@@ -310,7 +310,8 @@ class LandosolToolboxApplication : Application() {
                     eventCustomizationEnabled = labyrinthEntryRecognitionSession.eventCustomizationEnabledSnapshot,
                     allowInitial1088GeometryRefinement = {
                         val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
-                        if (snapshot != null) snapshot.allowInitial1088GeometryRefinement else labyrinthEntryRecognitionSession.allowInitial1088GeometryRefinement()
+                        val capturedContext = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.currentInitial1088RefinementContext()
+                        capturedContext?.allowed ?: if (snapshot != null) snapshot.allowInitial1088GeometryRefinement else labyrinthEntryRecognitionSession.allowInitial1088GeometryRefinement()
                     },
                 )::process
             },

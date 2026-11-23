@@ -267,6 +267,50 @@ class LabyrinthEventChoicePlanner(
                 ), observation, acquiredCharacterIds, rejectedChoiceIds,
             )
         }
+        val fixedCookingChoice = fixedCookingStageChoiceFor(event.id)
+        if (fixedCookingChoice != null) {
+            val (choiceId, slot, name) = fixedCookingChoice
+            if (event.choices.size != 2) {
+                return LabyrinthEventChoiceDecision.Wait("料理阶段选项数量与目录不一致")
+            }
+            val visual = observation.choices.singleOrNull {
+                it.choice.id == choiceId && it.choice.slot == slot && it.choice.name == name
+            } ?: return LabyrinthEventChoiceDecision.Wait("料理阶段固定分支没有有效按钮映射")
+            return revalidateDecision(
+                LabyrinthEventChoiceDecision.Select(
+                    eventId = event.id,
+                    choiceId = choiceId,
+                    label = name,
+                    buttonRect = visual.buttonRect,
+                    utility = 0.0,
+                    explanation = "料理${if (event.id == "2315") "第二" else "第三"}阶段固定选择左分支，不比较收益",
+                    actionSafe = false,
+                    utilityEstimated = false,
+                    ruleProvenance = provenanceFor(externalRule?.id),
+                ), observation, acquiredCharacterIds, rejectedChoiceIds,
+            )
+        }
+        // Cooking round one has exactly one branch. There is nothing to compare, so do not
+        // enumerate the later cooking chain or estimate its rewards; the live frame still has to
+        // pass the same trust, stability, rejection and enabled-button checks.
+        if (event.id == "1315" && event.choices.size == 1) {
+            val onlyChoice = event.choices.single()
+            val visual = currentVisual(observation, onlyChoice)
+                ?: return LabyrinthEventChoiceDecision.Wait("料理第一轮唯一选项没有有效按钮映射")
+            return revalidateDecision(
+                LabyrinthEventChoiceDecision.Select(
+                    eventId = event.id,
+                    choiceId = onlyChoice.id,
+                    label = onlyChoice.name,
+                    buttonRect = visual.buttonRect,
+                    utility = 0.0,
+                    explanation = "料理第一轮为单项事件，直接选择唯一分支，不估算后续收益",
+                    actionSafe = false,
+                    utilityEstimated = false,
+                    ruleProvenance = provenanceFor(externalRule?.id),
+                ), observation, acquiredCharacterIds, rejectedChoiceIds,
+            )
+        }
         val canonicalAcquired = acquiredCharacterIds.map(::canonicalLabyrinthRoleId).toSet()
         val cacheKey = EstimateKey(event, canonicalAcquired, context, relicStacks.toMap(), catalogRegistry?.revision ?: 0L)
         val ranked = evaluationCache.getOrPut(cacheKey) {
@@ -400,6 +444,13 @@ class LabyrinthEventChoicePlanner(
         "1102" -> Triple("11021", 1, "想要强化型 成为伙伴！")
         "1103" -> Triple("11031", 1, "想要减益型 成为伙伴！")
         "1104" -> Triple("11042", 2, "想要破防型 成为伙伴！")
+        else -> null
+    }
+
+    /** Cooking stages two and three are fixed to their catalog default left branch. */
+    private fun fixedCookingStageChoiceFor(eventId: String): Triple<String, Int, String>? = when (eventId) {
+        "2315" -> Triple("23152", 1, "这样应该就 足够了吧？")
+        "3315" -> Triple("33152", 1, "这么多 根本吃不完吧！")
         else -> null
     }
 
@@ -542,11 +593,10 @@ class LabyrinthEventChoicePlanner(
 
     private fun rolePool(roleClass: String, evaluation: EvaluationContext): RolePool {
         return evaluation.rolePools.getOrPut(roleClass) {
-            val owned = acquiredProfiles(evaluation)
             val values = profiles.values.asSequence()
                 .filter { it.roleClass == roleClass && it.characterId !in evaluation.acquiredIds }
                 .filter(LabyrinthRoleProfile::isStrictDecisionReady)
-                .map { candidate -> candidateMarginal(candidate, owned, evaluation.context) }
+                .map { candidate -> candidateMarginal(candidate, evaluation) }
                 .sortedDescending()
                 .toList()
             RolePool(values, values.averageOrZero())
@@ -557,7 +607,7 @@ class LabyrinthEventChoicePlanner(
         evaluation.allRoleValues ?: profiles.values.asSequence()
             .filter { it.roleClass in ROLE_CLASSES && it.characterId !in evaluation.acquiredIds }
             .filter(LabyrinthRoleProfile::isStrictDecisionReady)
-            .map { candidate -> candidateMarginal(candidate, acquiredProfiles(evaluation), evaluation.context) }
+            .map { candidate -> candidateMarginal(candidate, evaluation) }
             .sortedDescending()
             .toList()
             .also { evaluation.allRoleValues = it }
@@ -568,19 +618,35 @@ class LabyrinthEventChoicePlanner(
             .take(EVENT_OWNED_ROSTER_LIMIT)
             .also { evaluation.acquiredProfiles = it }
 
+    /**
+     * Reuses only values that are provably identical inside one pure evaluation. The baseline
+     * formation is the same for every candidate, and a candidate has the same marginal whether it
+     * is reached through its role-class pool or the all-role pool. Neither cache stores screen
+     * evidence, button state or action permission; callers still revalidate every live decision.
+     */
     private fun candidateMarginal(
         candidate: LabyrinthRoleProfile,
-        owned: List<LabyrinthRoleProfile>,
-        context: LabyrinthRoleDecisionContext,
+        evaluation: EvaluationContext,
     ): Double {
-        val baseline = optimizer.bestFormation(owned, context)
+        evaluation.candidateMarginals[candidate]?.let { return it }
+        val owned = acquiredProfiles(evaluation)
+        val baselineScore = if (evaluation.baselineScoreComputed) {
+            evaluation.baselineScore ?: 0.0
+        } else {
+            val computed = optimizer.bestFormation(owned, evaluation.context)?.score
+            evaluation.baselineScore = computed
+            evaluation.baselineScoreComputed = true
+            computed ?: 0.0
+        }
         val pool = (owned + candidate).distinctBy(LabyrinthRoleProfile::characterId)
-        val first = optimizer.bestFormation(pool, context)
-        val forced = optimizer.bestFormation(pool, context, candidate.characterId)
-        return max(
+        val first = optimizer.bestFormation(pool, evaluation.context)
+        val forced = optimizer.bestFormation(pool, evaluation.context, candidate.characterId)
+        val marginal = max(
             0.0,
-            (first?.score ?: 0.0) + (forced?.score ?: 0.0) * 0.35 - (baseline?.score ?: 0.0) * 1.35,
+            (first?.score ?: 0.0) + (forced?.score ?: 0.0) * 0.35 - baselineScore * 1.35,
         )
+        evaluation.candidateMarginals[candidate] = marginal
+        return marginal
     }
 
     private fun individualPriority(role: LabyrinthRoleProfile, targetCount: Int): Double {
@@ -619,7 +685,7 @@ class LabyrinthEventChoicePlanner(
     private fun specificRoleUtility(name: String, evaluation: EvaluationContext): Double {
         val role = profiles.values.firstOrNull { it.displayName == name } ?: return 0.0
         if (role.characterId in evaluation.acquiredIds) return 0.0
-        return candidateMarginal(role, acquiredProfiles(evaluation), evaluation.context)
+        return candidateMarginal(role, evaluation)
     }
 
     private fun randomRelicUtility(rarity: Int, stacks: Map<LabyrinthRelicMark, Int>): Double =
@@ -669,6 +735,9 @@ class LabyrinthEventChoicePlanner(
         val rolePools: MutableMap<String, RolePool> = mutableMapOf(),
         var acquiredProfiles: List<LabyrinthRoleProfile>? = null,
         var allRoleValues: List<Double>? = null,
+        val candidateMarginals: MutableMap<LabyrinthRoleProfile, Double> = mutableMapOf(),
+        var baselineScore: Double? = null,
+        var baselineScoreComputed: Boolean = false,
     )
 
     private data class RolePool(val values: List<Double>, val average: Double)

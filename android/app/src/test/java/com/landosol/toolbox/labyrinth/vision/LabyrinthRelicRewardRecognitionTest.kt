@@ -105,8 +105,8 @@ class LabyrinthRelicRewardRecognitionTest {
         assertFalse(recognizer.candidate(frame, result(emptyMap())))
     }
 
-    private fun result(scores: Map<String, Double> = mapOf(EntryAnchorId.ITEM_REWARD_INSTRUCTION to 0.9,
-        EntryAnchorId.ITEM_REWARD_CLOSE to 0.9)) = LabyrinthEntryFrameResult(
+    private fun result(scores: Map<String, Double> = mapOf(EntryAnchorId.RELIC_EFFECT_TITLE to 0.9,
+        EntryAnchorId.RELIC_EFFECT_INSTRUCTION to 0.9, EntryAnchorId.ITEM_REWARD_CLOSE to 0.9)) = LabyrinthEntryFrameResult(
         LabyrinthEntryPageObservation(LabyrinthEntryPageState.UNKNOWN, 0.0, emptyMap(), LabyrinthAnchorScores(scores)),
         emptyList(), 0,
     )

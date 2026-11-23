@@ -102,15 +102,15 @@ class EventChainCustomDecisionTest {
         assertTrue(probe.enumerationCount > 0)
     }
 
-    @Test fun `invalid override falls back to unchanged automatic cooking right winner`() {
+    @Test fun `invalid override falls back to fixed cooking left branch without estimation`() {
         val observed = observation(cooking)
         val settings = configured(cooking, 1).copy(eventChoiceOverrides = mapOf(cooking.name to "无效分支"))
         val result = decide(planner(settings), observed) as LabyrinthEventChoiceDecision.Select
         assertEquals(decide(planner(), observed), result)
-        assertEquals("23151", result.choiceId)
-        assertTrue(result.utility > 0.0)
-        assertTrue(result.utilityEstimated)
-        assertEquals("继续料理：50%进入第3段；失败500α币", result.explanation)
+        assertEquals("23152", result.choiceId)
+        assertEquals(0.0, result.utility, 0.0)
+        assertFalse(result.utilityEstimated)
+        assertTrue(result.explanation.contains("固定选择左分支"))
     }
 
     @Test fun `disabled configured button falls back by utility not by configured slot`() {

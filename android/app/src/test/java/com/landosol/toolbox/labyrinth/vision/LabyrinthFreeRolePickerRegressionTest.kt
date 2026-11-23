@@ -80,10 +80,15 @@ class LabyrinthFreeRolePickerRegressionTest {
         assertTrue(target.confidence >= LABYRINTH_CHARACTER_ICON_SAFE_CONFIDENCE)
         assertTrue(target.rivalMargin >= LABYRINTH_CHARACTER_ICON_SAFE_RIVAL_MARGIN)
         assertEquals(originalTarget.screenRect, target.screenRect)
+        assertEquals(LabyrinthInitial1088RefinementOutcome.BLOCKED_PERMISSION, originalTarget.initial1088RefinementEvidence?.outcome)
+        assertEquals(LabyrinthInitial1088RefinementOutcome.EXECUTED_TRUSTED, target.initial1088RefinementEvidence?.outcome)
+        assertTrue(requireNotNull(target.initial1088RefinementEvidence).attempts > 1)
+        assertNotNull(target.initial1088RefinementEvidence?.bestCrop)
+        assertEquals(originalTarget.confidence, target.initial1088RefinementEvidence?.before?.score)
         println("1088 original=${originalTarget.confidence}/${originalTarget.rivalMargin} refined=${target.confidence}/${target.rivalMargin}")
         assertEquals(original.visibleCharacters.filter { it.slotId != target.slotId },
             refined.visibleCharacters.filter { it.slotId != target.slotId })
-        assertEquals(refined, recognizer.recognizeOpening(frame, allowInitial1088GeometryRefinement = true))
+        assertEquals(withCachedRefinementEvidence(refined), recognizer.recognizeOpening(frame, allowInitial1088GeometryRefinement = true))
         // Switching back to event/shop mode must not inherit the recovered identity.
         val freePicker = recognizer.recognizeOpening(frame)
         assertEquals(original.visibleCharacters, freePicker.visibleCharacters)
@@ -95,7 +100,7 @@ class LabyrinthFreeRolePickerRegressionTest {
         val stable = stableRecognizer.recognizeOpening(frame, allowInitial1088GeometryRefinement = true)
         assertTrue(stable.visibleCharacters.single { it.slotId == target.slotId }.trusted)
         repeat(3) {
-            assertEquals(stable, stableRecognizer.recognizeOpening(frame, allowInitial1088GeometryRefinement = true))
+            assertEquals(withCachedRefinementEvidence(stable), stableRecognizer.recognizeOpening(frame, allowInitial1088GeometryRefinement = true))
         }
 
         val assetRoot = File(root, "android/app/src/main/assets")
@@ -116,6 +121,12 @@ class LabyrinthFreeRolePickerRegressionTest {
             assertEquals(if (enabled) "1088" else null, actual.characterId)
         }
     }
+
+    private fun withCachedRefinementEvidence(value: LabyrinthBattleTeamObservation) = value.copy(
+        visibleCharacters = value.visibleCharacters.map { match ->
+            match.copy(initial1088RefinementEvidence = match.initial1088RefinementEvidence?.copy(cacheHit = true))
+        },
+    )
 
     private fun readImage(file: File): PixelImage = pixels(requireNotNull(
         Class.forName("javax.imageio.ImageIO").getMethod("read", File::class.java).invoke(null, file),

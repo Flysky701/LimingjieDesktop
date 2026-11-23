@@ -56,6 +56,8 @@ class AndroidLabyrinthExEncounterResolver(
             val difficulty = LabyrinthChallengeDifficultyResolver.resolve(
                 normalScore = result.observation.anchorScores[EntryAnchorId.BATTLE_CHALLENGE_SUFFIX_NORMAL],
                 extremeScore = result.observation.anchorScores[EntryAnchorId.BATTLE_CHALLENGE_SUFFIX_EXTREME],
+                extremeAlternativeScore =
+                    result.observation.anchorScores[EntryAnchorId.BATTLE_CHALLENGE_SUFFIX_EXTREME_ALT],
             )
 
             // Multi-monster and special dual-target EX identities are intentionally resolved by

@@ -124,13 +124,14 @@ class AndroidLabyrinthEventChoiceResolver(
             referenceRect = OCR_REFERENCE_RECT,
         ) ?: return result.copy(eventOcrDiagnostics = LabyrinthEventOcrDiagnostics("INVALID_CROP"))
         val customTitleScope = customTitleEvents.isNotEmpty() && completeLayoutCount == 2
+        val titleRect = if (customTitleScope) layoutMapper.titleBounds(2, bitmap.width, bitmap.height) else null
+        val currentTitleFingerprint = titleRect?.let { titleFingerprint(bitmap, it) }
         val fingerprint = if (customTitleScope) {
-            val titleRect = layoutMapper.titleBounds(2, bitmap.width, bitmap.height) ?: cropRect
-            titleFingerprint(bitmap, titleRect) xor
+            (currentTitleFingerprint ?: titleFingerprint(bitmap, cropRect)) xor
                 (if (titleOnly) 0L else differenceHash(bitmap, cropRect))
         } else differenceHash(bitmap, cropRect)
         val lookup = ocrCache.lookup(
-            LabyrinthEventOcrCache.Key(fingerprint, cropRect),
+            LabyrinthEventOcrCache.Key(fingerprint, cropRect, currentTitleFingerprint),
             android.os.SystemClock.elapsedRealtime(),
         )
         val diagnostic = LabyrinthEventOcrDiagnostics(
@@ -141,8 +142,12 @@ class AndroidLabyrinthEventChoiceResolver(
             buttonConfidencesByOptionCount = confidencesByOptionCount,
             cache = lookup.diagnostics,
         )
+        // Match only cached text here; reuse still requires current-frame/request-source evidence.
+        val titleMatch = if (customTitleScope) {
+            lookup.text?.let { recognizer.recognizeCustomTitle(it, customTitleEvents) }
+        } else null
         val observedText = lookup.text.takeIf {
-            !customTitleScope || lookup.diagnostics.fingerprintDistance == 0
+            canReuseLabyrinthEventOcrText(lookup, customTitleScope, currentTitleFingerprint, titleMatch)
         }
         if (observedText == null) {
             lastEventId = null
@@ -160,10 +165,10 @@ class AndroidLabyrinthEventChoiceResolver(
             if (eventCustomizationEnabled && !titleOnly && completedWithoutText) {
                 // Preserve the original dual-anchor escape for genuine single-choice events.
                 // Multi-choice layouts remain blocked by their count in runtime policy.
-                retryOcr(bitmap, cropRect, fingerprint)
+                retryOcr(bitmap, cropRect, fingerprint, currentTitleFingerprint)
                 return result.copy(eventOcrDiagnostics = diagnostic.copy(status = "OCR_UNAVAILABLE"))
             }
-            val scheduled = schedule(bitmap, cropRect, fingerprint)
+            val scheduled = schedule(bitmap, cropRect, fingerprint, requestTitleFingerprint = currentTitleFingerprint)
             return result.copy(eventOcrDiagnostics = diagnostic.copy(
                 status = if (titleOnly) "TITLE_WAITING_OCR" else "WAITING_OCR",
                 requestScheduled = scheduled,
@@ -171,9 +176,6 @@ class AndroidLabyrinthEventChoiceResolver(
         }
 
         // Full OCR can recover a title without needing regional arena reward digits.
-        val titleMatch = if (customTitleEvents.isNotEmpty() && completeLayoutCount == 2) {
-            recognizer.recognizeCustomTitle(observedText, customTitleEvents)
-        } else null
         val familyMatched = titleMatch?.event != null
         val match = if (titleOnly || familyMatched) requireNotNull(titleMatch)
             else recognizer.recognize(observedText)
@@ -209,7 +211,7 @@ class AndroidLabyrinthEventChoiceResolver(
             }
             lastEventId = null
             stableFrames = 0
-            val scheduled = retryOcr(bitmap, cropRect, fingerprint)
+            val scheduled = retryOcr(bitmap, cropRect, fingerprint, currentTitleFingerprint)
             return result.copy(eventOcrDiagnostics = diagnostic.copy(
                 status = "NO_CATALOG_MATCH", requestScheduled = scheduled,
                 rawText = observedText.take(MAX_DIAGNOSTIC_TEXT_LENGTH),
@@ -235,7 +237,7 @@ class AndroidLabyrinthEventChoiceResolver(
         val layoutConfirmed = !familyMatched || completeLayoutCount == 2
         val trusted = match.trusted && layoutConfirmed && stableFrames >= REQUIRED_STABLE_FRAMES
         val scheduled = if (!match.trusted && stableFrames >= REQUIRED_STABLE_FRAMES) {
-            retryOcr(bitmap, cropRect, fingerprint)
+            retryOcr(bitmap, cropRect, fingerprint, currentTitleFingerprint)
         } else false
         val eventObservation = LabyrinthEventChoiceObservation(
             event = event,
@@ -312,9 +314,17 @@ class AndroidLabyrinthEventChoiceResolver(
         return texts
     }
 
-    private fun schedule(bitmap: Bitmap, rect: EntryPixelRect, fingerprint: Long, cache: LabyrinthEventOcrCache = ocrCache): Boolean {
+    private fun schedule(
+        bitmap: Bitmap,
+        rect: EntryPixelRect,
+        fingerprint: Long,
+        cache: LabyrinthEventOcrCache = ocrCache,
+        requestTitleFingerprint: Long? = null,
+    ): Boolean {
         val now = android.os.SystemClock.elapsedRealtime()
-        val requestId = cache.begin(LabyrinthEventOcrCache.Key(fingerprint, rect), now) ?: return false
+        val requestId = cache.begin(
+            LabyrinthEventOcrCache.Key(fingerprint, rect, requestTitleFingerprint), now,
+        ) ?: return false
         val crop = Bitmap.createBitmap(bitmap, rect.left, rect.top, rect.width, rect.height)
         if (cache === ocrCache) lastOcrRequestAtMillis = now
         Log.d(LOG_TAG, "ocr-request id=$requestId elapsedMillis=$now crop=$rect fingerprint=${java.lang.Long.toHexString(fingerprint)}")
@@ -336,12 +346,17 @@ class AndroidLabyrinthEventChoiceResolver(
     }
 
     /** A poor first OCR read must never pin a static event page forever. */
-    private fun retryOcr(bitmap: Bitmap, rect: EntryPixelRect, fingerprint: Long): Boolean {
+    private fun retryOcr(
+        bitmap: Bitmap,
+        rect: EntryPixelRect,
+        fingerprint: Long,
+        requestTitleFingerprint: Long? = null,
+    ): Boolean {
         val now = android.os.SystemClock.elapsedRealtime()
         if (lastOcrRequestAtMillis != Long.MIN_VALUE &&
             now - lastOcrRequestAtMillis < MIN_OCR_RETRY_INTERVAL_MILLIS
         ) return false
-        return schedule(bitmap, rect, fingerprint)
+        return schedule(bitmap, rect, fingerprint, requestTitleFingerprint = requestTitleFingerprint)
     }
 
     private fun enabledButtonConfidence(bitmap: Bitmap, rect: EntryPixelRect): Double =
@@ -416,3 +431,23 @@ class AndroidLabyrinthEventChoiceResolver(
         const val LOG_TAG = "LabyrinthEventOcr"
     }
 }
+
+/** Only the three requested titles may tolerate crop animation; this never authorizes a click. */
+internal fun canReuseLabyrinthEventOcrText(
+    lookup: LabyrinthEventOcrCache.Lookup,
+    customTitleScope: Boolean,
+    currentTitleFingerprint: Long?,
+    titleMatch: LabyrinthEventTextMatch?,
+): Boolean {
+    if (lookup.text == null) return false
+    if (!customTitleScope) return true
+    val scopedMatch = titleMatch?.trusted == true &&
+        titleMatch.event?.id in ANIMATED_CUSTOM_TITLE_EVENT_IDS
+    if (!scopedMatch) return lookup.diagnostics.fingerprintDistance == 0
+    // With identical title hashes, the existing XOR distance is exactly the crop dHash distance.
+    // HIT already enforces the original crop geometry, lifetime and <=8-bit similarity policy.
+    return lookup.diagnostics.status == "HIT" && currentTitleFingerprint != null &&
+        lookup.requestTitleFingerprint == currentTitleFingerprint
+}
+
+private val ANIMATED_CUSTOM_TITLE_EVENT_IDS = setOf(LabyrinthArenaEvent.ID, "2316", "3316")

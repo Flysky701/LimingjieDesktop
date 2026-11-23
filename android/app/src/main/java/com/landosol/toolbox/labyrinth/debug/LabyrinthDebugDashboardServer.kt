@@ -684,6 +684,20 @@ class LabyrinthDebugDashboardServer(
                 }
             },
         )
+        put("initial1088RefinementContext", result.initial1088RefinementContext?.let {
+            JSONObject(labyrinthInitial1088ContextPayload(it))
+        } ?: JSONObject.NULL)
+        put("initial1088Recovery", state.initial1088Recovery?.let {
+            JSONObject(labyrinthInitial1088RecoveryPayload(it))
+        } ?: JSONObject.NULL)
+        put("initial1088Refinement", JSONArray().apply {
+            result.openingCharacterMatches.forEach { character ->
+                character.initial1088RefinementEvidence?.let { evidence ->
+                    put(JSONObject(labyrinthInitial1088RefinementPayload(character.slotId, evidence,
+                        result.initial1088RefinementContext)))
+                }
+            }
+        })
         put(
             "openingCharacters",
             JSONArray().apply {

@@ -50,13 +50,16 @@ object LabyrinthChallengeDifficultyResolver {
     fun resolve(
         normalScore: Double,
         extremeScore: Double,
+        extremeAlternativeScore: Double = 0.0,
         minimumScore: Double = 0.78,
         minimumMargin: Double = 0.10,
     ): LabyrinthChallengeDifficulty {
-        val best = maxOf(normalScore, extremeScore)
-        val margin = kotlin.math.abs(normalScore - extremeScore)
+        // Either calibrated 极难 template may match the current banner style; the stronger one wins.
+        val resolvedExtreme = maxOf(extremeScore, extremeAlternativeScore)
+        val best = maxOf(normalScore, resolvedExtreme)
+        val margin = kotlin.math.abs(normalScore - resolvedExtreme)
         if (best < minimumScore || margin < minimumMargin) return LabyrinthChallengeDifficulty.UNKNOWN
-        return if (extremeScore > normalScore) {
+        return if (resolvedExtreme > normalScore) {
             LabyrinthChallengeDifficulty.EXTREME
         } else {
             LabyrinthChallengeDifficulty.NORMAL
