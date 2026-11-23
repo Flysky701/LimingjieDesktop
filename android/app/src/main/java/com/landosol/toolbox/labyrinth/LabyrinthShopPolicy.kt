@@ -5,6 +5,8 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemKind
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryState
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemStatus
 
+enum class LabyrinthShopWaitKind { COINS, ITEMS, SCAN, OTHER }
+
 sealed interface LabyrinthShopDecision {
     data class BuyRelic(
         val item: LabyrinthShopItemMatch,
@@ -21,8 +23,8 @@ sealed interface LabyrinthShopDecision {
     }
 
     data class Refresh(val reason: String) : LabyrinthShopDecision
-    data class Close(val reason: String) : LabyrinthShopDecision
-    data class Wait(val reason: String) : LabyrinthShopDecision
+    data class Close(val reason: String, val immediate: Boolean = false) : LabyrinthShopDecision
+    data class Wait(val reason: String, val kind: LabyrinthShopWaitKind = LabyrinthShopWaitKind.OTHER) : LabyrinthShopDecision
 }
 
 /**
@@ -104,8 +106,15 @@ class LabyrinthShopPolicy(
         relicPurchasesInCycle: Int = 0,
         refreshAvailabilityKnown: Boolean = true,
         refreshesUsedInVisit: Int = 0,
+        coinBalance: Int? = null,
+        stockScanComplete: Boolean = true,
+        allowSecondaryPurchases: Boolean = true,
+        allowClearancePurchases: Boolean = true,
     ): LabyrinthShopDecision {
-        if (!buyRelics) return LabyrinthShopDecision.Close("策略已关闭商店购买，退出商店")
+        if (!buyRelics) return LabyrinthShopDecision.Close("策略已关闭商店购买，退出商店", immediate = true)
+        if (currentArea == 3) return decideArea3(items, acquired, calibratedStacks, refreshAvailable, lockedFocus, refreshAvailabilityKnown, refreshesUsedInVisit, coinBalance, stockScanComplete, allowSecondaryPurchases)
+        if (currentArea == 4) return decideArea4(items, acquired, calibratedStacks, refreshAvailable, lockedFocus, refreshAvailabilityKnown, refreshesUsedInVisit, coinBalance, stockScanComplete, allowSecondaryPurchases)
+        if (currentArea == 5) return decideArea5(items, acquired, calibratedStacks, refreshAvailable, lockedFocus, refreshAvailabilityKnown, refreshesUsedInVisit, coinBalance, stockScanComplete, allowSecondaryPurchases, allowClearancePurchases)
         val refreshAllowed = refreshEnabled && currentArea != null && currentArea >= finalArea
         // The area budget is what keeps a shop from spending 300 coins on a refill that the
         // remaining balance cannot buy from. Running out of budget simply falls through to the
@@ -348,5 +357,233 @@ class LabyrinthShopPolicy(
                 else -> "区域${currentArea ?: "?"}当前无可确认遗物或可购买印记，结束商店"
             },
         )
+    }
+
+    // ===== Area 3/4/5 explicit purchase order (shop rework) =====
+
+    private fun decideArea3(
+        items: List<LabyrinthShopItemMatch>,
+        acquired: List<LabyrinthObservedRelic>,
+        calibratedStacks: Map<LabyrinthRelicMark, Int>,
+        refreshAvailable: Boolean,
+        lockedFocus: LabyrinthRelicMark?,
+        refreshAvailabilityKnown: Boolean,
+        refreshesUsedInVisit: Int,
+        coinBalance: Int?,
+        stockScanComplete: Boolean,
+        allowSecondaryPurchases: Boolean,
+    ): LabyrinthShopDecision {
+        if (coinBalance == null) return LabyrinthShopDecision.Wait("等待金币识别两次一致后重试（3图）", LabyrinthShopWaitKind.COINS)
+        buyBestRelic(items, setOf(1), acquired, calibratedStacks, 3, lockedFocus)?.let { return it }
+        // A whole-store priority pass must finish before current-view imprints may consume coins.
+        if (!allowSecondaryPurchases) {
+            waitForUnresolved(items)?.let { return it }
+            return scanWait()
+        }
+        pendingImprintWait(items)?.let { return it }
+        val gate = when (refreshesUsedInVisit) {
+            0 -> 7620
+            1 -> 3510
+            else -> null
+        }
+        bestRandomImprint(items, gate, coinBalance)?.let { item ->
+            return LabyrinthShopDecision.BuyRoleImprint(item, item.roleImprintLabel ?: "职能印记", "3图购买随机角色印记")
+        }
+        waitForUnresolved(items)?.let { return it }
+        if (!stockScanComplete) return scanWait()
+        if (refreshesUsedInVisit < 2) {
+            val cost = if (refreshesUsedInVisit == 0) 300 else 600
+            if (refreshesUsedInVisit == 1 && coinBalance < 1769) {
+                return LabyrinthShopDecision.Close("3图第二次刷新前余额<1769，退出商店")
+            }
+            if (!refreshAvailabilityKnown) return LabyrinthShopDecision.Wait("等待刷新按钮稳定识别（3图）")
+            if (refreshAvailable && coinBalance >= cost) {
+                return LabyrinthShopDecision.Refresh("3图第" + (refreshesUsedInVisit + 1) + "次刷新（" + cost + "金币）")
+            }
+        }
+        return LabyrinthShopDecision.Close("3图无可确认购买项，退出商店")
+    }
+
+    private fun decideArea4(
+        items: List<LabyrinthShopItemMatch>,
+        acquired: List<LabyrinthObservedRelic>,
+        calibratedStacks: Map<LabyrinthRelicMark, Int>,
+        refreshAvailable: Boolean,
+        lockedFocus: LabyrinthRelicMark?,
+        refreshAvailabilityKnown: Boolean,
+        refreshesUsedInVisit: Int,
+        coinBalance: Int?,
+        stockScanComplete: Boolean,
+        allowSecondaryPurchases: Boolean,
+    ): LabyrinthShopDecision {
+        if (coinBalance == null) return LabyrinthShopDecision.Wait("等待金币识别两次一致后重试（4图）", LabyrinthShopWaitKind.COINS)
+        val savingBalance = 8000
+        if (coinBalance <= savingBalance) return LabyrinthShopDecision.Close("4图余额≤" + savingBalance + "，停手退出商店", immediate = true)
+        pendingImprintWait(items.filter { !it.choiceRoleImprint })?.let { return it }
+        bestRandomImprint(items, null, coinBalance)?.let { item ->
+            return LabyrinthShopDecision.BuyRoleImprint(item, item.roleImprintLabel ?: "职能印记", "4图购买随机角色印记")
+        }
+        waitForUnresolved(items)?.let { return it }
+        if (!stockScanComplete) return scanWait()
+        if (refreshesUsedInVisit < 2) {
+            val cost = if (refreshesUsedInVisit == 0) 300 else 600
+            if (coinBalance - cost <= savingBalance)
+                return LabyrinthShopDecision.Close("4图刷新后余额≤" + savingBalance + "，不刷新，停手退出商店")
+            if (!refreshAvailabilityKnown) return LabyrinthShopDecision.Wait("等待刷新按钮稳定识别（4图）")
+            if (refreshAvailable && coinBalance >= cost) {
+                return LabyrinthShopDecision.Refresh("4图第" + (refreshesUsedInVisit + 1) + "次刷新（" + cost + "金币）")
+            }
+        }
+        return LabyrinthShopDecision.Close("4图无可确认购买项，退出商店")
+    }
+
+    /**
+     * Area 5 explicit order: ★1 relic -> random imprint -> ★2 relic -> ★3 relic -> choice
+     * imprint -> close. Rounds 1 and 2 gate ★2/★3 on the current confirmed coin balance; the
+     * final round allows ★2/★3/choice only after the two-refresh cap is spent.
+     */
+    private fun decideArea5(
+        items: List<LabyrinthShopItemMatch>,
+        acquired: List<LabyrinthObservedRelic>,
+        calibratedStacks: Map<LabyrinthRelicMark, Int>,
+        refreshAvailable: Boolean,
+        lockedFocus: LabyrinthRelicMark?,
+        refreshAvailabilityKnown: Boolean,
+        refreshesUsedInVisit: Int,
+        coinBalance: Int?,
+        stockScanComplete: Boolean,
+        allowSecondaryPurchases: Boolean,
+        allowClearancePurchases: Boolean,
+    ): LabyrinthShopDecision {
+        if (coinBalance == null) return LabyrinthShopDecision.Wait("等待金币识别两次一致后重试（5图）", LabyrinthShopWaitKind.COINS)
+        buyBestRelic(items, setOf(1), acquired, calibratedStacks, 5, lockedFocus)?.let { return it }
+        // A whole-store priority pass must finish before current-view imprints may consume coins.
+        if (!allowSecondaryPurchases) {
+            waitForUnresolved(items)?.let { return it }
+            return scanWait()
+        }
+        pendingImprintWait(items)?.let { return it }
+        bestRandomImprint(items, null, coinBalance)?.let { item ->
+            return LabyrinthShopDecision.BuyRoleImprint(item, item.roleImprintLabel ?: "职能印记", "5图购买随机角色印记")
+        }
+        if (refreshesUsedInVisit == 0) {
+            if (coinBalance >= ROUND1_STAR2_MIN_BALANCE) {
+                buyBestRelic(items, setOf(2), acquired, calibratedStacks, 5, lockedFocus)?.let { return it }
+            }
+            if (coinBalance >= ROUND1_STAR3_MIN_BALANCE) {
+                buyBestRelic(items, setOf(3), acquired, calibratedStacks, 5, lockedFocus)?.let { return it }
+            }
+        } else if (refreshesUsedInVisit == 1) {
+            if (coinBalance >= ROUND2_STAR2_MIN_BALANCE) {
+                buyBestRelic(items, setOf(2), acquired, calibratedStacks, 5, lockedFocus)?.let { return it }
+            }
+            if (coinBalance >= ROUND2_STAR3_MIN_BALANCE) {
+                buyBestRelic(items, setOf(3), acquired, calibratedStacks, 5, lockedFocus)?.let { return it }
+            }
+        } else if (allowClearancePurchases) {
+            buyBestRelic(items, setOf(2), acquired, calibratedStacks, 5, lockedFocus)?.let { return it }
+            buyBestRelic(items, setOf(3), acquired, calibratedStacks, 5, lockedFocus)?.let { return it }
+            bestChoiceImprint(items)?.let { item ->
+                return LabyrinthShopDecision.BuyRoleImprint(
+                    item = item,
+                    label = item.roleImprintLabel ?: "职能印记",
+                    reason = "5图刷新用尽，用剩余金币购买自选印记",
+                )
+            }
+        }
+        waitForUnresolved(items)?.let { return it }
+        if (!stockScanComplete) return scanWait()
+        if (refreshesUsedInVisit < 2) {
+            val cost = if (refreshesUsedInVisit == 0) 300 else 600
+            if (!refreshAvailabilityKnown) return LabyrinthShopDecision.Wait("等待刷新按钮稳定识别（5图）")
+            if (refreshAvailable && coinBalance >= cost) {
+                return LabyrinthShopDecision.Refresh("5图第" + (refreshesUsedInVisit + 1) + "次刷新（" + cost + "金币）")
+            }
+        }
+        return LabyrinthShopDecision.Close("5图无可确认购买项，退出商店")
+    }
+
+    private fun buyBestRelic(
+        items: List<LabyrinthShopItemMatch>,
+        rarities: Set<Int>,
+        acquired: List<LabyrinthObservedRelic>,
+        calibratedStacks: Map<LabyrinthRelicMark, Int>,
+        area: Int,
+        lockedFocus: LabyrinthRelicMark?,
+    ): LabyrinthShopDecision? {
+        val candidates = items.filter { item ->
+            item.categoryState == LabyrinthShopCategoryState.READY &&
+                item.purchasable &&
+                item.kind != LabyrinthShopItemKind.ROLE_IMPRINT &&
+                item.relicMatch?.recognized == true &&
+                (item.relicMatch?.rarity ?: 0) in rarities &&
+                acquired.none { it.relicId == item.relicMatch?.relicId }
+        }.mapNotNull { it.relicMatch }
+        if (candidates.isEmpty()) return null
+        val decision = relicChoicePolicy.choose(
+            acquired = acquired,
+            candidates = candidates,
+            lockedFocus = lockedFocus,
+            calibratedStacks = calibratedStacks,
+            currentArea = area,
+        ) ?: return LabyrinthShopDecision.Wait("已识别到遗物，但属性/层数元数据不足，拒绝盲买")
+        val item = items.firstOrNull { it.relicMatch?.relicId == decision.choice.relicId }
+            ?: return LabyrinthShopDecision.Wait("遗物身份复核中，暂不购买")
+        return LabyrinthShopDecision.BuyRelic(item, decision)
+    }
+
+    /** Lowest-slot role-specific 选择 imprint; only used by the area-5 clearance tier. */
+    private fun bestChoiceImprint(items: List<LabyrinthShopItemMatch>): LabyrinthShopItemMatch? =
+        items.filter { item ->
+            item.categoryState == LabyrinthShopCategoryState.READY &&
+                item.purchasable &&
+                item.kind == LabyrinthShopItemKind.ROLE_IMPRINT &&
+                item.choiceRoleImprint &&
+                !item.roleImprintLabel.isNullOrBlank()
+        }.minByOrNull { it.slotId }
+
+    private fun bestRandomImprint(
+        items: List<LabyrinthShopItemMatch>,
+        gate: Int?,
+        coinBalance: Int?,
+    ): LabyrinthShopItemMatch? {
+        if (gate != null && (coinBalance == null || coinBalance < gate)) return null
+        return items.filter { item ->
+            item.categoryState == LabyrinthShopCategoryState.READY &&
+                item.purchasable &&
+                item.kind == LabyrinthShopItemKind.ROLE_IMPRINT &&
+                !item.choiceRoleImprint &&
+                !item.roleImprintLabel.isNullOrBlank()
+        }.minWithOrNull(compareBy({ it.choiceRoleImprint }, { it.slotId }))
+    }
+
+    private fun pendingImprintWait(items: List<LabyrinthShopItemMatch>): LabyrinthShopDecision? {
+        val pending = items.firstOrNull { item ->
+            item.categoryState == LabyrinthShopCategoryState.READY &&
+                item.purchasable &&
+                item.kind == LabyrinthShopItemKind.ROLE_IMPRINT &&
+                item.roleImprintLabel.isNullOrBlank() &&
+                item.imprintLabelPending
+        }
+        return pending?.let { LabyrinthShopDecision.Wait(it.slotId + "职能名尚未读出，重识别中", LabyrinthShopWaitKind.ITEMS) }
+    }
+
+    private fun scanWait() = LabyrinthShopDecision.Wait("当前视口无合规购买项，继续整店扫描", LabyrinthShopWaitKind.SCAN)
+
+    private fun waitForUnresolved(items: List<LabyrinthShopItemMatch>): LabyrinthShopDecision? {
+        val reading = items.firstOrNull { it.purchasable && it.categoryState == LabyrinthShopCategoryState.READING }
+        if (reading != null) {
+            return LabyrinthShopDecision.Wait(reading.slotId + "正在确认商品类别（" + reading.categoryAttempt + "/3轮）", LabyrinthShopWaitKind.ITEMS)
+        }
+        val unknown = items.firstOrNull { it.status == LabyrinthShopItemStatus.UNKNOWN }
+        if (unknown != null) return LabyrinthShopDecision.Wait("商店商品按钮尚未完整识别，等待稳定后再决定", LabyrinthShopWaitKind.ITEMS)
+        return null
+    }
+
+    private companion object {
+        const val ROUND1_STAR2_MIN_BALANCE = 15_000
+        const val ROUND1_STAR3_MIN_BALANCE = 17_000
+        const val ROUND2_STAR2_MIN_BALANCE = 12_320
+        const val ROUND2_STAR3_MIN_BALANCE = 14_520
     }
 }

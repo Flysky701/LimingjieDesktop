@@ -289,6 +289,10 @@ class LandosolToolboxApplication : Application() {
                         val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
                         if (snapshot != null) snapshot.relicEvidenceVersion else labyrinthEntryRecognitionSession.relicEvidenceVersion
                     },
+                    shopEvidenceVersion = {
+                        val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
+                        snapshot?.shopEvidenceVersion ?: labyrinthEntryRecognitionSession.shopEvidenceVersion
+                    },
                     relicVerificationMarks = {
                         val snapshot = com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()
                         if (snapshot != null) snapshot.relicVerificationMarks else labyrinthEntryRecognitionSession.relicVerificationMarks

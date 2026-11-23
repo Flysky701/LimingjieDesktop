@@ -20,9 +20,11 @@ class LabyrinthShopCategoryResolutionTest {
             .recognize(readImage(File(root, "android/app/src/test/resources/shop/imprints-20260914.jpg")))
         val log = Json.parseToJsonElement(File(root, "android/app/src/test/resources/shop/imprints-20260914.json").readText()).jsonObject
         val titles = log.getValue("items").jsonArray.map { it.jsonObject.getValue("titleText").jsonPrimitive.content }
-        assertEquals(3, raw.items.size)
-        assertTrue(raw.items.all { it.purchasable })
-        val classified = raw.items.mapIndexed { i, item -> resolver.resolve(item, titles[i], i.toLong(), 0) }
+        // The recognizer now reports all six fixed slots; only the three fully visible goods
+        // are actionable and match the three logged OCR titles.
+        val visible = raw.items.filter { it.purchasable }
+        assertEquals(3, visible.size)
+        val classified = visible.mapIndexed { i, item -> resolver.resolve(item, titles[i], i.toLong(), 0) }
         assertTrue(classified.all { it.kind == LabyrinthShopItemKind.ROLE_IMPRINT && it.relicMatch == null })
         assertEquals("增益型职能印记", classified[2].roleImprintLabel)
         assertTrue(decide(classified) is LabyrinthShopDecision.BuyRoleImprint)
@@ -45,10 +47,13 @@ class LabyrinthShopCategoryResolutionTest {
         id, rect, rect, 0.99, 1.0, LabyrinthShopItemStatus.AVAILABLE,
         relicMatch = LabyrinthRelicMatch(slotId = id, relicId = if (recognized) "40005" else null,
             displayName = "候选遗物", attribute = "弱体", attributeBonus = "1", effect = null,
-            confidence = 0.715, screenRect = rect, iconRect = rect, rivalMargin = 0.000338),
+            confidence = 0.715, rarity = if (recognized) 1 else 0,
+            screenRect = rect, iconRect = rect, rivalMargin = 0.000338),
     )
-    private fun decide(items: List<LabyrinthShopItemMatch>, area: Int = 3, purchased: Int = 0) =
-        LabyrinthShopPolicy().decide(area, items, emptyList(), refreshAvailable = true, relicPurchasesInCycle = purchased)
+    private fun decide(items: List<LabyrinthShopItemMatch>, area: Int = 3, purchased: Int = 0,
+                       refreshAvailable: Boolean = true) =
+        LabyrinthShopPolicy().decide(area, items, emptyList(), refreshAvailable = refreshAvailable,
+            relicPurchasesInCycle = purchased, coinBalance = 999999)
 
     @Test fun `title classification overrides even a recognized relic icon`() {
         val result = resolver.resolve(item(recognized = true), "增益型识能的随机印记", 22, 0)
@@ -103,10 +108,10 @@ class LabyrinthShopCategoryResolutionTest {
 
     @Test fun `three completed unresolved reads skip item without assuming exhausted relic stock`() {
         val imprint = resolver.resolve(item("1"), "攻击型职能的随机印记", 1, 0)
-        assertTrue(decide(listOf(imprint, resolver.resolve(item(), "看不清", 2, 0))) is LabyrinthShopDecision.Wait)
+        assertTrue(decide(listOf(resolver.resolve(item(), "看不清", 2, 0))) is LabyrinthShopDecision.Wait)
         val skipped = resolver.resolve(item(), "看不清", 4, 3)
-        assertTrue(decide(listOf(imprint, skipped), area = 5) is LabyrinthShopDecision.BuyRoleImprint)
-        assertTrue(decide(listOf(skipped), area = 5) is LabyrinthShopDecision.Close)
+        assertTrue(decide(listOf(imprint, skipped), area = 5, refreshAvailable = false) is LabyrinthShopDecision.BuyRoleImprint)
+        assertTrue(decide(listOf(skipped), area = 5, refreshAvailable = false) is LabyrinthShopDecision.Close)
     }
 
     /**
@@ -132,15 +137,18 @@ class LabyrinthShopCategoryResolutionTest {
     }
 
     @Test fun `remaining titles finish bounded reading after third relic purchase`() {
-        assertTrue(decide(listOf(resolver.resolve(item(), null, null, 0)), purchased = 3) is LabyrinthShopDecision.Wait)
-        assertTrue(decide(listOf(resolver.resolve(item(), null, null, 3)), purchased = 3) is LabyrinthShopDecision.Close)
+        assertTrue(decide(listOf(resolver.resolve(item(), null, null, 0)), purchased = 3,
+            refreshAvailable = false) is LabyrinthShopDecision.Wait)
+        assertTrue(decide(listOf(resolver.resolve(item(), null, null, 3)), purchased = 3,
+            refreshAvailable = false) is LabyrinthShopDecision.Close)
     }
 
     @Test fun `three imprints recover stock and follow area refresh rules`() {
         val items = listOf("攻击型职能的随机印记", "治疗型职能的随机印记", "增益型识能的随机印记")
             .mapIndexed { i, title -> resolver.resolve(item(i.toString()), title, i.toLong(), 0) }
         assertTrue(decide(items, 3) is LabyrinthShopDecision.BuyRoleImprint)
-        assertTrue(decide(items, 5) is LabyrinthShopDecision.Refresh)
+        // The generic path recovers the lost purchase counter when all three slots are imprints.
+        assertTrue(decide(items, 6) is LabyrinthShopDecision.Refresh)
     }
 
     /**
@@ -162,7 +170,7 @@ class LabyrinthShopCategoryResolutionTest {
         // 2026-11-01 rule: inside areas 3/5 a role-specific 选择 imprint is skipped outright
         // (随机 780 against 选择 1,820 for the same class), so a lone choice imprint ends the visit.
         assertTrue("area 5 must skip a lone choice imprint",
-            decide(listOf(choice), area = 5) is LabyrinthShopDecision.Close)
+            decide(listOf(choice), area = 5, refreshAvailable = false) is LabyrinthShopDecision.Close)
         // Areas without the imprint gate keep the old fallback behaviour.
         val fallback = decide(listOf(choice), area = 2) as LabyrinthShopDecision.BuyRoleImprint
         assertEquals("1", fallback.item.slotId)

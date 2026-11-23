@@ -19,6 +19,9 @@ enum class LabyrinthShopItemStatus {
     UNKNOWN,
 }
 
+/** Visibility is geometry evidence, independent of stock/button recognition. */
+enum class LabyrinthShopItemVisibility { FULL, PARTIAL, UNSEEN, UNRESOLVED }
+
 enum class LabyrinthShopItemKind {
     UNKNOWN,
     RELIC,
@@ -50,9 +53,29 @@ data class LabyrinthShopItemMatch(
      * spending coins, so the shop policy waits on this good instead of ending the visit.
      */
     val imprintLabelPending: Boolean = false,
+    /** Defaults preserve existing mock observations; real recognition always supplies visibility. */
+    val visibility: LabyrinthShopItemVisibility = LabyrinthShopItemVisibility.FULL,
+    val titleRect: EntryPixelRect? = null,
 ) {
-    val purchasable: Boolean get() = status == LabyrinthShopItemStatus.AVAILABLE
+    val purchasable: Boolean get() = visibility == LabyrinthShopItemVisibility.FULL &&
+        status == LabyrinthShopItemStatus.AVAILABLE
 }
+
+/** An unrecognized purchase control is not proof of an empty or already-purchased slot. */
+internal fun LabyrinthShopItemMatch.skipOcrIfButtonUnknown(): LabyrinthShopItemMatch? =
+    if (visibility == LabyrinthShopItemVisibility.FULL && status != LabyrinthShopItemStatus.UNKNOWN) null else copy(
+        status = LabyrinthShopItemStatus.UNKNOWN,
+        kind = LabyrinthShopItemKind.UNKNOWN,
+        relicMatch = null,
+        titleText = null,
+        roleImprintLabel = null,
+        choiceRoleImprint = false,
+        titleEvidenceId = null,
+        // A FULL unknown button is waiting for fresh geometric/button evidence, not OCR exhaustion.
+        categoryState = LabyrinthShopCategoryState.READING,
+        categoryAttempt = categoryAttempt,
+        imprintLabelPending = false,
+    )
 
 /** Pure helper so noisy shop-title OCR can be tested without Android/ML Kit. */
 object LabyrinthShopItemText {
@@ -127,6 +150,15 @@ data class LabyrinthShopObservation(
     val refreshButtonEnabledEvidence: Double = 0.0,
     /** The relic shown in the purchase-confirmation dialog, if the icon is trusted. */
     val purchaseCandidate: LabyrinthRelicMatch? = null,
+    /** Wallet balance read from the shop bottom bar; null until two independent OCR reads agree. */
+    val coinBalance: Int? = null,
+    val coinBalanceConfirmed: Boolean = false,
+    /** Pixel evidence from the right-hand scroll thumb; absent when the rail is not trusted. */
+    val viewport: LabyrinthShopViewport? = null,
+    /** Quantized goods-list pixels only, never OCR, scroll-bar or wallet evidence. */
+    val visualFingerprint: Long = 0,
+    /** False is unresolved layout, never evidence of an empty shop. Defaults keep mocks compatible. */
+    val layoutReady: Boolean = true,
 ) {
     val availableItemCount: Int get() = items.count(LabyrinthShopItemMatch::purchasable)
     val recognizedButtonCount: Int get() = items.count { it.buyButtonScore >= BUTTON_MIN_CONFIDENCE }
@@ -152,6 +184,7 @@ class LabyrinthShopRecognizer(
     private val minRelicMargin: Double = 0.05,
 ) {
     private val relicMatcher = AlignedRgbRelicMatcher()
+    private val visibleLayout = LabyrinthShopVisibleLayout(matcher, minButtonConfidence)
 
     init {
         require(minButtonConfidence in 0.0..1.0)
@@ -164,32 +197,33 @@ class LabyrinthShopRecognizer(
         frame: PixelImage,
         dialogState: LabyrinthShopDialogState = LabyrinthShopDialogState.NONE,
     ): LabyrinthShopObservation {
-        val items = TOP_ROW_SLOTS.map { slot ->
-            val screenRect = map(frame, slot.cardRect)
-            val buyButtonRect = map(frame, slot.buyButtonRect)
-            val iconRect = map(frame, slot.iconRect)
-            val score = buyButtonTemplate?.let {
-                matcher.score(frame, buyButtonRect, it, minimumChannelScore = 0.0)
-            } ?: 0.0
-            val enabledEvidence = buyButtonEnabledEvidence(frame, buyButtonRect)
-            val relicMatch = matchRelic(frame, slot.id, screenRect, iconRect)
+        val fixedSlots = (TOP_ROW_SLOTS + BOTTOM_ROW_SLOTS).map { slot ->
+            LabyrinthShopLayoutSlot(slot.id, map(frame, slot.cardRect), map(frame, slot.buyButtonRect),
+                map(frame, slot.iconRect), map(frame, requireNotNull(LabyrinthShopVisibleLayout.TITLE_RECTS[slot.id])))
+        }
+        val layout = visibleLayout.recognize(frame,
+            buyButtonTemplate.takeIf { dialogState == LabyrinthShopDialogState.NONE }, fixedSlots)
+        val items = layout.slots.map { slot ->
+            val full = slot.visibility == LabyrinthShopItemVisibility.FULL
+            val score = slot.buttonScore
+            val enabledEvidence = if (full) buyButtonEnabledEvidence(frame, slot.buyButtonRect) else 0.0
+            val relicMatch = if (full) matchRelic(frame, slot.id, slot.cardRect, slot.iconRect) else null
             LabyrinthShopItemMatch(
                 slotId = slot.id,
-                screenRect = screenRect,
-                buyButtonRect = buyButtonRect,
+                screenRect = slot.cardRect,
+                buyButtonRect = slot.buyButtonRect,
                 buyButtonScore = score,
                 buyButtonEnabledEvidence = enabledEvidence,
                 status = when {
-                    score < minButtonConfidence -> LabyrinthShopItemStatus.UNKNOWN
+                    !full || score < minButtonConfidence -> LabyrinthShopItemStatus.UNKNOWN
                     enabledEvidence >= MIN_ENABLED_BUTTON_EVIDENCE -> LabyrinthShopItemStatus.AVAILABLE
                     else -> LabyrinthShopItemStatus.DISABLED
                 },
                 relicMatch = relicMatch,
-                kind = if (relicMatch?.recognized == true) {
-                    LabyrinthShopItemKind.RELIC
-                } else {
-                    LabyrinthShopItemKind.UNKNOWN
-                },
+                kind = if (relicMatch?.recognized == true) LabyrinthShopItemKind.RELIC else LabyrinthShopItemKind.UNKNOWN,
+                categoryState = LabyrinthShopCategoryState.READING,
+                visibility = slot.visibility,
+                titleRect = slot.titleRect.takeIf { full },
             )
         }
         val purchaseCandidate = if (dialogState == LabyrinthShopDialogState.PURCHASE_CONFIRMATION) {
@@ -207,9 +241,16 @@ class LabyrinthShopRecognizer(
         }
         return LabyrinthShopObservation(
             items = items,
+            layoutReady = layout.ready,
             dialogState = dialogState,
             refreshButtonEnabledEvidence = buyButtonEnabledEvidence(frame, map(frame, REFRESH_BUTTON_RECT)),
             purchaseCandidate = purchaseCandidate,
+            viewport = if (dialogState == LabyrinthShopDialogState.NONE) {
+                LabyrinthShopViewportRecognition.recognize(frame)
+            } else null,
+            visualFingerprint = if (dialogState == LabyrinthShopDialogState.NONE) {
+                LabyrinthShopViewportRecognition.visualFingerprint(frame)
+            } else 0,
         )
     }
 
@@ -321,6 +362,28 @@ class LabyrinthShopRecognizer(
                 cardRect = EntryReferenceRect(1237, 220, 559, 357),
                 buyButtonRect = EntryReferenceRect(1506, 480, 290, 90),
                 iconRect = EntryReferenceRect(1254, 315, 155, 155),
+            ),
+        )
+        // Second (bottom) goods row. Same slot geometry as the top row, shifted down by 283.
+        // Kept separate from TOP_ROW_SLOTS so the top-row parameters are never touched.
+        val BOTTOM_ROW_SLOTS = listOf(
+            Slot(
+                id = "shop_item_4",
+                cardRect = EntryReferenceRect(84, 503, 558, 357),
+                buyButtonRect = EntryReferenceRect(350, 763, 290, 90),
+                iconRect = EntryReferenceRect(100, 598, 155, 155),
+            ),
+            Slot(
+                id = "shop_item_5",
+                cardRect = EntryReferenceRect(662, 503, 556, 357),
+                buyButtonRect = EntryReferenceRect(928, 763, 290, 90),
+                iconRect = EntryReferenceRect(679, 598, 155, 155),
+            ),
+            Slot(
+                id = "shop_item_6",
+                cardRect = EntryReferenceRect(1237, 503, 559, 357),
+                buyButtonRect = EntryReferenceRect(1506, 763, 290, 90),
+                iconRect = EntryReferenceRect(1254, 598, 155, 155),
             ),
         )
         val PURCHASE_DIALOG_ICON_RECTS = listOf(

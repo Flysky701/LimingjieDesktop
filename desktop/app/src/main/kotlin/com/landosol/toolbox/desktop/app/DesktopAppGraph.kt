@@ -518,6 +518,10 @@ class DesktopAppGraph(
                         com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.relicEvidenceVersion
                             ?: labyrinthEntryRecognitionSession.relicEvidenceVersion
                     },
+                    shopEvidenceVersion = {
+                        com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.shopEvidenceVersion
+                            ?: labyrinthEntryRecognitionSession.shopEvidenceVersion
+                    },
                     relicVerificationMarks = {
                         com.landosol.toolbox.labyrinth.LabyrinthBalancedVisionContext.current()?.relicVerificationMarks
                             ?: labyrinthEntryRecognitionSession.relicVerificationMarks

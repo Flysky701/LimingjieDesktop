@@ -423,28 +423,31 @@ class LabyrinthEntryFrameProcessorTest {
         )
 
         val shop = recognizer.recognize(frame)
+        // The recognizer reports all six fixed slots; only the three fully visible goods are
+        // actionable and carry the live relic identities.
+        val visible = shop.items.filter { it.purchasable }
 
-        assertEquals(3, shop.items.size)
+        assertEquals(3, visible.size)
         assertEquals(
-            shop.items.joinToString { item ->
+            visible.joinToString { item ->
                 "${item.slotId}:${item.relicMatch?.suspectedRelicId}" +
                     "@${item.relicMatch?.confidence}" +
                     "/margin=${item.relicMatch?.rivalMargin}"
             },
             listOf("14001", "25004", "15001"),
-            shop.items.map { it.relicMatch?.relicId },
+            visible.map { it.relicMatch?.relicId },
         )
         assertTrue(
-            shop.items.joinToString { "${it.slotId}:${it.relicMatch}" },
-            shop.items.all { it.relicMatch?.recognized == true },
+            visible.joinToString { "${it.slotId}:${it.relicMatch}" },
+            visible.all { it.relicMatch?.recognized == true },
         )
         assertTrue(
-            shop.items.joinToString { "${it.slotId}:${it.status}/${it.buyButtonEnabledEvidence}" },
-            shop.items.all { it.status == LabyrinthShopItemStatus.AVAILABLE },
+            visible.joinToString { "${it.slotId}:${it.status}/${it.buyButtonEnabledEvidence}" },
+            visible.all { it.status == LabyrinthShopItemStatus.AVAILABLE },
         )
         assertTrue(
-            shop.items.joinToString { "${it.slotId}:${it.buyButtonEnabledEvidence}" },
-            shop.items.all { it.buyButtonEnabledEvidence >= 0.80 },
+            visible.joinToString { "${it.slotId}:${it.buyButtonEnabledEvidence}" },
+            visible.all { it.buyButtonEnabledEvidence >= 0.80 },
         )
     }
 

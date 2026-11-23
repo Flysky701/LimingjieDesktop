@@ -1,13 +1,28 @@
 package com.landosol.toolbox.labyrinth.kernel
 
+import com.landosol.toolbox.automation.AutomationAction
+import com.landosol.toolbox.automation.AutomationBackendResult
+import com.landosol.toolbox.automation.AutomationSessionManager
+import com.landosol.toolbox.automation.SessionBoundActionExecutor
+import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSession
+import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionStartResult
+import com.landosol.toolbox.labyrinth.LabyrinthExecutionGateResult
+import com.landosol.toolbox.labyrinth.LabyrinthNodeJson
+import com.landosol.toolbox.labyrinth.LabyrinthRouteJson
 import com.landosol.toolbox.labyrinth.LabyrinthPostEntryActionKind
 import com.landosol.toolbox.labyrinth.LabyrinthPostEntryActionKind.*
 import com.landosol.toolbox.labyrinth.LabyrinthRelicIdentityGate
 import com.landosol.toolbox.labyrinth.LabyrinthRelicMark.ACCELERATION
+import com.landosol.toolbox.labyrinth.LabyrinthShopDecision
 import com.landosol.toolbox.labyrinth.LabyrinthShopPolicy
+import com.landosol.toolbox.labyrinth.LabyrinthShopRefreshOutcome
+import com.landosol.toolbox.labyrinth.LabyrinthShopRefreshPhase
+import com.landosol.toolbox.labyrinth.LabyrinthShopScanController
 import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds as K
 import com.landosol.toolbox.labyrinth.kernel.shop.ShopDomainModule
 import com.landosol.toolbox.labyrinth.kernel.shop.ShopPlanOutcome
+import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
+import com.landosol.toolbox.labyrinth.node.NodeTemplateSet
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorId
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorMatch
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
@@ -22,9 +37,18 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthShopDialogState
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemKind
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemStatus
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemVisibility
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopObservation
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopRefreshDialog
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopRefreshDialogKind
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopViewport
 import org.junit.Assert.*
 import org.junit.Test
+import java.lang.reflect.InvocationTargetException
+import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 
 class ShopDomainKernelTest {
     @Test fun relicConfirmationRequiresCurrentMatchingIdentityAndCompletionCountsOnce() {
@@ -78,9 +102,12 @@ class ShopDomainKernelTest {
         val relic = relic("receipt-relic")
         f.perform(f.planBuy(relic, 1_000L), 1_100L)
         assertEquals(0, f.module.relicPurchasesThisCycle)
-        assertNotNull(f.module.recordActionExecuted(SHOP_CLOSE_PURCHASE_COMPLETE, 1_500L, { f.cancelled.add(it) }))
+        val close = f.plan(frame(SHOP_PURCHASE_COMPLETE), 1_500L, purchaseAlreadyObserved = true)
+            .expectAction(SHOP_CLOSE_PURCHASE_COMPLETE)
+        assertEquals(0, f.module.relicPurchasesThisCycle)
+        f.perform(close, 1_500L)
         assertEquals(1, f.module.relicPurchasesThisCycle)
-        f.module.recordActionExecuted(SHOP_CLOSE_PURCHASE_COMPLETE, 1_600L, { f.cancelled.add(it) })
+        assertNull(f.module.recordActionExecuted(SHOP_CLOSE_PURCHASE_COMPLETE, 1_600L))
         assertEquals(1, f.module.relicPurchasesThisCycle)
         assertNull(f.module.plannedPurchaseRelicId)
         assertFalse("receipt-relic" in f.cancelled)
@@ -115,45 +142,198 @@ class ShopDomainKernelTest {
         assertNull(f.module.plannedRoleImprintLabel)
     }
 
-    @Test fun timedOutRefreshKeepsPurchasesAndAConfirmedRefreshResetsOnlyTheCycle() {
+    @Test fun refreshCommitsOnceOnTwoDistinctPaidFramesAndKeepsTheWholeInputChain() {
         val f = Fixture(area = 5)
         repeat(3) { f.completePurchase(relic("relic-$it"), 1_000L + it * 2_000L) }
+        val missingButton = shelf(refreshScore = 0.44)
+        assertWait(f.plan(missingButton, 6_700L), "画面稳定")
+        assertWait(f.plan(missingButton, 6_800L), "底部可见商品")
+        assertWait(f.plan(missingButton, 6_900L), "等待刷新按钮稳定识别")
+        val refresh = f.plan(shelf(refreshScore = 0.45), 7_000L).expectAction(SHOP_REFRESH)
+        val dispatched = f.dispatch(refresh, 7_000L)
+        assertNull(f.module.shopRefreshTransaction.pending)
+        assertEquals(0, f.module.refreshesUsedInVisit)
+        val requestReceipt = f.execute(refresh, 7_010L, dispatched)
+        assertEquals(7_010L, f.module.plannedRefreshStartedAt)
         assertEquals(3, f.module.relicPurchasesThisCycle)
-        val stock = shop(refreshScore = 0.45)
-        assertWait(f.plan(shop(refreshScore = 0.44), 6_900L), "等待刷新按钮稳定识别")
+        assertEquals(0, f.module.refreshesUsedInVisit)
 
-        val refresh = f.plan(stock, 7_000L).expectAction(SHOP_REFRESH)
-        f.perform(refresh, 7_000L)
-        assertEquals(1, f.module.refreshesUsedInVisit)
-        assertEquals(7_000L, f.module.plannedRefreshStartedAt)
-        assertWait(f.refresh(refreshDialog(), 8_499L), "安全点击间隔")
-        val expired = f.refresh(refreshDialog(), 8_500L).expectAction(SHOP_CONFIRM_REFRESH)
-        val timeout = f.refresh(refreshDialog(), 15_001L)
-        assertWait(timeout, "未重置本轮遗物计数")
-        assertFalse(timeout.handled)
-        assertEquals(Long.MIN_VALUE, f.module.plannedRefreshStartedAt)
-        assertEquals(Long.MIN_VALUE, f.module.plannedRefreshConfirmedAt)
+        assertWait(f.refresh(refreshDialog(8_499L), 8_499L), "安全点击间隔")
+        val confirm = f.refresh(refreshDialog(8_500L), 8_500L).expectAction(SHOP_CONFIRM_REFRESH)
+        val confirmReceipt = f.perform(confirm, 8_500L)
+        assertTrue(requestReceipt in f.runtime.log.causalChain(confirmReceipt.eventSeq))
+        assertEquals(8_500L, f.module.plannedRefreshConfirmedAt)
+        val paid = shelf(coins = 19_700, visual = 87)
+        assertWait(f.refresh(paid, 8_600L), "第二个稳定新截图")
+        assertWait(f.refresh(paid, 8_600L), "第二个稳定新截图")
+        assertEquals(1, f.module.shopRefreshTransaction.pending?.stableFrames)
         assertEquals(3, f.module.relicPurchasesThisCycle)
-        assertEquals(1, f.module.refreshesUsedInVisit)
-        assertNull(f.module.capturePermit(requireNotNull(expired.actionKey), 15_001L))
-        assertEquals("refresh_confirmation_timeout", f.runtime.log.filter(kind = K.PERMIT_REVOKED).last().reasonCode)
-        assertNull(f.module.handleRefreshConfirmation(stock, 15_002L))
-
-        f.perform(f.plan(stock, 15_100L).expectAction(SHOP_REFRESH), 15_100L)
-        assertEquals(2, f.module.refreshesUsedInVisit)
-        val confirm = f.refresh(refreshDialog(), 16_600L).expectAction(SHOP_CONFIRM_REFRESH)
-        f.perform(confirm, 16_600L)
-        assertEquals(16_600L, f.module.plannedRefreshConfirmedAt)
-        assertWait(f.refresh(stock, 17_099L), "等待新商品列表返回")
-        assertWait(f.refresh(refreshDialog(), 17_100L), "等待新商品列表返回")
-        assertEquals(3, f.module.relicPurchasesThisCycle)
-        val committed = f.refresh(stock, 17_101L)
-        assertWait(committed, "商店已刷新")
-        assertTrue(committed.handled)
+        assertEquals(0, f.module.refreshesUsedInVisit)
+        val commit = f.refresh(paid, 8_701L)
+        assertEquals(LabyrinthShopRefreshOutcome.COMMITTED, commit.refreshOutcome)
+        assertWait(commit, "提交第1次刷新")
         assertEquals(0, f.module.relicPurchasesThisCycle)
-        assertEquals(2, f.module.refreshesUsedInVisit)
+        assertEquals(1, f.module.refreshesUsedInVisit)
         assertEquals(Long.MIN_VALUE, f.module.plannedRefreshStartedAt)
         assertEquals(Long.MIN_VALUE, f.module.plannedRefreshConfirmedAt)
+        assertFalse(f.module.shopScan.complete)
+        assertNull(f.module.handleRefreshConfirmation(paid, 9_000L))
+        val reduced = f.runtime.log.filter(kind = K.STATE_REDUCED, reasonCode = "refresh_committed").single()
+        assertTrue(confirmReceipt in f.runtime.log.causalChain(reduced.eventSeq))
+
+        val next = f.readyToRefresh(10_000L, shelf(coins = 19_700, visual = 87))
+        f.perform(next, 10_200L)
+        assertEquals(600, f.module.shopRefreshTransaction.pending?.expectedFee)
+        assertWait(f.refresh(refreshDialog(11_800L, fee = 300), 11_800L), "未结算")
+        f.refresh(refreshDialog(11_900L, fee = 600), 11_900L).expectAction(SHOP_CONFIRM_REFRESH)
+    }
+
+    @Test fun genericStaleAndWrongFeeDialogsRevokeConfirmationAndExitStopsTheVisit() {
+        val f = Fixture(area = 5)
+        val refresh = f.readyToRefresh(1_000L)
+        // The permit cannot transfer a financial baseline to a different frame.
+        assertNull(f.module.recordActionDispatched(SHOP_REFRESH, 1_201L, actionKey = refresh.actionKey,
+            permitToken = refresh.permitToken))
+        f.perform(f.plan(shelf(), 1_300L).expectAction(SHOP_REFRESH), 1_300L)
+        val valid = f.refresh(refreshDialog(2_900L), 2_900L).expectAction(SHOP_CONFIRM_REFRESH)
+        assertNull(f.module.recordActionDispatched(SHOP_CONFIRM_REFRESH, 2_900L, actionKey = valid.actionKey,
+            permitToken = valid.permitToken, dialog = null))
+        assertFalse(requireNotNull(valid.permitToken).isCurrent(2_900L))
+        for (dialog in listOf(null, LabyrinthShopRefreshDialog(),
+                LabyrinthShopRefreshDialog(LabyrinthShopRefreshDialogKind.REFRESH, 300, false, capturedAtMillis = 3_000L),
+                LabyrinthShopRefreshDialog(LabyrinthShopRefreshDialogKind.REFRESH, 300, true, capturedAtMillis = 1_300L),
+                LabyrinthShopRefreshDialog(LabyrinthShopRefreshDialogKind.REFRESH, 600, true, capturedAtMillis = 3_000L))) {
+            assertWait(f.refresh(refreshDialog(3_000L).copy(shopRefreshDialog = dialog), 3_000L), "未结算")
+        }
+        val exit = refreshDialog(3_100L, kind = LabyrinthShopRefreshDialogKind.EXIT)
+        val stopped = f.plan(exit.copy(observation = frame(SHOP_EXIT_CONFIRMATION).observation), 3_100L)
+        assertStopped(stopped, "检测到退出确认")
+        assertEquals(0, f.module.refreshesUsedInVisit)
+        assertNull(f.module.shopRefreshTransaction.pending?.confirmedAt)
+        assertEquals(LabyrinthShopRefreshPhase.REQUESTED, f.module.shopRefreshTransaction.pending?.phase)
+    }
+
+    @Test fun unchangedStockCancelsButAnUnexplainedBalanceKeepsTheUnresolvedReceipt() {
+        for (unchanged in listOf(true, false)) {
+            val f = Fixture(area = 5)
+            f.completePurchase(relic("before-refresh"), 1_000L)
+            f.perform(f.readyToRefresh(3_000L), 3_200L)
+            val confirm = f.refresh(refreshDialog(5_000L), 5_000L).expectAction(SHOP_CONFIRM_REFRESH)
+            val stock = if (unchanged) shelf() else shelf(coins = 19_699)
+            assertWait(f.refresh(stock, 5_100L), "未结算")
+            assertFalse(requireNotNull(confirm.permitToken).isCurrent(5_100L))
+            val stopped = f.refresh(stock, 11_201L)
+            if (unchanged) {
+                assertStopped(stopped, "刷新已取消或未扣费")
+                assertEquals(LabyrinthShopRefreshOutcome.CANCELLED, stopped.refreshOutcome)
+                assertNull(f.module.shopRefreshTransaction.pending)
+                assertEquals(Long.MIN_VALUE, f.module.plannedRefreshStartedAt)
+            } else {
+                assertStopped(stopped, "刷新结果无法核实")
+                assertEquals(LabyrinthShopRefreshOutcome.UNRESOLVED, stopped.refreshOutcome)
+                assertEquals(3_200L, f.module.shopRefreshTransaction.pending?.requestedAt)
+                assertEquals(19_699, f.module.shopRefreshTransaction.pending?.observedCoins)
+                assertNull(f.module.recordActionExecuted(SHOP_REFRESH, 11_300L))
+            }
+            assertEquals(1, f.module.relicPurchasesThisCycle)
+            assertEquals(0, f.module.refreshesUsedInVisit)
+            assertTrue(f.runtime.log.filter(kind = K.STATE_REDUCED, reasonCode = "refresh_committed").isEmpty())
+        }
+    }
+
+    @Test fun pauseRevokesPlansButRetainsAnExecutedRefreshForLateBalanceReconciliation() {
+        val f = Fixture(area = 5)
+        val refresh = f.readyToRefresh(1_000L)
+        val dispatched = f.dispatch(refresh, 1_200L)
+        f.module.resetShopScrollState(capturedAfter = 1_201L)
+        assertFalse(requireNotNull(refresh.permitToken).isCurrent(1_201L))
+        // The backend can return Executed after pause revoked its planning permit.
+        assertNotNull(f.module.recordActionExecuted(SHOP_REFRESH, 1_210L, cause = dispatched))
+        f.module.resetShopScrollState(capturedAfter = 10_000L)
+        val paid = shelf(coins = 19_700)
+        val first = f.refresh(paid, 10_100L)
+        assertEquals(LabyrinthShopRefreshOutcome.UNRESOLVED, first.refreshOutcome)
+        assertWait(first, "未结算")
+        assertEquals(0, f.module.refreshesUsedInVisit)
+        assertEquals(LabyrinthShopRefreshOutcome.COMMITTED, f.refresh(paid, 10_200L).refreshOutcome)
+        assertEquals(1, f.module.refreshesUsedInVisit)
+    }
+
+    @Test fun oneExpiredPaidFrameCannotHoldAnUnresolvedVisitOpen() {
+        val f = Fixture(area = 5)
+        f.perform(f.readyToRefresh(1_000L), 1_200L)
+        val paid = shelf(coins = 19_700)
+        assertWait(f.refresh(paid, 10_000L), "未结算")
+        val stopped = f.module.handleRefreshConfirmation(paid, 13_001L, nowMillis = 13_001L, capturedAt = 10_000L)
+        assertStopped(requireNotNull(stopped), "刷新结果无法核实")
+        assertEquals(0, f.module.refreshesUsedInVisit)
+    }
+
+    @Test fun onlyFullCardsCanContributeIdentityOrAnActionableTarget() {
+        val f = Fixture()
+        val item = relicItem(relic("cropped"))
+        for (visibility in LabyrinthShopItemVisibility.entries.filter { it != LabyrinthShopItemVisibility.FULL }) {
+            val clipped = shop(item.copy(visibility = visibility))
+            f.plan(clipped, 1_000L).expectAction(SHOP_CLOSE)
+            f.plan(clipped, 1_100L).expectAction(SHOP_CLOSE)
+        }
+        assertWait(f.plan(shop(item), 1_200L), "复核待购买遗物身份")
+        val buy = f.plan(shop(item), 1_300L).expectAction(SHOP_BUY_RELIC)
+        f.plan(shop(item.copy(visibility = LabyrinthShopItemVisibility.PARTIAL)), 1_400L).expectAction(SHOP_CLOSE)
+        assertFalse(requireNotNull(buy.permitToken).isCurrent(1_400L))
+    }
+
+    @Test fun aWalletReadingMustBeConfirmedAndTheCoinDeadlinePrecedesTheScan() {
+        for (area in 3..5) {
+            val f = Fixture(area)
+            val unconfirmed = shelf(coins = 20_000, confirmed = false)
+            assertWait(f.plan(unconfirmed, 1_000L), "等待金币识别")
+            assertNull(f.module.observedAlphaCoin)
+            assertWait(f.plan(unconfirmed, 30_999L), "等待金币识别")
+            assertStopped(f.plan(unconfirmed, 31_000L), "商店金币超过30秒")
+        }
+        val f = Fixture(area = 4)
+        val unread = shelf(relicItem(relic("partial")).copy(visibility = LabyrinthShopItemVisibility.PARTIAL),
+            coins = 8_000, confirmed = false)
+        assertWait(f.plan(unread, 1_000L), "等待金币识别")
+        f.plan(unread, 1_100L, coins = 8_000).expectAction(SHOP_CLOSE)
+        assertEquals(8_000, f.module.observedAlphaCoin)
+        // A previous confirmed balance is not evidence on the next capture.
+        assertWait(f.plan(unread, 1_200L), "等待金币识别")
+        val confirmed = unread.copy(shopObservation = requireNotNull(unread.shopObservation).copy(coinBalanceConfirmed = true))
+        f.plan(confirmed, 1_300L).expectAction(SHOP_CLOSE)
+    }
+
+    @Test fun overlayAndPermitRequireTheSameRefreshBaselineEvenWhenEarlyRefreshIsEnabled() {
+        val policy = LabyrinthShopPolicy(finalArea = 1)
+        val f = Fixture(policy = policy)
+        val goods = Array(3) { imprintItem().copy(slotId = "imprint-$it") }
+        for (stock in listOf(shelf(*goods, confirmed = false), shelf(*goods, coins = 299), shelf(*goods, visual = 0L))) {
+            val displayed = f.module.currentShopDecision(stock, policy, 1, emptyList(), emptyMap())
+            assertTrue(displayed is LabyrinthShopDecision.Wait)
+            assertWait(f.plan(stock, 1_000L), (displayed as LabyrinthShopDecision.Wait).reason)
+        }
+        val ready = shelf(*goods)
+        assertTrue(f.module.currentShopDecision(ready, policy, 1, emptyList(), emptyMap()) is LabyrinthShopDecision.Refresh)
+        f.plan(ready, 1_100L).expectAction(SHOP_REFRESH)
+    }
+
+    @Test fun unreadOrMovingStockRevokesATapAndCannotAuthorizeARefresh() {
+        val f = Fixture(area = 5)
+        val imprint = imprintItem().copy(choiceRoleImprint = false)
+        val ready = shelf(imprint)
+        assertWait(f.plan(ready, 1_000L), "画面稳定")
+        val buy = f.plan(ready, 1_100L).expectAction(SHOP_BUY_IMPRINT)
+        val moving = shelf(imprint, visual = 99)
+        assertWait(f.plan(moving, 1_200L), "画面稳定")
+        assertFalse(requireNotNull(buy.permitToken).isCurrent(1_200L))
+        val unread = shelf(imprint.copy(status = LabyrinthShopItemStatus.UNKNOWN), visual = 99)
+        assertWait(f.plan(unread, 1_300L), "等待本页可见商品")
+        val align = f.plan(unread, 3_000L)
+        assertTrue(align.scanStep is LabyrinthShopScanController.Step.Reposition)
+        assertNull(align.permitToken)
+        assertStopped(f.plan(unread, 24_000L), "未完成覆盖")
+        assertFalse(f.module.shopScan.complete)
     }
 
     @Test fun manualPurchaseDialogsRevokePreviousShopPermits() {
@@ -236,30 +416,42 @@ class ShopDomainKernelTest {
         repeat(3) { f.completePurchase(relic("before-reset-$it"), 1_000L + it * 2_000L) }
         assertEquals(ACCELERATION, f.module.focusMark)
         assertEquals(3, f.module.relicPurchasesThisCycle)
-        val oldPermit = f.plan(shop(refreshScore = 0.8), 7_000L).expectAction(SHOP_REFRESH)
-        f.module.onEnterShopNode(area = 5, timestampMillis = 7_100L)
+        val oldPermit = f.readyToRefresh(7_000L)
+        f.perform(oldPermit, 7_200L)
+        val oldConfirm = f.refresh(refreshDialog(8_700L), 8_700L).expectAction(SHOP_CONFIRM_REFRESH)
+        assertNotNull(f.module.shopRefreshTransaction.pending)
+        assertTrue(f.module.shopScan.complete)
+        f.module.onEnterShopNode(area = 5, timestampMillis = 8_750L)
         assertEquals(ACCELERATION, f.module.focusMark)
         assertEquals(0, f.module.relicPurchasesThisCycle)
-        assertFalse(requireNotNull(oldPermit.permitToken).isCurrent(7_100L))
+        assertFalse(requireNotNull(oldConfirm.permitToken).isCurrent(8_750L))
+        assertNull(f.module.shopRefreshTransaction.pending)
+        assertFalse(f.module.shopScan.complete)
+        assertNull(f.module.scrollStage)
+        assertNull(f.module.observedAlphaCoin)
 
-        assertNotNull(f.module.recordActionExecuted(SHOP_REFRESH, 7_200L))
+        assertNull(f.module.recordActionExecuted(SHOP_REFRESH, 9_000L))
+        f.perform(f.readyToRefresh(9_000L), 9_200L)
+        assertEquals(0, f.module.refreshesUsedInVisit)
+        val confirm = f.refresh(refreshDialog(10_700L), 10_700L).expectAction(SHOP_CONFIRM_REFRESH)
+        f.perform(confirm, 10_700L)
+        val paid = shelf(coins = 19_700)
+        f.refresh(paid, 11_400L)
+        f.refresh(paid, 11_500L)
         assertEquals(1, f.module.refreshesUsedInVisit)
-        val confirm = f.refresh(refreshDialog(), 8_700L).expectAction(SHOP_CONFIRM_REFRESH)
-        f.perform(confirm, 8_700L)
-        f.refresh(shop(), 9_200L)
-        f.completePurchase(relic("after-refresh"), 9_300L)
+        f.completePurchase(relic("after-refresh"), 11_600L)
         f.area = 1
-        val pending = f.plan(shop(imprintItem()), 9_800L, coins = 1_820, scroll = 1).expectAction(SHOP_BUY_IMPRINT)
-        f.perform(pending, 9_800L)
-        f.perform(f.plan(confirmation(null), 9_900L).expectAction(SHOP_CONFIRM_IMPRINT), 9_900L)
-        val outstanding = f.plan(frame(SHOP_PURCHASE_COMPLETE), 10_000L).expectAction(SHOP_CLOSE_PURCHASE_COMPLETE)
+        val pending = f.plan(shop(imprintItem()), 12_100L, coins = 1_820, scroll = 1).expectAction(SHOP_BUY_IMPRINT)
+        f.perform(pending, 12_100L)
+        f.perform(f.plan(confirmation(null), 12_200L).expectAction(SHOP_CONFIRM_IMPRINT), 12_200L)
+        val outstanding = f.plan(frame(SHOP_PURCHASE_COMPLETE), 12_300L).expectAction(SHOP_CLOSE_PURCHASE_COMPLETE)
         assertTrue(f.module.choiceImprintRolePending)
         assertEquals(1, f.module.relicPurchasesThisCycle)
         assertEquals(1, f.module.refreshesUsedInVisit)
         assertEquals(ACCELERATION, f.module.focusMark)
         f.runtime.resetSession("next-shop-run")
-        assertFalse(requireNotNull(outstanding.permitToken).isCurrent(10_000L))
-        assertNull(f.module.capturePermit(requireNotNull(outstanding.actionKey), 10_000L))
+        assertFalse(requireNotNull(outstanding.permitToken).isCurrent(12_300L))
+        assertNull(f.module.capturePermit(requireNotNull(outstanding.actionKey), 12_300L))
         assertEquals("session_reset", f.runtime.log.filter(kind = K.PERMIT_REVOKED).last().reasonCode)
         assertEquals(0, f.module.relicPurchasesThisCycle)
         assertEquals(0, f.module.refreshesUsedInVisit)
@@ -282,6 +474,94 @@ class ShopDomainKernelTest {
         assertEquals(listOf(K.SESSION_LIFECYCLE), f.runtime.log.byTraceId("next-shop-run").map { it.kind })
     }
 
+    @Test fun resetSessionClearsPendingRefreshAndPreparedNavigation() {
+        val f = Fixture(area = 5)
+        f.perform(f.readyToRefresh(1_000L), 1_200L)
+        val confirm = f.refresh(refreshDialog(3_000L), 3_000L).expectAction(SHOP_CONFIRM_REFRESH)
+        val visit = f.module.visitProgress()
+        assertEquals(1_200L, visit.refreshStartedAt)
+        f.runtime.resetSession("next")
+        assertNull(f.module.shopRefreshTransaction.pending)
+        assertFalse(f.module.shopScan.complete)
+        assertNull(f.module.scrollStage)
+        assertFalse(requireNotNull(confirm.permitToken).isCurrent(3_000L))
+        assertNull(f.module.handleRefreshConfirmation(refreshDialog(3_100L), 3_100L))
+        f.module.restoreVisit(visit)
+        assertEquals(20_000, f.module.shopRefreshTransaction.pending?.coinsBefore)
+        assertEquals(0, f.module.refreshesUsedInVisit)
+        assertFalse(requireNotNull(confirm.permitToken).isCurrent(3_100L))
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun resumedShopSessionScansBothEndsAndReconcilesPaymentAcrossPause() = runTest {
+        val node = LabyrinthNodeJson(5, 1, 1, 50101L, LabyrinthNodeTypes.SHOP, null, emptyList(), false)
+        val route = LabyrinthRouteJson(1, 1, 1, 1, false, false, "fixture", emptyList(), emptyList(),
+            listOf(node), allNodes = listOf(node), currentBlockId = node.blockId)
+        val manager = AutomationSessionManager()
+        var now = 1_000L
+        val inputs = mutableListOf<AutomationAction>()
+        val session = LabyrinthEntryRecognitionSession(manager, captureActive = { true },
+            processorFactory = { { error("replay supplies shop observations") } }, actionScope = this, clock = { now },
+            routeLoader = { route }, routeExecutionGate = { LabyrinthExecutionGateResult.Allowed(route, "offline") },
+            nodeTemplateLoader = { NodeTemplateSet(emptyMap()) },
+            actionExecutor = SessionBoundActionExecutor(manager) { inputs += it; AutomationBackendResult.Completed })
+        val process = session.javaClass.declaredMethods.single {
+            it.name.startsWith("processFrameResult-") && it.parameterCount == 6
+        }.apply { isAccessible = true }
+        suspend fun feed(result: LabyrinthEntryFrameResult, advance: Long = 2_000L) {
+            now += advance
+            suspendCoroutineUninterceptedOrReturn<Unit> { continuation ->
+                try {
+                    process.invoke(session, requireNotNull(session.state.value.sessionId).value, result,
+                        WIDTH, HEIGHT, now, continuation)
+                } catch (failure: InvocationTargetException) { throw failure.targetException }
+            }
+            runCurrent()
+        }
+        val stock = shelf()
+        val top = stock.copy(shopObservation = requireNotNull(stock.shopObservation).copy(viewport = LabyrinthShopViewport(true, false, 0)))
+        val bottom = stock.copy(shopObservation = requireNotNull(stock.shopObservation).copy(viewport = LabyrinthShopViewport(false, true, 1000),
+            visualFingerprint = 82L))
+        val runtime = session.kernelRuntime
+        try {
+            assertTrue(session.startAutomation(1L) is LabyrinthEntryRecognitionStartResult.Started)
+            session.javaClass.getDeclaredField("entryPhaseComplete").apply { isAccessible = true }.setBoolean(session, true)
+            runCurrent()
+            val startVersion = session.shopEvidenceVersion
+            repeat(3) { feed(top) }
+            val up = inputs.single() as AutomationAction.Swipe
+            assertTrue(up.start.y > up.end.y)
+            assertEquals(startVersion + 1, session.shopEvidenceVersion)
+            val frames = session.state.value.frameCount
+            feed(top, LabyrinthShopScanController.SETTLE_MILLIS)
+            assertEquals(frames, session.state.value.frameCount)
+            repeat(3) { feed(bottom) }
+            val down = inputs.last() as AutomationAction.Swipe
+            assertTrue(down.start.y < down.end.y)
+            assertEquals(2, inputs.size)
+            repeat(2) { feed(top) }
+            assertEquals(3, inputs.size)
+            assertEquals(SHOP_REFRESH.name, (runtime.log.filter(KernelDomain.SHOP, K.ACTION_RECEIPT_OBSERVED).last().payload as ActionReceiptPayload).choiceId)
+            feed(refreshDialog(now + 2_000L).copy(shopRefreshDialog = null))
+            assertEquals(3, inputs.size)
+            feed(refreshDialog(now + 2_000L))
+            val confirm = runtime.log.filter(KernelDomain.SHOP, K.ACTION_RECEIPT_OBSERVED).last()
+            assertEquals(SHOP_CONFIRM_REFRESH.name, (confirm.payload as ActionReceiptPayload).choiceId)
+            assertTrue(session.setPaused(true))
+            now += 9_000L
+            assertTrue(session.setPaused(false))
+            val paid = shelf(coins = 19_700, visual = 90)
+            feed(paid, 100L)
+            assertTrue(runtime.log.filter(reasonCode = "refresh_committed").isEmpty())
+            feed(paid, 100L)
+            val commit = runtime.log.filter(KernelDomain.SHOP, K.STATE_REDUCED, reasonCode = "refresh_committed").single()
+            assertTrue(confirm in runtime.log.causalChain(commit.eventSeq))
+            assertEquals("1", (commit.payload as StateReducedPayload).detail["refreshesUsedInVisit"])
+            assertEquals(4, inputs.size)
+            assertEquals(4, session.state.value.actionCount)
+        } finally { session.stop() }
+    }
+
     @Test fun sessionResetClearsIdentityEvidenceWhenTheNextSessionStartsOnTheSamePage() {
         val f = Fixture()
         val stock = shop(relicItem(relic("same-visible-relic")))
@@ -291,12 +571,11 @@ class ShopDomainKernelTest {
         f.plan(stock, 1_200L).expectAction(SHOP_BUY_RELIC)
     }
 
-    private class Fixture(var area: Int = 1) {
+    private class Fixture(var area: Int = 1, private val policy: LabyrinthShopPolicy = LabyrinthShopPolicy()) {
         private var now = 0L
         val runtime = KernelRuntime(clock = { now })
         val module = ShopDomainModule(runtime)
         val cancelled = mutableListOf<String?>()
-        private val policy = LabyrinthShopPolicy()
         private val identity = LabyrinthRelicIdentityGate()
 
         init {
@@ -304,11 +583,13 @@ class ShopDomainKernelTest {
             module.onEnterShopNode(area = area, cause = runtime.resetSession("shop-run"))
         }
 
-        fun plan(result: LabyrinthEntryFrameResult, at: Long, coins: Int? = null, scroll: Int? = null): ShopPlanOutcome {
+        fun plan(result: LabyrinthEntryFrameResult, at: Long, coins: Int? = null, scroll: Int? = null,
+                 purchaseAlreadyObserved: Boolean = false): ShopPlanOutcome {
             now = at
             return module.planShopPage(result, result.observation.state, policy, area, emptyList(),
                 mapOf(ACCELERATION to 6), identity, { true }, { cancelled.add(it) },
-                WIDTH, HEIGHT, at, observedAlphaCoin = coins, scrollStage = scroll)
+                WIDTH, HEIGHT, at, observedAlphaCoin = coins, scrollStage = scroll,
+                purchaseAlreadyObserved = purchaseAlreadyObserved)
         }
 
         fun refresh(result: LabyrinthEntryFrameResult, at: Long): ShopPlanOutcome {
@@ -330,11 +611,24 @@ class ShopDomainKernelTest {
                 dispatch, key, outcome.permitToken))
         }
 
-        fun perform(outcome: ShopPlanOutcome, at: Long) = execute(outcome, at, dispatch(outcome, at))
+        fun perform(outcome: ShopPlanOutcome, at: Long): KernelEvent {
+            val receipt = execute(outcome, at, dispatch(outcome, at))
+            val chain = runtime.log.causalChain(receipt.eventSeq)
+            assertEquals(listOf(K.EVENT_RULE_EVALUATED, K.EVENT_DECISION_PROPOSED, K.PERMIT_ISSUED,
+                K.ACTION_DISPATCHED, K.ACTION_RECEIPT_OBSERVED), chain.takeLast(5).map { it.kind })
+            assertTrue(chain.dropLast(5).any { it.domain == KernelDomain.SHOP && it.kind == K.FRAME_OBSERVED })
+            return receipt
+        }
+
+        fun readyToRefresh(at: Long, stock: LabyrinthEntryFrameResult = shelf()): ShopPlanOutcome {
+            assertWait(plan(stock, at), "画面稳定")
+            assertWait(plan(stock, at + 100L), "底部可见商品")
+            return plan(stock, at + 200L).expectAction(SHOP_REFRESH)
+        }
 
         fun planBuy(relic: LabyrinthRelicMatch, at: Long): ShopPlanOutcome {
-            val stock = shop(relicItem(relic))
-            assertWait(plan(stock, at), "复核待购买遗物身份")
+            val stock = if (area == 5) shelf(relicItem(relic)) else shop(relicItem(relic))
+            assertWait(plan(stock, at), if (area == 5) "画面稳定" else "复核待购买遗物身份")
             return plan(stock, at + 100L).expectAction(SHOP_BUY_RELIC)
         }
 
@@ -382,9 +676,18 @@ class ShopDomainKernelTest {
                 LabyrinthShopObservation(emptyList(), LabyrinthShopDialogState.PURCHASE_CONFIRMATION, purchaseCandidate = relic),
                 if (anchor == null) emptyMap() else mapOf(EntryAnchorId.SHOP_EXIT_CONFIRM_BUTTON to anchor))
 
-        fun refreshDialog() = frame(UNKNOWN).copy(nodeMoveConfirmation = LabyrinthNodeMoveConfirmationObservation(
-            0.9, BUTTON, EntryPixelRect(500, 600, 100, 50),
-        ))
+        fun shelf(vararg items: LabyrinthShopItemMatch, coins: Int? = 20_000, confirmed: Boolean = coins != null,
+                  visual: Long = 71L, refreshScore: Double = 0.9): LabyrinthEntryFrameResult {
+            val goods = items.toList().ifEmpty { listOf(imprintItem().copy(status = LabyrinthShopItemStatus.DISABLED)) }
+            return shop(refreshScore = refreshScore).copy(shopObservation = LabyrinthShopObservation(goods,
+                refreshButtonEnabledEvidence = 0.9, coinBalance = coins, coinBalanceConfirmed = confirmed,
+                viewport = LabyrinthShopViewport(atTop = true, atBottom = true, position = 0), visualFingerprint = visual))
+        }
+
+        fun refreshDialog(at: Long, fee: Int = 300, kind: LabyrinthShopRefreshDialogKind = LabyrinthShopRefreshDialogKind.REFRESH) =
+            frame(UNKNOWN).copy(nodeMoveConfirmation = LabyrinthNodeMoveConfirmationObservation(
+                0.9, BUTTON, EntryPixelRect(500, 600, 100, 50)),
+                shopRefreshDialog = LabyrinthShopRefreshDialog(kind, fee, confirmed = true, capturedAtMillis = at))
 
         fun frame(
             page: LabyrinthEntryPageState,
@@ -402,6 +705,15 @@ class ShopDomainKernelTest {
             assertTrue(outcome.decision is KernelDecision.Wait)
             assertTrue(outcome.waitReason.orEmpty(), outcome.waitReason.orEmpty().contains(reason))
             assertEquals(outcome.waitReason, (outcome.decision as KernelDecision.Wait).reason)
+        }
+
+        fun assertStopped(outcome: ShopPlanOutcome, reason: String) {
+            assertTrue(outcome.handled)
+            assertNull(outcome.tapPlan)
+            assertNull(outcome.permitToken)
+            val stop = outcome.decision as KernelDecision.FinishRun
+            assertFalse(stop.cleared)
+            assertTrue(stop.reason, stop.reason.contains(reason))
         }
 
         fun ShopPlanOutcome.expectAction(kind: LabyrinthPostEntryActionKind): ShopPlanOutcome {

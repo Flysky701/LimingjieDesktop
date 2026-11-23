@@ -11,13 +11,16 @@ import com.landosol.toolbox.labyrinth.LabyrinthRelicIdentityGate
 import com.landosol.toolbox.labyrinth.LabyrinthRelicMark
 import com.landosol.toolbox.labyrinth.LabyrinthShopDecision
 import com.landosol.toolbox.labyrinth.LabyrinthShopPolicy
+import com.landosol.toolbox.labyrinth.LabyrinthShopRefreshOutcome
+import com.landosol.toolbox.labyrinth.LabyrinthShopRefreshPhase
+import com.landosol.toolbox.labyrinth.LabyrinthShopRefreshTransaction
+import com.landosol.toolbox.labyrinth.LabyrinthShopScanController
+import com.landosol.toolbox.labyrinth.LabyrinthShopScanController.Step
+import com.landosol.toolbox.labyrinth.LabyrinthShopWaitKind
 import com.landosol.toolbox.labyrinth.kernel.*
 import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds as K
 import com.landosol.toolbox.labyrinth.labyrinthKeepsPlannedShopPurchaseAcrossPage
 import com.landosol.toolbox.labyrinth.labyrinthPageUiOwner
-import com.landosol.toolbox.labyrinth.labyrinthShopRefreshCanCommit
-import com.landosol.toolbox.labyrinth.labyrinthShopRefreshConfirmationOwnsFrame
-import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorId
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
@@ -25,6 +28,9 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState.*
 import com.landosol.toolbox.labyrinth.vision.LabyrinthRelicMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopDialogState
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemVisibility
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopRefreshDialog
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopRefreshDialogKind
 
 internal data class ShopActionKey(
     val sessionId: String,
@@ -47,6 +53,8 @@ internal data class ShopPlanOutcome(
     val handled: Boolean = true,
     /** Matching confirmation evidence delivered once when the purchase completes visually. */
     val completedPurchaseRelic: LabyrinthRelicMatch? = null,
+    val scanStep: Step? = null,
+    val refreshOutcome: LabyrinthShopRefreshOutcome? = null,
 )
 
 internal data class ShopVisitProgress(
@@ -54,9 +62,22 @@ internal data class ShopVisitProgress(
     val purchaseStartedAt: Long, val purchaseCounted: Boolean, val choiceImprintPending: Boolean,
     val refreshStartedAt: Long, val refreshConfirmedAt: Long, val focus: LabyrinthRelicMark?,
     val closedFrames: Int, val closedAt: Long,
+    val refreshTransaction: LabyrinthShopRefreshTransaction? = null,
 )
 
-class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule {
+/** The run ledger and the planner share the very same purchase target during a suspended write. */
+internal open class ShopPurchaseTarget {
+    open var relicId: String? = null
+    open var startedAt: Long = Long.MIN_VALUE
+    open var confirmedRelic: LabyrinthRelicMatch? = null
+}
+
+class ShopDomainModule internal constructor(
+    private val runtime: KernelRuntime,
+    purchase: ShopPurchaseTarget,
+) : KernelDomainModule {
+    constructor(runtime: KernelRuntime) : this(runtime, ShopPurchaseTarget())
+
     override val id = "shop"
     override val domain = KernelDomain.SHOP
 
@@ -64,24 +85,22 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         private set
     internal var refreshesUsedInVisit = 0
         private set
-    internal var plannedPurchaseRelicId: String? = null
+    private val refreshFee get() = if (refreshesUsedInVisit == 0) 300 else 600
+    internal var plannedPurchaseRelicId by purchase::relicId
         private set
-    internal var plannedPurchaseStartedAt = Long.MIN_VALUE
+    internal var plannedPurchaseStartedAt by purchase::startedAt
         private set
     internal var plannedRoleImprintLabel: String? = null
         private set
     internal var choiceImprintRolePending = false
         private set
-    internal var plannedRefreshStartedAt = Long.MIN_VALUE
-        private set
-    internal var plannedRefreshConfirmedAt = Long.MIN_VALUE
-        private set
-    internal var focusMark: LabyrinthRelicMark? = null
-        private set
+    internal val plannedRefreshStartedAt get() = shopRefreshTransaction.pending?.requestedAt ?: Long.MIN_VALUE
+    internal val plannedRefreshConfirmedAt get() = shopRefreshTransaction.pending?.confirmedAt ?: Long.MIN_VALUE
+    @Volatile internal var focusMark: LabyrinthRelicMark? = null
 
     internal var plannedPurchaseCounted = false
         private set
-    internal var pendingPurchaseRelic: LabyrinthRelicMatch? = null
+    internal var pendingPurchaseRelic by purchase::confirmedRelic
         private set
     internal var imprintRewardConfirmedAt = Long.MIN_VALUE
         private set
@@ -94,17 +113,28 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
     internal var lastObservedPage: LabyrinthEntryPageState? = null
         private set
 
-    /** Observed balance for later area-specific rules. A missing reading is unknown. */
+    /** Confirmed balance on the current stock frame. Never reuse it for a later unread wallet. */
     internal var observedAlphaCoin: Int? = null
         private set
-    /** Optional list position for future scrolling. Null leaves planning on the first screen. */
+    /** Position supplied by the caller or measured from the current scroll thumb. */
     internal var scrollStage: Int? = null
         private set
+
+    internal val shopScan = LabyrinthShopScanController()
+    private var shopCoinUnconfirmedSince = Long.MIN_VALUE
+    internal var shopRefreshTransaction = LabyrinthShopRefreshTransaction()
+        private set
+    private data class RefreshBaseline(val capturedAt: Long, val coins: Int, val visual: Long, val fee: Int)
+    private var preparedShopRefresh: RefreshBaseline? = null
+    // Keep the dispatched baseline until its executor receipt, even if pause revokes planning evidence.
+    private var dispatchedRefresh: RefreshBaseline? = null
+    private var confirmationDialog: LabyrinthShopRefreshDialog? = null
 
     private var nodeEntry: KernelEvent? = null
     private var lastDispatch: KernelEvent? = null
     private var lastReceipt: KernelEvent? = null
     private var lastActionDispatchedAt = Long.MIN_VALUE
+    private var purchaseStartedBeforeDispatch = Long.MIN_VALUE
     private var observedIdentityGate: LabyrinthRelicIdentityGate? = null
     private var permitParent: KernelEvent? = null
     private var permitKey: ShopActionKey? = null
@@ -160,13 +190,13 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         relicPurchasesThisCycle = 0
         refreshesUsedInVisit = 0
         clearPlannedPurchase(cancelRelicLedger)
-        clearPlannedRefresh()
+        shopRefreshTransaction = LabyrinthShopRefreshTransaction()
+        dispatchedRefresh = null
+        resetShopScrollState()
         clearChoiceImprintRolePending()
         imprintRewardConfirmedAt = Long.MIN_VALUE
         lastShopDialogState = LabyrinthShopDialogState.NONE
         lastObservedPage = null
-        observedAlphaCoin = null
-        scrollStage = null
         nodeEntry = null
         lastDispatch = null
         lastReceipt = null
@@ -176,6 +206,15 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
     }
 
     internal fun restoreVisit(progress: ShopVisitProgress) = synchronized(runtime) {
+        // Two timestamps alone cannot restore authority to confirm a payment.
+        check(dispatchedRefresh == null && (shopRefreshTransaction.pending == null ||
+            progress.refreshTransaction === shopRefreshTransaction)) { "待结算刷新不能被旧进度覆盖" }
+        require(progress.refreshStartedAt == (progress.refreshTransaction?.pending?.requestedAt ?: Long.MIN_VALUE) &&
+            progress.refreshConfirmedAt == (progress.refreshTransaction?.pending?.confirmedAt ?: Long.MIN_VALUE))
+        revoke("visit_restored")
+        shopRefreshTransaction = progress.refreshTransaction ?: LabyrinthShopRefreshTransaction()
+        dispatchedRefresh = null
+        resetShopScrollState()
         relicPurchasesThisCycle = progress.purchases
         refreshesUsedInVisit = progress.refreshes
         plannedPurchaseRelicId = progress.purchaseId
@@ -183,8 +222,6 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         plannedPurchaseStartedAt = progress.purchaseStartedAt
         plannedPurchaseCounted = progress.purchaseCounted
         choiceImprintRolePending = progress.choiceImprintPending
-        plannedRefreshStartedAt = progress.refreshStartedAt
-        plannedRefreshConfirmedAt = progress.refreshConfirmedAt
         focusMark = progress.focus
         shopConfirmClosedFrames = progress.closedFrames
         shopConfirmClosedAt = progress.closedAt
@@ -193,7 +230,16 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
     internal fun visitProgress() = synchronized(runtime) {
         ShopVisitProgress(relicPurchasesThisCycle, refreshesUsedInVisit, plannedPurchaseRelicId,
             plannedRoleImprintLabel, plannedPurchaseStartedAt, plannedPurchaseCounted, choiceImprintRolePending,
-            plannedRefreshStartedAt, plannedRefreshConfirmedAt, focusMark, shopConfirmClosedFrames, shopConfirmClosedAt)
+            plannedRefreshStartedAt, plannedRefreshConfirmedAt, focusMark, shopConfirmClosedFrames, shopConfirmClosedAt,
+            shopRefreshTransaction.takeIf { it.pending != null })
+    }
+
+    internal fun resetShopScrollState(capturedAfter: Long = Long.MIN_VALUE) = synchronized(runtime) {
+        revoke("shop_scan_reset")
+        shopScan.reset(capturedAfter)
+        shopCoinUnconfirmedSince = Long.MIN_VALUE
+        observedAlphaCoin = null
+        scrollStage = null
     }
 
     internal fun authorize(
@@ -208,6 +254,8 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
 
     internal fun revoke(reason: String, cause: KernelEvent? = null) {
         synchronized(runtime) {
+            preparedShopRefresh = null
+            confirmationDialog = null
             permitParent = cause ?: permitIssued ?: permitParent
             permit.revoke(reason)
             permitParent = null
@@ -240,18 +288,24 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         scrollStage: Int? = null,
         cause: KernelEvent? = null,
         purchaseAlreadyObserved: Boolean = false,
+        nowMillis: Long = timestampMillis,
+        capturedAt: Long = timestampMillis,
     ): ShopPlanOutcome = synchronized(runtime) {
+        handleRefreshConfirmation(result, timestampMillis, frameWidth, frameHeight, sessionId,
+            cause = cause, nowMillis = nowMillis, capturedAt = capturedAt)?.let { return@synchronized it }
         val previous = lastObservedPage
         val observed = observeFrame(page, timestampMillis, cause)
-        if (page == SHOP) {
-            this.observedAlphaCoin = observedAlphaCoin
-            this.scrollStage = scrollStage
-        }
         val shop = result.shopObservation
+        if (page == SHOP) {
+            this.observedAlphaCoin = shop?.coinBalance?.takeIf { shop.coinBalanceConfirmed } ?: observedAlphaCoin
+            this.scrollStage = scrollStage ?: shop?.viewport?.position
+            if (this.observedAlphaCoin != null) shopCoinUnconfirmedSince = Long.MIN_VALUE
+        }
         val candidate = shop?.purchaseCandidate
         observedIdentityGate = relicIdentityGate
         if (!purchaseAlreadyObserved) relicIdentityGate.observe(page, timestampMillis, when (page) {
-            SHOP -> shop?.items.orEmpty().mapNotNull { it.relicMatch }
+            SHOP -> shop?.items.orEmpty().filter { it.visibility == LabyrinthShopItemVisibility.FULL }
+                .mapNotNull { it.relicMatch }
             SHOP_PURCHASE_CONFIRMATION -> listOfNotNull(candidate)
             else -> emptyList()
         })
@@ -271,12 +325,10 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         when (page) {
             SHOP -> {
                 when {
-                    plannedRefreshStartedAt != Long.MIN_VALUE ->
-                        frame.wait("等待商店刷新事务结束", "refresh_pending")
                     shopConfirmClosedFrames > 0 ->
                         frame.wait("购买确认弹窗已关闭，等待购买结果稳定", "purchase_close_grace")
                     else -> frame.planStock(result, shopPolicy, currentArea, observedRelics, calibratedStacks,
-                        relicIdentityGate, canPrepareRelic, cancelRelicLedger)
+                        relicIdentityGate, canPrepareRelic, cancelRelicLedger, nowMillis, capturedAt)
                 }
             }
             SHOP_PURCHASE_CONFIRMATION ->
@@ -295,6 +347,27 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
                     ?: frame.fallback(LabyrinthFallbackTap.SHOP_EXIT_CONFIRM))
             else -> frame.wait("当前页面由其他流程处理", "outside_shop", handled = false)
         }
+    }
+
+    /** Consumed by the run ledger before planning, including on frames held by another page handler. */
+    internal fun observePurchaseFrame(
+        result: LabyrinthEntryFrameResult,
+        gate: LabyrinthRelicIdentityGate,
+        timestampMillis: Long,
+        cancelRelicLedger: (String?) -> Unit,
+        cause: KernelEvent?,
+    ): LabyrinthRelicMatch? = synchronized(runtime) {
+        val counted = plannedPurchaseCounted
+        val page = result.observation.state
+        val shop = result.shopObservation
+        val completed = observePurchase(page, shop?.dialogState, shop?.purchaseCandidate, gate,
+            timestampMillis, cancelRelicLedger)
+        if (!counted && plannedPurchaseCounted) {
+            runtime.emit(domain, K.STATE_REDUCED, StateReducedPayload(page.name,
+                detail = mapOf("relicPurchasesThisCycle" to relicPurchasesThisCycle.toString())),
+                cause ?: lastReceipt ?: nodeEntry, "purchase_committed")
+        }
+        completed
     }
 
     private fun observePurchase(
@@ -355,6 +428,44 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         return null
     }
 
+    internal fun currentShopDecision(
+        result: LabyrinthEntryFrameResult,
+        policy: LabyrinthShopPolicy,
+        area: Int?,
+        acquired: List<LabyrinthObservedRelic>,
+        stacks: Map<LabyrinthRelicMark, Int>,
+        observedAlphaCoin: Int? = null,
+        scanComplete: Boolean = shopScan.complete,
+    ): LabyrinthShopDecision? = synchronized(runtime) {
+        val shop = result.shopObservation ?: return@synchronized null
+        if (shop.dialogState != LabyrinthShopDialogState.NONE) return@synchronized null
+        shopRefreshTransaction.pending?.let { return@synchronized LabyrinthShopDecision.Wait(refreshWaitMessage(it.reason)) }
+        val scannedArea = area == 3 || area == 4 || area == 5
+        val coins = shop.coinBalance?.takeIf { shop.coinBalanceConfirmed } ?: observedAlphaCoin
+        val refreshReady = anchorRect(result, EntryAnchorId.SHOP_REFRESH_BUTTON) != null
+        val decision = policy.decide(
+            currentArea = area,
+            items = shop.items.filter { it.visibility == LabyrinthShopItemVisibility.FULL },
+            acquired = acquired, calibratedStacks = stacks, lockedFocus = focusMark,
+            refreshAvailable = refreshReady && shop.refreshButtonEnabled, refreshAvailabilityKnown = refreshReady,
+            relicPurchasesInCycle = relicPurchasesThisCycle, refreshesUsedInVisit = refreshesUsedInVisit,
+            coinBalance = coins,
+            stockScanComplete = !scannedArea || scanComplete,
+            allowSecondaryPurchases = true, allowClearancePurchases = true,
+        )
+        if (decision is LabyrinthShopDecision.Close && decision.immediate ||
+            decision is LabyrinthShopDecision.Wait && decision.kind == LabyrinthShopWaitKind.COINS) return@synchronized decision
+        if (scannedArea) shopScan.readingReason(shop)?.let {
+            return@synchronized LabyrinthShopDecision.Wait("本页读取未完成：$it", LabyrinthShopWaitKind.ITEMS)
+        }
+        if (decision is LabyrinthShopDecision.Refresh) {
+            if (coins == null) return@synchronized LabyrinthShopDecision.Wait("等待刷新前金币确认")
+            if (coins < refreshFee || shop.visualFingerprint == 0L)
+                return@synchronized LabyrinthShopDecision.Wait("等待可信的刷新前余额和库存画面")
+        }
+        decision
+    }
+
     private fun FramePlan.planStock(
         result: LabyrinthEntryFrameResult,
         policy: LabyrinthShopPolicy,
@@ -364,33 +475,45 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         gate: LabyrinthRelicIdentityGate,
         canPrepareRelic: (LabyrinthRelicMatch) -> Boolean,
         cancelRelicLedger: (String?) -> Unit,
+        now: Long,
+        capturedAt: Long,
     ): ShopPlanOutcome {
         val shop = result.shopObservation
         if (shop == null || shop.dialogState != LabyrinthShopDialogState.NONE) {
             return wait("商店商品识别尚未生成", "shop_stock_unavailable")
         }
-        val refreshRect = anchorRect(result, EntryAnchorId.SHOP_REFRESH_BUTTON)
-        return when (val decision = policy.decide(
-            currentArea = area,
-            items = shop.items,
-            acquired = acquired,
-            calibratedStacks = stacks,
-            refreshAvailable = refreshRect != null && shop.refreshButtonEnabled,
-            lockedFocus = focusMark,
-            relicPurchasesInCycle = relicPurchasesThisCycle,
-            refreshAvailabilityKnown = refreshRect != null,
-            refreshesUsedInVisit = refreshesUsedInVisit,
-        )) {
+        var decision = currentShopDecision(result, policy, area, acquired, stacks, observedAlphaCoin)
+            ?: return wait("商店商品识别尚未生成", "shop_stock_unavailable")
+        if (decision is LabyrinthShopDecision.Wait && decision.kind == LabyrinthShopWaitKind.COINS) {
+            if (shopCoinUnconfirmedSince == Long.MIN_VALUE) shopCoinUnconfirmedSince = now
+            if (now - shopCoinUnconfirmedSince >= 30_000L)
+                return stop("商店金币超过30秒未能识别确定，已停止并保留诊断状态", "shop_coins_timeout")
+            return wait(decision.reason, "shop_coins_unconfirmed")
+        }
+        if ((area == 3 || area == 4 || area == 5) && !(decision is LabyrinthShopDecision.Close && decision.immediate)) {
+            val wasComplete = shopScan.complete
+            val step = shopScan.observe(shop, now, capturedAt, currentArea = area)
+            if (step !is Step.Evaluate) return scan(step)
+            if (step.complete != wasComplete) {
+                decision = requireNotNull(currentShopDecision(result, policy, area, acquired, stacks, observedAlphaCoin, step.complete))
+            }
+            if (decision is LabyrinthShopDecision.Wait) {
+                if (decision.kind == LabyrinthShopWaitKind.SCAN) return scan(shopScan.advance(shop, now))
+                if (decision.kind == LabyrinthShopWaitKind.OTHER && shopScan.readTimedOut(now))
+                    return stop("商店安全复核超时：${decision.reason}", "shop_read_timeout")
+            }
+        }
+        return when (decision) {
             is LabyrinthShopDecision.BuyRelic -> {
                 val relicDecision = decision.relicDecision
                 val relic = relicDecision.choice
-                val relicId = relic.relicId ?: return wait("正在复核待购买遗物身份", "relic_identity_unconfirmed")
+                val relicId = relic.relicId ?: return waitForRelicIdentity(now)
                 if (plannedPurchaseRelicId != relicId) {
                     if (!plannedPurchaseCounted) cancelRelicLedger(plannedPurchaseRelicId)
                     clearPlannedPurchase()
                 }
                 if (!gate.confirmed(relic) || !canPrepareRelic(relic)) {
-                    return wait("正在复核待购买遗物身份", "relic_identity_unconfirmed")
+                    return waitForRelicIdentity(now)
                 }
                 if (relicDecision.phase != LabyrinthRelicChoicePhase.BUILD_BASELINE) {
                     focusMark = relicDecision.focusMark
@@ -411,8 +534,11 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
             }
             is LabyrinthShopDecision.Refresh -> {
                 clearPlannedPurchase(cancelRelicLedger)
-                act(SHOP_REFRESH, "刷新商店：${decision.reason}", refreshRect,
-                    missingRectReason = "策略允许刷新，但刷新按钮没有达到安全识别线")
+                val baseline = RefreshBaseline(capturedAt, requireNotNull(observedAlphaCoin), shop.visualFingerprint, refreshFee)
+                act(SHOP_REFRESH, "刷新商店：${decision.reason}", anchorRect(result, EntryAnchorId.SHOP_REFRESH_BUTTON),
+                    missingRectReason = "策略允许刷新，但刷新按钮没有达到安全识别线").also {
+                    if (it.permitToken != null) preparedShopRefresh = baseline
+                }
             }
             is LabyrinthShopDecision.Close -> {
                 clearPlannedPurchase(cancelRelicLedger)
@@ -421,6 +547,21 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
             }
             is LabyrinthShopDecision.Wait -> wait(decision.reason, "shop_policy_wait")
         }
+    }
+
+    private fun FramePlan.waitForRelicIdentity(now: Long): ShopPlanOutcome =
+        if (shopScan.readTimedOut(now)) stop("商店遗物身份复核超时，拒绝盲买", "shop_relic_identity_timeout")
+        else wait("正在复核待购买遗物身份", "relic_identity_unconfirmed")
+
+    private fun FramePlan.scan(step: Step): ShopPlanOutcome {
+        val reason = when (step) {
+            is Step.Stop -> return stop(step.reason, "shop_scan_stopped")
+            is Step.Wait -> step.reason
+            is Step.Reacquire -> step.reason
+            is Step.Reposition, is Step.Swipe -> "商店扫描翻页，等待动作完成及新画面"
+            is Step.Evaluate -> "整店扫描已完成，等待复核"
+        }
+        return wait(reason, "shop_scan").copy(scanStep = step)
     }
 
     private fun FramePlan.planPurchaseConfirmation(
@@ -457,54 +598,83 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
             "购买确认遗物已核对，但确认按钮未达到安全识别线")
     }
 
-    /** Route generic confirmations here before ordinary page planning while a refresh is active. */
+    private fun refreshWaitMessage(reason: String) = "刷新事务未结算（已用${refreshesUsedInVisit}次）：$reason"
+
+    /** Session teardown clears live authority. Keep the outstanding financial evidence in its causal trace. */
+    internal fun recordPendingRefreshOnStop(cause: KernelEvent?): KernelEvent? = synchronized(runtime) {
+        val pending = shopRefreshTransaction.pending ?: return@synchronized null
+        runtime.emit(domain, K.STATE_REDUCED, StateReducedPayload(SHOP.name, detail = mapOf(
+            "phase" to pending.phase.name, "requestedAt" to pending.requestedAt.toString(),
+            "confirmedAt" to pending.confirmedAt.toString(), "expectedFee" to pending.expectedFee.toString(),
+            "coinsBefore" to pending.coinsBefore.toString(), "observedCoins" to pending.observedCoins.toString(),
+            "visualBefore" to pending.visualBefore.toString(), "observedVisual" to pending.observedVisual.toString(),
+            "lastCapturedAt" to pending.lastCapturedAt.toString(), "stableFrames" to pending.stableFrames.toString(),
+            "refreshesUsedInVisit" to refreshesUsedInVisit.toString(),
+        )), cause ?: lastReceipt, "refresh_pending_at_stop", pending.reason)
+    }
+
+    private fun authorizesRefresh(dialog: LabyrinthShopRefreshDialog?): Boolean {
+        val pending = shopRefreshTransaction.pending ?: return false
+        return pending.phase == LabyrinthShopRefreshPhase.REQUESTED && pending.confirmedAt == null &&
+            dialog?.authorizesRefresh(pending.expectedFee) == true && dialog.capturedAtMillis > pending.requestedAt
+    }
+
+    /** While payment is outstanding the transaction owns even UNKNOWN and visually similar exit dialogs. */
     internal fun handleRefreshConfirmation(
         result: LabyrinthEntryFrameResult,
         timestampMillis: Long,
         frameWidth: Int = result.frameWidth,
         frameHeight: Int = result.frameHeight,
         sessionId: String = runtime.traceId,
-        activeNodeType: Int? = LabyrinthNodeTypes.SHOP,
-        lastPostEntryActionAt: Long? = null,
+        lastPostEntryActionAt: Long = lastActionDispatchedAt,
         cause: KernelEvent? = null,
+        nowMillis: Long = timestampMillis,
+        capturedAt: Long = timestampMillis,
     ): ShopPlanOutcome? = synchronized(runtime) {
-        val startedAt = plannedRefreshStartedAt
-        if (startedAt == Long.MIN_VALUE) return@synchronized null
+        val before = shopRefreshTransaction.pending ?: return@synchronized null
         val page = result.observation.state
         val frame = FramePlan(page, sessionId, timestampMillis, frameWidth, frameHeight,
-            observeFrame(page, timestampMillis, cause))
-
-        if (timestampMillis - startedAt > TRANSITION_TIMEOUT_MILLIS) {
-            clearPlannedRefresh()
-            return@synchronized frame.wait("商店刷新确认超时；未重置本轮遗物计数，等待重新识别商店",
-                "refresh_confirmation_timeout", handled = false)
-        }
-        val confirmation = result.nodeMoveConfirmation
-        if (confirmation != null && labyrinthShopRefreshConfirmationOwnsFrame(
-                activeNodeType, startedAt, plannedRefreshConfirmedAt, timestampMillis, true, TRANSITION_TIMEOUT_MILLIS,
-            )) {
-            val lastAction = lastPostEntryActionAt ?: lastActionDispatchedAt
-            return@synchronized if (lastAction == Long.MIN_VALUE || timestampMillis - lastAction >= ACTION_INTERVAL_MILLIS) {
-                frame.act(SHOP_CONFIRM_REFRESH, "确认刷新商店", confirmation.confirmButtonRect)
-            } else {
-                frame.wait("已识别更新确认，等待安全点击间隔", "refresh_action_interval")
-            }
-        }
-        if (plannedRefreshConfirmedAt != Long.MIN_VALUE) {
-            if (confirmation == null && labyrinthShopRefreshCanCommit(
-                    page, startedAt, plannedRefreshConfirmedAt, timestampMillis, REFRESH_SETTLE_MILLIS,
-                    TRANSITION_TIMEOUT_MILLIS,
-                )) {
+            observeFrame(page, capturedAt, cause))
+        val shop = result.shopObservation?.takeIf { page == SHOP }
+        val outcome = shopRefreshTransaction.observe(shop, nowMillis, capturedAt)
+        val plan = when (outcome) {
+            LabyrinthShopRefreshOutcome.COMMITTED -> {
+                refreshesUsedInVisit++
                 relicPurchasesThisCycle = 0
-                clearPlannedRefresh()
+                resetShopScrollState()
                 val reduced = runtime.emit(domain, K.STATE_REDUCED, StateReducedPayload(page.name,
-                    detail = mapOf("relicPurchasesThisCycle" to "0")), frame.parent, "refresh_committed")
-                return@synchronized FramePlan(page, sessionId, timestampMillis, frameWidth, frameHeight, reduced)
-                    .wait("商店已刷新，等待新商品列表稳定", "refresh_committed")
+                    detail = mapOf("refreshesUsedInVisit" to refreshesUsedInVisit.toString(), "relicPurchasesThisCycle" to "0",
+                        "coinsBefore" to before.coinsBefore.toString(), "fee" to before.expectedFee.toString(),
+                        "coinsAfter" to shop?.coinBalance.toString())), frame.parent, "refresh_committed")
+                FramePlan(page, sessionId, timestampMillis, frameWidth, frameHeight, reduced)
+                    .wait("刷新扣费已核验，提交第${refreshesUsedInVisit}次刷新，重读新库存", "refresh_committed")
             }
-            return@synchronized frame.wait("已确认刷新商店，等待新商品列表返回", "refresh_settling")
+            LabyrinthShopRefreshOutcome.CANCELLED ->
+                frame.stop("刷新已取消或未扣费，次数不增加；已停住，避免重复付费", "refresh_cancelled")
+            LabyrinthShopRefreshOutcome.UNRESOLVED -> {
+                val pending = requireNotNull(shopRefreshTransaction.pending)
+                val awaitingSecondPaidFrame = pending.observedCoins == pending.coinsBefore - pending.expectedFee &&
+                    pending.stableFrames == 1 && nowMillis - (pending.lastCapturedAt ?: 0L) in 0..3_000L
+                if (awaitingSecondPaidFrame) frame.wait(refreshWaitMessage(pending.reason), "refresh_awaiting_second_frame")
+                else frame.stop("刷新结果无法核实，次数未提交：" + pending.reason, "refresh_unresolved")
+            }
+            LabyrinthShopRefreshOutcome.WAIT -> {
+                val confirmation = result.nodeMoveConfirmation
+                val dialog = result.shopRefreshDialog
+                when {
+                    confirmation != null && authorizesRefresh(dialog) -> {
+                        if (lastPostEntryActionAt != Long.MIN_VALUE && timestampMillis - lastPostEntryActionAt < ACTION_INTERVAL_MILLIS)
+                            frame.wait("已识别更新确认，等待安全点击间隔", "refresh_action_interval")
+                        else frame.act(SHOP_CONFIRM_REFRESH, "确认刷新商店（${before.expectedFee}金币，弹窗语义已核对）",
+                            confirmation.confirmButtonRect).also { if (it.permitToken != null) confirmationDialog = dialog }
+                    }
+                    dialog?.kind == LabyrinthShopRefreshDialogKind.EXIT && dialog.confirmed ->
+                        frame.stop("检测到退出确认而非更新确认，停止并保留刷新事务，未增加次数", "refresh_exit_dialog")
+                    else -> frame.wait(refreshWaitMessage(requireNotNull(shopRefreshTransaction.pending).reason), "refresh_pending")
+                }
+            }
         }
-        frame.wait("已点击用300更新，等待更新确认弹窗", "refresh_waiting_confirmation")
+        plan.copy(refreshOutcome = outcome)
     }
 
     internal fun recordActionDispatched(
@@ -515,34 +685,40 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         actionKey: ShopActionKey? = null,
         cause: KernelEvent? = null,
         permitToken: KernelActionPermit.Token? = null,
+        dialog: LabyrinthShopRefreshDialog? = confirmationDialog,
     ): KernelEvent? = synchronized(runtime) {
-        if (actionKind !in SHOP_ACTIONS || !actionAllowed(actionKind, actionKey, permitToken, timestampMillis)) {
+        val key = actionKey ?: return@synchronized null
+        if (actionKind !in SHOP_ACTIONS || !actionAllowed(actionKind, key, permitToken, timestampMillis) ||
+            lastDispatch != null && lastReceipt == null) return@synchronized null
+        if (actionKind == SHOP_REFRESH && (preparedShopRefresh?.capturedAt != timestampMillis ||
+                shopRefreshTransaction.pending != null) ||
+            actionKind == SHOP_CONFIRM_REFRESH && !authorizesRefresh(dialog)) {
+            revoke("refresh_evidence_invalid", cause)
             return@synchronized null
         }
         val relicId = if (actionKind == SHOP_BUY_RELIC || actionKind == SHOP_CONFIRM_RELIC) {
-            shopPurchaseRelicId ?: actionKey?.targetId ?: plannedPurchaseRelicId
+            shopPurchaseRelicId ?: key.targetId ?: plannedPurchaseRelicId
         } else null
         val imprint = if (actionKind == SHOP_BUY_IMPRINT || actionKind == SHOP_CONFIRM_IMPRINT) {
-            shopPurchaseRoleImprintLabel ?: actionKey?.targetId ?: plannedRoleImprintLabel
+            shopPurchaseRoleImprintLabel ?: key.targetId ?: plannedRoleImprintLabel
         } else null
-        if (actionKey != null && (relicId ?: imprint)?.let { it != actionKey.targetId } == true) {
+        if ((relicId ?: imprint)?.let { it != key.targetId } == true) {
             return@synchronized null
         }
+        purchaseStartedBeforeDispatch = plannedPurchaseStartedAt
         if (relicId != null || imprint != null) {
             if (relicId != plannedPurchaseRelicId || imprint != plannedRoleImprintLabel) clearPlannedPurchase()
             plannedPurchaseRelicId = relicId
             plannedRoleImprintLabel = imprint
             plannedPurchaseStartedAt = timestampMillis
         }
-        val authorization = if (actionKey == null) null else {
-            permitIssued?.takeIf { it.causeEventSeq == permitParent?.eventSeq }
-                ?: runtime.emit(domain, K.PERMIT_ISSUED,
-                    PermitTransitionPayload(actionKey.traceTarget(), permit.currentRevision, "dispatch_capture"),
-                    permitParent, "dispatch_capture")
-        }
+        val authorization = permitIssued?.takeIf { it.causeEventSeq == permitParent?.eventSeq }
+            ?: runtime.emit(domain, K.PERMIT_ISSUED,
+                PermitTransitionPayload(key.traceTarget(), permit.currentRevision, "dispatch_capture"),
+                permitParent, "dispatch_capture")
+        if (actionKind == SHOP_REFRESH) dispatchedRefresh = preparedShopRefresh
         lastActionDispatchedAt = timestampMillis
-        runtime.emit(domain, K.ACTION_DISPATCHED, ActionDispatchedPayload(actionKind.name),
-            authorization ?: cause ?: permitIssued ?: lastReceipt ?: nodeEntry).also {
+        runtime.emit(domain, K.ACTION_DISPATCHED, ActionDispatchedPayload(actionKind.name), authorization).also {
             lastDispatch = it
             lastReceipt = null
         }
@@ -550,15 +726,18 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
 
     internal fun recordActionNotExecuted(dispatch: KernelEvent, verdict: String): KernelEvent? =
         synchronized(runtime) {
-            if (dispatch.traceId != runtime.traceId || lastReceipt?.causeEventSeq == dispatch.eventSeq) {
+            if (dispatch != lastDispatch || dispatch.traceId != runtime.traceId || lastReceipt != null) {
                 return@synchronized null
             }
             val action = (dispatch.payload as? ActionDispatchedPayload)?.choiceId ?: return@synchronized null
+            if (action == SHOP_REFRESH.name) dispatchedRefresh = null
+            if (action in setOf(SHOP_BUY_RELIC.name, SHOP_BUY_IMPRINT.name, SHOP_CONFIRM_RELIC.name, SHOP_CONFIRM_IMPRINT.name))
+                plannedPurchaseStartedAt = purchaseStartedBeforeDispatch
             runtime.emit(domain, K.ACTION_RECEIPT_OBSERVED, ActionReceiptPayload(action, verdict), dispatch, verdict)
                 .also { revoke(verdict, it) }
         }
 
-    /** An executed receipt without a key may come from a caller that already checked the permit. */
+    /** Native completion belongs to its dispatch even when pause has since revoked the permit. */
     internal fun recordActionExecuted(
         actionKind: LabyrinthPostEntryActionKind,
         timestampMillis: Long,
@@ -567,46 +746,61 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         actionKey: ShopActionKey? = null,
         permitToken: KernelActionPermit.Token? = null,
     ): KernelEvent? = synchronized(runtime) {
-        if (actionKind !in SHOP_ACTIONS || !actionAllowed(actionKind, actionKey, permitToken, timestampMillis)) {
-            return@synchronized null
-        }
         val dispatch = lastDispatch?.takeIf { (it.payload as? ActionDispatchedPayload)?.choiceId == actionKind.name }
-        if (cause?.kind == K.ACTION_DISPATCHED && cause != dispatch) return@synchronized null
-        if (dispatch != null && lastReceipt?.causeEventSeq == dispatch.eventSeq) return@synchronized null
-        if (actionKind == SHOP_REFRESH && plannedRefreshStartedAt != Long.MIN_VALUE) return@synchronized null
-        if (actionKind == SHOP_CONFIRM_REFRESH &&
-            (plannedRefreshStartedAt == Long.MIN_VALUE || plannedRefreshConfirmedAt != Long.MIN_VALUE)) {
-            return@synchronized null
-        }
-        val receipt = runtime.emit(domain, K.ACTION_RECEIPT_OBSERVED, ActionReceiptPayload(actionKind.name, "Executed"),
-            dispatch ?: cause ?: permitIssued ?: lastReceipt ?: nodeEntry)
-        lastReceipt = receipt
+            ?: return@synchronized null
+        if (cause != null && cause != dispatch || lastReceipt != null) return@synchronized null
+        if (cause == null && !actionAllowed(actionKind, actionKey, permitToken, timestampMillis)) return@synchronized null
+        var reason = K.ACTION_RECEIPT_OBSERVED
         when (actionKind) {
             SHOP_CLOSE_PURCHASE_COMPLETE -> {
                 countRelicPurchase()
+                shopScan.purchased(timestampMillis)
                 clearPlannedPurchase()
             }
             SHOP_REFRESH -> {
-                refreshesUsedInVisit++
-                plannedRefreshStartedAt = timestampMillis
-                plannedRefreshConfirmedAt = Long.MIN_VALUE
+                val baseline = dispatchedRefresh
+                dispatchedRefresh = null
+                preparedShopRefresh = null
+                if (baseline == null || !shopRefreshTransaction.begin(timestampMillis, baseline.coins, baseline.visual, baseline.fee))
+                    reason = "refresh_baseline_invalid"
                 clearPlannedPurchase(cancelRelicLedger)
             }
-            SHOP_CONFIRM_REFRESH -> plannedRefreshConfirmedAt = timestampMillis
+            SHOP_CONFIRM_REFRESH -> shopRefreshTransaction.confirmed(timestampMillis)
             SHOP_CONFIRM_IMPRINT -> imprintRewardConfirmedAt = timestampMillis
             SHOP_CLOSE, SHOP_CONFIRM_EXIT -> {
                 clearPlannedPurchase(cancelRelicLedger)
-                clearPlannedRefresh()
                 clearChoiceImprintRolePending()
             }
             else -> Unit
         }
+        val receipt = runtime.emit(domain, K.ACTION_RECEIPT_OBSERVED, ActionReceiptPayload(actionKind.name, "Executed"),
+            dispatch, reason)
+        lastReceipt = receipt
         revoke("action_executed", receipt)
         receipt
     }
 
     internal fun clearChoiceImprintRolePending() {
         synchronized(runtime) { choiceImprintRolePending = false }
+    }
+
+    internal fun ownsAction(kind: LabyrinthPostEntryActionKind) = kind in SHOP_ACTIONS
+
+    /** Compatibility for a caller delivering a relic tap already staged in the acquisition ledger. */
+    internal fun planPreparedRelicTap(
+        kind: LabyrinthPostEntryActionKind, relicId: String, label: String, rect: EntryPixelRect,
+        timestamp: Long, width: Int, height: Int, cause: KernelEvent?,
+    ): ShopPlanOutcome? = synchronized(runtime) {
+        if (relicId != plannedPurchaseRelicId || plannedPurchaseStartedAt == Long.MIN_VALUE ||
+            timestamp - plannedPurchaseStartedAt !in 0..TRANSITION_TIMEOUT_MILLIS || shopRefreshTransaction.pending != null)
+            return@synchronized null
+        val page = when (kind) {
+            SHOP_BUY_RELIC -> SHOP
+            SHOP_CONFIRM_RELIC -> if (pendingPurchaseRelic?.relicId == relicId) SHOP_PURCHASE_CONFIRMATION else return@synchronized null
+            else -> return@synchronized null
+        }
+        FramePlan(page, runtime.traceId, timestamp, width, height, observeFrame(page, timestamp, cause))
+            .act(kind, label, rect, relicId)
     }
 
     private fun actionAllowed(
@@ -617,7 +811,7 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
     ): Boolean = (key == null || (key.actionKind == kind && capturePermit(key, now) != null)) &&
         (token == null || token.isCurrent(now))
 
-    private fun clearPlannedPurchase(cancelRelicLedger: ((String?) -> Unit)? = null) {
+    internal fun clearPlannedPurchase(cancelRelicLedger: ((String?) -> Unit)? = null) = synchronized(runtime) {
         if (!plannedPurchaseCounted) plannedPurchaseRelicId?.let { cancelRelicLedger?.invoke(it) }
         plannedPurchaseRelicId = null
         plannedRoleImprintLabel = null
@@ -630,18 +824,6 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
     private fun resetConfirmCloseGrace() {
         shopConfirmClosedFrames = 0
         shopConfirmClosedAt = Long.MIN_VALUE
-    }
-
-    private fun clearPlannedRefresh() {
-        plannedRefreshStartedAt = Long.MIN_VALUE
-        plannedRefreshConfirmedAt = Long.MIN_VALUE
-    }
-
-    internal fun recordCompletedPurchase(cause: KernelEvent?): Unit = synchronized(runtime) {
-        if (countRelicPurchase()) runtime.emit(domain, K.STATE_REDUCED,
-            StateReducedPayload(SHOP_PURCHASE_COMPLETE.name,
-                detail = mapOf("relicPurchasesThisCycle" to relicPurchasesThisCycle.toString())),
-            cause ?: lastReceipt ?: lastDispatch ?: nodeEntry, "purchase_committed")
     }
 
     private fun countRelicPurchase(): Boolean {
@@ -702,6 +884,12 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
                 handled = handled, completedPurchaseRelic = completedRelic)
         }
 
+        fun stop(reason: String, code: String): ShopPlanOutcome {
+            val proposal = propose("FinishRun", null, reason, code)
+            revoke(code, proposal)
+            return ShopPlanOutcome(null, KernelDecision.FinishRun(false, reason), reason, decisionEvent = proposal)
+        }
+
         private fun propose(action: String, target: String?, reason: String, code: String): KernelEvent {
             val rule = runtime.emit(domain, K.EVENT_RULE_EVALUATED, PolicyRuleEvaluatedPayload(null, action),
                 parent, code, reason)
@@ -714,7 +902,6 @@ class ShopDomainModule(private val runtime: KernelRuntime) : KernelDomainModule 
         const val ANCHOR_MIN_SCORE = 0.45
         const val ACTION_INTERVAL_MILLIS = 1_500L
         const val CONFIRM_CLOSE_GRACE_MILLIS = 2_000L
-        const val REFRESH_SETTLE_MILLIS = 500L
         const val TRANSITION_TIMEOUT_MILLIS = 8_000L
         val SHOP_ACTIONS = setOf(SHOP_BUY_RELIC, SHOP_BUY_IMPRINT, SHOP_CONFIRM_RELIC, SHOP_CONFIRM_IMPRINT,
             SHOP_CLOSE_PURCHASE_COMPLETE, SHOP_REFRESH, SHOP_CONFIRM_REFRESH, SHOP_CLOSE, SHOP_CONFIRM_EXIT)

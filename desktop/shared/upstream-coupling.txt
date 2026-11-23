@@ -45,7 +45,9 @@ com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthRelicStackResolver.kt
 com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthRelicTemplateLoader.kt
 com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthResultScoreResolver.kt
 com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthRoleRewardNameResolver.kt
+com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthShopCoinResolver.kt
 com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthShopItemResolver.kt
+com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthShopRefreshResolver.kt
 com/landosol/toolbox/labyrinth/vision/AndroidRelicRoiOcr.kt
 com/landosol/toolbox/permissions/PermissionStatusReader.kt
 com/landosol/toolbox/protocol/bilibili/AndroidBilibiliSdkRequestProfileFactory.kt

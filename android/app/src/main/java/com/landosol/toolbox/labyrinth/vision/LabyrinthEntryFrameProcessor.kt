@@ -412,6 +412,8 @@ data class LabyrinthEntryFrameResult(
     val runResultScore: Long? = null,
     /** Quantized top-HUD digest sampled only on BATTLE_IN_PROGRESS frames for stall/progress bounds. */
     val battleHudDigest: Long? = null,
+    /** Dual-OCR semantic refresh/exit evidence, separate from legacy shop dialog classification. */
+    val shopRefreshDialog: LabyrinthShopRefreshDialog? = null,
     /** Exact request context, attached by the session after recognition; diagnostic only. */
     val initial1088RefinementContext: com.landosol.toolbox.labyrinth.LabyrinthInitial1088RefinementContext? = null,
 )

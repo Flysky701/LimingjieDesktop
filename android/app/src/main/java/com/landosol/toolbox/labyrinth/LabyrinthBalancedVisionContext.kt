@@ -18,6 +18,7 @@ object LabyrinthBalancedVisionContext {
         val allowInitial1088GeometryRefinement: Boolean,
         val lifecycleEpoch: Long = 0,
         val sceneEpoch: Long = 0,
+        val shopEvidenceVersion: Long = 0,
         val initial1088RefinementContext: LabyrinthInitial1088RefinementContext? = null,
     )
     private val local = ThreadLocal<RequestSnapshot?>()
