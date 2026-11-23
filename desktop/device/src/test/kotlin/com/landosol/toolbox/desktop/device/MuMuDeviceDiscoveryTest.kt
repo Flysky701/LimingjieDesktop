@@ -34,4 +34,21 @@ class MuMuDeviceDiscoveryTest {
         }, {})
         assertEquals(2, connected.size)
     }
+
+    @Test fun offlineMuMuEndpointIsDisconnectedBeforeReconnecting() = runBlocking {
+        val actions = mutableListOf<String>()
+        val events = mutableListOf<String>()
+        MuMuDeviceDiscovery.register(
+            endpoints = setOf("127.0.0.1:16416", "127.0.0.1:16480"),
+            registered = listOf(
+                DeviceDescriptor("127.0.0.1:16416", "MuMu", "offline"),
+                DeviceDescriptor("127.0.0.1:16480", "MuMu", "device"),
+            ),
+            connect = { actions += "connect:$it"; FakeAdb.success("connected to $it") },
+            onEvent = events::add,
+            disconnect = { actions += "disconnect:$it"; FakeAdb.success("disconnected $it") },
+        )
+        assertEquals(listOf("disconnect:127.0.0.1:16416", "connect:127.0.0.1:16416"), actions)
+        assertTrue(events.any { it.contains("127.0.0.1:16416") && it.contains("重置连接") })
+    }
 }

@@ -137,7 +137,7 @@ class AdbServerClientTest {
 
     @Test fun hostCommandsAndProtocolFailuresAreNotRetriedThroughProcesses() = runBlocking {
         ServerSocket(0).use { server ->
-            val commands = listOf("host:devices-l", "host-serial:fixture:get-state", "host:connect:127.0.0.1:5555", "host:transport:fixture")
+            val commands = listOf("host:devices-l", "host-serial:fixture:get-state", "host:connect:127.0.0.1:5555", "host:disconnect:127.0.0.1:5555", "host:transport:fixture")
             val peer = async(Dispatchers.IO) {
                 commands.forEachIndexed { index, request -> server.accept().use { socket ->
                     assertEquals(request, socket.request())
@@ -145,6 +145,7 @@ class AdbServerClientTest {
                         0 -> socket.message("fixture device model:Fixture\n")
                         1 -> socket.message("device")
                         2 -> socket.message("failed to connect to 127.0.0.1:5555")
+                        3 -> socket.message("disconnected 127.0.0.1:5555")
                         else -> { socket.send("FAIL000e"); socket.send("device offline") }
                     }
                 } }
@@ -153,6 +154,7 @@ class AdbServerClientTest {
                 assertEquals(1, DeviceParsers.devices((adb.execute(listOf("devices", "-l")) as AdbResult.Success).text()).size)
                 assertEquals("device", (adb.execute(listOf("get-state"), "fixture") as AdbResult.Success).text())
                 assertEquals(AdbFailureKind.ConnectionRefused, (adb.execute(listOf("connect", "127.0.0.1:5555")) as AdbResult.Failure).kind)
+                assertEquals("disconnected 127.0.0.1:5555", (adb.execute(listOf("disconnect", "127.0.0.1:5555")) as AdbResult.Success).text())
                 assertEquals(AdbFailureKind.DeviceOffline, (adb.shell("fixture", listOf("getprop")) as AdbResult.Failure).kind)
             }
             peer.await()

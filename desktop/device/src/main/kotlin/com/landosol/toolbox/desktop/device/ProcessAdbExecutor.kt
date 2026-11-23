@@ -1,7 +1,9 @@
 package com.landosol.toolbox.desktop.device
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import java.io.IOException
 import java.nio.file.Files
@@ -22,7 +24,9 @@ class ProcessAdbExecutor(
     private val screenshots = Semaphore(1)
     private val active = ConcurrentHashMap.newKeySet<Process>()
     private val closed = AtomicBoolean()
-    private val serverStartAttempted = AtomicBoolean()
+    private val serverStartLock = Mutex()
+    @Volatile private var canAutoStartServer = true
+    @Volatile private var serverStartEpoch = 0L
 
     internal suspend fun captureRaw(serial: String): DeviceFrame {
         var payload: RawCapturePayload? = null
@@ -37,13 +41,35 @@ class ProcessAdbExecutor(
     private suspend fun executeCommand(arguments: List<String>, serial: String?, timeoutMillis: Long, screenshot: Boolean,
         acceptRaw: ((RawCapturePayload) -> Unit)?): AdbResult {
         require(timeoutMillis > 0)
-        val result = (if (screenshot) screenshots else ordinary).withPermit { executeOnce(arguments, serial, timeoutMillis, screenshot, acceptRaw) }
+        val permitPool = if (screenshot) screenshots else ordinary
+        val epochBefore = serverStartEpoch
+        val result = permitPool.withPermit { executeOnce(arguments, serial, timeoutMillis, screenshot, acceptRaw) }
+        if (result is AdbResult.Success) {
+            canAutoStartServer = true
+            return result
+        }
         // FB-06 applies to the ADB daemon, not a refused emulator TCP port.
         if (result is AdbResult.Failure && result.kind == AdbFailureKind.ConnectionRefused &&
             Regex("daemon|server.*not running|cannot connect to.*5037", RegexOption.IGNORE_CASE).containsMatchIn(result.detail) &&
-            arguments.firstOrNull() != "start-server" && serverStartAttempted.compareAndSet(false, true)) {
-            val start = ordinary.withPermit { executeOnce(listOf("start-server"), null, 10_000, false) }
-            if (start is AdbResult.Success) return (if (screenshot) screenshots else ordinary).withPermit { executeOnce(arguments, serial, timeoutMillis, screenshot, acceptRaw) }
+            arguments.firstOrNull() != "start-server") {
+            val started = serverStartLock.withLock {
+                if (serverStartEpoch != epochBefore) true
+                else if (!canAutoStartServer) false
+                else {
+                    canAutoStartServer = false
+                    val start = try { ordinary.withPermit { executeOnce(listOf("start-server"), null, 10_000, false) } }
+                    catch (cancelled: CancellationException) { canAutoStartServer = true; throw cancelled }
+                    if (start is AdbResult.Success) {
+                        serverStartEpoch++
+                        true
+                    } else false
+                }
+            }
+            if (started) {
+                val retried = permitPool.withPermit { executeOnce(arguments, serial, timeoutMillis, screenshot, acceptRaw) }
+                if (retried is AdbResult.Success) canAutoStartServer = true
+                return retried
+            }
         }
         return result
     }

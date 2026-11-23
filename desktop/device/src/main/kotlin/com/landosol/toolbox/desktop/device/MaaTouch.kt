@@ -154,10 +154,10 @@ class MaaTouchConnection private constructor(
             }
             // Drain stderr continuously without retaining device-specific text or an unbounded buffer.
             scope.launch { try { process.errorStream.use { input -> val buffer = ByteArray(8192); while (input.read(buffer) >= 0) { } } } catch (_: IOException) { } }
-            try { MaaTouchConnection(executor, process, serial, bootId, withTimeout(5000) { handshake.await() }, scope) }
+            try { MaaTouchConnection(executor, process, serial, bootId, withTimeout(8000) { handshake.await() }, scope) }
             catch (_: TimeoutCancellationException) {
                 executor.release(process); scope.cancel()
-                throw DeviceOperationException("MaaTouch 启动失败：5 秒内未返回头部")
+                throw DeviceOperationException("MaaTouch 启动失败：8 秒内未返回头部")
             }
             catch (error: Throwable) { executor.release(process); scope.cancel(); throw error }
         }

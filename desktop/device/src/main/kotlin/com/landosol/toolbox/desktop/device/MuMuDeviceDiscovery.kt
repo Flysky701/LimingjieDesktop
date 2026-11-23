@@ -27,9 +27,19 @@ object MuMuDeviceDiscovery {
     internal suspend fun register(
         endpoints: Set<String>, registered: List<DeviceDescriptor>,
         connect: suspend (String) -> AdbResult, onEvent: (String) -> Unit,
+        disconnect: suspend (String) -> AdbResult = { AdbResult.Success(0, ByteArray(0), "") },
     ) {
         val online = registered.filter { it.state == "device" }.map { it.serial }.toSet()
+        val offline = registered.filter { it.state == "offline" }.map { it.serial }.toSet()
         for (endpoint in endpoints - online) {
+            if (endpoint in offline) {
+                onEvent("检测到离线 MuMu 通道，正在重置连接：$endpoint")
+                val reset = disconnect(endpoint)
+                if (reset is AdbResult.Failure && reset.kind == AdbFailureKind.ServerVersionConflict) {
+                    onEvent("MuMu 设备 $endpoint 尚未就绪：${reset.detail}")
+                    continue
+                }
+            }
             when (val result = connect(endpoint)) {
                 is AdbResult.Success -> onEvent("已向 ADB 请求连接 MuMu 设备：$endpoint")
                 is AdbResult.Failure -> onEvent("MuMu 设备 $endpoint 尚未就绪：${result.detail}")
@@ -56,7 +66,8 @@ object MuMuDeviceDiscovery {
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { /* Existing registered devices remain discoverable. */ }
             }
-            register(found, listed, { adb.execute(listOf("connect", it), timeoutMillis = 3_000) }, onEvent)
+            register(found, listed, { adb.execute(listOf("connect", it), timeoutMillis = 3_000) }, onEvent,
+                { adb.execute(listOf("disconnect", it), timeoutMillis = 3_000) })
         }
     }
 }

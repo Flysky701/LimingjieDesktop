@@ -86,6 +86,27 @@ class ProcessAdbExecutorTest {
             assertEquals(1, conflictCalls.get())
         }
     }
+    @Test fun daemonRestartRecoversAgainAfterMidRunCrash() = runBlocking {
+        val starts = AtomicInteger()
+        var daemonAlive = false
+        ProcessAdbExecutor("fake", AdbProcessFactory { args ->
+            if (args.last() == "start-server") {
+                starts.incrementAndGet()
+                daemonAlive = true
+                ProcessFixture.start("echo")
+            } else if (!daemonAlive) {
+                ProcessFixture.start("error", "cannot connect to adb daemon at 127.0.0.1:5037", "1")
+            } else {
+                ProcessFixture.start("echo", "ok")
+            }
+        }).use { runner ->
+            assertTrue(runner.execute(listOf("devices")) is AdbResult.Success)
+            assertEquals(1, starts.get())
+            daemonAlive = false
+            assertTrue(runner.execute(listOf("devices")) is AdbResult.Success)
+            assertEquals(2, starts.get())
+        }
+    }
     @Test fun repeatedDaemonStartupPreservesSuccessfulCommandAndDiagnostics() = runBlocking {
         val diagnostic = "* daemon not running; starting now at tcp:5037\n* daemon started successfully"
         val output = "List of devices attached\n127.0.0.1:5555\tdevice\n"

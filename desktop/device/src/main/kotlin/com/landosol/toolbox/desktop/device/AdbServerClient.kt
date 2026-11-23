@@ -31,6 +31,7 @@ class AdbServerClient(private val address: InetSocketAddress = defaultAddress())
             arguments == listOf("devices", "-l") -> "host:devices-l"
             arguments == listOf("get-state") && serial != null -> "host-serial:$serial:get-state"
             arguments.size == 2 && arguments[0] == "connect" -> "host:connect:${arguments[1]}"
+            arguments.size == 2 && arguments[0] == "disconnect" -> "host:disconnect:${arguments[1]}"
             arguments.size == 2 && arguments[0] == "shell" && serial != null -> "shell,v2,raw:${arguments[1]}"
             // raw shell-v2 has no PTY/newline conversion and, unlike legacy exec:, also reports exit status.
             arguments.firstOrNull() == "exec-out" && serial != null -> "shell,v2,raw:" + arguments.drop(1).joinToString(" ", transform = ProcessAdbExecutor::shellQuote)

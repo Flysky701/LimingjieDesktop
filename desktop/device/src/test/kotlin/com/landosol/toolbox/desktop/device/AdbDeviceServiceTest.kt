@@ -237,11 +237,121 @@ class AdbDeviceServiceTest {
             } }
             assertEquals(2, device.capture().width)
             assertEquals(20_000L, testScheduler.currentTime - started)
-            assertEquals(1, adb.calls.count { it.arguments == listOf("connect", serial) })
+            val connectCount = adb.calls.count { it.arguments == listOf("connect", serial) }
+            assertTrue("expected bounded connect retries, got $connectCount", connectCount in 1..3)
+            assertEquals(CaptureMode.Raw, (device.state.value as DeviceConnectionState.Ready).device.selectedMode)
             assertFalse(adb.calls.any { it.arguments == listOf("getprop", "sys.boot_completed") })
             assertTrue(lost.isEmpty() && device.state.value is DeviceConnectionState.Ready)
             assertTrue(touch.gestures.isEmpty())
             assertTrue(events.any { it.contains("已确认原模拟器启动身份") })
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun alreadyConnectedOfflineTransportTriggersDisconnectAndReconnect() = kotlinx.coroutines.test.runTest {
+        val adb = FakeAdb()
+        val touch = RecordingTouch()
+        val lost = CopyOnWriteArrayList<String>()
+        val serial = "127.0.0.1:16416"
+        val captures = AtomicInteger()
+        var disconnected = false
+        var reconnected = false
+        adb.handler = { call -> if (call.arguments == listOf("dumpsys", "window")) awaitCancellation() else adb.default(call) }
+        service(adb, touch, lost = lost).use { device ->
+            device.connect(serial)
+            adb.calls.clear()
+            adb.handler = { call -> when {
+                call.arguments == listOf("dumpsys", "window") -> awaitCancellation()
+                call.screenshot && captures.incrementAndGet() == 1 ->
+                    AdbResult.Failure(AdbFailureKind.ConnectionRefused, "ADB 数据帧不完整")
+                call.arguments == listOf("disconnect", serial) -> {
+                    disconnected = true
+                    FakeAdb.success("disconnected $serial")
+                }
+                call.arguments == listOf("connect", serial) -> {
+                    if (!disconnected) FakeAdb.success("already connected to $serial")
+                    else {
+                        reconnected = true
+                        FakeAdb.success("connected to $serial")
+                    }
+                }
+                !reconnected -> FakeAdb.success("offline")
+                else -> adb.default(call)
+            } }
+            assertEquals(2, device.capture().width)
+            assertTrue(adb.calls.any { it.arguments == listOf("disconnect", serial) })
+            assertTrue(lost.isEmpty() && device.state.value is DeviceConnectionState.Ready)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun failedConnectDuringRecoveryRetriesAndRecovers() = kotlinx.coroutines.test.runTest {
+        val adb = FakeAdb()
+        val touch = RecordingTouch()
+        val lost = CopyOnWriteArrayList<String>()
+        val serial = "127.0.0.1:16480"
+        val captures = AtomicInteger()
+        var connectCalls = 0
+        var reconnected = false
+        adb.handler = { call -> if (call.arguments == listOf("dumpsys", "window")) awaitCancellation() else adb.default(call) }
+        service(adb, touch, lost = lost).use { device ->
+            device.connect(serial)
+            adb.calls.clear()
+            val started = testScheduler.currentTime
+            adb.handler = { call -> when {
+                call.arguments == listOf("dumpsys", "window") -> awaitCancellation()
+                call.screenshot && captures.incrementAndGet() == 1 ->
+                    AdbResult.Failure(AdbFailureKind.DeviceNotFound, "device '$serial' not found")
+                call.arguments == listOf("connect", serial) -> {
+                    if (++connectCalls == 1) AdbResult.Failure(AdbFailureKind.ConnectionRefused, "cannot connect to $serial")
+                    else {
+                        reconnected = true
+                        FakeAdb.success("connected to $serial")
+                    }
+                }
+                !reconnected -> AdbResult.Failure(AdbFailureKind.DeviceNotFound, "device '$serial' not found")
+                else -> adb.default(call)
+            } }
+            assertEquals(2, device.capture().width)
+            assertEquals(2, connectCalls)
+            assertEquals(5_000L, testScheduler.currentTime - started)
+            assertTrue(lost.isEmpty() && device.state.value is DeviceConnectionState.Ready)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun postTransportRecoveryTransientGlitchDoesNotTriggerPrematureLoss() = kotlinx.coroutines.test.runTest {
+        val adb = FakeAdb()
+        val touch = RecordingTouch()
+        val lost = CopyOnWriteArrayList<String>()
+        val serial = "127.0.0.1:16416"
+        val captures = AtomicInteger()
+        adb.handler = { call -> if (call.arguments == listOf("dumpsys", "window")) awaitCancellation() else adb.default(call) }
+        service(adb, touch, lost = lost).use { device ->
+            device.clockNanos = { 1_000_000_000_000L + testScheduler.currentTime * 1_000_000L }
+            device.connect(serial)
+            adb.calls.clear()
+            val started = testScheduler.currentTime
+            adb.handler = { call -> when {
+                call.arguments == listOf("dumpsys", "window") -> awaitCancellation()
+                testScheduler.currentTime - started < 15_000 && !call.screenshot && call.arguments != listOf("connect", serial) && call.arguments != listOf("disconnect", serial) ->
+                    AdbResult.Failure(AdbFailureKind.DeviceOffline, "device offline")
+                call.arguments == listOf("connect", serial) -> FakeAdb.success("connected to $serial")
+                call.screenshot -> when (captures.incrementAndGet()) {
+                    1 -> AdbResult.Failure(AdbFailureKind.ConnectionRefused, "ADB 数据帧不完整")
+                    2 -> AdbResult.Failure(AdbFailureKind.Timeout, "post-recovery transient glitch")
+                    else -> adb.default(call)
+                }
+                else -> adb.default(call)
+            } }
+            val firstAttempt = runCatching { device.capture() }
+            assertTrue(firstAttempt.isFailure)
+            assertTrue(lost.isEmpty())
+            assertTrue(device.state.value is DeviceConnectionState.Ready)
+            delay(300)
+            assertEquals(2, device.capture().width)
+            assertEquals(CaptureMode.Raw, (device.state.value as DeviceConnectionState.Ready).device.selectedMode)
+            assertTrue(lost.isEmpty())
         }
     }
 
@@ -474,6 +584,117 @@ class AdbDeviceServiceTest {
             withTimeout(3000) { restarting.await() }
             withTimeout(1000) { device.disconnect() }
             assertEquals(DeviceConnectionState.Disconnected, device.state.value)
+        }
+    }
+
+    @Test fun transientAdbErrorDuringTouchRecoveryRetriesAndRecovers() = runBlocking {
+        val adb = FakeAdb()
+        val first = RecordingTouch()
+        val second = RecordingTouch()
+        val opens = AtomicInteger()
+        val events = CopyOnWriteArrayList<String>()
+        val lost = CopyOnWriteArrayList<String>()
+        val stateFlaked = AtomicInteger()
+        adb.handler = { call ->
+            if (call.arguments == listOf("get-state") && opens.get() == 2 && stateFlaked.incrementAndGet() == 1) {
+                AdbResult.Failure(AdbFailureKind.DeviceOffline, "device offline")
+            } else adb.default(call)
+        }
+        AdbDeviceService(adb, directory.root.toPath(), emptySet(), onEvent = events::add, onLost = lost::add,
+            leases = UserResourceLeases(directory.root.toPath().resolve("user-runtime")),
+            touchFactory = TouchConnectionFactory { _, _, _ ->
+                when (opens.incrementAndGet()) {
+                    1 -> first
+                    2 -> throw DeviceOperationException("transient touch adb drop", AdbFailureKind.DeviceOffline)
+                    else -> second
+                }
+            }).use { device ->
+            device.connect("fixture")
+            first.alive = false
+            withTimeout(6_000) {
+                while (opens.get() < 3 || events.none { it.contains("触控服务已恢复") }) delay(20)
+            }
+            assertTrue(lost.isEmpty())
+            assertEquals(TouchResult.Completed, device.back(FakeAdb.GAME))
+            assertEquals(1, second.gestures.size)
+        }
+    }
+
+    @Test fun resolveAndConnectResetStaleOfflineTcpTransport() = runBlocking {
+        val adb = FakeAdb()
+        val serial = "127.0.0.1:16416"
+        var disconnected = false
+        var connected = false
+        adb.handler = { call -> when (call.arguments) {
+            listOf("get-state") -> FakeAdb.success(if (connected) "device" else "offline")
+            listOf("disconnect", serial) -> {
+                disconnected = true
+                FakeAdb.success("disconnected $serial")
+            }
+            listOf("connect", serial) -> {
+                if (!disconnected) FakeAdb.success("already connected to $serial")
+                else {
+                    connected = true
+                    FakeAdb.success("connected to $serial")
+                }
+            }
+            else -> adb.default(call)
+        } }
+        service(adb).use { device ->
+            val resolved = device.resolveDevice(serial)
+            assertEquals("10000000-1111-2222-3333-444444444444", resolved.bootId)
+            assertTrue(disconnected)
+            disconnected = false
+            connected = false
+            adb.calls.clear()
+            device.connect(serial)
+            assertTrue(device.state.value is DeviceConnectionState.Ready)
+            assertTrue(disconnected)
+            val disconnectIndex = adb.calls.indexOfFirst { it.arguments == listOf("disconnect", serial) }
+            val connectIndex = adb.calls.indexOfFirst { it.arguments == listOf("connect", serial) }
+            assertTrue(disconnectIndex >= 0 && connectIndex > disconnectIndex)
+        }
+    }
+
+    @Test fun transientConnectionRefusedCapturePreservesPrimaryModeEvenWhenTransportAlreadyRecovered() = runBlocking {
+        val adb = FakeAdb()
+        val touch = RecordingTouch()
+        val events = CopyOnWriteArrayList<String>()
+        val lost = CopyOnWriteArrayList<String>()
+        val serial = "127.0.0.1:16416"
+        val captures = AtomicInteger()
+        adb.handler = { call -> if (call.arguments == listOf("dumpsys", "window")) awaitCancellation() else adb.default(call) }
+        service(adb, touch, events, lost).use { device ->
+            device.connect(serial)
+            assertEquals(CaptureMode.Raw, (device.state.value as DeviceConnectionState.Ready).device.selectedMode)
+            adb.calls.clear()
+            // 1st capture fails with ConnectionRefused, but get-state/boot_id are already healthy (monitor finished first);
+            // retry must stay on Raw without downgrading to Png.
+            adb.handler = { call -> when {
+                call.arguments == listOf("dumpsys", "window") -> awaitCancellation()
+                call.screenshot && captures.incrementAndGet() == 1 ->
+                    AdbResult.Failure(AdbFailureKind.ConnectionRefused, "ADB 数据帧不完整")
+                else -> adb.default(call)
+            } }
+            assertEquals(2, device.capture().width)
+            assertEquals(CaptureMode.Raw, (device.state.value as DeviceConnectionState.Ready).device.selectedMode)
+            assertFalse(events.any { it.contains("尝试备用截图") })
+
+            // When the same ConnectionRefused retry then hits a non-transport failure on Raw, it still falls back to Png.
+            captures.set(0)
+            events.clear()
+            adb.handler = { call -> when {
+                call.arguments == listOf("dumpsys", "window") -> awaitCancellation()
+                call.screenshot && captures.incrementAndGet() == 1 ->
+                    AdbResult.Failure(AdbFailureKind.ConnectionRefused, "ADB 数据帧不完整")
+                call.screenshot && "-p" !in call.arguments ->
+                    AdbResult.Failure(AdbFailureKind.NonZeroExit, "raw stream decode failure")
+                else -> adb.default(call)
+            } }
+            assertEquals(2, device.capture().width)
+            assertEquals(CaptureMode.Png, (device.state.value as DeviceConnectionState.Ready).device.selectedMode)
+            assertTrue(events.any { it.contains("尝试备用截图 Png") })
+            assertTrue(lost.isEmpty())
         }
     }
 }
