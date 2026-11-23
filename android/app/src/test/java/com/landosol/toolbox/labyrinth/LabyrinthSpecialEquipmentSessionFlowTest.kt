@@ -1,8 +1,10 @@
 package com.landosol.toolbox.labyrinth
 
 import com.landosol.toolbox.automation.AutomationBackendResult
+import com.landosol.toolbox.automation.AutomationMode
 import com.landosol.toolbox.automation.AutomationSessionId
 import com.landosol.toolbox.automation.AutomationSessionManager
+import com.landosol.toolbox.automation.AutomationSessionStartResult
 import com.landosol.toolbox.automation.SessionBoundActionExecutor
 import com.landosol.toolbox.automation.session.SessionBlockKind
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorId
@@ -1105,6 +1107,27 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
                     bossTeamTabs = bossTeamTabs,
                 )
             }
+            if (tab > 1) {
+                awaitActionLatch(session)
+                assertTrue(
+                    invoke(
+                        session,
+                        "handleUnconfirmedBattleTeamActionFrame",
+                        SESSION_ID,
+                        frame(teamPageObservation()),
+                        now - 1_500L,
+                    ) as Boolean,
+                )
+                assertFalse(
+                    invoke(
+                        session,
+                        "handleUnconfirmedBattleTeamActionFrame",
+                        SESSION_ID,
+                        frame(teamPageObservation()),
+                        now - 1_000L,
+                    ) as Boolean,
+                )
+            }
 
             // 入口：每个页签都要自己武装一次，而且只点一次入口。
             dispatched += feedFrame(session, frame(teamPageObservation()), now)
@@ -1143,6 +1166,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
                 },
                 lastExecutionKey(session),
             )
+            awaitActionLatch(session)
             now += 2_000L
         }
 
@@ -1349,8 +1373,10 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
         assertEquals(labyrinthBattleTeamSignature(teamIds), signature)
 
         // 战斗开始的帧序：编组页 → 战斗/结算页（连续两帧落在别的页面 ⇒ 上一轮标记清零）→ 下一场编组页。
-        assertFalse(flowFrame(session, teamPageFrame(null, pageState = LabyrinthEntryPageState.NODE_SELECTION), 2_000L))
-        assertFalse(flowFrame(session, teamPageFrame(null, pageState = LabyrinthEntryPageState.NODE_SELECTION), 2_200L))
+        val nodeFrame = teamPageFrame(null, pageState = LabyrinthEntryPageState.NODE_SELECTION)
+        invoke(session, "acknowledgeBattleTeamActionProgress", nodeFrame)
+        assertFalse(flowFrame(session, nodeFrame, 2_000L))
+        assertFalse(flowFrame(session, nodeFrame, 2_200L))
         assertEquals(LabyrinthSpecialEquipmentFlowStage.INACTIVE, flowStage(session))
 
         // 第二场第一帧：编组完全相同 ⇒ 不武装、零点击（这一帧没有可派发的开战按钮，
@@ -1520,6 +1546,10 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
         clock: () -> Long = System::currentTimeMillis,
     ): LabyrinthEntryRecognitionSession {
         val manager = AutomationSessionManager()
+        val started = runBlocking {
+            manager.start(AutomationMode.LABYRINTH, dryRun = false)
+        } as AutomationSessionStartResult.Started
+        assertEquals(SESSION_ID, started.session.id)
         val session = LabyrinthEntryRecognitionSession(
             sessionManager = manager,
             processorFactory = { { error("测试不投喂帧") } },
@@ -1654,6 +1684,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
         setBattleTeamRecommendation(created, readyRecommendation(ids))
         if (kind == LabyrinthCombatKind.BOSS) {
             setField(created, "bossEditorPreparationStage", LabyrinthBossEditorPreparationStage.COMPLETE)
+            setField(created, "bossEditorTeamIndex", 1)
         }
         bossTeamMode?.let { setField(created, "bossTeamMode", it) }
         bossMultiTeamTargetCount?.let { setField(created, "bossMultiTeamTargetCount", it) }
@@ -1821,7 +1852,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
     /**
      * 等待单动作锁（`actionInFlight`）由真实动作协程释放。
      *
-     * 真实运行时由动作协程的 finally 释放；单元测试里动作只会在无会话的后端上得到 `StaleSession`，
+     * 真实运行时由动作协程的 finally 释放；单元测试里动作在后台协程中异步执行，
      * 下一帧必须等到上一动作及切队回执清理完成，不能替换锁后与仍在运行的协程并发写状态。
      */
     private fun awaitActionLatch(session: Any) = runBlocking {
@@ -1896,7 +1927,7 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
     }
 
     private companion object {
-        const val SESSION_ID_VALUE = 7L
+        const val SESSION_ID_VALUE = 1L
         const val MISS_REASON = "special-equipment-entry-button-not-found"
         val SESSION_ID = AutomationSessionId(SESSION_ID_VALUE)
     }

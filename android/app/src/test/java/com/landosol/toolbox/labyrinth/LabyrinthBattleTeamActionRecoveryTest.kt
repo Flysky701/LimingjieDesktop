@@ -4,6 +4,7 @@ import com.landosol.toolbox.automation.AutomationBackendResult
 import com.landosol.toolbox.automation.AutomationSessionId
 import com.landosol.toolbox.automation.AutomationSessionManager
 import com.landosol.toolbox.automation.SessionBoundActionExecutor
+import com.landosol.toolbox.automation.accessibility.GAME_NOT_FOREGROUND_REASON
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorId
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorMatch
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
@@ -227,23 +228,99 @@ class LabyrinthBattleTeamActionRecoveryTest {
         }
     }
 
+    @Test
+    fun `swallowed start with surplus roster never dispatches bogus edits during three-to-four-second ack window`() =
+        runBlocking {
+            withSession(
+                specialEquipment = false,
+                roleCount = 10,
+                vanguardIndices = setOf(1, 6),
+            ) { session, _ ->
+                val frame = teamFrame()
+                val firstTeamIds = roleIds.toSet()
+
+                assertEquals("编组完成，开始战斗", feedFrame(session, frame, 1_000L))
+                awaitActions(session)
+                assertEquals(firstTeamIds, committedIds(session))
+                assertNotNull(pendingBattleTeamAction(session))
+
+                // 3.0s–4.0s window: battleWait START_PAGE_GRACE_MILLIS (3s) has elapsed while START_BATTLE ACK (4s)
+                // is still pending and surplus roster yields a 2nd recommended team (r6..r10). Never click edits.
+                for (now in listOf(1_700L, 3_100L, 4_300L, 4_700L)) {
+                    assertNull("unexpected action at $now", feedFrame(session, frame, now))
+                    awaitActions(session)
+                    assertEquals(firstTeamIds, committedIds(session))
+                }
+                assertEquals(
+                    listOf("r6", "r7", "r8", "r9", "r10"),
+                    session.state.value.battleTeamRecommendation?.members?.map { it.characterId },
+                )
+
+                // Past 4s ACK timeout -> releases commit cleanly and retries START_BATTLE.
+                assertNull(feedFrame(session, frame, 5_300L))
+                assertTrue(committedIds(session).isEmpty())
+                assertNull(pendingBattleTeamAction(session))
+
+                assertEquals("编组完成，开始战斗", feedFrame(session, frame, 5_900L))
+                awaitActions(session)
+                assertEquals(firstTeamIds, committedIds(session))
+            }
+        }
+
+    @Test
+    fun `rejected start battle clears pending state and normal team memory immediately`() = runBlocking {
+        var rejectStart = true
+        withSession(
+            specialEquipment = false,
+            backend = {
+                if (rejectStart) AutomationBackendResult.Rejected(GAME_NOT_FOREGROUND_REASON)
+                else AutomationBackendResult.Completed
+            },
+        ) { session, _ ->
+            val frame = teamFrame()
+
+            assertEquals("编组完成，开始战斗", feedFrame(session, frame, 1_000L))
+            awaitActions(session)
+
+            assertNull(pendingBattleTeamAction(session))
+            assertTrue(committedIds(session).isEmpty())
+            assertNull(field(session, "lastNormalBattleTeamSignature").get(session))
+            assertEquals(Long.MIN_VALUE, lastSessionActionAt(session))
+
+            // Next frame retries immediately once foreground recovers (does not wait 4s ACK timeout).
+            rejectStart = false
+            assertEquals("编组完成，开始战斗", feedFrame(session, frame, 1_600L))
+            awaitActions(session)
+            assertEquals(roleIds.toSet(), committedIds(session))
+        }
+    }
+
     // ---- 会话级脚手架 ----
 
     private suspend fun withSession(
         specialEquipment: Boolean = true,
+        roleCount: Int = 5,
+        vanguardIndices: Set<Int> = setOf(1),
+        backend: suspend () -> AutomationBackendResult = { AutomationBackendResult.Completed },
         body: suspend (LabyrinthEntryRecognitionSession, AutomationSessionManager) -> Unit,
     ) {
         val manager = AutomationSessionManager()
-        val profiles = (1..5).associate { index ->
+        val profiles = (1..roleCount).associate { index ->
             val id = "r$index"
-            id to role(id, "角色$index", index, reliableVanguard = if (index == 1) 100.0 else 0.0)
+            id to role(
+                id = id,
+                name = "角色$index",
+                position = index,
+                reliableVanguard = if (index in vanguardIndices) 100.0 else 0.0,
+                userScore = if (index <= 5) 80.0 else 75.0,
+            )
         }
         var fakeClock = 0L
         val session = LabyrinthEntryRecognitionSession(
             sessionManager = manager,
             captureActive = { true },
             processorFactory = { { error("测试不投喂截图帧") } },
-            actionExecutor = SessionBoundActionExecutor(manager) { AutomationBackendResult.Completed },
+            actionExecutor = SessionBoundActionExecutor(manager) { backend() },
             actionsAvailable = { true },
             clock = { fakeClock },
             battleTeamRecommendationPlanner = recommendationPlanner(profiles),
@@ -259,10 +336,10 @@ class LabyrinthBattleTeamActionRecoveryTest {
             set(session, "entryPhaseComplete", true)
             setState(session) { state ->
                 state.copy(
-                    joinedCharacters = roleIds.mapIndexed { index, id ->
+                    joinedCharacters = (1..roleCount).mapIndexed { index, i ->
                         LabyrinthJoinedCharacter(
-                            characterId = id,
-                            displayName = "角色${index + 1}",
+                            characterId = "r$i",
+                            displayName = "角色$i",
                             orderIndex = index,
                             confidence = 0.95,
                             firstSeenAt = 0L,
@@ -510,6 +587,7 @@ class LabyrinthBattleTeamActionRecoveryTest {
         name: String,
         position: Int,
         reliableVanguard: Double = 0.0,
+        userScore: Double = 80.0,
     ) = LabyrinthRoleProfile(
         characterId = id,
         displayName = name,
@@ -517,7 +595,7 @@ class LabyrinthBattleTeamActionRecoveryTest {
         attribute = LabyrinthCharacterAttribute.LIGHT,
         damageType = LabyrinthRoleDamageType.PHYSICAL,
         position = position,
-        userScore = 80.0,
+        userScore = userScore,
         userRatingCount = 5,
         physicalDamagePotential = 80.0,
         magicDamagePotential = 0.0,

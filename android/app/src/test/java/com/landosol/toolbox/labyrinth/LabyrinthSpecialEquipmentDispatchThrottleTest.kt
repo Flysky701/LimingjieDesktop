@@ -1,8 +1,10 @@
 package com.landosol.toolbox.labyrinth
 
 import com.landosol.toolbox.automation.AutomationBackendResult
+import com.landosol.toolbox.automation.AutomationMode
 import com.landosol.toolbox.automation.AutomationSessionId
 import com.landosol.toolbox.automation.AutomationSessionManager
+import com.landosol.toolbox.automation.AutomationSessionStartResult
 import com.landosol.toolbox.automation.SessionBoundActionExecutor
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorId
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorMatch
@@ -19,7 +21,10 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import com.landosol.toolbox.labyrinth.vision.LabyrinthSpecialEquipmentObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthSpecialEquipmentStage
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -425,6 +430,10 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
         settings: LabyrinthStrategySettings?,
     ): LabyrinthEntryRecognitionSession {
         val manager = AutomationSessionManager()
+        val started = runBlocking {
+            manager.start(AutomationMode.LABYRINTH, dryRun = false)
+        } as AutomationSessionStartResult.Started
+        assertEquals(SESSION_ID, started.session.id)
         val created = LabyrinthEntryRecognitionSession(
             sessionManager = manager,
             processorFactory = { { error("测试不投喂帧") } },
@@ -521,8 +530,8 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
 
     /** 按真实顺序喂一帧编组页：先过特别装备闸门，被交还时再走既有编组/开战路径。 */
     private fun feedFrame(session: Any, result: LabyrinthEntryFrameResult, now: Long): String? {
-        // 真实运行里单动作锁由动作协程释放；测试里显式放锁，让每一次派发都可确定复现。
-        releaseActionLatch(session)
+        // 等待上一帧的异步动作协程完成，避免下一帧 authorizeBattleAction 提前撤销未执行的 kernelPermit。
+        awaitActionLatch(session)
         if (flowFrame(session, result, now)) return frameActionLabel(session)
         invoke(session, "handleBattleTeamSelectionExecution", SESSION_ID, result, 1920, 1080, now)
         return frameActionLabel(session)
@@ -686,10 +695,15 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
         stateFlow.value = stateFlow.value.copy(battleTeamRecommendation = recommendation)
     }
 
+    private fun awaitActionLatch(session: Any) = runBlocking {
+        val inFlight = field(session, "actionInFlight").get(session) as AtomicBoolean
+        withTimeout(5_000) { while (inFlight.get()) delay(1) }
+    }
+
     /**
      * 放掉单动作锁（`actionInFlight`）。
      *
-     * 真实运行时由动作协程的 finally 释放；单元测试里动作只会得到 `StaleSession`，释放时机不确定，
+     * 真实运行时由动作协程的 finally 释放；单元测试里动作在后台协程中异步执行，释放时机不确定，
      * 所以需要连续两次派发的用例显式放锁，断言才是确定性的。
      */
     private fun releaseActionLatch(session: Any) {
@@ -746,6 +760,6 @@ class LabyrinthSpecialEquipmentDispatchThrottleTest {
 
     private companion object {
         const val MISS_REASON = "special-equipment-entry-button-not-found"
-        val SESSION_ID = AutomationSessionId(7L)
+        val SESSION_ID = AutomationSessionId(1L)
     }
 }

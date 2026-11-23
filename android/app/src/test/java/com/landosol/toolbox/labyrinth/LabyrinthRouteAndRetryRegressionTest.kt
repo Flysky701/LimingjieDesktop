@@ -5,6 +5,7 @@ import com.landosol.toolbox.automation.AutomationSessionId
 import com.landosol.toolbox.automation.AutomationSessionManager
 import com.landosol.toolbox.automation.SessionBoundActionExecutor
 import com.landosol.toolbox.labyrinth.batch.LabyrinthRunTerminalEvent
+import com.landosol.toolbox.labyrinth.concurrent.LabyrinthFourThreadRuntime
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
 import com.landosol.toolbox.labyrinth.node.NodeTemplateSet
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorId
@@ -32,6 +33,7 @@ import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -220,29 +222,122 @@ class LabyrinthRouteAndRetryRegressionTest {
         }
     }
 
+    @Test
+    fun `balanced mode large roster battle failure offloads retry feasibility off T2 and retries`() = runBlocking {
+        val harness = Harness(roleCount = 14, rerollAfterThreeFailures = true, balancedMode = true)
+        try {
+            harness.start(runId = "run-balanced-t2-retry")
+            harness.enterExCombat(area = 3)
+            harness.seedCurrentTeam(listOf("r1", "r2", "r3", "r4", "r5"))
+
+            harness.feed(failureFrame(), at = 1_000L)
+            harness.feed(failureFrame(), at = 1_300L)
+            assertEquals(LabyrinthEntryRecognitionStatus.RUNNING, harness.session.state.value.status)
+            assertEquals(0, harness.executedActions.get())
+
+            harness.awaitBattleRetryPlanningIdle()
+            val readyAt = harness.battleRetryPlanningReadyAt()
+            harness.feed(failureFrame(), at = maxOf(1_600L, readyAt + 100L))
+            harness.awaitActions()
+
+            assertEquals(LabyrinthEntryRecognitionStatus.RUNNING, harness.session.state.value.status)
+            assertEquals(1, harness.executedActions.get())
+            assertEquals(1, harness.get("battleRetryCount"))
+            assertEquals(true, harness.get("awaitingRetryBattleAfterFailure"))
+        } finally {
+            harness.close()
+        }
+    }
+
+    @Test
+    fun `balanced mode battle failure hands off when async retry feasibility is unavailable`() = runBlocking {
+        // Subcase 1: 14-role pool (>= PARALLEL_MIN_COMBINATIONS) where parallel search finds no legal retry team.
+        val largePool = Harness(
+            roleCount = 14,
+            rerollAfterThreeFailures = false,
+            balancedMode = true,
+            frontlineSurvivalGateEnabled = true,
+            backmostOnlyVanguard = true,
+        )
+        try {
+            largePool.start(runId = "run-balanced-t2-unavail-14")
+            largePool.enterExCombat(area = 3)
+            largePool.seedCurrentTeam(listOf("r1", "r2", "r3", "r4", "r5"))
+
+            largePool.feed(failureFrame(), at = 1_000L)
+            largePool.feed(failureFrame(), at = 1_300L)
+            largePool.awaitBattleRetryPlanningIdle()
+            val readyAt = largePool.battleRetryPlanningReadyAt()
+            largePool.feed(failureFrame(), at = maxOf(1_600L, readyAt + 100L))
+            largePool.awaitStopped()
+            largePool.awaitTerminalEvent()
+
+            assertEquals(0, largePool.executedActions.get())
+            assertEquals(
+                listOf(LabyrinthRunTerminalEvent.FailedMaxRetry("run-balanced-t2-unavail-14")),
+                largePool.terminalEvents.toList(),
+            )
+            assertTrue(largePool.session.state.value.message.orEmpty().contains("无可替换的未失败重试阵容"))
+        } finally {
+            largePool.close()
+        }
+
+        // Subcase 2: short 4-role pool exhausted in balanced mode still hands off to batch immediately.
+        val shortPool = Harness(
+            roleCount = 4,
+            rerollAfterThreeFailures = false,
+            balancedMode = true,
+        )
+        try {
+            shortPool.start(runId = "run-balanced-t2-unavail-4")
+            shortPool.enterExCombat(area = 1)
+            shortPool.seedCurrentTeam(listOf("r1", "r2", "r3", "r4"))
+
+            shortPool.feed(failureFrame(), at = 1_000L)
+            shortPool.feed(failureFrame(), at = 1_300L)
+            shortPool.awaitBattleRetryPlanningIdle()
+            val readyAt = shortPool.battleRetryPlanningReadyAt()
+            shortPool.feed(failureFrame(), at = maxOf(1_600L, readyAt + 100L))
+            shortPool.awaitStopped()
+            shortPool.awaitTerminalEvent()
+
+            assertEquals(0, shortPool.executedActions.get())
+            assertEquals(
+                listOf(LabyrinthRunTerminalEvent.FailedMaxRetry("run-balanced-t2-unavail-4")),
+                shortPool.terminalEvents.toList(),
+            )
+        } finally {
+            shortPool.close()
+        }
+    }
+
     private class Harness(
         private val roleCount: Int,
         private val rerollAfterThreeFailures: Boolean = true,
+        private val balancedMode: Boolean = false,
+        private val frontlineSurvivalGateEnabled: Boolean = false,
+        private val backmostOnlyVanguard: Boolean = false,
     ) {
         val manager = AutomationSessionManager()
         val clock = AtomicLong(0L)
         val executedActions = AtomicInteger(0)
         val rerollRequested = AtomicBoolean(false)
         val terminalEvents = CopyOnWriteArrayList<LabyrinthRunTerminalEvent>()
-        private val allProfiles = (1..7).associate { i ->
+        private val allProfiles = (1..maxOf(7, roleCount)).associate { i ->
             val id = "r$i"
+            val isVanguard = if (backmostOnlyVanguard) i == roleCount else i == 1
             id to LabyrinthRoleProfile(
                 characterId = id,
                 displayName = "角色$i",
-                roleClass = if (i == 1) "掩护者" else "攻击者",
+                roleClass = if (isVanguard) "掩护者" else "攻击者",
                 attribute = LabyrinthCharacterAttribute.LIGHT,
                 damageType = LabyrinthRoleDamageType.PHYSICAL,
-                position = i,
+                position = if (backmostOnlyVanguard && isVanguard) 999 else i,
                 userScore = 90.0 - i,
                 userRatingCount = 5,
                 physicalDamagePotential = 80.0,
                 magicDamagePotential = 0.0,
-                functions = LabyrinthRoleFunctions(reliableVanguard = if (i == 1) 100.0 else 0.0),
+                functions = LabyrinthRoleFunctions(reliableVanguard = if (isVanguard) 100.0 else 0.0),
             )
         }
         private val planner = LabyrinthBattleTeamRecommendationPlanner(
@@ -254,6 +349,7 @@ class LabyrinthRouteAndRetryRegressionTest {
                             attributeDamageBonus = mapOf(1 to 0.0, 2 to 0.08, 3 to 0.16, 4 to 0.25, 5 to 0.75),
                         ),
                     ),
+                    searchThreads = if (balancedMode) maxOf(2, LabyrinthFourThreadRuntime.cpuWorkerBudget) else 1,
                 ),
                 LabyrinthTeamPlanSearchConfig(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
             ),
@@ -278,29 +374,40 @@ class LabyrinthRouteAndRetryRegressionTest {
                 true
             },
             runTerminalListener = { event -> terminalEvents += event },
+            fastProcessorFactory = if (balancedMode) ({ { error("direct frame feed only") } }) else null,
         )
 
         suspend fun start(runId: String?) {
             assertTrue(session.startAutomation(accountId = 1L, runId = runId) is LabyrinthEntryRecognitionStartResult.Started)
-            set("entryPhaseComplete", true)
-            (get("nodeInitStarted") as AtomicBoolean).set(true)
-            set("rerollAfterThreeBattleFailures", rerollAfterThreeFailures)
-            state { current ->
-                current.copy(
-                    joinedCharacters = (1..roleCount).map { i ->
-                        LabyrinthJoinedCharacter("r$i", "角色$i", i - 1, 0.95, 0L, 0L)
-                    },
-                )
+            suspend fun configure() {
+                set("entryPhaseComplete", true)
+                (get("nodeInitStarted") as AtomicBoolean).set(true)
+                set("rerollAfterThreeBattleFailures", rerollAfterThreeFailures)
+                if (frontlineSurvivalGateEnabled) {
+                    set("battleStrategySettingsSnapshot", LabyrinthStrategySettings(frontlineSurvivalGateEnabled = true))
+                }
+                state { current ->
+                    current.copy(
+                        joinedCharacters = (1..roleCount).map { i ->
+                            LabyrinthJoinedCharacter("r$i", "角色$i", i - 1, 0.95, 0L, 0L)
+                        },
+                    )
+                }
             }
+            if (balancedMode) withContext(LabyrinthFourThreadRuntime.controlDispatcher) { configure() } else configure()
         }
 
-        fun enterExCombat() {
-            set("combatContext", LabyrinthCombatContext(LabyrinthCombatKind.EX))
-            val stageField = session.javaClass.getDeclaredField("effectiveCharacterScanStage").apply { isAccessible = true }
-            val completeStage = stageField.type.enumConstants.first { (it as Enum<*>).name == "COMPLETE" }
-            stageField.set(session, completeStage)
-            val stampMethod = session.javaClass.getDeclaredMethod("currentEffectiveScanRosterStamp").apply { isAccessible = true }
-            set("effectiveCharacterScanRosterStamp", stampMethod.invoke(session))
+        suspend fun enterExCombat(area: Int? = null) {
+            fun configure() {
+                if (area != null) set("activeNodeArea", area)
+                set("combatContext", LabyrinthCombatContext(LabyrinthCombatKind.EX))
+                val stageField = session.javaClass.getDeclaredField("effectiveCharacterScanStage").apply { isAccessible = true }
+                val completeStage = stageField.type.enumConstants.first { (it as Enum<*>).name == "COMPLETE" }
+                stageField.set(session, completeStage)
+                val stampMethod = session.javaClass.getDeclaredMethod("currentEffectiveScanRosterStamp").apply { isAccessible = true }
+                set("effectiveCharacterScanRosterStamp", stampMethod.invoke(session))
+            }
+            if (balancedMode) withContext(LabyrinthFourThreadRuntime.controlDispatcher) { configure() } else configure()
         }
 
         @Suppress("UNCHECKED_CAST")
@@ -328,26 +435,47 @@ class LabyrinthRouteAndRetryRegressionTest {
 
         suspend fun feed(result: LabyrinthEntryFrameResult, at: Long) {
             val id = session.state.value.sessionId ?: return
-            clock.set(at)
-            suspendCoroutine<Unit> { continuation ->
-                val method = session.javaClass.declaredMethods.first {
-                    it.name.startsWith("processFrameResult") && it.parameterCount == 6
-                }.apply { isAccessible = true }
-                val rawArgs = arrayOf<Any?>(id, result, 1920, 1080, at, continuation)
-                val adapted = method.parameterTypes.mapIndexed { index, type ->
-                    val arg = rawArgs[index]
-                    when {
-                        type.name == "long" -> (arg as? AutomationSessionId)?.value ?: (arg as Number).toLong()
-                        type.name == "int" -> (arg as Number).toInt()
-                        else -> arg
+            suspend fun deliver() {
+                clock.set(at)
+                if (balancedMode) {
+                    set("balancedDetailCapturedAt", at)
+                    set("balancedDetailWidth", 1920)
+                    set("balancedDetailHeight", 1080)
+                    set("balancedDetailEpoch", get("balancedSceneEpoch"))
+                }
+                suspendCoroutine<Unit> { continuation ->
+                    val method = session.javaClass.declaredMethods.first {
+                        it.name.startsWith("processFrameResult") && it.parameterCount == 6
+                    }.apply { isAccessible = true }
+                    val rawArgs = arrayOf<Any?>(id, result, 1920, 1080, at, continuation)
+                    val adapted = method.parameterTypes.mapIndexed { index, type ->
+                        val arg = rawArgs[index]
+                        when {
+                            type.name == "long" -> (arg as? AutomationSessionId)?.value ?: (arg as Number).toLong()
+                            type.name == "int" -> (arg as Number).toInt()
+                            else -> arg
+                        }
+                    }.toTypedArray()
+                    try {
+                        if (method.invoke(session, *adapted) !== COROUTINE_SUSPENDED) continuation.resume(Unit)
+                    } catch (e: InvocationTargetException) {
+                        continuation.resumeWithException(e.targetException)
                     }
-                }.toTypedArray()
-                try {
-                    if (method.invoke(session, *adapted) !== COROUTINE_SUSPENDED) continuation.resume(Unit)
-                } catch (e: InvocationTargetException) {
-                    continuation.resumeWithException(e.targetException)
                 }
             }
+            if (balancedMode) withContext(LabyrinthFourThreadRuntime.controlDispatcher) { deliver() } else deliver()
+        }
+
+        suspend fun awaitBattleRetryPlanningIdle() = withTimeout(3_000L) {
+            while (withContext(LabyrinthFourThreadRuntime.controlDispatcher) {
+                (get("battleRetryPlanning") as LabyrinthBalancedPlanningSlot<*, *>).busy
+            }) {
+                delay(5L)
+            }
+        }
+
+        suspend fun battleRetryPlanningReadyAt(): Long = withContext(LabyrinthFourThreadRuntime.controlDispatcher) {
+            (get("battleRetryPlanning") as LabyrinthBalancedPlanningSlot<*, *>).readyAt
         }
 
         suspend fun awaitActions() {
