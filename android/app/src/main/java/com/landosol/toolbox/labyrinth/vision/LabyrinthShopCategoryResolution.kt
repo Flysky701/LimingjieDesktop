@@ -1,8 +1,8 @@
 package com.landosol.toolbox.labyrinth.vision
 
 /**
- * Per visible title, at most three crop variants. A variant is retired only once its OCR read has
- * actually completed (or a long backstop elapses), never merely because time passed.
+ * Per visible title, at most three crop variants. Reads advance on completion, with backstops
+ * for a silent engine and for repeated fingerprint changes that invalidate the reads.
  *
  * OCR runs on one shared serial queue at 2-5 s per read, so a fixed 3 s-per-round wall clock
  * retired titles whose only read was still in flight: 2026-09-21 bundle 134750 shows all three
@@ -11,14 +11,36 @@ package com.landosol.toolbox.labyrinth.vision
  */
 internal class LabyrinthShopCategoryResolution {
     private data class State(val fingerprint: Long, var attempt: Int = 0, var variantStartedAt: Long)
+    private data class JitterState(val firstSeenAt: Long, var lastFingerprint: Long, var transitions: Int = 0) {
+        fun record(fingerprint: Long) {
+            if (lastFingerprint == fingerprint) return
+            lastFingerprint = fingerprint
+            transitions++
+        }
+
+        fun isExhausted(now: Long): Boolean =
+            transitions >= MAX_FINGERPRINT_TRANSITIONS && now - firstSeenAt >= SLOT_JITTER_BUDGET_MILLIS
+    }
+
     private val slots = mutableMapOf<String, State>()
+    private val jitter = mutableMapOf<String, JitterState>()
+    private val variant2Churn = mutableMapOf<String, JitterState>()
 
     /** When each slot first showed a nameless imprint; see [labelGraceOpen]. */
     private val labelGraceStartedAt = mutableMapOf<String, Long>()
 
     fun clear() {
         slots.clear()
+        jitter.clear()
+        variant2Churn.clear()
         labelGraceStartedAt.clear()
+    }
+
+    fun resetSlot(slot: String) {
+        slots.remove(slot)
+        jitter.remove(slot)
+        variant2Churn.remove(slot)
+        labelGraceStartedAt.remove(slot)
     }
 
     /** A role imprint whose role name OCR did not recover, so it cannot be bought yet. */
@@ -37,12 +59,26 @@ internal class LabyrinthShopCategoryResolution {
         return now - startedAt < LABEL_GRACE_MILLIS
     }
 
-    /** The current crop-variant index (0..[MAX_ATTEMPTS]) for this slot. Does not advance itself. */
+    /** The current crop-variant index (0..[MAX_ATTEMPTS]), including exhaustion from jitter. */
     fun attempt(slot: String, fingerprint: Long, now: Long): Int {
+        jitter.getOrPut(slot) { JitterState(now, fingerprint) }.record(fingerprint)
         val state = slots[slot]?.takeIf { it.fingerprint == fingerprint }
-            ?: State(fingerprint, variantStartedAt = now).also { slots[slot] = it }
-        return state.attempt
+            ?: State(fingerprint, variantStartedAt = now).also {
+                slots[slot] = it
+                variant2Churn.remove(slot)
+            }
+        return if (isJitterExhausted(slot, now)) MAX_ATTEMPTS else state.attempt
     }
+
+    /** The expanded crop can change even while the title is stable. It shares the slot's time budget. */
+    fun noteVariantChurn(slot: String, ocrFingerprint: Long, now: Long): Int {
+        val title = jitter.getValue(slot)
+        variant2Churn.getOrPut(slot) { JitterState(title.firstSeenAt, ocrFingerprint) }.record(ocrFingerprint)
+        return if (isJitterExhausted(slot, now)) MAX_ATTEMPTS else slots.getValue(slot).attempt
+    }
+
+    fun isJitterExhausted(slot: String, now: Long): Boolean =
+        jitter[slot]?.isExhausted(now) == true || variant2Churn[slot]?.isExhausted(now) == true
 
     /**
      * Retire the current variant and move to the next only when its OCR actually finished
@@ -85,6 +121,7 @@ internal class LabyrinthShopCategoryResolution {
             },
             relicMatch = if (imprint) null else item.relicMatch,
             roleImprintLabel = label,
+            imprintLabelPending = false,
             choiceRoleImprint = imprint && LabyrinthShopItemText.isChoiceRoleImprint(text),
             titleText = text,
             titleEvidenceId = evidenceId,
@@ -99,6 +136,8 @@ internal class LabyrinthShopCategoryResolution {
 
     private companion object {
         const val MAX_ATTEMPTS = 3
+        const val MAX_FINGERPRINT_TRANSITIONS = 3
+        const val SLOT_JITTER_BUDGET_MILLIS = 10_000L
         /**
          * How long the whole OCR engine may produce nothing before a waiting title gives up its
          * current crop. Roughly three times the slowest single read observed on the reporting

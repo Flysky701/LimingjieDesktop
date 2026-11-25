@@ -1,5 +1,6 @@
 package com.landosol.toolbox.labyrinth.kernel.strategy
 
+import com.landosol.toolbox.labyrinth.LabyrinthBattleModelStyle
 import com.landosol.toolbox.labyrinth.LabyrinthCharacterAttribute
 import com.landosol.toolbox.labyrinth.LabyrinthRelicMark
 import com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionContext
@@ -7,7 +8,10 @@ import com.landosol.toolbox.labyrinth.LabyrinthRoleProfile
 import com.landosol.toolbox.labyrinth.LabyrinthTeamScorer
 import com.landosol.toolbox.labyrinth.canonicalLabyrinthRoleId
 import com.landosol.toolbox.labyrinth.withKnownRoleIdentities
+import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.ln
+import kotlin.math.sqrt
 
 /** Database unit_id is the catalog key. The existing scorer uses the supplied character profile. */
 data class BattleRosterUnit(
@@ -29,6 +33,8 @@ data class BattleValueContext(
     val reviveAvailable: Boolean = false,
     /** Optional observed wave, in catalog slot order. */
     val enemyIds: List<Int>? = null,
+    val strategyStyle: LabyrinthBattleModelStyle = LabyrinthBattleModelStyle.BALANCED,
+    val isBossBattle: Boolean = false,
 ) {
     init {
         require(ownedUnits.all { it.unitId > 0 } && ownedUnits.distinctBy { it.unitId }.size == ownedUnits.size)
@@ -43,6 +49,43 @@ data class BattleValue(
     val pWin: Double, val pTimeout: Double, val pWipe: Double,
     val damageMean: Double, val damageLogStd: Double, val winRemTime: Double,
 )
+
+internal fun battleTeamUtility(
+    value: BattleValue,
+    style: LabyrinthBattleModelStyle,
+    isBossBattle: Boolean,
+    reviveAvailable: Boolean,
+): Double {
+    val p = value.pWin.coerceIn(0.0, 1.0)
+    val beta = if (!isBossBattle && reviveAvailable) {
+        style.speedUtilityWeight * style.reviveSpeedMultiplier
+    } else style.speedUtilityWeight
+    return ln(maxOf(p, 1e-6)) + beta * p * value.winRemTime.coerceIn(0.0, 1.0)
+}
+
+internal fun combinedMultiTeamPassProb(values: List<BattleValue>): Double {
+    if (values.isEmpty()) return 0.0
+    if (values.size == 1) return values[0].pWin.coerceIn(0.0, 1.0)
+    val pIndep = 1.0 - values.fold(1.0) { miss, value -> miss * (1.0 - value.pWin.coerceIn(0.0, 1.0)) }
+    val totalDamage = values.sumOf { it.damageMean.coerceIn(0.0, 1.0) }
+    val totalVar = values.sumOf {
+        val std = exp(it.damageLogStd).coerceIn(0.15, 0.35)
+        std * std
+    }
+    val pDamage = if (totalDamage <= 0.0) 0.0
+        else normalCdf((totalDamage - 1.15) / sqrt(totalVar)).coerceAtMost(0.98)
+    return maxOf(pIndep, pDamage).coerceIn(0.0, 1.0)
+}
+
+private fun normalCdf(z: Double): Double {
+    // Abramowitz & Stegun 7.1.26, with absolute erf error below 1.5e-7.
+    val x = abs(z) / sqrt(2.0)
+    val t = 1.0 / (1.0 + 0.3275911 * x)
+    val polynomial =
+        (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t
+    val tail = polynomial * exp(-x * x) / 2.0
+    return if (z < 0.0) tail else 1.0 - tail
+}
 
 fun interface LabyrinthBattleValueEstimator {
     /** One result per candidate in input order. A team has 1–5 distinct owned database unit IDs. */
@@ -95,6 +138,8 @@ data class BattleModelAssessment(
     val jointWinProbability: Double? = null,
     val plannedTeams: List<List<String>> = emptyList(),
     val teamWinProbabilities: List<Double> = emptyList(),
+    val autoDowngradedToMultiTeam: Boolean = false,
+    val adoptionNote: String? = null,
 )
 
 data class BattleValueEstimate(
@@ -153,6 +198,8 @@ internal fun buildBattleValueContext(
     markStacksByMark: Map<LabyrinthRelicMark, Int>,
     alphaRupee: Int?,
     reviveAvailable: Boolean,
+    strategyStyle: LabyrinthBattleModelStyle = LabyrinthBattleModelStyle.BALANCED,
+    isBossBattle: Boolean = false,
 ): BattleValueContext? {
     val canonicalIds = acquiredCharacterIds.map(::canonicalLabyrinthRoleId).distinct()
     val knownProfiles = profiles.withKnownRoleIdentities(canonicalIds)
@@ -173,6 +220,7 @@ internal fun buildBattleValueContext(
         questId = questId, area = area, difficulty = difficulty, ownedUnits = ownedUnits, ruleContext = ruleContext,
         relicIds = relicIds, markStacks = labyrinthMarkStacksForModel(markStacksByMark),
         alphaRupee = alphaRupee, reviveAvailable = reviveAvailable,
+        strategyStyle = strategyStyle, isBossBattle = isBossBattle,
     )
 }
 

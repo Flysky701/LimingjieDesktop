@@ -18,7 +18,8 @@ import java.util.concurrent.ConcurrentHashMap
  * resolution:VisualResolutionStatus; ocr:OcrEngineStatus
  * credentials:{accountIdString:Boolean}; identity:DeviceIdentitySnapshot?; gameClient:GameClientResolution
  * database:String; foreground:String?; connectionActivity:String?; connectionMessage:String?
- * devices:[DeviceDescriptor]; history:[DesktopRunRecord]; logs:[UserLogLine] (last 50)
+ * devices:[DeviceDescriptor]; history:[DesktopRunRecord]; logs:[UserLogLine] (compact tail, last 50)
+ * keyLogs:[UserLogLine] (all retained KEY, WARNING and ERROR entries in chronological order)
  * historyTotal:Int; historyRevision:Long; logTotal:Int; logRevision:Long
  * dataDirectory:String; debugUrl:String?; complete lists and crash names are requested on demand
  * preview:{jpeg:String(base64),timestampMillis:Long}?; only for a selected worker with an expanded, visible preview
@@ -48,6 +49,15 @@ object ControlModelCodec {
     private val properties=ConcurrentHashMap<KClass<*>,Map<String,KProperty1<Any,*>>>()
     @Suppress("UNCHECKED_CAST") private fun properties(type:KClass<*>)=properties.getOrPut(type){type.memberProperties.associateBy{it.name} as Map<String,KProperty1<Any,*>>}
 
+    private fun scalarMapKey(key: Any?): String? = when (key) {
+        is String -> key
+        is Char -> key.toString()
+        is Boolean -> key.toString()
+        is Number -> key.toString()
+        is Enum<*> -> key.name
+        else -> null
+    }
+
     fun encode(value:Any?):JsonElement=when(value) {
         null->JsonNull
         is JsonElement->value
@@ -58,7 +68,15 @@ object ControlModelCodec {
         is Float->if(value.isFinite())JsonPrimitive(value) else JsonPrimitive(value.toString())
         is Number->JsonPrimitive(value)
         is Enum<*>->JsonPrimitive(value.name)
-        is Map<*,*>->JsonObject(value.entries.associate{(key,item)->(if(key is Enum<*>)key.name else key.toString()) to encode(item)})
+        is Map<*, *> -> {
+            if (value.isEmpty() || value.keys.all { scalarMapKey(it) != null }) {
+                JsonObject(value.entries.associate { (key, item) -> scalarMapKey(key)!! to encode(item) })
+            } else {
+                JsonArray(value.entries.map { (key, item) ->
+                    buildJsonObject { put("_k", encode(key)); put("_v", encode(item)) }
+                })
+            }
+        }
         is Iterable<*>->JsonArray(value.map(::encode))
         is IntArray->JsonArray(value.map(::JsonPrimitive))
         is LongArray->JsonArray(value.map(::JsonPrimitive))
@@ -105,7 +123,19 @@ object ControlModelCodec {
             ByteArray::class->return value.jsonArray.map{it.jsonPrimitive.int.toByte()}.toByteArray()
             List::class,Collection::class,Iterable::class->return value.jsonArray.map{decode(it,checkNotNull(type.arguments[0].type))}
             Set::class->return value.jsonArray.map{decode(it,checkNotNull(type.arguments[0].type))}.toSet()
-            Map::class->return value.jsonObject.entries.associate{(key,item)->decode(JsonPrimitive(key),checkNotNull(type.arguments[0].type)) to decode(item,checkNotNull(type.arguments[1].type))}
+            Map::class -> {
+                val keyType = checkNotNull(type.arguments[0].type)
+                val valueType = checkNotNull(type.arguments[1].type)
+                return when (value) {
+                    is JsonArray -> value.associate { entry ->
+                        val pair = entry.jsonObject
+                        decode(pair.getValue("_k"), keyType) to decode(pair.getValue("_v"), valueType)
+                    }
+                    else -> value.jsonObject.entries.associate { (key, item) ->
+                        decode(JsonPrimitive(key), keyType) to decode(item, valueType)
+                    }
+                }
+            }
         }
         if(klass.java.isEnum)return klass.java.enumConstants.firstOrNull{(it as Enum<*>).name==primitive?.content} ?: error("Unknown ${klass.simpleName}")
         val obj=value.jsonObject

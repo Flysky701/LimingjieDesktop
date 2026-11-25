@@ -62,6 +62,9 @@ object ControlOps {
     const val LOG_CLEAR="log.clear"
     const val LOG_ADD="log.add" // text:String,kind:UserLogKind.name
     const val DIAGNOSTICS_EXPORT="diagnostics.export" // path:String (chosen by UI); worker writes its own diagnostic ZIP
+    const val REPLAYS_STATS="replays.stats" // reply episodes:Int, battleSamples:Int
+    const val REPLAYS_EXPORT="replays.export" // path:String; reply exported:Int, battleSamples:Int, message:String
+    const val NOTICES_DISMISS="notices.dismiss"
     const val OPEN_DATA="files.openData"
     const val OPEN_LOGS="files.openLogs"
     const val OPEN_CRASH="files.openCrash" // name:String only; never an arbitrary path

@@ -123,7 +123,7 @@ object LabyrinthRoutePreviewBuilder {
                 score != null -> "官方预计分 ${score.expectedScore.toLong()} · 路线上限 ${score.hardUpperBound}（假设战斗全胜）"
                 mode == LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP -> "官方分数暂不可用"
                 else -> "仅路线结构，不含收益估算"
-            },
+            } + if (route.targetScore > 0L) " · 刷分目标 ${route.targetScore}" else "",
             expectedScore = score?.expectedScore,
             hardUpperBound = score?.hardUpperBound,
         )

@@ -18,16 +18,18 @@ import com.landosol.toolbox.labyrinth.LabyrinthEntryActionPlanner
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withTimeout
 import android.util.Log
 
 enum class GameSessionResetStatus { IDLE, RUNNING, STOPPED, ERROR }
@@ -147,16 +149,30 @@ class GameSessionResetWorkflow(
     private val debugLog: (String) -> Unit = { Log.d(LOG_TAG, it) },
 ) {
     private val mutex = Mutex()
+    private val frameProcessorMutex = Mutex()
     private val inFlight = AtomicBoolean(false)
     private val _state = MutableStateFlow(GameSessionResetState())
     val state: StateFlow<GameSessionResetState> = _state.asStateFlow()
 
     @Volatile
     private var activeSessionId: AutomationSessionId? = null
+    private var resetFlowJob: Job? = null
+    @Volatile
+    private var pauseStartedAt: Long = Long.MIN_VALUE
+    @Volatile
+    private var pausedDurationMillis: Long = 0L
     private var lease: com.landosol.toolbox.automation.capture.CaptureFrameConsumerLease? = null
+    @Volatile
     private var stage: GameSessionResetStage = GameSessionResetStage.PENDING
     private var stableStageFrames = 0
     private var lastStageChangeAt = Long.MIN_VALUE
+
+    private fun activeClock(): Long {
+        val now = clock()
+        val pausedAt = pauseStartedAt
+        val currentPause = if (pausedAt != Long.MIN_VALUE) (now - pausedAt).coerceAtLeast(0L) else 0L
+        return now - pausedDurationMillis - currentPause
+    }
 
     /** Most recent recognised page; read by the PENDING peek before termination is decided. */
     @Volatile
@@ -191,6 +207,18 @@ class GameSessionResetWorkflow(
     @Volatile
     private var coldStartGate: ColdStartTitleGate? = null
 
+    @Volatile
+    private var reconnectRecoveryRequested = false
+    private var expiryRecoveryAttempts = 0
+
+    private fun isExpiryReconnect(block: SessionBlockKind): Boolean =
+        backend.kind == ClientTerminationKind.SESSION_EXPIRY &&
+            coldStartGate == null &&
+            block == SessionBlockKind.RECONNECT_PROMPTED
+
+    private val GameSessionResetStage.isFailure: Boolean
+        get() = this == GameSessionResetStage.SESSION_BLOCKED || this == GameSessionResetStage.FAILED
+
     init {
         require(totalTimeoutMillis > 0)
     }
@@ -210,14 +238,19 @@ class GameSessionResetWorkflow(
     ): GameSessionResetStartResult {
         val admission = configurationGate.tryBeginTask()
             ?: return GameSessionResetStartResult.Blocked(com.landosol.toolbox.automation.TaskConfigurationGate.TRANSFER_MESSAGE)
-        return try { startAdmitted(saveRoundResult, clientHardClosed) } finally { admission.close() }
+        return try {
+            activeSessionId?.let { return GameSessionResetStartResult.AlreadyRunning(it) }
+            // Let an old capture callback finish before the new processor resets shared frame evidence.
+            frameProcessorMutex.withLock { startAdmitted(saveRoundResult, clientHardClosed) }
+        } finally {
+            admission.close()
+        }
     }
 
     private suspend fun startAdmitted(
         saveRoundResult: suspend () -> Unit,
         clientHardClosed: Boolean,
     ): GameSessionResetStartResult {
-        activeSessionId?.let { return GameSessionResetStartResult.AlreadyRunning(it) }
         if (!captureActive()) {
             val reason = "请先在权限中心开启屏幕捕获"
             _state.value = _state.value.copy(status = GameSessionResetStatus.ERROR, message = reason)
@@ -248,7 +281,9 @@ class GameSessionResetWorkflow(
             _state.value = _state.value.copy(status = GameSessionResetStatus.ERROR, message = reason)
             return GameSessionResetStartResult.Blocked(reason)
         }.also { planner ->
-            planner.start(clock())
+            pauseStartedAt = Long.MIN_VALUE
+            pausedDurationMillis = 0L
+            planner.start(activeClock())
         }
         val registration = CaptureFrameBus.register(OWNER) { frame ->
             onFrame(session.id, processor, entryPlanner, frame)
@@ -261,16 +296,20 @@ class GameSessionResetWorkflow(
         }
         lease = (registration as CaptureFrameRegistrationResult.Registered).lease
         activeSessionId = session.id
+        pauseStartedAt = Long.MIN_VALUE
+        pausedDurationMillis = 0L
         inFlight.set(false)
         stage = GameSessionResetStage.PENDING
         stableStageFrames = 0
-        lastStageChangeAt = clock()
+        lastStageChangeAt = activeClock()
         lastObservedPage = LabyrinthEntryPageState.UNKNOWN
         clientObserved = false
         channelPromptVisibleUntil = Long.MIN_VALUE
         lastChannelPromptPollAt = Long.MIN_VALUE
         channelPrompts?.reset()
         coldStartGate = if (clientHardClosed) ColdStartTitleGate() else null
+        reconnectRecoveryRequested = false
+        expiryRecoveryAttempts = 0
         _state.value = GameSessionResetState(
             status = GameSessionResetStatus.RUNNING,
             sessionId = session.id,
@@ -293,18 +332,22 @@ class GameSessionResetWorkflow(
             activeSessionId = null
             sessionManager.stop(session.id)
             val reason = "任务控制通知不可用或已有任务占用，请检查通知权限与频道"
-            _state.value = _state.value.copy(
-                status = GameSessionResetStatus.ERROR,
-                sessionId = null,
-                message = reason,
-            )
+            _state.update {
+                it.copy(
+                    status = GameSessionResetStatus.ERROR,
+                    sessionId = null,
+                    message = reason,
+                )
+            }
             return GameSessionResetStartResult.Blocked(reason)
         }
-        actionScope.launch {
+        resetFlowJob?.cancel()
+        resetFlowJob = actionScope.launch {
             runResetFlow(
                 sessionId = session.id,
                 saveRoundResult = saveRoundResult,
                 clientHardClosed = clientHardClosed,
+                entryPlanner = entryPlanner,
             )
         }
         return GameSessionResetStartResult.Started(session.id)
@@ -313,10 +356,26 @@ class GameSessionResetWorkflow(
     suspend fun setPaused(paused: Boolean): Boolean = mutex.withLock {
         val sessionId = activeSessionId ?: return false
         if (!sessionManager.setPaused(sessionId, paused)) return false
-        _state.value = _state.value.copy(
-            paused = paused,
-            message = if (paused) "会话重置已暂停" else "会话重置已继续",
-        )
+        if (_state.value.paused == paused) {
+            overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
+            return true
+        }
+        val now = clock()
+        if (paused) {
+            pauseStartedAt = now
+        } else {
+            val startedAt = pauseStartedAt
+            if (startedAt != Long.MIN_VALUE) {
+                pausedDurationMillis += (now - startedAt).coerceAtLeast(0L)
+                pauseStartedAt = Long.MIN_VALUE
+            }
+        }
+        _state.update {
+            it.copy(
+                paused = paused,
+                message = if (paused) "会话重置已暂停" else "会话重置已继续",
+            )
+        }
         overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
         true
     }
@@ -324,16 +383,23 @@ class GameSessionResetWorkflow(
     suspend fun stop(reason: String = "用户停止会话重置"): Boolean = mutex.withLock {
         val sessionId = activeSessionId ?: return false
         activeSessionId = null
+        resetFlowJob?.cancel()
+        resetFlowJob = null
+        pauseStartedAt = Long.MIN_VALUE
+        pausedDurationMillis = 0L
         inFlight.set(false)
         lease?.let(CaptureFrameBus::unregister)
         lease = null
         val stopped = sessionManager.stop(sessionId)
         overlayCoordinator.detach(sessionId)
-        _state.value = _state.value.copy(
-            status = GameSessionResetStatus.STOPPED,
-            sessionId = null,
-            message = reason,
-        )
+        _state.update {
+            it.copy(
+                status = GameSessionResetStatus.STOPPED,
+                sessionId = null,
+                paused = false,
+                message = reason,
+            )
+        }
         stopped
     }
 
@@ -351,90 +417,97 @@ class GameSessionResetWorkflow(
     private suspend fun runResetFlow(
         sessionId: AutomationSessionId,
         saveRoundResult: suspend () -> Unit,
-        clientHardClosed: Boolean = false,
+        clientHardClosed: Boolean,
+        entryPlanner: LabyrinthEntryActionPlanner,
     ) {
-        val outcome = runCatching {
-            withTimeout(totalTimeoutMillis) {
-                // 1. 保存本局结果。runOnceAfterRound 只把回调交给本流程，不在外层重复调用。
-                setMessage("保存本局结果")
-                saveRoundResult()
+        val activeDeadline = activeClock() + totalTimeoutMillis
+        val outcome = try {
+            awaitUnpaused(sessionId, activeDeadline)
+            // 1. 保存本局结果。runOnceAfterRound 只把回调交给本流程，不在外层重复调用。
+            setMessage("保存本局结果")
+            saveRoundResult()
+            awaitUnpaused(sessionId, activeDeadline)
 
-                // 2. 先看清客户端此刻在哪一页。批次首轮可能从标题/主页/冒险页发起，那些页面
-                //    尚未载入黎明界状态，没有旧会话可失效，直接走入口导航即可。
-                setMessage("识别客户端当前页面")
-                // A round can begin while the client is still opening. Give it time to reach the
-                // foreground before judging which page it is on; otherwise every frame belongs to
-                // the launcher and the peek below can only report UNKNOWN.
-                // A hard-closed client cannot appear on its own; waiting for it only costs time.
-                if (!clientHardClosed) awaitClientObserved(sessionId, CLIENT_PRESENCE_TIMEOUT_MILLIS)
-                val observedPage = if (clientHardClosed) {
-                    LabyrinthEntryPageState.UNKNOWN
-                } else {
-                    awaitObservedPage(sessionId, PAGE_PEEK_TIMEOUT_MILLIS)
-                }
-                // A round can begin with a channel login dialog already over the title (2026-10-12
-                // diag: the page read UNKNOWN, the flow hunted a 黎明界 trigger to invalidate a
-                // session, timed out, and the reset failed before WAITING_LOGIN, the only stage
-                // that handles the dialog). A channel login prompt on screen means the client is
-                // still logging in: there is no session to invalidate.
-                val channelPrompt = if (clientHardClosed) null else channelPrompts?.peek()
-                val skipTermination = clientHardClosed || channelPrompt != null ||
-                    gameSessionResetSkipsTermination(observedPage, clientObserved)
-                debugLog(
-                    "peek page=$observedPage clientObserved=$clientObserved hardClosed=$clientHardClosed " +
-                        "channelPrompt=${channelPrompt?.rule?.id} skipTermination=$skipTermination",
-                )
-                if (skipTermination) {
-                    setMessage(
-                        when {
-                            clientHardClosed -> "游戏已在刷开局前大退，冷启动公主连结"
-                            channelPrompt != null -> "客户端停在渠道登录界面（${channelPrompt.rule.label}），无需触发会话失效"
-                            !clientObserved -> "未看到公主连结画面，没有可失效的旧会话；直接进入登录导航"
-                            else -> "客户端在 ${observedPage.name}，尚未载入黎明界，无需触发会话失效"
-                        },
-                    )
-                    // Nothing was terminated, so the client may simply not be running. Ask the
-                    // backend to bring it up; the entry planner drives everything after that.
-                    if (clientHardClosed || !clientObserved) {
-                        transitionTo(sessionId, GameSessionResetStage.RELAUNCHING, "启动公主连结")
-                        val relaunch = backend.relaunchClient()
-                        if (relaunch != GameClientRelaunchResult.LAUNCH_REQUESTED) {
-                            error("启动客户端失败：$relaunch")
-                        }
-                    }
-                } else {
-                    // 3. 关闭/退出客户端（ADB force-stop 或会话失效触发弹窗返回标题）
-                    val terminationLabel = when (backend.kind) {
-                        ClientTerminationKind.SESSION_EXPIRY -> "触发会话失效并返回标题页"
-                        else -> "关闭/退出公主连结客户端"
-                    }
-                    transitionTo(sessionId, GameSessionResetStage.TERMINATING, terminationLabel)
-                    val termination = backend.terminateClient()
-                    debugLog("terminate kind=${backend.kind} result=$termination")
-                    if (
-                        termination != ClientTerminationResult.TERMINATED &&
-                        termination != ClientTerminationResult.ALREADY_GONE
-                    ) {
-                        error("终止客户端未确认完成：$termination")
-                    }
-
-                    // 会话失效触发已回到标题页，无需重启；其余策略重新启动客户端
-                    if (backend.kind != ClientTerminationKind.SESSION_EXPIRY) {
-                        transitionTo(sessionId, GameSessionResetStage.RELAUNCHING, "重新启动公主连结")
-                        val relaunch = backend.relaunchClient()
-                        if (relaunch != GameClientRelaunchResult.LAUNCH_REQUESTED) {
-                            error("重新启动客户端失败：$relaunch")
-                        }
-                    }
-                }
-
-                // 4-7. 入口规划器根据识别帧实际点击：标题 → 公告 → 主页 → 冒险 → 黎明界。
-                transitionTo(sessionId, GameSessionResetStage.WAITING_LOGIN, "等待登录完成")
-                awaitStageReached(sessionId, GameSessionResetStage.READY_FOR_NEXT_ROUND)
+            // 2. 先看清客户端此刻在哪一页。批次首轮可能从标题/主页/冒险页发起，那些页面
+            //    尚未载入黎明界状态，没有旧会话可失效，直接走入口导航即可。
+            setMessage("识别客户端当前页面")
+            // A round can begin while the client is still opening. Give it time to reach the
+            // foreground before judging which page it is on; otherwise every frame belongs to
+            // the launcher and the peek below can only report UNKNOWN.
+            // A hard-closed client cannot appear on its own; waiting for it only costs time.
+            if (!clientHardClosed) awaitClientObserved(sessionId, CLIENT_PRESENCE_TIMEOUT_MILLIS, activeDeadline)
+            val observedPage = if (clientHardClosed) {
+                LabyrinthEntryPageState.UNKNOWN
+            } else {
+                awaitObservedPage(sessionId, PAGE_PEEK_TIMEOUT_MILLIS, activeDeadline)
             }
+            throwIfResetFailed()
+            awaitUnpaused(sessionId, activeDeadline)
+            // A round can begin with a channel login dialog already over the title (2026-10-12
+            // diag: the page read UNKNOWN, the flow hunted a 黎明界 trigger to invalidate a
+            // session, timed out, and the reset failed before WAITING_LOGIN, the only stage
+            // that handles the dialog). A channel login prompt on screen means the client is
+            // still logging in: there is no session to invalidate.
+            val channelPrompt = if (clientHardClosed) null else channelPrompts?.peek()
+            awaitUnpaused(sessionId, activeDeadline)
+            throwIfResetFailed()
+            val pendingExpiryPopup = isExpiryReconnect(_state.value.lastBlock)
+            val skipTermination = clientHardClosed || channelPrompt != null ||
+                (!pendingExpiryPopup && gameSessionResetSkipsTermination(observedPage, clientObserved))
+            debugLog(
+                "peek page=$observedPage clientObserved=$clientObserved hardClosed=$clientHardClosed " +
+                    "channelPrompt=${channelPrompt?.rule?.id} skipTermination=$skipTermination",
+            )
+            if (skipTermination) {
+                setMessage(
+                    when {
+                        clientHardClosed -> "游戏已在刷开局前大退，冷启动公主连结"
+                        channelPrompt != null -> "客户端停在渠道登录界面（${channelPrompt.rule.label}），无需触发会话失效"
+                        !clientObserved -> "未看到公主连结画面，没有可失效的旧会话；直接进入登录导航"
+                        else -> "客户端在 ${observedPage.name}，尚未载入黎明界，无需触发会话失效"
+                    },
+                )
+                // Nothing was terminated, so the client may simply not be running. Ask the
+                // backend to bring it up; the entry planner drives everything after that.
+                if (clientHardClosed || !clientObserved) {
+                    awaitUnpaused(sessionId, activeDeadline)
+                    throwIfResetFailed()
+                    transitionTo(sessionId, GameSessionResetStage.RELAUNCHING, "启动公主连结")
+                    val relaunch = backend.relaunchClient()
+                    if (relaunch != GameClientRelaunchResult.LAUNCH_REQUESTED) {
+                        error("启动客户端失败：$relaunch")
+                    }
+                }
+            } else {
+                // 3. 关闭/退出客户端（ADB force-stop 或会话失效触发弹窗返回标题）
+                terminateClient(sessionId, activeDeadline)
+
+                // 会话失效触发已回到标题页，无需重启；其余策略重新启动客户端
+                if (backend.kind != ClientTerminationKind.SESSION_EXPIRY) {
+                    awaitUnpaused(sessionId, activeDeadline)
+                    transitionTo(sessionId, GameSessionResetStage.RELAUNCHING, "重新启动公主连结")
+                    val relaunch = backend.relaunchClient()
+                    if (relaunch != GameClientRelaunchResult.LAUNCH_REQUESTED) {
+                        error("重新启动客户端失败：$relaunch")
+                    }
+                }
+            }
+
+            // 4-7. 入口规划器根据识别帧实际点击：标题 → 公告 → 主页 → 冒险 → 黎明界。
+            awaitUnpaused(sessionId, activeDeadline)
+            throwIfResetFailed()
+            transitionTo(sessionId, GameSessionResetStage.WAITING_LOGIN, "等待登录完成")
+            awaitStageReached(sessionId, GameSessionResetStage.READY_FOR_NEXT_ROUND, activeDeadline, entryPlanner)
+            awaitUnpaused(sessionId, activeDeadline)
+            Result.success(Unit)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            Result.failure(error)
         }
 
         if (outcome.isSuccess) {
+            if (activeSessionId != sessionId) return
             runCatching { onNextRoundReady(sessionId) }
                 .onFailure { callbackError ->
                     finishFlow(
@@ -463,52 +536,134 @@ class GameSessionResetWorkflow(
         }
     }
 
-    /** Waits for the first recognised page (or the timeout) while the stage is still PENDING. */
+    private suspend fun terminateClient(sessionId: AutomationSessionId, activeDeadline: Long) {
+        val label = when (backend.kind) {
+            ClientTerminationKind.SESSION_EXPIRY -> "触发会话失效并返回标题页"
+            else -> "关闭/退出公主连结客户端"
+        }
+        while (true) {
+            awaitUnpaused(sessionId, activeDeadline)
+            throwIfResetFailed()
+            if (inFlight.compareAndSet(false, true)) break
+            kotlinx.coroutines.delay(FRAME_POLL_MILLIS)
+        }
+        try {
+            throwIfResetFailed()
+            if (reconnectRecoveryRequested) {
+                reconnectRecoveryRequested = false
+                expiryRecoveryAttempts++
+            }
+            transitionTo(sessionId, GameSessionResetStage.TERMINATING, label)
+        } finally {
+            // The terminator needs fresh frames for popup and title recognition.
+            inFlight.set(false)
+        }
+
+        val termination = backend.terminateClient()
+        val terminationFailed = termination != ClientTerminationResult.TERMINATED &&
+            termination != ClientTerminationResult.ALREADY_GONE
+        val stepSuffix = if (terminationFailed) {
+            backend.lastDiagnosticStep?.let { "（step=$it）" }.orEmpty()
+        } else {
+            ""
+        }
+        debugLog("terminate kind=${backend.kind} result=$termination$stepSuffix")
+        if (terminationFailed) {
+            error("终止客户端未确认完成：$termination$stepSuffix")
+        }
+    }
+
+    private fun throwIfResetFailed() {
+        val current = _state.value
+        when (current.stage) {
+            GameSessionResetStage.SESSION_BLOCKED -> error("会话被阻塞：${current.lastBlock}")
+            GameSessionResetStage.FAILED -> error(current.message?.takeIf(String::isNotBlank) ?: "会话重置失败")
+            else -> Unit
+        }
+    }
+
+    private suspend fun awaitUnpaused(sessionId: AutomationSessionId, activeDeadline: Long) {
+        while (activeSessionId == sessionId && _state.value.paused) {
+            kotlinx.coroutines.delay(FRAME_POLL_MILLIS)
+        }
+        if (activeSessionId != sessionId) error("会话重置已被停止")
+        if (activeClock() >= activeDeadline) error("会话重置超时")
+    }
+
     /** Waits for one frame recognised with the client in the foreground. */
     private suspend fun awaitClientObserved(
         sessionId: AutomationSessionId,
         timeoutMillis: Long,
+        activeDeadline: Long,
     ): Boolean {
-        val deadline = clock() + timeoutMillis
-        while (activeSessionId == sessionId && clock() < deadline) {
-            if (clientObserved) return true
+        val deadline = minOf(activeClock() + timeoutMillis, activeDeadline)
+        while (activeSessionId == sessionId) {
+            val current = _state.value
+            if (current.stage.isFailure) return clientObserved
+            if (current.paused) {
+                kotlinx.coroutines.delay(FRAME_POLL_MILLIS)
+                continue
+            }
+            // A captured expiry popup is evidence enough while the foreground cache catches up.
+            if (clientObserved || isExpiryReconnect(current.lastBlock)) return clientObserved
+            if (activeClock() >= deadline) break
             kotlinx.coroutines.delay(FRAME_POLL_MILLIS)
         }
         if (activeSessionId != sessionId) error("会话重置已被停止")
+        if (!clientObserved && activeClock() >= activeDeadline) error("会话重置超时")
         return clientObserved
     }
 
     private suspend fun awaitObservedPage(
         sessionId: AutomationSessionId,
         timeoutMillis: Long,
+        activeDeadline: Long,
     ): LabyrinthEntryPageState {
-        val deadline = clock() + timeoutMillis
-        while (activeSessionId == sessionId && clock() < deadline) {
+        val deadline = minOf(activeClock() + timeoutMillis, activeDeadline)
+        while (activeSessionId == sessionId) {
+            val current = _state.value
+            if (current.stage.isFailure) return lastObservedPage
+            if (current.paused) {
+                kotlinx.coroutines.delay(FRAME_POLL_MILLIS)
+                continue
+            }
             val page = lastObservedPage
-            if (page != LabyrinthEntryPageState.UNKNOWN) return page
+            if (page != LabyrinthEntryPageState.UNKNOWN || isExpiryReconnect(current.lastBlock)) return page
+            if (activeClock() >= deadline) break
             kotlinx.coroutines.delay(FRAME_POLL_MILLIS)
         }
         if (activeSessionId != sessionId) error("会话重置已被停止")
+        if (lastObservedPage == LabyrinthEntryPageState.UNKNOWN && activeClock() >= activeDeadline) error("会话重置超时")
         return lastObservedPage
     }
 
     private suspend fun awaitStageReached(
         sessionId: AutomationSessionId,
         target: GameSessionResetStage,
+        activeDeadline: Long,
+        entryPlanner: LabyrinthEntryActionPlanner,
     ) {
         // 识别帧回调驱动推进；此处等待目标阶段被 onFrame 转换到达
         while (activeSessionId == sessionId && stage != target) {
+            throwIfResetFailed()
+            if (_state.value.paused) {
+                kotlinx.coroutines.delay(FRAME_POLL_MILLIS)
+                continue
+            }
+            if (activeClock() >= activeDeadline) {
+                error("会话重置超时")
+            }
             if (!captureActive()) {
                 // Without frames nothing can reach the target; report why instead of idling until
                 // the total timeout (for example a rotation that outlasted the capture grace).
                 error(CaptureStateRegistry.lastStopReason() ?: "屏幕捕获已停止，请重新授权")
             }
-            if (stage == GameSessionResetStage.FAILED) {
-                error(_state.value.message?.takeIf(String::isNotBlank) ?: "会话重置失败")
-            }
-            if (stage == GameSessionResetStage.SESSION_BLOCKED) {
-                onBlocked(sessionId, _state.value.lastBlock)
-                error("会话被阻塞：${_state.value.lastBlock}")
+            if (reconnectRecoveryRequested) {
+                terminateClient(sessionId, activeDeadline)
+                awaitUnpaused(sessionId, activeDeadline)
+                entryPlanner.start(activeClock())
+                transitionTo(sessionId, GameSessionResetStage.WAITING_LOGIN, "已从失效弹窗返回标题，等待重新登录")
+                continue
             }
             pollChannelPrompts(sessionId)
             kotlinx.coroutines.delay(FRAME_POLL_MILLIS)
@@ -526,7 +681,7 @@ class GameSessionResetWorkflow(
     private suspend fun pollChannelPrompts(sessionId: AutomationSessionId) {
         val assistant = channelPrompts ?: return
         if (stage != GameSessionResetStage.WAITING_LOGIN || _state.value.paused) return
-        val now = clock()
+        val now = activeClock()
         if (lastChannelPromptPollAt != Long.MIN_VALUE && now - lastChannelPromptPollAt < CHANNEL_PROMPT_POLL_MILLIS) return
         if (!inFlight.compareAndSet(false, true)) return
         try {
@@ -540,11 +695,12 @@ class GameSessionResetWorkflow(
                 }
                 is ChannelPromptStep.Activated -> {
                     channelPromptVisibleUntil = now + CHANNEL_PROMPT_HOLD_MILLIS
-                    val current = _state.value
-                    _state.value = current.copy(
-                        actionCount = current.actionCount + 1,
-                        message = "渠道登录界面：${step.label}，已点击",
-                    )
+                    _state.update { current ->
+                        current.copy(
+                            actionCount = current.actionCount + 1,
+                            message = "渠道登录界面：${step.label}，已点击",
+                        )
+                    }
                     overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
                 }
                 is ChannelPromptStep.Exhausted -> markFailed(sessionId, step.reason)
@@ -564,19 +720,29 @@ class GameSessionResetWorkflow(
             recycle(frame)
             return
         }
-        if (inFlight.get()) {
+        if (inFlight.get() || !frameProcessorMutex.tryLock()) {
             recycle(frame)
             return
         }
-        runCatching { processor(frame) }
+        val processed = try {
+            if (activeSessionId != sessionId || _state.value.paused) {
+                recycle(frame)
+                return
+            }
+            runCatching { processor(frame) }
+        } finally {
+            frameProcessorMutex.unlock()
+        }
+        processed
             .onSuccess { result ->
-                if (activeSessionId != sessionId) return@onSuccess
+                if (activeSessionId != sessionId || _state.value.paused) return@onSuccess
                 val block = blockClassifier(result)
-                val current = _state.value
-                _state.value = current.copy(
-                    frameCount = current.frameCount + 1,
-                    lastBlock = block,
-                )
+                _state.update { current ->
+                    if (current.stage.isFailure) current else current.copy(
+                        frameCount = current.frameCount + 1,
+                        lastBlock = block,
+                    )
+                }
                 debugFramePublisher?.let { publish ->
                     runCatching { publish(frame, _state.value, result, buildOverlayPresentation(sessionId)) }
                 }
@@ -591,7 +757,7 @@ class GameSessionResetWorkflow(
             }
             .onFailure { error ->
                 if (activeSessionId == sessionId) {
-                    _state.value = _state.value.copy(message = "识别失败：${error.message ?: "未知错误"}")
+                    _state.update { it.copy(message = "识别失败：${error.message ?: "未知错误"}") }
                 }
             }
             .also { recycle(frame) }
@@ -608,41 +774,57 @@ class GameSessionResetWorkflow(
         if (!inFlight.compareAndSet(false, true)) return
         actionScope.launch {
             try {
-                if (clock() < channelPromptVisibleUntil) {
+                if (activeSessionId != sessionId || _state.value.paused) return@launch
+                if (stage.isFailure) return@launch
+                if (activeClock() < channelPromptVisibleUntil) {
                     // A white SDK dialog can also score as a session prompt; neither the block
                     // classifier nor the entry planner may act on it while the poll owns it.
                     return@launch
                 }
+                val expiryReconnect = isExpiryReconnect(block)
+                if (expiryReconnect && stage in EXPIRY_RECOVERY_STAGES &&
+                    expiryRecoveryAttempts < MAX_EXPIRY_RECOVERY_ATTEMPTS
+                ) {
+                    setMessage("检测到会话失效弹窗，准备点击返回标题重新登录")
+                    reconnectRecoveryRequested = true
+                    return@launch
+                }
                 val expectedExpiryPopup =
-                    stage == GameSessionResetStage.TERMINATING &&
-                        backend.kind == ClientTerminationKind.SESSION_EXPIRY
+                    (backend.kind == ClientTerminationKind.SESSION_EXPIRY && stage == GameSessionResetStage.TERMINATING) ||
+                        (stage == GameSessionResetStage.PENDING && expiryReconnect)
                 if (block != SessionBlockKind.NONE && !expectedExpiryPopup) {
+                    if (activeSessionId != sessionId || _state.value.paused) return@launch
                     stage = GameSessionResetStage.SESSION_BLOCKED
                     // A session prompt before the title of a hard-closed client most likely means
                     // the old process is still there and just met 6002.
                     val beforeColdStartTitle = coldStartGate?.titleSeen == false
-                    _state.value = _state.value.copy(
-                        stage = GameSessionResetStage.SESSION_BLOCKED,
-                        message = if (beforeColdStartTitle) {
-                            "会话被阻塞：$block（冷启动尚未出现标题页，可能大退未生效、游戏进程仍在）"
-                        } else {
-                            "会话被阻塞：$block"
-                        },
-                    )
+                    _state.update {
+                        it.copy(
+                            stage = GameSessionResetStage.SESSION_BLOCKED,
+                            lastBlock = block,
+                            message = if (beforeColdStartTitle) {
+                                "会话被阻塞：$block（冷启动尚未出现标题页，可能大退未生效、游戏进程仍在）"
+                            } else {
+                                "会话被阻塞：$block"
+                            },
+                        )
+                    }
                     onBlocked(sessionId, block)
                     return@launch
                 }
+                if (reconnectRecoveryRequested || stage == GameSessionResetStage.TERMINATING) return@launch
                 if (!presence.isGameForeground()) {
-                    _state.value = _state.value.copy(message = "等待公主连结回到前台")
+                    _state.update { it.copy(message = "等待公主连结回到前台") }
                     return@launch
                 }
+                if (activeSessionId != sessionId || _state.value.paused) return@launch
 
                 val pageState = result.observation.state
                 lastObservedPage = pageState
                 clientObserved = true
                 if (stage == GameSessionResetStage.PENDING) {
                     // The flow is still deciding whether termination is needed; look, never act.
-                    _state.value = _state.value.copy(message = "识别客户端当前页面：${pageState.name}")
+                    _state.update { it.copy(message = "识别客户端当前页面：${pageState.name}") }
                     return@launch
                 }
                 coldStartGate?.let { gate ->
@@ -651,7 +833,7 @@ class GameSessionResetWorkflow(
                         ColdStartVerdict.PENDING -> if (pageState != LabyrinthEntryPageState.UNKNOWN &&
                             pageState != LabyrinthEntryPageState.GAME_LOADING_PROGRESS
                         ) {
-                            _state.value = _state.value.copy(message = "确认冷启动：等待标题页（当前 ${pageState.name}）")
+                            _state.update { it.copy(message = "确认冷启动：等待标题页（当前 ${pageState.name}）") }
                             return@launch
                         }
                         ColdStartVerdict.CLIENT_SURVIVED -> {
@@ -664,13 +846,14 @@ class GameSessionResetWorkflow(
                         }
                     }
                 }
+                if (activeSessionId != sessionId || _state.value.paused) return@launch
                 // While the terminator is still driving the client (TERMINATING / RELAUNCHING) the
                 // screen is by definition the *old* labyrinth home; recognising it as "ready" here
                 // would let the entry planner tap 出发 on stale state. Only frames observed after
                 // the flow has moved into the login/navigation phase may complete the reset.
                 when (gameSessionResetReadyDecision(stage, pageState)) {
                     GameSessionResetReadyDecision.HOLD_FOR_TERMINATION -> {
-                        _state.value = _state.value.copy(message = "等待旧会话失效（当前页面 ${pageState.name}）")
+                        _state.update { it.copy(message = "等待旧会话失效（当前页面 ${pageState.name}）") }
                         return@launch
                     }
                     GameSessionResetReadyDecision.READY -> {
@@ -686,6 +869,7 @@ class GameSessionResetWorkflow(
                     markFailed(sessionId, "会话重置意外进入开局角色流程，已停止避免误操作")
                     return@launch
                 }
+                if (activeSessionId != sessionId || _state.value.paused) return@launch
 
                 updateNavigationStage(pageState)
                 when (
@@ -693,7 +877,7 @@ class GameSessionResetWorkflow(
                         state = pageState,
                         frameWidth = frameWidth,
                         frameHeight = frameHeight,
-                        nowMillis = clock(),
+                        nowMillis = activeClock(),
                         anchorScores = result.observation.anchorScores,
                         anchorMatches = result.anchorMatches,
                     )
@@ -708,11 +892,12 @@ class GameSessionResetWorkflow(
                             is AutomationActionResult.Executed,
                             is AutomationActionResult.DryRun,
                             -> {
-                                val current = _state.value
-                                _state.value = current.copy(
-                                    actionCount = current.actionCount + 1,
-                                    message = decision.label,
-                                )
+                                _state.update { current ->
+                                    current.copy(
+                                        actionCount = current.actionCount + 1,
+                                        message = decision.label,
+                                    )
+                                }
                                 overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
                             }
                             is AutomationActionResult.Rejected ->
@@ -720,17 +905,21 @@ class GameSessionResetWorkflow(
                             AutomationActionResult.StaleSession ->
                                 markFailed(sessionId, "动作会话已失效")
                             AutomationActionResult.Paused ->
-                                _state.value = _state.value.copy(message = "会话重置已暂停")
+                                _state.update { it.copy(message = "会话重置已暂停") }
                         }
                     }
                     is LabyrinthEntryActionDecision.Wait -> {
                         stableStageFrames++
-                        _state.value = _state.value.copy(message = decision.reason)
+                        _state.update { it.copy(message = decision.reason) }
                     }
                     is LabyrinthEntryActionDecision.Complete ->
-                        markReady(sessionId, decision.reason)
+                        if (activeSessionId == sessionId && !_state.value.paused) {
+                            markReady(sessionId, decision.reason)
+                        }
                     is LabyrinthEntryActionDecision.Stop ->
-                        markFailed(sessionId, decision.reason)
+                        if (activeSessionId == sessionId && !_state.value.paused) {
+                            markFailed(sessionId, decision.reason)
+                        }
                 }
             } finally {
                 inFlight.set(false)
@@ -750,26 +939,30 @@ class GameSessionResetWorkflow(
         if (stage != next) {
             stage = next
             stableStageFrames = 0
-            lastStageChangeAt = clock()
-            _state.value = _state.value.copy(stage = next)
+            lastStageChangeAt = activeClock()
+            _state.update { it.copy(stage = next) }
         }
     }
 
     private fun markReady(sessionId: AutomationSessionId, message: String) {
         stage = GameSessionResetStage.READY_FOR_NEXT_ROUND
-        _state.value = _state.value.copy(
-            stage = GameSessionResetStage.READY_FOR_NEXT_ROUND,
-            message = message,
-        )
+        _state.update {
+            it.copy(
+                stage = GameSessionResetStage.READY_FOR_NEXT_ROUND,
+                message = message,
+            )
+        }
         overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
     }
 
     private fun markFailed(sessionId: AutomationSessionId, message: String) {
         stage = GameSessionResetStage.FAILED
-        _state.value = _state.value.copy(
-            stage = GameSessionResetStage.FAILED,
-            message = message,
-        )
+        _state.update {
+            it.copy(
+                stage = GameSessionResetStage.FAILED,
+                message = message,
+            )
+        }
         overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
     }
 
@@ -780,13 +973,13 @@ class GameSessionResetWorkflow(
     ) {
         this.stage = stage
         stableStageFrames = 0
-        lastStageChangeAt = clock()
-        _state.value = _state.value.copy(stage = stage, message = message)
+        lastStageChangeAt = activeClock()
+        _state.update { it.copy(stage = stage, message = message) }
         overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
     }
 
     private fun setMessage(message: String) {
-        _state.value = _state.value.copy(message = message)
+        _state.update { it.copy(message = message) }
     }
 
     private suspend fun finishFlow(
@@ -797,18 +990,24 @@ class GameSessionResetWorkflow(
     ) = mutex.withLock {
         if (activeSessionId != sessionId) return@withLock
         activeSessionId = null
+        resetFlowJob = null
+        pauseStartedAt = Long.MIN_VALUE
+        pausedDurationMillis = 0L
         inFlight.set(false)
         lease?.let(CaptureFrameBus::unregister)
         lease = null
         sessionManager.stop(sessionId)
         overlayCoordinator.detach(sessionId)
         stage = terminalStage
-        _state.value = _state.value.copy(
-            status = status,
-            sessionId = null,
-            stage = terminalStage,
-            message = message,
-        )
+        _state.update {
+            it.copy(
+                status = status,
+                sessionId = null,
+                stage = terminalStage,
+                paused = false,
+                message = message,
+            )
+        }
     }
 
     private fun buildOverlayPresentation(sessionId: AutomationSessionId): AutomationOverlayPresentation {
@@ -851,5 +1050,13 @@ class GameSessionResetWorkflow(
  */
 const val CLIENT_PRESENCE_TIMEOUT_MILLIS = 20_000L
         const val DEFAULT_TOTAL_TIMEOUT_MILLIS = 180_000L
+        const val MAX_EXPIRY_RECOVERY_ATTEMPTS = 2
+        val EXPIRY_RECOVERY_STAGES = setOf(
+            GameSessionResetStage.RELAUNCHING,
+            GameSessionResetStage.WAITING_LOGIN,
+            GameSessionResetStage.NAVIGATING_HOME,
+            GameSessionResetStage.NAVIGATING_ADVENTURE,
+            GameSessionResetStage.NAVIGATING_DAWN_REALM,
+        )
     }
 }

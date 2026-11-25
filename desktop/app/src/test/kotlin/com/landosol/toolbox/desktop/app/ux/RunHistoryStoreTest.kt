@@ -29,6 +29,47 @@ class RunHistoryStoreTest {
         assertEquals(terminal.copy(score = 50_000), rows.getValue("late"))
         assertEquals(listOf(rows.getValue("late")), scoreEvents)
     }
+
+    @Test fun scoreAndReasonStayInSyncWhenScoreArrivesBeforePutDuringRunOrAfterFinish() {
+        val root = directory.root.toPath()
+        val clock = 200 * day
+        val scoreEvents = mutableListOf<DesktopRunRecord>()
+        val store = RunHistoryStore(root, {}, { clock }, onScoreRecord = scoreEvents::add)
+        val reason = "本局通关 · 用时34分45秒 · 分数未识别"
+        val run = DesktopRunRecord("early", clock, "样例", "单局", "通关", singleRun = true)
+
+        assertFalse(store.supplementScore("early", 50_400))
+        assertTrue(store.records.value.isEmpty())
+        assertEquals(50_400L, store.scoreFor("early"))
+        store.put(run)
+        store.finish("early", "通关", reason, 1)
+
+        store.put(run.copy(id = "during"))
+        assertTrue(store.supplementScore("during", 48_800))
+        store.finish("during", "通关", reason, 1)
+
+        store.put(run.copy(id = "late"))
+        store.finish("late", "通关", reason, 1)
+        assertNull(store.scoreFor("late"))
+        assertTrue(store.supplementScore("late", 49_600))
+
+        val rows = store.records.value.associateBy { it.id }
+        val expected = mapOf(
+            "early" to (50_400L to "本局通关 · 用时34分45秒 · 分数50400"),
+            "during" to (48_800L to "本局通关 · 用时34分45秒 · 分数48800"),
+            "late" to (49_600L to "本局通关 · 用时34分45秒 · 分数49600"),
+        )
+        assertEquals(expected, rows.mapValues { (_, row) -> row.score to row.reason })
+        assertEquals(listOf("during", "late"), scoreEvents.map { it.id })
+        assertEquals(rows.getValue("late"), scoreEvents.last())
+
+        val reloaded = RunHistoryStore(root, {}, { clock })
+        assertEquals(rows, reloaded.records.value.associateBy { it.id })
+        for ((id, row) in rows) {
+            assertEquals(row.score, reloaded.scoreFor(id))
+        }
+    }
+
     @Test fun scoreAndResultTimeSurviveReloadAndDuplicateFinish() {
         val root=directory.root.toPath();val now=System.currentTimeMillis();val store=RunHistoryStore(root,{})
         store.put(DesktopRunRecord("result",now-60_000,"样例","单局","通关",singleRun=true,strategy=StrategyIdentity("saved-strategy","当时的策略",4)))

@@ -116,7 +116,18 @@ class DesktopUxController(private val graph:DesktopAppGraph) {
             }
         }
     }
-    suspend fun refreshDatabase()=withContext(Dispatchers.IO) { databaseMutable.value=graph.labyrinthCnDatabaseRepository.currentMetadata()?.let { "已就绪 · ${it.version}" } ?: "尚无国服数据库，请在设置中更新" }
+    suspend fun refreshDatabase() = withContext(Dispatchers.IO) {
+        val repository = graph.labyrinthCnDatabaseRepository
+        val hasFile = repository.currentDatabaseFile() != null
+        val metadata = runCatching { repository.currentMetadata() }.getOrNull()
+        val pending = repository.hasPendingInstall()
+        databaseMutable.value = when {
+            hasFile && metadata != null && pending -> "已就绪 · ${metadata.version}（待重启更新）"
+            hasFile && metadata != null -> "已就绪 · ${metadata.version}"
+            pending -> "待重启生效"
+            else -> "未下载 · 前往设置"
+        }
+    }
     suspend fun refreshForeground()=withContext(Dispatchers.IO) { foregroundMutable.value=graph.device.queryForeground() }
     private fun begin(id:String,type:String,goal:String,s:RunConsoleState,single:Boolean=false) {
         if(history.records.value.none { it.id==id }) { history.put(DesktopRunRecord(id,System.currentTimeMillis(),s.task.selectedAccount?.alias ?: "未选择",type,goal,singleRun=single,strategy=if(single) graph.taskStrategyIdentity else null)); graph.log.add("开始：$type",kind=UserLogKind.KEY) }
@@ -129,7 +140,7 @@ class DesktopUxController(private val graph:DesktopAppGraph) {
             batch.currentRunId?.let { begin("run:$it","批量执行 · 单次","公会 ${batch.currentGuildId ?: batch.activeGoal?.guildId ?: "—"}",s,true) }
             batch.lastRecordedRunId?.let { runId -> (batch.lastRecordedOutcome ?: batch.currentRunOutcome)?.let { outcome ->
                 val summary = batch.lastRunSummary
-                history.finish("run:$runId",when(outcome){LabyrinthRunOutcome.CLEARED->"通关";LabyrinthRunOutcome.USER_STOPPED->"手动停止";LabyrinthRunOutcome.ABORTED_UNKNOWN->"结果未确认";else->"未通关"},summary?.description() ?: outcome.name,if(outcome==LabyrinthRunOutcome.CLEARED)1 else 0,summary?.score,summary?.endedAt)
+                history.finish("run:$runId",when(outcome){LabyrinthRunOutcome.CLEARED->"通关";LabyrinthRunOutcome.RETIRED_SCORE_TARGET->"未达目标撤退";LabyrinthRunOutcome.USER_STOPPED->"手动停止";LabyrinthRunOutcome.ABORTED_UNKNOWN->"结果未确认";else->"未通关"},summary?.description() ?: outcome.name,if(outcome==LabyrinthRunOutcome.CLEARED)1 else 0,summary?.score,summary?.endedAt)
             } }
             if(batch.stage in setOf(LabyrinthBatchStage.COMPLETED,LabyrinthBatchStage.FAILED,LabyrinthBatchStage.PAUSED)) {
                 val result=if(batch.stage==LabyrinthBatchStage.COMPLETED) "已完成" else if(s.halt==LabyrinthBatchHaltReason.USER_STOPPED) "手动停止" else "已停止"

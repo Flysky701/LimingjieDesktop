@@ -75,6 +75,9 @@ interface LabyrinthRouteDao {
     @Query("SELECT * FROM labyrinth_routes WHERE account_id = :accountId ORDER BY created_at DESC, id DESC LIMIT 1")
     suspend fun getLatestByAccount(accountId: Long): LabyrinthRouteEntity?
 
+    @Query("SELECT * FROM labyrinth_routes ORDER BY created_at DESC, id DESC LIMIT :limit")
+    suspend fun getRecent(limit: Int = 500): List<LabyrinthRouteEntity>
+
     @Query("UPDATE labyrinth_routes SET route_json = :routeJson WHERE id = :id")
     suspend fun updateRouteJson(id: Long, routeJson: String): Int
 }

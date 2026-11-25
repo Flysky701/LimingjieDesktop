@@ -33,6 +33,11 @@ class LabyrinthShadowBattleRecorder {
     fun hasPendingAttempt(): Boolean = pendingAttempt != null
 
     @Synchronized
+    fun cancelPendingAttempt() {
+        pendingAttempt = null
+    }
+
+    @Synchronized
     fun reset() {
         pendingAttempt = null
         activeRoundId = null
@@ -138,4 +143,23 @@ class LabyrinthShadowBattleRecorder {
                 .joinToString("") { "%02x".format(it) }
         }
     }
+}
+
+internal fun labyrinthShouldRecordShadowBattleAttempt(
+    kind: LabyrinthCombatKind?,
+    bossTeamMode: LabyrinthBossTeamMode,
+    plannedTeams: Int,
+    committedTeamCount: Int,
+    bossFallbackMultiTeamActive: Boolean,
+    bossEditorTeamIndex: Int?,
+    combatTeamIndex: Int,
+): Boolean {
+    if (kind == null) return false
+    if (kind != LabyrinthCombatKind.BOSS) return true
+    val sequentialBossContinuation = bossEditorTeamIndex == null && combatTeamIndex > 1
+    return bossTeamMode == LabyrinthBossTeamMode.SINGLE_TEAM &&
+        !bossFallbackMultiTeamActive &&
+        !sequentialBossContinuation &&
+        plannedTeams <= 1 &&
+        committedTeamCount <= 1
 }

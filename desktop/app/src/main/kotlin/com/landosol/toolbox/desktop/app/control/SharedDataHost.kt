@@ -120,6 +120,7 @@ class SharedDataHost private constructor(
     private suspend fun publish() {
         mutableSnapshots.value = JsonObject(domain.snapshot(false) + mapOf(
             "sharedData" to JsonPrimitive(true), "strategyRevision" to JsonPrimitive(strategyRevision())))
+        mutableError.value = null
     }
 
     private suspend fun rpc(op: String, args: JsonObject): JsonObject {

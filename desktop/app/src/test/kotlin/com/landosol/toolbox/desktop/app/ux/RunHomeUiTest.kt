@@ -43,7 +43,7 @@ class RunHomeUiTest {
             compose.onNodeWithText("保存更改").assertIsDisplayed()
             compose.onRoot().performKeyInput{pressKey(Key.F5)}
             compose.runOnIdle{assertFalse(graph.busy);assertTrue(graph.ux.preferences.state.value.goals.isEmpty());assertFalse(ControlOps.START in port.requests)}
-            compose.onNodeWithText("高级配置").performClick()
+            compose.onNodeWithText("开局与路线").performClick()
             compose.onNodeWithText("放弃未保存的常用配置？").assertExists()
             compose.onNodeWithText("留在此页").performClick()
             compose.onNodeWithText("保存更改").performClick()
@@ -52,15 +52,14 @@ class RunHomeUiTest {
             compose.onNodeWithText("取消更改").performClick()
             compose.onNodeWithContentDescription("美食殿堂 次数").assertTextEquals("3")
 
-            // Use the original form's actual Save action, then return to the home shortcut.
-            compose.onNodeWithText("高级配置").performClick()
+            // Use the native advanced reroll dialog's Save action, then verify F5 guard and sync.
+            compose.onNodeWithText("开局与路线").performClick()
             compose.onNodeWithText("开始 F5").assertIsNotEnabled()
-            compose.onNodeWithText("刷开局设置").performClick()
-            compose.onNodeWithText("刷开局设置 · 当前账号",useUnmergedTree=true).assertExists()
-            compose.onAllNodes(hasText("2") and hasAnyAncestor(isDialog())).onFirst().performClick()
+            compose.onNodeWithText("开局与路线设置").assertExists()
+            compose.onNodeWithText("难度 2").performClick()
             compose.onNodeWithText("保存").performClick()
             compose.waitUntil(5000){graph.labyrinthController.uiState.value.selectedDifficulty==2}
-            compose.onNodeWithText("返回运行台 · Esc").performClick()
+            compose.waitUntil(5000){compose.onAllNodesWithText("开局与路线设置").fetchSemanticsNodes().isEmpty()}
             compose.runOnIdle{assertFalse(ControlOps.START in port.requests);assertNull(port.error.value)}
             // The saved difficulty reaches the form on the next control snapshot.
             compose.waitUntil(5_000) { compose.onAllNodesWithText("2").fetchSemanticsNodes().size == 1 }
@@ -75,7 +74,7 @@ class RunHomeUiTest {
             compose.onRoot().performKeyInput{pressKey(Key.F5)}
             compose.onNodeWithText("确认彻底撤退").assertDoesNotExist()
             compose.onNodeWithText("取消更改").performClick()
-            compose.onNodeWithText("高级配置").performClick()
+            compose.onNodeWithText("开局与路线").performClick()
             compose.onRoot().performKeyInput{pressKey(Key.F5)}
             compose.onNodeWithText("确认彻底撤退").assertDoesNotExist()
             compose.onNodeWithText("返回运行台 · Esc").performClick()

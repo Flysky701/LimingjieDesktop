@@ -16,9 +16,10 @@ import org.junit.Test
 class DesktopBattleModelLruTest {
     @Test fun pathBSettingRoundTripsAndDefaultsForLegacyJson() {
         assertFalse(DesktopSettings().pathBPlanningEnabled)
+        assertEquals("BALANCED", DesktopSettings().battleModelStyle)
 
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-        val enabled = DesktopSettings(battleOnnxEnabled = true, pathBPlanningEnabled = true)
+        val enabled = DesktopSettings(battleOnnxEnabled = true, pathBPlanningEnabled = true, battleModelStyle = "AGGRESSIVE")
         assertEquals(enabled, json.decodeFromString<DesktopSettings>(json.encodeToString(enabled)))
         assertEquals(enabled, ControlModelCodec.decode<DesktopSettings>(ControlModelCodec.encode(enabled)))
 

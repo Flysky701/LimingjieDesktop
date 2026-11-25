@@ -2,8 +2,15 @@ package com.landosol.toolbox.labyrinth
 
 import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.labyrinth.kernel.*
+import com.landosol.toolbox.labyrinth.kernel.planning.AreaClears
+import com.landosol.toolbox.labyrinth.kernel.planning.BlockClears
 import com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthRunPlanningContext
 import com.landosol.toolbox.labyrinth.kernel.planning.ModelBattlePassEstimator
+import com.landosol.toolbox.labyrinth.kernel.planning.PlanningState
+import com.landosol.toolbox.labyrinth.kernel.planning.ScoreCounts
+import com.landosol.toolbox.labyrinth.kernel.planning.ScoreTargetEvaluation
+import com.landosol.toolbox.labyrinth.kernel.planning.evaluateMidRunScoreTarget
+import com.landosol.toolbox.protocol.labyrinth.LabyrinthMapNode
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelAssessment
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelDecisionStatus
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelTrace
@@ -116,6 +123,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -259,6 +267,8 @@ internal data class BattleModelInputs(
     val estimator: LabyrinthBattleValueEstimator?,
     val exEncounterId: String? = null,
     val alphaRupee: Int? = null,
+    val strategyStyle: LabyrinthBattleModelStyle = LabyrinthBattleModelStyle.BALANCED,
+    val isBossBattle: Boolean = false,
 ) {
     fun valueContext(
         acquiredCharacterIds: List<String>,
@@ -278,6 +288,8 @@ internal data class BattleModelInputs(
             markStacksByMark = markStacks,
             alphaRupee = alphaRupee,
             reviveAvailable = reviveAvailable,
+            strategyStyle = strategyStyle,
+            isBossBattle = isBossBattle,
         )
     }
 
@@ -1093,7 +1105,7 @@ internal fun labyrinthNodeClickContradictsRecentStrongBinding(
     return !labyrinthNodeClickRectsAreStable(rememberedRect, candidateRect)
 }
 
-private enum class LabyrinthRunTerminalOutcome { CLEARED, FAILED_MAX_RETRY }
+private enum class LabyrinthRunTerminalOutcome { CLEARED, FAILED_MAX_RETRY, RETIRED_SCORE_TARGET }
 
 private data class PendingNodeTransition(
     val blockId: Long,
@@ -1128,10 +1140,11 @@ internal enum class LabyrinthPostBossStage {
 internal fun labyrinthPostBossStageOnPage(
     current: LabyrinthPostBossStage,
     page: LabyrinthEntryPageState,
+    chestObserved: Boolean = false,
 ): LabyrinthPostBossStage = when (page) {
     LabyrinthEntryPageState.RUN_CLEAR_RESULT -> when (current) {
-        LabyrinthPostBossStage.NONE, LabyrinthPostBossStage.BEFORE_SCORE,
-        LabyrinthPostBossStage.CHEST_SEQUENCE -> LabyrinthPostBossStage.SCORE_RESULT
+        LabyrinthPostBossStage.NONE, LabyrinthPostBossStage.BEFORE_SCORE -> LabyrinthPostBossStage.SCORE_RESULT
+        LabyrinthPostBossStage.CHEST_SEQUENCE -> if (chestObserved) current else LabyrinthPostBossStage.SCORE_RESULT
         else -> current
     }
     LabyrinthEntryPageState.RUN_CLEAR_CHEST_ANIMATION,
@@ -1228,6 +1241,17 @@ data class LabyrinthPathBDecisionSummary(
     val detail: String,
 )
 
+data class LabyrinthScoreTargetStatus(
+    val targetScore: Long,
+    val confirmedPts: Long,
+    val expectedScore: Long,
+    val hardUpperBound: Long,
+    val probReachTarget: Double,
+    val willRetire: Boolean,
+    val usedModel: Boolean,
+    val reason: String,
+)
+
 data class LabyrinthEntryRecognitionSessionState(
     val status: LabyrinthEntryRecognitionStatus = LabyrinthEntryRecognitionStatus.IDLE,
     val sessionId: AutomationSessionId? = null,
@@ -1259,6 +1283,8 @@ data class LabyrinthEntryRecognitionSessionState(
     val balancedDiagnostics: LabyrinthBalancedDiagnostics? = null,
     val pathBDecisionSummary: LabyrinthPathBDecisionSummary? = null,
     val nodeBindings: com.landosol.toolbox.labyrinth.node.NodeMatchResult? = null,
+    val alphaRupeeBalance: Int? = null,
+    val scoreTargetStatus: LabyrinthScoreTargetStatus? = null,
 ) {
     val running: Boolean get() = status == LabyrinthEntryRecognitionStatus.RUNNING
 }
@@ -1320,13 +1346,26 @@ class LabyrinthEntryRecognitionSession(
     val kernelRuntime: KernelRuntime = KernelRuntime(clock = clock),
     private val eventPackProvider: (() -> CompiledEventPackSet)? = null,
     private val journalDirectoryProvider: (() -> File?)? = null,
+    private val targetScoreProvider: ((Long?) -> Long)? = null,
+    private val scoreRetireRerollRequester: (suspend (Long, String) -> Boolean)? = null,
+    private val externalRunScoreProvider: ((runId: String?, sessionId: AutomationSessionId) -> Long?)? = null,
 ) {
     @Volatile var battleValueEstimator: LabyrinthBattleValueEstimator? = null
         private set
     private var battleRoleProfiles: Map<String, LabyrinthRoleProfile> = emptyMap()
     private var pathBPlanningEnabled = false
+    private var battleModelStyle: LabyrinthBattleModelStyle = LabyrinthBattleModelStyle.BALANCED
     private var planningEstimator: ModelBattlePassEstimator? = null
+    private var planningRequireLeadVanguard = false
+    private var planningScoringConfig: LabyrinthTeamScoringConfig? = null
     private var planningEstimatorRevision = 0L
+    @Volatile private var activeRunTargetScore: Long = 0L
+    @Volatile private var pendingTerminalReason: String? = null
+    @Volatile private var eventArenaNormalWins = 0
+    @Volatile private var eventArenaExWins = 0
+    private val countedEventBattleNodeIds = java.util.Collections.synchronizedSet(mutableSetOf<Long>())
+    @Volatile private var lastScoreTargetCacheKey: String? = null
+    @Volatile private var lastScoreTargetEval: ScoreTargetEvaluation? = null
     private val alphaRupeeLedger = LabyrinthAlphaRupeeLedger()
     private val shadowBattleRecorder = LabyrinthShadowBattleRecorder()
     @Volatile private var plannedShopImprintIsChoice: Boolean? = null
@@ -1781,6 +1820,8 @@ class LabyrinthEntryRecognitionSession(
     @Volatile
     private var lastBattleTeamRecommendationKey: Pair<String, BattleModelInputs>? = null
     @Volatile
+    private var lastBattleTeamRecommendationLog: String? = null
+    @Volatile
     private var lastBattleTeamSelectionPlanLog: String? = null
     @Volatile
     private var lastBattleTeamExecutionKey: String? = null
@@ -2034,6 +2075,7 @@ class LabyrinthEntryRecognitionSession(
     private var plannedShopPurchaseStartedAt = Long.MIN_VALUE
     private val shopChoiceImprintRolePending get() = shopDomain.choiceImprintRolePending
     private val shopScan get() = shopDomain.shopScan
+    @Volatile private var lastPublishedShopPathBTarget: Pair<String, String>? = null
     @Volatile var shopEvidenceVersion: Long = 0
         private set
     @Volatile private var shopRequiredCapturedAfter = Long.MIN_VALUE
@@ -2181,6 +2223,7 @@ class LabyrinthEntryRecognitionSession(
     @Volatile
     private var postEntryStallMessage: String? = null
     private val battleWait = battleDomain.battleWait
+    @Volatile private var battleWaitActive = false
     @Volatile
     private var characterAcquisitionActive = false
     @Volatile
@@ -2205,6 +2248,8 @@ class LabyrinthEntryRecognitionSession(
     private var lastObservedRoleRewardSelectionSignature: String? = null
     @Volatile
     private var postBossStage = LabyrinthPostBossStage.NONE
+    @Volatile
+    private var postBossChestObserved = false
     @Volatile
     private var postBossUnknownAttempts = 0
     @Volatile
@@ -2431,6 +2476,7 @@ class LabyrinthEntryRecognitionSession(
         // otherwise complete before the batch run id is attached.
         currentRunId = if (dryRun) null else runId
         pendingTerminalOutcome = null
+        pendingTerminalReason = null
         synchronized(kernelRuntime) {
             resetKernelRoute("session_start")
             var traceId = "labyrinth-" + session.id.value
@@ -2444,6 +2490,11 @@ class LabyrinthEntryRecognitionSession(
         activeRunAccountId = accountId
         confirmedNodeEntryReceipt = null
         validatedRoute = executionRoute
+        activeRunTargetScore = resolveActiveRunTargetScore()
+        eventArenaNormalWins = 0
+        eventArenaExWins = 0
+        countedEventBattleNodeIds.clear()
+        invalidateScoreTargetCache()
         lastProcessedAt = Long.MIN_VALUE
         endGuardedAction()
         channelPromptVisibleUntil = Long.MIN_VALUE
@@ -2579,9 +2630,11 @@ class LabyrinthEntryRecognitionSession(
 
     suspend fun setPaused(paused: Boolean): Boolean {
         if (!balancedMode) return setPausedOnControl(paused)
-        manualPauseRequested.set(paused)
+        val previous = manualPauseRequested.getAndSet(paused)
         lifecycleEpoch.incrementAndGet()
-        return withContext(LabyrinthFourThreadRuntime.controlDispatcher) { setPausedOnControl(paused) }
+        val changed = withContext(LabyrinthFourThreadRuntime.controlDispatcher) { setPausedOnControl(paused) }
+        if (!changed) manualPauseRequested.set(previous)
+        return changed
     }
 
     private suspend fun setPausedOnControl(paused: Boolean): Boolean = mutex.withLock {
@@ -2595,14 +2648,36 @@ class LabyrinthEntryRecognitionSession(
         resetPendingNodeClickStability()
         if (paused) {
             invalidateEventPermission("session_paused")
+            revokeDomainInput("session_paused")
+            balancedPipeline?.clearPending()
+            clearQueuedFrame()
             diagnosticLane.clear()
+            if (balancedMode) {
+                rolePlanning.invalidate("SESSION_PAUSED")
+                freeRolePlanning.invalidate("SESSION_PAUSED")
+                eventPlanning.invalidate("SESSION_PAUSED")
+                battlePlanning.invalidate("SESSION_PAUSED")
+                battleRetryPlanning.invalidate("SESSION_PAUSED")
+            }
+        } else {
+            balancedRequiredCapturedAfter = maxOf(balancedRequiredCapturedAfter, clock())
+        }
+        synchronized(kernelRuntime) {
+            kernelRuntime.emit(
+                KernelDomain.RUNTIME,
+                KernelEventKinds.SESSION_LIFECYCLE,
+                SessionLifecyclePayload(kernelRuntime.traceId, if (paused) "pause" else "resume"),
+                summary = if (paused) "session_paused" else "session_resumed",
+            )
         }
         synchronized(roleDecisionPublishLock) {
             roleDecisionGeneration.incrementAndGet()
-            _state.value = _state.value.copy(
-                paused = paused,
-                message = if (paused) "入口识别已暂停" else "入口仅识别已继续",
-            )
+            _state.update {
+                it.copy(
+                    paused = paused,
+                    message = if (paused) "入口识别已暂停" else "入口仅识别已继续",
+                )
+            }
         }
         overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
         if (balancedMode) {
@@ -2697,17 +2772,23 @@ class LabyrinthEntryRecognitionSession(
      * unexplained stop the batch must not count.
      */
     private fun publishRunTerminal(reason: String, userInitiated: Boolean) {
-        val runId = currentRunId ?: return
+        val runId = currentRunId ?: run {
+            pendingTerminalReason = null
+            return
+        }
         val outcome = pendingTerminalOutcome
+        val terminalReason = pendingTerminalReason ?: reason
         // Run ownership is session-local state and must be cleared even in builds/tests that do
         // not install a batch listener. Otherwise the next interactive run inherits a stale run
         // id and may retain capture or report a terminal event to the wrong batch.
         currentRunId = null
         pendingTerminalOutcome = null
+        pendingTerminalReason = null
         val listener = runTerminalListener ?: return
         val event = when {
             outcome == LabyrinthRunTerminalOutcome.CLEARED -> LabyrinthRunTerminalEvent.Cleared(runId, _state.value.runSummary)
             outcome == LabyrinthRunTerminalOutcome.FAILED_MAX_RETRY -> LabyrinthRunTerminalEvent.FailedMaxRetry(runId)
+            outcome == LabyrinthRunTerminalOutcome.RETIRED_SCORE_TARGET -> LabyrinthRunTerminalEvent.RetiredScoreTarget(runId, terminalReason)
             userInitiated -> LabyrinthRunTerminalEvent.UserStopped(runId)
             else -> LabyrinthRunTerminalEvent.FatalUnknown(runId, reason)
         }
@@ -2816,6 +2897,8 @@ class LabyrinthEntryRecognitionSession(
         changed = ::publishBalancedDiagnostics,
         intervalMillis = { responseIntervalMillis }, recycle = ::recycle,
         timestampMillis = { frame -> frame.timestampMillis }, workerClock = SystemClock::elapsedRealtime,
+        foregroundReady = { _state.value.dryRun || actionTargetReady() },
+        onNotForeground = { publishWaitingForGameForeground(sessionId) },
     )
 
     private fun observeBalancedFast(sessionId: AutomationSessionId, fast: LabyrinthFastFrameObservation) {
@@ -2868,6 +2951,7 @@ class LabyrinthEntryRecognitionSession(
         resetPendingNodeClickStability()
         revokeDomainInput("scene_invalidated")
         if (!balancedMode) return
+        lastBattleTeamRecommendationKey = null
         invalidateEventPermission("scene_invalidated")
         rolePlanning.invalidate(); freeRolePlanning.invalidate(); eventPlanning.invalidate(); battlePlanning.invalidate(); battleRetryPlanning.invalidate()
     }
@@ -2900,7 +2984,7 @@ class LabyrinthEntryRecognitionSession(
         frame: CapturedFrame,
     ) {
         frameQueueMetrics.seen()
-        if (activeSessionId != sessionId || _state.value.paused) {
+        if (activeSessionId != sessionId || _state.value.paused || manualPauseRequested.get() || stopRequested.get()) {
             frameQueueMetrics.invalidDropped()
             recycle(frame)
             return
@@ -2945,7 +3029,7 @@ class LabyrinthEntryRecognitionSession(
         processor: (CapturedFrame) -> LabyrinthEntryFrameResult,
         frame: CapturedFrame,
     ) {
-        if (activeSessionId != sessionId || _state.value.paused) {
+        if (activeSessionId != sessionId || _state.value.paused || manualPauseRequested.get() || stopRequested.get()) {
             recycle(frame)
             return
         }
@@ -2953,7 +3037,7 @@ class LabyrinthEntryRecognitionSession(
         if (!sessionState.dryRun && !actionTargetReady()) {
             val message = "等待游戏切到前台，自动会话保持运行"
             if (sessionState.message != message) {
-                _state.value = sessionState.copy(message = message)
+                _state.update { it.copy(message = message) }
                 runCatching {
                     overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
                 }.onFailure { error ->
@@ -2965,10 +3049,7 @@ class LabyrinthEntryRecognitionSession(
         }
         val frameWidth = frame.bitmap.width
         val frameHeight = frame.bitmap.height
-        val beforeProcessing = _state.value
-        _state.value = beforeProcessing.copy(
-            receivedFrameCount = beforeProcessing.receivedFrameCount + 1,
-        )
+        _state.update { it.copy(receivedFrameCount = it.receivedFrameCount + 1) }
         val workerStarted = SystemClock.elapsedRealtime()
         val frameGeneration = roleDecisionGeneration.get()
         val frameShopVersion = shopEvidenceVersion
@@ -3101,12 +3182,15 @@ class LabyrinthEntryRecognitionSession(
             return
         }
         val current = _state.value
+        val previousPage = current.lastResult?.observation?.state
         _state.value = current.copy(
             frameCount = current.frameCount + 1,
             lastResult = result,
             initial1088Recovery = null,
             pathBDecisionSummary = current.pathBDecisionSummary?.takeIf {
-                current.lastResult?.observation?.state == result.observation.state
+                previousPage == result.observation.state ||
+                    (previousPage != null && labyrinthPageUiOwner(previousPage) == LabyrinthPageUiOwner.SHOP &&
+                        labyrinthPageUiOwner(result.observation.state) == LabyrinthPageUiOwner.SHOP)
             },
             message = if (result.observation.state == LabyrinthEntryPageState.UNKNOWN) {
                 "未知或低置信度页面，动作已禁用"
@@ -3200,7 +3284,7 @@ class LabyrinthEntryRecognitionSession(
         ) {
             entryPhaseComplete = false
             existingRunResumeHandoffArmed = false
-            battleWait.reset()
+            resetBattleWait()
             clearCharacterAcquisitionContext()
             clearRoleRewardBatchTracking()
             synchronized(actionPlannerLock) {
@@ -3302,6 +3386,7 @@ class LabyrinthEntryRecognitionSession(
         if (pageState == LabyrinthEntryPageState.SHOP) {
             result.shopObservation?.let { shop ->
                 alphaRupeeLedger.onShopCoinsObserved(shop.coinBalance, shop.coinBalanceConfirmed, timestampMillis)
+                syncAlphaRupeeState()
             }
         }
         refreshEventChoiceDecision(sessionId, result)
@@ -3535,7 +3620,8 @@ class LabyrinthEntryRecognitionSession(
 
             shopJoinedReward && !current.dryRun ->
                 handlePostEntryPage(sessionId, result, frameWidth, frameHeight, timestampMillis)
-            nodeReplayActive && pageState == LabyrinthEntryPageState.NODE_SELECTION ->
+            nodeReplayActive && pageState == LabyrinthEntryPageState.NODE_SELECTION &&
+                (current.dryRun || postBossStage == LabyrinthPostBossStage.NONE) ->
                 handleNodeSelectionFrame(sessionId, result, frameWidth, frameHeight, timestampMillis)
 
             // 入口流程已交接给路线执行：点击节点后出现的事件页在这里处理，
@@ -3554,7 +3640,7 @@ class LabyrinthEntryRecognitionSession(
         firstFrameWatchdog?.cancel()
         firstFrameWatchdog = actionScope.launch {
             delay(FIRST_FRAME_TIMEOUT_MILLIS)
-            if (activeSessionId != sessionId) return@launch
+            if (activeSessionId != sessionId || _state.value.paused || manualPauseRequested.get()) return@launch
             val current = _state.value
             if (current.lastResult != null || current.frameCount > 0) return@launch
             val captureRunning = captureActive()
@@ -3616,7 +3702,7 @@ class LabyrinthEntryRecognitionSession(
         )
         mirrorSessionRecovery()
         if (!evaluation.blocked) return false
-        battleWait.reset()
+        resetBattleWait()
         when (val decision = evaluation.decision) {
             is KernelDecision.Act -> dispatchSessionReturnTitle(sessionId, evaluation, timestampMillis)
             is KernelDecision.NeedEvidence -> publishSessionRecoveryMessage(sessionId, decision.reason)
@@ -3695,6 +3781,7 @@ class LabyrinthEntryRecognitionSession(
         settlementDomain.reset(kernelRuntime.traceId)
         rewardTail.reset(kernelRuntime.traceId)
         shopDomain.reset(kernelRuntime.traceId)
+        lastPublishedShopPathBTarget = null
         battleDomain.reset(kernelRuntime.traceId)
         mapDomain.reset(kernelRuntime.traceId)
         invalidateEventPermission("entry_navigation_restarted")
@@ -3702,8 +3789,9 @@ class LabyrinthEntryRecognitionSession(
         nodeEvidenceFrameWidth = 0
         nodeEvidenceFrameHeight = 0
         nodeConflictRecovery.reset()
-        battleWait.reset()
+        resetBattleWait()
         alphaRupeeLedger.reset()
+        syncAlphaRupeeState()
         shadowBattleRecorder.reset()
         plannedShopImprintIsChoice = null
         entryPhaseComplete = false
@@ -3740,6 +3828,7 @@ class LabyrinthEntryRecognitionSession(
         awaitingRetryBattleAfterFailure = false
         combatContext = null
         lastBattleTeamRecommendationKey = null
+        lastBattleTeamRecommendationLog = null
         lastBattleTeamSelectionPlanLog = null
         _state.value = _state.value.copy(
             combatContext = null,
@@ -4301,6 +4390,7 @@ class LabyrinthEntryRecognitionSession(
                     activeRunStartedAt = snapshot?.startedAt
                     battleRelicReviveConsumed = false
                     alphaRupeeLedger.reset()
+                    syncAlphaRupeeState()
                     shadowBattleRecorder.reset()
                     plannedShopImprintIsChoice = null
                     openingRelicBaselineKnown = fixedOpening.complete
@@ -4334,6 +4424,7 @@ class LabyrinthEntryRecognitionSession(
             cancelShopRelicAcquisition(relicId)
         }, eventDomain.currentFrame)
         if (purchasedRelic != null) {
+            lastPublishedShopPathBTarget = null
             val price = LabyrinthAlphaRupeeLedger.estimatedShopItemPrice(
                 rarity = purchasedRelic.rarity,
                 isRoleImprint = false,
@@ -4342,6 +4433,7 @@ class LabyrinthEntryRecognitionSession(
                 hasRelic40003 = _state.value.observedRelics.any { it.relicId == "40003" },
             )
             alphaRupeeLedger.onShopPurchaseCommitted(price, timestampMillis)
+            syncAlphaRupeeState()
             plannedShopImprintIsChoice = null
         }
         val reconciled = labyrinthRosterReconciliationMatches(result)
@@ -4544,6 +4636,7 @@ class LabyrinthEntryRecognitionSession(
         }
         if (pageState != LabyrinthEntryPageState.BATTLE_TEAM_SELECTION) {
             lastBattleTeamRecommendationKey = null
+            lastBattleTeamRecommendationLog = null
             lastBattleTeamSelectionPlanLog = null
             battleTeamPageStallSince = Long.MIN_VALUE
             _state.value = _state.value.copy(
@@ -4855,10 +4948,23 @@ class LabyrinthEntryRecognitionSession(
 
     private fun refreshSharedSettings(snapshot: LabyrinthStrategySnapshot?, sessionPacks: CompiledEventPackSet) {
         pathBPlanningEnabled = snapshot?.pathBPlanningEnabled == true
+        battleModelStyle = snapshot?.battleModelStyle ?: LabyrinthBattleModelStyle.BALANCED
         val estimator = snapshot?.roleRuntime?.battleValueEstimator
         val profiles = snapshot?.roleRuntime?.profiles.orEmpty()
-        if (battleValueEstimator !== estimator || battleRoleProfiles !== profiles) {
-            planningEstimator = (estimator as? ContextualBattleValueEstimator)?.let { ModelBattlePassEstimator(it, profiles) }
+        val nextRequireLeadVanguard =
+            snapshot?.settings?.effectiveFrontlineSurvivalMode?.requiresFrontlineSurvivalGate ?: false
+        val nextScoring = snapshot?.roleRuntime?.document?.scoring
+        if (battleValueEstimator !== estimator || battleRoleProfiles !== profiles ||
+            planningRequireLeadVanguard != nextRequireLeadVanguard || planningScoringConfig != nextScoring
+        ) {
+            planningEstimator = createPlanningBattlePassEstimator(
+                estimator = estimator,
+                profiles = profiles,
+                scoring = nextScoring,
+                requireLeadVanguard = nextRequireLeadVanguard,
+            )
+            planningRequireLeadVanguard = nextRequireLeadVanguard
+            planningScoringConfig = nextScoring
             planningEstimatorRevision++
         }
         battleValueEstimator = estimator
@@ -4906,6 +5012,14 @@ class LabyrinthEntryRecognitionSession(
             synchronized(pendingAcquiredCharacterIds) { pendingAcquiredCharacterIds.toList() })
             .mapTo(linkedSetOf(), ::canonicalLabyrinthRoleId)
 
+    private fun resolveActiveRunTargetScore(): Long =
+        targetScoreProvider?.invoke(activeRunAccountId) ?: (validatedRoute?.targetScore ?: 0L)
+
+    private fun invalidateScoreTargetCache() {
+        lastScoreTargetCacheKey = null
+        lastScoreTargetEval = null
+    }
+
     private fun buildRunPlanningContext(observedAlphaCoin: Int? = null): LabyrinthRunPlanningContext? {
         if (!pathBPlanningEnabled) return null
         val route = validatedRoute ?: return null
@@ -4922,6 +5036,7 @@ class LabyrinthEntryRecognitionSession(
             alphaRupee = observedAlphaCoin ?: alphaRupeeLedger.currentBalance,
             passEstimator = planningEstimator,
             estimatorTag = planningEstimatorRevision.toString(),
+            targetScore = activeRunTargetScore,
         )
     }
 
@@ -4933,17 +5048,28 @@ class LabyrinthEntryRecognitionSession(
         if (current.pathBDecisionSummary != summary) _state.value = current.copy(pathBDecisionSummary = summary)
     }
 
+    private fun syncAlphaRupeeState() {
+        val balance = alphaRupeeLedger.currentBalance
+        val current = _state.value
+        if (current.alphaRupeeBalance != balance) {
+            _state.value = current.copy(alphaRupeeBalance = balance)
+        }
+    }
+
     private fun publishShopPlanningDecision(decision: LabyrinthShopDecision) {
-        when (decision) {
-            is LabyrinthShopDecision.BuyRelic -> publishPathBDecision(decision.planningSource, "商店",
+        val (source, target, detail) = when (decision) {
+            is LabyrinthShopDecision.BuyRelic -> Triple(decision.planningSource,
                 "购买${decision.relicDecision.choice.displayName ?: decision.relicDecision.choice.relicId}",
                 decision.relicDecision.reason)
-            is LabyrinthShopDecision.BuyRoleImprint ->
-                publishPathBDecision(decision.planningSource, "商店", "购买${decision.label}", decision.reason)
-            is LabyrinthShopDecision.Refresh -> publishPathBDecision(decision.planningSource, "商店", "刷新", decision.reason)
-            is LabyrinthShopDecision.Close -> publishPathBDecision(decision.planningSource, "商店", "退出", decision.reason)
-            is LabyrinthShopDecision.Wait -> Unit
+            is LabyrinthShopDecision.BuyRoleImprint -> Triple(decision.planningSource, "购买${decision.label}", decision.reason)
+            is LabyrinthShopDecision.Refresh -> Triple(decision.planningSource, "刷新", decision.reason)
+            is LabyrinthShopDecision.Close -> Triple(decision.planningSource, "退出", decision.reason)
+            is LabyrinthShopDecision.Wait -> return
         }
+        val key = source?.let { it to target }
+        if (key != null && key == lastPublishedShopPathBTarget) return
+        lastPublishedShopPathBTarget = key
+        publishPathBDecision(source, "商店", target, detail)
     }
 
     private fun battleModelInputs(
@@ -4964,8 +5090,13 @@ class LabyrinthEntryRecognitionSession(
             estimator = battleValueEstimator,
             exEncounterId = if (kind == LabyrinthCombatKind.EX) exEncounterStrategy?.id else null,
             alphaRupee = alphaRupeeLedger.currentBalance,
+            strategyStyle = battleModelStyle,
+            isBossBattle = kind == LabyrinthCombatKind.BOSS,
         )
     }
+
+    private fun battleTeamPlanningFrozen(): Boolean =
+        pendingBattleTeamAction?.kind == LabyrinthBattleTeamExecutionKind.START_BATTLE || battleWaitActive
 
     /** Builds the recommendation consumed by the guarded battle-team execution stage. */
     private fun refreshBattleTeamRecommendation(
@@ -4975,6 +5106,7 @@ class LabyrinthEntryRecognitionSession(
     ) {
         if (activeSessionId != sessionId) return
         if (pageState != LabyrinthEntryPageState.BATTLE_TEAM_SELECTION) {
+            lastBattleTeamRecommendationLog = null
             battleFormationExhaustedReason = null
             if (balancedMode) battlePlanning.invalidate()
             if (
@@ -4990,11 +5122,13 @@ class LabyrinthEntryRecognitionSession(
             }
             return
         }
+        if (battleTeamPlanningFrozen()) return
 
         if (combatContext?.kind == LabyrinthCombatKind.BOSS &&
             bossEditorPreparationStage != LabyrinthBossEditorPreparationStage.COMPLETE
         ) {
             lastBattleTeamRecommendationKey = null
+            lastBattleTeamRecommendationLog = null
             _state.value = _state.value.copy(
                 battleTeamRecommendation = null,
                 battleTeamRecommendationUnavailableReason = null,
@@ -5081,6 +5215,16 @@ class LabyrinthEntryRecognitionSession(
             .distinct()
         val usedCharacterIds = synchronized(committedBattleCharacterIds) { committedBattleCharacterIds.toSet() }
         val eligibleCharacterIds = acquiredCharacterIds.filterNot(usedCharacterIds::contains)
+        val autoDowngradeBossMaxTeams = if (
+            currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
+            bossTeamMode == LabyrinthBossTeamMode.SINGLE_TEAM &&
+            singleBossFallbackToMultiAfterThreeFailures &&
+            currentCombatContext.teamIndex == 1 &&
+            battleRetryCount == 0 &&
+            preparedBossFirstTeamIds.isEmpty() &&
+            usedCharacterIds.isEmpty() &&
+            eligibleCharacterIds.size >= 10
+        ) minOf(3, eligibleCharacterIds.size / 5) else 1
         val planner = battleTeamRecommendationPlanner
         val savedFrontlineMode = battleStrategySettingsSnapshot.effectiveFrontlineSurvivalMode
         val requestedFrontlineMode = battleFormationState.requestedMode(savedFrontlineMode)
@@ -5126,6 +5270,7 @@ class LabyrinthEntryRecognitionSession(
             append(bossFallbackMultiTeamActive)
             append("|requestedBossTeams=")
             append(requestedBossTeamCount)
+            append("|autoDowngradeBossMax=").append(autoDowngradeBossMaxTeams)
             append("|bossTarget=")
             append(bossMultiTeamTargetCount ?: 0)
             append("|retry=")
@@ -5142,7 +5287,7 @@ class LabyrinthEntryRecognitionSession(
             append(usedCharacterIds.sorted().joinToString(","))
         } to modelInputs
         if (
-            !balancedMode && cacheKey == lastBattleTeamRecommendationKey &&
+            cacheKey == lastBattleTeamRecommendationKey &&
             (current.battleTeamRecommendation != null ||
                 current.battleTeamRecommendationUnavailableReason != null)
         ) {
@@ -5177,7 +5322,11 @@ class LabyrinthEntryRecognitionSession(
         val unavailableReason = battleTeamRecommendationUnavailableReason
         val teamIndex = currentCombatContext?.teamIndex ?: 1
         val profiles = battleRoleProfiles
-        val savedBossAssessment = plannedBossModelAssessment.takeIf { allowSupplementLead && retryNumber == 0 }
+        val savedBossAssessment = plannedBossModelAssessment?.takeIf {
+            retryNumber == 0 && (allowSupplementLead ||
+                (currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
+                    bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM && teamIndex == 1 && it.autoDowngradedToMultiTeam))
+        }
         val savedBossTeams = if (savedBossAssessment == null) emptyList() else plannedBossModelTeams
         val computeRecommendation = {
             val plannedRecommendation = savedBossAssessment?.let {
@@ -5194,13 +5343,14 @@ class LabyrinthEntryRecognitionSession(
                 } else null
                 labyrinthBalancedBattleRecommendation(planner, unavailableReason, eligibleCharacterIds,
                     decisionContext, failedSignatures, lastFailedSignature, retryNumber,
-                    requestedBossTeamCount, allowSupplementLead, teamIndex, battleValueContext, modelFallbackTrace)
+                    requestedBossTeamCount, allowSupplementLead, teamIndex, battleValueContext, modelFallbackTrace,
+                    autoDowngradeBossMaxTeams = autoDowngradeBossMaxTeams)
             }
         }
         val output = if (balancedMode) {
             val key = listOf(sessionId, roleDecisionGeneration.get(), balancedSceneEpoch, planner,
                 acquiredCharacterIds.toList(), eligibleCharacterIds.toList(), decisionContext,
-                failedSignatures.toList(), lastFailedSignature, retryNumber, requestedBossTeamCount,
+                failedSignatures.toList(), lastFailedSignature, retryNumber, requestedBossTeamCount, autoDowngradeBossMaxTeams,
                 allowSupplementLead, bossTeamMode, bossMultiTeamTargetCount, currentCombatContext,
                 usedCharacterIds.toList(), savedFrontlineMode, requestedFrontlineMode, candidateSelection,
                 modelInputs, savedBossAssessment)
@@ -5224,10 +5374,29 @@ class LabyrinthEntryRecognitionSession(
             is LabyrinthBattleTeamRecommendationResult.Ready -> {
                 battleFormationExhaustedReason = null
                 val originalPlan = recommendationResult.recommendation
+                val downgradeAssessment = originalPlan.modelAssessment?.takeIf {
+                    currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
+                        bossTeamMode == LabyrinthBossTeamMode.SINGLE_TEAM &&
+                        teamIndex == 1 &&
+                        preparedBossFirstTeamIds.isEmpty() &&
+                        usedCharacterIds.isEmpty() &&
+                        it.autoDowngradedToMultiTeam &&
+                        originalPlan.plannedBossTeamCount > 1
+                }
+                if (downgradeAssessment != null) {
+                    bossTeamMode = LabyrinthBossTeamMode.MULTI_TEAM
+                    bossFallbackMultiTeamActive = true
+                    lastBattleTeamRecommendationKey = null
+                    nodeLog(
+                        "boss-auto-downgrade-multi-team soloPWin=${"%.3f".format(downgradeAssessment.pWin)} " +
+                            "plannedTeams=${originalPlan.plannedBossTeamCount}",
+                    )
+                }
                 val plannedCount = labyrinthAggressiveBossPlannedRemainingTeams(
                     savedFrontlineMode, currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
                         bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM,
-                    requestedBossTeamCount, eligibleCharacterIds.size, originalPlan.plannedBossTeamCount,
+                    if (downgradeAssessment != null) originalPlan.plannedBossTeamCount else requestedBossTeamCount,
+                    eligibleCharacterIds.size, originalPlan.plannedBossTeamCount,
                 )
                 val planned = originalPlan.copy(
                     plannedBossTeamCount = plannedCount,
@@ -5268,7 +5437,11 @@ class LabyrinthEntryRecognitionSession(
                         unavailableReason = null,
                     ),
                 )
-                runCatching { Log.i(TEAM_RECOMMENDATION_LOG_TAG, recommendation.logText()) }
+                val log = recommendation.logText()
+                if (lastBattleTeamRecommendationLog != log) {
+                    lastBattleTeamRecommendationLog = log
+                    runCatching { Log.i(TEAM_RECOMMENDATION_LOG_TAG, log) }
+                }
             }
 
             is LabyrinthBattleTeamRecommendationResult.Unavailable -> {
@@ -5296,8 +5469,10 @@ class LabyrinthEntryRecognitionSession(
                         unavailableReason = recommendationResult.reason,
                     ),
                 )
-                runCatching {
-                    Log.w(TEAM_RECOMMENDATION_LOG_TAG, "第一队建议不可用：${recommendationResult.reason}")
+                val log = "第一队建议不可用：${recommendationResult.reason}"
+                if (lastBattleTeamRecommendationLog != log) {
+                    lastBattleTeamRecommendationLog = log
+                    runCatching { Log.w(TEAM_RECOMMENDATION_LOG_TAG, log) }
                 }
             }
         }
@@ -5328,12 +5503,15 @@ class LabyrinthEntryRecognitionSession(
             battleTeamSelectionPlan = plan,
             message = "普通战沿用已确认的满5人现队，普战跳编队优先生效，准备开始战斗",
         )
-        val log = plan.logText()
-        if (lastBattleTeamSelectionPlanLog != log) {
-            lastBattleTeamSelectionPlanLog = log
-            runCatching { Log.i(TEAM_SELECTION_PLAN_LOG_TAG, log) }
-        }
+        logBattleTeamSelectionPlan(plan)
         return true
+    }
+
+    private fun logBattleTeamSelectionPlan(plan: LabyrinthBattleTeamSelectionPlan) {
+        val key = plan.logKey()
+        if (lastBattleTeamSelectionPlanLog == key) return
+        lastBattleTeamSelectionPlanLog = key
+        runCatching { Log.i(TEAM_SELECTION_PLAN_LOG_TAG, plan.logText()) }
     }
 
     private fun refreshBattleTeamSelectionPlan(
@@ -5342,6 +5520,7 @@ class LabyrinthEntryRecognitionSession(
         observation: com.landosol.toolbox.labyrinth.vision.LabyrinthBattleTeamObservation?,
     ) {
         if (activeSessionId != sessionId) return
+        if (battleTeamPlanningFrozen()) return
         if (pageState == LabyrinthEntryPageState.BATTLE_TEAM_SELECTION &&
             publishCurrentNormalTeamHold(sessionId, observation)) return
         val recommendation = _state.value.battleTeamRecommendation
@@ -5352,8 +5531,10 @@ class LabyrinthEntryRecognitionSession(
             observation == null ||
             planner == null
         ) {
-            if (_state.value.battleTeamSelectionPlan != null || lastBattleTeamSelectionPlanLog != null) {
+            if (pageState != LabyrinthEntryPageState.BATTLE_TEAM_SELECTION) {
                 lastBattleTeamSelectionPlanLog = null
+            }
+            if (_state.value.battleTeamSelectionPlan != null) {
                 _state.value = _state.value.copy(battleTeamSelectionPlan = null)
             }
             return
@@ -5378,7 +5559,6 @@ class LabyrinthEntryRecognitionSession(
                 retryCount = battleRetryCount,
             ),
         )
-        val logText = plan.logText()
         val current = _state.value
         _state.value = current.copy(
             battleTeamSelectionPlan = plan,
@@ -5389,10 +5569,7 @@ class LabyrinthEntryRecognitionSession(
                 selectionPlan = plan,
             ),
         )
-        if (lastBattleTeamSelectionPlanLog != logText) {
-            lastBattleTeamSelectionPlanLog = logText
-            runCatching { Log.i(TEAM_SELECTION_PLAN_LOG_TAG, logText) }
-        }
+        logBattleTeamSelectionPlan(plan)
     }
 
     /**
@@ -5610,14 +5787,24 @@ class LabyrinthEntryRecognitionSession(
     }
 
     private fun finishFromPlanner(sessionId: AutomationSessionId, reason: String, stopImmediately: Boolean = false) {
+        if (_state.value.paused || manualPauseRequested.get()) return
         if (stopImmediately) {
             if (activeSessionId != sessionId || !stopRequested.compareAndSet(false, true)) return
-            actionScope.launch { if (activeSessionId == sessionId) stopFromRunLogic(reason) }
+            actionScope.launch {
+                if (activeSessionId != sessionId) return@launch
+                if (_state.value.paused || manualPauseRequested.get()) {
+                    stopRequested.set(false)
+                    return@launch
+                }
+                stopFromRunLogic(reason)
+            }
             return
         }
         if (!beginGuardedAction(requireFreshEvidence = false)) return
         launchGuardedAction(requireFreshEvidence = false) {
-            if (activeSessionId == sessionId) stopFromRunLogic(reason)
+            if (activeSessionId == sessionId && !_state.value.paused && !manualPauseRequested.get()) {
+                stopFromRunLogic(reason)
+            }
         }
     }
 
@@ -5625,27 +5812,195 @@ class LabyrinthEntryRecognitionSession(
         sessionId: AutomationSessionId,
         reason: String,
     ) {
+        if (_state.value.paused || manualPauseRequested.get()) return
         if (!beginGuardedAction(requireFreshEvidence = false)) return
         val accountId = activeRunAccountId
         launchGuardedAction(requireFreshEvidence = false) {
-            if (activeSessionId == sessionId) {
+            if (activeSessionId == sessionId && !_state.value.paused && !manualPauseRequested.get()) {
                 // The next run reuses this projection; only the run ends here.
                 pendingTerminalOutcome = LabyrinthRunTerminalOutcome.FAILED_MAX_RETRY
                 val stopped = stop("$reason；正在切换到刷开局", releaseCapture = false)
                 if (stopped && accountId != null) {
                     val started = runCatching { rerollRequester?.invoke(accountId) == true }.getOrDefault(false)
                     if (!started) {
-                        _state.value = _state.value.copy(
-                            message = "$reason；自动重刷启动失败，请手动进入刷开局页面继续",
-                        )
+                        _state.update {
+                            it.copy(message = "$reason；自动重刷启动失败，请手动进入刷开局页面继续")
+                        }
                     }
                 } else if (stopped) {
-                    _state.value = _state.value.copy(
-                        message = "$reason；缺少当前账号，未自动启动重刷",
-                    )
+                    _state.update {
+                        it.copy(message = "$reason；缺少当前账号，未自动启动重刷")
+                    }
                 }
             }
         }
+    }
+
+    private fun finishFromScoreTargetRetire(
+        sessionId: AutomationSessionId,
+        reason: String,
+    ) {
+        if (_state.value.paused || manualPauseRequested.get()) return
+        if (!beginGuardedAction(requireFreshEvidence = false)) return
+        val accountId = activeRunAccountId
+        // Capture batch ownership before stop() clears currentRunId and launches onRunTerminal.
+        val batchOwned = currentRunId != null
+        launchGuardedAction(requireFreshEvidence = false) {
+            if (activeSessionId == sessionId && !_state.value.paused && !manualPauseRequested.get()) {
+                pendingTerminalOutcome = LabyrinthRunTerminalOutcome.RETIRED_SCORE_TARGET
+                pendingTerminalReason = reason
+                val stopped = stop("$reason；正在撤退并重开下一局", releaseCapture = false)
+                if (stopped && !batchOwned) {
+                    if (accountId != null) {
+                        val started = runCatching {
+                            scoreRetireRerollRequester?.invoke(accountId, reason) == true
+                        }.getOrDefault(false)
+                        if (!started) {
+                            _state.update {
+                                it.copy(message = "$reason；自动撤退重刷启动失败，请手动进入刷开局页面继续")
+                            }
+                        }
+                    } else {
+                        _state.update {
+                            it.copy(message = "$reason；缺少当前账号，未自动撤退重刷")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun evaluateMidRunScoreTargetIfNeeded(
+        sessionId: AutomationSessionId,
+        nodeState: NodeSessionState,
+    ): Boolean {
+        val route = validatedRoute ?: return false
+        val targetScore = activeRunTargetScore
+        if (targetScore <= 0L) {
+            if (_state.value.scoreTargetStatus != null) {
+                _state.value = _state.value.copy(scoreTargetStatus = null)
+            }
+            return false
+        }
+        if (nodeState.isComplete ||
+            postBossStage != LabyrinthPostBossStage.NONE ||
+            pendingNodeTransition != null
+        ) {
+            return false
+        }
+        val acquiredIds = planningAcquiredIds()
+        if (acquiredIds.size < 3 && nodeState.visitedNodes.size <= 1) {
+            return false
+        }
+        val routeNodes = route.toLabyrinthRoute().nodes
+        if (routeNodes.isEmpty()) return false
+        val visitedSet = nodeState.visitedNodes.toSet()
+        val remainingRouteNodes = routeNodes.filterNot { it.blockId in visitedSet }
+        if (remainingRouteNodes.isEmpty()) return false
+
+        val visitedNodes = routeNodes.filter {
+            it.blockId in visitedSet &&
+                it.blockType != LabyrinthNodeTypes.CLEAR &&
+                it.blockType != LabyrinthNodeTypes.UNKNOWN
+        }
+        val clearedAreaIds = routeNodes.groupBy(LabyrinthMapNode::area)
+            .mapNotNull { (area, areaNodes) ->
+                val lastBlock = areaNodes.maxByOrNull(LabyrinthMapNode::column)?.blockId
+                area.takeIf { lastBlock != null && lastBlock in visitedSet }
+            }
+            .toSet()
+        val currentState = _state.value
+        val relicIds = currentState.observedRelics.mapNotNull { it.relicId.toIntOrNull() }.toSet()
+        val openingRelics = route.openingRelics
+        val relicCount = if (relicIds.isNotEmpty() || openingRelicBaselineKnown) {
+            relicIds.size
+        } else if (openingRelics != null) {
+            if (LabyrinthOpeningRelicCatalog.ADDITIONAL_RELIC_NODE_ID in openingRelics.enhanceNodeIds.orEmpty()) 2 else 1
+        } else {
+            2
+        }
+        val markStacks = relicChoicePolicy.markStacks(currentState.observedRelics, relicMarkStackCalibration)
+        val alphaRupee = alphaRupeeLedger.currentBalance
+        val reviveAvailable = (
+            50002 in relicIds ||
+                (!openingRelicBaselineKnown && route.guildId == 2 &&
+                    LabyrinthOpeningRelicCatalog.ADDITIONAL_RELIC_NODE_ID in openingRelics?.enhanceNodeIds.orEmpty())
+            ) && !battleRelicReviveConsumed
+        val boostNode21 = 21 in openingRelics?.enhanceNodeIds.orEmpty()
+        val confirmedUnits = maxOf(acquiredIds.size, 5)
+        val confirmedCounts = ScoreCounts(
+            areasCleared = AreaClears.Ids(clearedAreaIds),
+            blocksCleared = BlockClears.AreaIds(visitedNodes.map(LabyrinthMapNode::area)),
+            units = confirmedUnits,
+            relics = relicCount,
+            normalWins = visitedNodes.count { it.blockType == LabyrinthNodeTypes.NORMAL_BATTLE } + eventArenaNormalWins,
+            exWins = visitedNodes.count { it.blockType == LabyrinthNodeTypes.EX_BATTLE } + eventArenaExWins,
+            bossWins = visitedNodes.count { it.blockType == LabyrinthNodeTypes.BOSS },
+        )
+        val estimator = planningEstimator
+        val cacheKey = buildString {
+            append(route.enterId).append('|').append(targetScore).append('|')
+            append(nodeState.currentArea).append('|')
+            append(nodeState.currentNodeId).append('|').append(visitedSet.size).append('|')
+            append(acquiredIds.size).append('|').append(confirmedUnits).append('|').append(relicCount).append('|')
+            append(markStacks.entries.sortedBy { it.key.ordinal }.joinToString(",") { "${it.key.ordinal}:${it.value}" }).append('|')
+            append(alphaRupee).append('|').append(reviveAvailable).append('|')
+            append(eventArenaNormalWins).append('|').append(eventArenaExWins).append('|')
+            append(estimator != null).append('|').append(planningEstimatorRevision)
+        }
+        val cachedEval = lastScoreTargetEval
+        val evaluation = if (cacheKey == lastScoreTargetCacheKey && cachedEval != null) {
+            cachedEval
+        } else {
+            val planningState = PlanningState(
+                difficulty = route.difficulty,
+                currentArea = nodeState.currentArea,
+                ownedCharacterIds = acquiredIds,
+                relicIds = relicIds,
+                markStacks = markStacks,
+                remainingShops = remainingRouteNodes.count { it.blockType == LabyrinthNodeTypes.SHOP },
+                enhanceNode21 = boostNode21,
+                reviveAvailable = reviveAvailable,
+                alphaRupee = alphaRupee,
+                targetScore = targetScore,
+            )
+            evaluateMidRunScoreTarget(
+                remainingRouteNodes = remainingRouteNodes,
+                confirmedCounts = confirmedCounts,
+                difficulty = route.difficulty,
+                targetScore = targetScore,
+                planningState = planningState,
+                passEstimator = estimator,
+            ).also { eval ->
+                lastScoreTargetCacheKey = cacheKey
+                lastScoreTargetEval = eval
+                nodeLog(
+                    "score-target target=$targetScore confirmed=${eval.confirmedPts} " +
+                        "expected=${eval.expectedScore.toLong()} upper=${eval.hardUpperBound} " +
+                        "prob=${"%.3f".format(eval.probReachTarget)} retire=${eval.shouldRetire} " +
+                        "model=${eval.usedModel} reason=${eval.gate.reason}",
+                )
+            }
+        }
+        val nextStatus = LabyrinthScoreTargetStatus(
+            targetScore = evaluation.targetScore,
+            confirmedPts = evaluation.confirmedPts,
+            expectedScore = evaluation.expectedScore.toLong(),
+            hardUpperBound = evaluation.hardUpperBound,
+            probReachTarget = evaluation.probReachTarget,
+            willRetire = evaluation.shouldRetire,
+            usedModel = evaluation.usedModel,
+            reason = evaluation.gate.reason,
+        )
+        if (_state.value.scoreTargetStatus != nextStatus) {
+            _state.value = _state.value.copy(scoreTargetStatus = nextStatus)
+        }
+        if (evaluation.shouldRetire && !currentState.dryRun) {
+            nodeLog("score-target-retire-trigger target=$targetScore reason=${evaluation.gate.reason}", warning = true)
+            finishFromScoreTargetRetire(sessionId, evaluation.gate.reason)
+            return true
+        }
+        return false
     }
 
     private fun nodeExecutionConfigured(): Boolean =
@@ -5692,7 +6047,8 @@ class LabyrinthEntryRecognitionSession(
             decision.choice.displayName ?: decision.choice.relicId.orEmpty(), decision.reason)
 
     private fun currentShopDecision(result: LabyrinthEntryFrameResult) =
-        shopDomain.currentShopDecision(result, shopPolicy, currentShopArea, _state.value.observedRelics, relicMarkStackCalibration)
+        shopDomain.currentShopDecision(result, shopPolicy, currentShopArea, _state.value.observedRelics,
+            relicMarkStackCalibration, notifyObserver = false)
 
     private fun shopCapturedAt(timestampMillis: Long) =
         if (balancedMode) balancedDetailCapturedAt ?: Long.MIN_VALUE else timestampMillis
@@ -5783,6 +6139,11 @@ class LabyrinthEntryRecognitionSession(
         }
     }
 
+    private fun resetBattleWait() {
+        battleWait.reset()
+        battleWaitActive = false
+    }
+
     /** Battle waiting gates all route taps before UNKNOWN can reach any animation fallback. */
     private fun handleBattleWaitFrame(
         sessionId: AutomationSessionId,
@@ -5790,7 +6151,7 @@ class LabyrinthEntryRecognitionSession(
         timestampMillis: Long,
     ): Boolean {
         if (result.relicDetailObservation != null || result.nodeMoveConfirmation != null) {
-            battleWait.reset()
+            resetBattleWait()
             return false
         }
         val persistedBossNode = if (combatContext == null) labyrinthPersistedBossNode(validatedRoute) else null
@@ -5814,7 +6175,7 @@ class LabyrinthEntryRecognitionSession(
             // The current client renders area-3/area-5 Boss victory summaries as UNKNOWN pages.
             // Do not let the generic battle waiter swallow a real post-battle "下一步" screen
             // for up to five minutes. The post-entry handler below will use this exact rect.
-            battleWait.reset()
+            resetBattleWait()
             postEntryUnknownSince = Long.MIN_VALUE
             if (activeSessionId == sessionId) {
                 _state.value = _state.value.copy(
@@ -5836,6 +6197,7 @@ class LabyrinthEntryRecognitionSession(
         val (wait, event) = battleDomain.observeBattleWait(
             result, timestampMillis, battleResultNextReady, plannedTeams, eventDomain.currentFrame,
         )
+        battleWaitActive = wait != LabyrinthBattleWaitDecision.NONE
         if (event != null) kernelRouteCause = event
         when (wait) {
             LabyrinthBattleWaitDecision.NONE -> {
@@ -5966,6 +6328,9 @@ class LabyrinthEntryRecognitionSession(
         pendingBattleTeamAction = null
         battleTeamActionUnconfirmedAttempts++
         if (battleTeamActionUnconfirmedAttempts > MAX_BATTLE_TEAM_ACTION_UNCONFIRMED) {
+            if (pending.kind == LabyrinthBattleTeamExecutionKind.START_BATTLE) {
+                shadowBattleRecorder.cancelPendingAttempt()
+            }
             val reason = "队伍编组页动作连续${battleTeamActionUnconfirmedAttempts}次派发后画面仍未推进" +
                 "（${pending.label}）；已停止并保留诊断状态"
             battleTeamActionStopReason = reason
@@ -5998,6 +6363,7 @@ class LabyrinthEntryRecognitionSession(
             }
         }
         if (pending.kind == LabyrinthBattleTeamExecutionKind.START_BATTLE) {
+            shadowBattleRecorder.cancelPendingAttempt()
             // 这一下没被游戏收下，普通关卡的编组记忆还原成当次捕获的原值（最近一次派发之前的值）。
             lastNormalBattleTeamSignature = pending.previousNormalTeamSignature
             if (battleRetryCount > 0) {
@@ -6007,10 +6373,11 @@ class LabyrinthEntryRecognitionSession(
         if (pending.kind == LabyrinthBattleTeamExecutionKind.NEXT_BOSS_TEAM) {
             pendingBossTeamAdvance = null
         }
-        battleWait.reset()
+        resetBattleWait()
         resetBattleTeamExecutionTracking()
         battleTeamPageStallSince = Long.MIN_VALUE
         lastBattleTeamRecommendationKey = null
+        lastBattleTeamRecommendationLog = null
         lastBattleTeamSelectionPlanLog = null
         if (activeSessionId == sessionId) {
             _state.value = _state.value.copy(
@@ -6964,6 +7331,12 @@ class LabyrinthEntryRecognitionSession(
             else -> if (postBossStage == LabyrinthPostBossStage.WAITING_FOR_DAWN_HOME &&
                 pageState == LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE) return
         }
+        if (postBossStage != LabyrinthPostBossStage.NONE &&
+            (pageState == LabyrinthEntryPageState.NODE_SELECTION || pageState == LabyrinthEntryPageState.NODE_MAP_VIEW)
+        ) {
+            _state.value = _state.value.copy(message = "最终结算过渡中，忽略地图误识别（结算阶段 ${postBossStage.name}）")
+            return
+        }
 
         // Later role rewards are human card selections. The common "选择" template is visible
         // before the user chooses anything, so it must never be used as an automatic tap target.
@@ -7513,6 +7886,19 @@ class LabyrinthEntryRecognitionSession(
                 }
 
             LabyrinthEntryPageState.BATTLE_RESULT -> {
+                val persistedNode = labyrinthPersistedCurrentNode(validatedRoute)
+                val isEventBattle = (activeNodeType ?: persistedNode?.blockType) == LabyrinthNodeTypes.EVENT
+                if (isEventBattle) {
+                    val battleKey = nodeSession?.getState()?.currentNodeId ?: persistedNode?.blockId
+                    if (battleKey != null && countedEventBattleNodeIds.add(battleKey)) {
+                        if (combatContext?.kind == LabyrinthCombatKind.EX) {
+                            eventArenaExWins++
+                        } else {
+                            eventArenaNormalWins++
+                        }
+                        invalidateScoreTargetCache()
+                    }
+                }
                 shadowBattleRecorder.completeAttempt(0, timestampMillis, kernelRuntime)
                 LabyrinthPostEntryTapPlan(
                     LabyrinthPostEntryActionKind.BATTLE_RESULT_NEXT,
@@ -7701,6 +8087,7 @@ class LabyrinthEntryRecognitionSession(
                     combatContext = (combatContext ?: LabyrinthCombatContext(LabyrinthCombatKind.BOSS))
                         .copy(kind = LabyrinthCombatKind.BOSS, teamIndex = 1)
                     lastBattleTeamRecommendationKey = null
+                    lastBattleTeamRecommendationLog = null
                     lastBattleTeamSelectionPlanLog = null
                     resetBattleTeamExecutionTracking()
                     _state.value = _state.value.copy(
@@ -7737,6 +8124,7 @@ class LabyrinthEntryRecognitionSession(
             combatContext = (combatContext ?: LabyrinthCombatContext(LabyrinthCombatKind.BOSS))
                 .copy(kind = LabyrinthCombatKind.BOSS, teamIndex = observation.bossTeamIndex)
             lastBattleTeamRecommendationKey = null
+            lastBattleTeamRecommendationLog = null
             lastBattleTeamSelectionPlanLog = null
             resetBattleTeamExecutionTracking()
             _state.value = _state.value.copy(
@@ -8631,9 +9019,19 @@ class LabyrinthEntryRecognitionSession(
                             committedBattleCharacterIds += step.confirmedTeamIds
                         }
                         val battleStartedAt = clock()
-                        battleWait.onStartExecuted(battleStartedAt, plannedBattleTeamsForWait())
+                        val plannedTeams = plannedBattleTeamsForWait()
+                        battleWait.onStartExecuted(battleStartedAt, plannedTeams)
+                        battleWaitActive = true
                         val battleKind = combatContext?.kind
-                        if (battleKind != null && step.confirmedTeamIds.isNotEmpty()) {
+                        val committedTeamCount = synchronized(currentBattleTeamSignatures) { currentBattleTeamSignatures.size }
+                        val canRecordShadow = step.confirmedTeamIds.isNotEmpty() &&
+                            labyrinthShouldRecordShadowBattleAttempt(
+                                battleKind, bossTeamMode, plannedTeams, committedTeamCount, bossFallbackMultiTeamActive,
+                                bossEditorTeamIndex, combatContext?.teamIndex ?: 1,
+                            )
+                        if (!canRecordShadow || battleKind == null) {
+                            shadowBattleRecorder.cancelPendingAttempt()
+                        } else {
                             val area = labyrinthBattleTeamArea(
                                 activeNodeArea, battleKind, validatedRoute, _state.value.routeProgress?.currentArea,
                             )
@@ -8668,6 +9066,8 @@ class LabyrinthEntryRecognitionSession(
                                     labyrinthGuildId = validatedRoute?.guildId ?: 0,
                                     startedAtMillis = battleStartedAt,
                                 )
+                            } else {
+                                shadowBattleRecorder.cancelPendingAttempt()
                             }
                         }
                     }
@@ -9105,6 +9505,12 @@ class LabyrinthEntryRecognitionSession(
             if (settlementDispatch != null) {
                 settlementDomain.recordTapReceipt(settlementDispatch, result, suppressed)?.let {
                     kernelRouteCause = it
+                    if (postBossStage == LabyrinthPostBossStage.SCORE_RESULT &&
+                        settlementDomain.stage == LabyrinthPostBossStage.CHEST_SEQUENCE
+                    ) {
+                        // The next score frame must establish fresh stability after the close tap.
+                        postEntryStableFrames = 0
+                    }
                     mirrorSettlementProgress()
                 }
             }
@@ -9208,6 +9614,9 @@ class LabyrinthEntryRecognitionSession(
                     lastPostEntryActionLandedAt = clock()
                     if (shopDispatch != null) {
                         invalidateShopEvidence()
+                        if (kind == LabyrinthPostEntryActionKind.SHOP_CLOSE_PURCHASE_COMPLETE) {
+                            lastPublishedShopPathBTarget = null
+                        }
                         if (kind == LabyrinthPostEntryActionKind.SHOP_CLOSE_PURCHASE_COMPLETE &&
                             shopPurchaseRelicId == null && plannedShopImprintIsChoice != null
                         ) {
@@ -9221,6 +9630,7 @@ class LabyrinthEntryRecognitionSession(
                                 hasRelic40003 = _state.value.observedRelics.any { it.relicId == "40003" },
                             )
                             alphaRupeeLedger.onShopPurchaseCommitted(price, lastPostEntryActionLandedAt)
+                            syncAlphaRupeeState()
                         }
                         if (kind == LabyrinthPostEntryActionKind.SHOP_REFRESH &&
                             (shopReceipt == null || shopReceipt?.reasonCode == "refresh_baseline_invalid")) {
@@ -9231,6 +9641,7 @@ class LabyrinthEntryRecognitionSession(
                         shopScan.purchased(lastPostEntryActionLandedAt)
                         invalidateShopEvidence()
                         plannedShopImprintIsChoice?.let { choiceImprint ->
+                            lastPublishedShopPathBTarget = null
                             plannedShopImprintIsChoice = null
                             val price = LabyrinthAlphaRupeeLedger.estimatedShopItemPrice(
                                 rarity = null,
@@ -9240,6 +9651,7 @@ class LabyrinthEntryRecognitionSession(
                                 hasRelic40003 = _state.value.observedRelics.any { it.relicId == "40003" },
                             )
                             alphaRupeeLedger.onShopPurchaseCommitted(price, lastPostEntryActionLandedAt)
+                            syncAlphaRupeeState()
                         }
                     }
                     if (kind == LabyrinthPostEntryActionKind.EVENT_FREE_ROLE_SELECT && eventFreeRoleCandidateId != null) {
@@ -9262,6 +9674,7 @@ class LabyrinthEntryRecognitionSession(
                         eventChoiceCommittedAt = clock()
                         eventChoiceCommittedChoiceId = dispatchedEventChoiceId
                         alphaRupeeLedger.onEventChoiceCommitted(dispatchedEventChoiceId, eventChoiceCommittedAt)
+                        syncAlphaRupeeState()
                     }
                     if (kind == LabyrinthPostEntryActionKind.SELECT_RELIC) {
                         relicChoiceCommitted = true
@@ -9333,7 +9746,7 @@ class LabyrinthEntryRecognitionSession(
                             // the retry budget or clearing the failed-team books here would book the
                             // run wrongly. Reset the wait and frame budget for "遗物效果结果".
                             battleRelicReviveConsumed = true
-                            battleWait.reset()
+                            resetBattleWait()
                             postEntryStableFrames = 0
                             postEntryAttempts = 0
                         }
@@ -9353,6 +9766,7 @@ class LabyrinthEntryRecognitionSession(
                                 battleRetryCount = retry.battleRetryCount
                                 awaitingRetryBattleAfterFailure = retry.awaitingRetryBattleAfterFailure
                                 if (switchToMulti) {
+                                    shadowBattleRecorder.cancelPendingAttempt()
                                     bossFallbackMultiTeamActive = true
                                     pendingSingleBossFallbackToMulti = false
                                 }
@@ -9360,7 +9774,7 @@ class LabyrinthEntryRecognitionSession(
                             if (balancedMode && (battleRetryPlanning.busy || battleRetryPlanning.hasReady)) {
                                 battleRetryPlanning.invalidate()
                             }
-                            battleWait.reset()
+                            resetBattleWait()
                             clearPlannedBossModelTeams()
                             bossEditorTeamIndex = null
                             pendingBossTeamAdvance = null
@@ -9374,6 +9788,7 @@ class LabyrinthEntryRecognitionSession(
                             bossMultiTeamTargetCount = null
                             combatContext = combatContext?.copy(teamIndex = 1)
                             lastBattleTeamRecommendationKey = null
+                            lastBattleTeamRecommendationLog = null
                             lastBattleTeamSelectionPlanLog = null
                             resetBattleTeamExecutionTracking()
                             postEntryStableFrames = 0
@@ -9433,13 +9848,14 @@ class LabyrinthEntryRecognitionSession(
     }
 
     private fun restoreSettlementProgress() {
-        settlementDomain.restoreProgress(postBossStage, postBossStartedAt, postBossUnknownAttempts)
+        settlementDomain.restoreProgress(postBossStage, postBossStartedAt, postBossUnknownAttempts, postBossChestObserved)
     }
 
     private fun mirrorSettlementProgress() {
         postBossStage = settlementDomain.stage
         postBossStartedAt = settlementDomain.startedAt
         postBossUnknownAttempts = settlementDomain.unknownAttempts
+        postBossChestObserved = settlementDomain.chestObserved
     }
 
     private fun beginFinalSettlement(timestampMillis: Long) {
@@ -9458,7 +9874,8 @@ class LabyrinthEntryRecognitionSession(
             visitedCount = 0,
             routeNodeCount = routeNodeCount,
         )
-        val summary = LabyrinthRunSummary(runStartedAt, clock(), runScoreCollector.score)
+        val resolvedScore = runScoreCollector.score ?: externalRunScoreProvider?.invoke(currentRunId, sessionId)
+        val summary = LabyrinthRunSummary(runStartedAt, clock(), resolvedScore)
         _state.value = current.copy(routeProgress = progress.copy(complete = true), runSummary = summary)
         nodeLog("run-result-complete durationMs=${summary.durationMillis} score=${summary.score ?: "unread"}")
         pendingTerminalOutcome = LabyrinthRunTerminalOutcome.CLEARED
@@ -9482,14 +9899,16 @@ class LabyrinthEntryRecognitionSession(
         mapDomain.reset(kernelRuntime.traceId)
         battleDomain.reset(kernelRuntime.traceId)
         shopDomain.reset(kernelRuntime.traceId)
+        lastPublishedShopPathBTarget = null
         rewardTail.reset(kernelRuntime.traceId)
         settlementDomain.reset(kernelRuntime.traceId)
         nodeActionEvidence.reset()
         nodeEvidenceFrameWidth = 0
         nodeEvidenceFrameHeight = 0
         nodeConflictRecovery.reset()
-        battleWait.reset()
+        resetBattleWait()
         alphaRupeeLedger.reset()
+        syncAlphaRupeeState()
         shadowBattleRecorder.reset()
         plannedShopImprintIsChoice = null
         eventFreeRoleSelectedCharacterIds.clear()
@@ -9552,10 +9971,12 @@ class LabyrinthEntryRecognitionSession(
         clearRoleRewardBatchTracking()
         existingRunResumeHandoffArmed = false
         postBossStage = LabyrinthPostBossStage.NONE
+        postBossChestObserved = false
         postBossUnknownAttempts = 0
         postBossStartedAt = Long.MIN_VALUE
         combatContext = null
         lastBattleTeamRecommendationKey = null
+        lastBattleTeamRecommendationLog = null
         lastBattleTeamSelectionPlanLog = null
         resetBattleTeamExecutionTracking()
         // 会话/账号边界：特别装备轮次与「上一场普通战斗的编组记忆」都属于**这一次运行**的状态。
@@ -9582,11 +10003,17 @@ class LabyrinthEntryRecognitionSession(
         activeNodeArea = null
         eventActionAttempts = 0
         activeNodeArea = null
+        activeRunTargetScore = 0L
+        eventArenaNormalWins = 0
+        eventArenaExWins = 0
+        countedEventBattleNodeIds.clear()
+        invalidateScoreTargetCache()
         _state.value = _state.value.copy(
             combatContext = null,
             battleTeamRecommendation = null,
             battleTeamRecommendationUnavailableReason = null,
             battleTeamSelectionPlan = null,
+            scoreTargetStatus = null,
         )
         resetSessionRecoveryTracking()
     }
@@ -9723,6 +10150,9 @@ class LabyrinthEntryRecognitionSession(
             )
             _state.value = _state.value.copy(message = "游戏未进入${pending.label}，准备重试同一节点")
             return
+        }
+        if (result.nodeMoveConfirmation == null && postBossStage == LabyrinthPostBossStage.NONE) {
+            if (evaluateMidRunScoreTargetIfNeeded(sessionId, nodeState)) return
         }
         // The processor skipped this frame's map scan because, when it looked, one of the two
         // gates above was still closed (see nodeScanConsumable). Both gates only open with time,
@@ -9948,6 +10378,8 @@ class LabyrinthEntryRecognitionSession(
                     return@run "读取已保存路线失败：${error.message ?: "未知错误"}"
                 } ?: return@run "未找到已保存路线，请先完成刷开局"
                 validatedRoute = route
+                activeRunTargetScore = resolveActiveRunTargetScore()
+                invalidateScoreTargetCache()
                 if (route.allNodes.isEmpty()) {
                     return@run "已保存路线缺少完整地图数据，请重新刷取一次"
                 }
@@ -10284,6 +10716,7 @@ class LabyrinthEntryRecognitionSession(
 
     private fun prepareNodeTransitionContext(blockType: Int, area: Int?) {
         resetNodeMoveConfirmationTracking()
+        lastPublishedShopPathBTarget = null
         nodeEntryMismatchFrames = 0
         nodeEntryMismatchPage = null
         eventFreeRoleSelectedCharacterIds.clear()
@@ -10345,11 +10778,13 @@ class LabyrinthEntryRecognitionSession(
             cause = eventDomain.currentFrame, nowMillis = clock(), capturedAt = shopCapturedAt(timestampMillis),
         ) ?: return false
         if (planned.refreshOutcome == LabyrinthShopRefreshOutcome.COMMITTED) {
+            lastPublishedShopPathBTarget = null
             alphaRupeeLedger.onShopRefreshCommitted(
                 fee = if (shopDomain.refreshesUsedInVisit <= 1) 300 else 600,
                 observedCoinsAfter = result.shopObservation?.coinBalance?.takeIf { result.shopObservation.coinBalanceConfirmed },
                 timestampMillis = timestampMillis,
             )
+            syncAlphaRupeeState()
             kernelRouteCause = planned.decisionEvent
             postEntryStableFrames = 0
             postEntryAttempts = 0
@@ -10577,9 +11012,12 @@ class LabyrinthEntryRecognitionSession(
     }
 
     private fun publishWaitingForGameForeground(sessionId: AutomationSessionId) {
-        if (activeSessionId != sessionId) return
-        _state.value = _state.value.copy(message = "游戏不在前台，保持会话并等待返回")
-        overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
+        if (activeSessionId != sessionId || _state.value.paused || manualPauseRequested.get() || stopRequested.get()) return
+        val message = "游戏不在前台，保持会话并等待返回"
+        if (_state.value.message != message) {
+            _state.update { it.copy(message = message) }
+            overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
+        }
     }
 
     private fun confirmPendingNodeTransition(
@@ -12152,3 +12590,15 @@ internal const val SPECIAL_EQUIPMENT_LEAVE_STABLE_FRAMES = 2
 
 /** 超限逃生点击（点弹窗1「取消」）之后等弹窗关闭的上限；超期仍未关就停机并保留诊断。 */
 internal const val SPECIAL_EQUIPMENT_ESCAPE_TIMEOUT_MILLIS = 8_000L
+
+/** Planning estimators run synchronously on T2, so rule seeding must stay single-threaded (`searchThreads = 1`). */
+internal fun createPlanningBattlePassEstimator(
+    estimator: LabyrinthBattleValueEstimator?,
+    profiles: Map<String, LabyrinthRoleProfile>,
+    scoring: LabyrinthTeamScoringConfig?,
+    requireLeadVanguard: Boolean,
+): ModelBattlePassEstimator? {
+    val contextual = estimator as? ContextualBattleValueEstimator ?: return null
+    val optimizer = scoring?.let { LabyrinthTeamOptimizer(LabyrinthTeamScorer(it), searchThreads = 1) }
+    return ModelBattlePassEstimator(contextual, profiles, optimizer, requireLeadVanguard = requireLeadVanguard)
+}

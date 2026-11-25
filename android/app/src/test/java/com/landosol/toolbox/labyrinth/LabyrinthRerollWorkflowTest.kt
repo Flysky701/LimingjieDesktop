@@ -489,6 +489,41 @@ class LabyrinthRerollWorkflowTest {
         assertEquals(LabyrinthOpeningRelicState(3, emptySet()), store.route?.openingRelics)
     }
 
+    @Test
+    fun `targetScore rejects low-EX opening retries via retire and accepts next qualifying run`() = runTest {
+        val weakMap = matchingEnter(1).map.map { node ->
+            if (node.blockType == com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes.EX_BATTLE) {
+                node.copy(blockType = com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes.NORMAL_BATTLE)
+            } else {
+                node
+            }
+        }
+        val strongEnter = matchingEnter(2)
+        val topD5 = LabyrinthTop(null, null, null, listOf(ClearedDifficulty(101, 4)))
+        val api = FakeApi(
+            top = topD5,
+            enters = ArrayDeque(listOf(LabyrinthEnter(1, weakMap), strongEnter)),
+        )
+        val stages = mutableListOf<String>()
+        val cfg = config().copy(
+            difficulty = 5,
+            routePolicy = LabyrinthRoutePolicy(
+                evaluationMode = LabyrinthRouteEvaluationMode.VALUE_ROUTE,
+                valueAllowance = 3,
+                targetScore = 49_000L,
+            ),
+        )
+
+        val result = LabyrinthRerollWorkflow(api, FakeRouteStore(), pause = {}).run(cfg) { progress ->
+            stages += progress.stage
+        }
+
+        assertTrue(result is LabyrinthRerollResult.Success)
+        assertEquals(2, (result as LabyrinthRerollResult.Success).attempt)
+        assertEquals(listOf(1L), api.retired)
+        assertTrue(stages.any { it.contains("目标") && it.contains("撤退") })
+    }
+
     private fun config(
         retireExisting: Boolean = true,
         maxAttempts: Int = 3,

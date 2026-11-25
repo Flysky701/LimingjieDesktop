@@ -18,12 +18,14 @@ class RunSetupDraftTest {
         val draft=RunSetupDraft(source,listOf(DesktopGoal(1,3,false)))
         assertEquals("账号凭据缺失",startMissing(DesktopTask.REROLL,RunConsoleState(task=source),true,true,false))
         assertEquals("正在检查账号凭据",startMissing(DesktopTask.READ,RunConsoleState(task=source),true,true,null))
-        draft.settings=draft.settings.copy(difficulty=2,valueAllowance=0,rerollUntilFound=false,maxAttempts="800")
+        draft.settings=draft.settings.copy(difficulty=2,routeEvaluationMode=LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP,valueAllowance=0,rerollUntilFound=false,maxAttempts="800")
         assertNull(draft.validationError(source))
-        assertEquals(setOf(319604),draft.settings.area3BossIds)
-        assertTrue(draft.settings.area5BossIds.isEmpty())
-        assertFalse(draft.settings.retireExisting)
-        assertEquals(LabyrinthThirdBlockChoice.EITHER,draft.settings.thirdBlockChoice)
+        val merged = draft.settingsToSave(source)
+        assertEquals(LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP, merged.routeEvaluationMode)
+        assertEquals(setOf(319604),merged.area3BossIds)
+        assertTrue(merged.area5BossIds.isEmpty())
+        assertFalse(merged.retireExisting)
+        assertEquals(LabyrinthThirdBlockChoice.EITHER,merged.thirdBlockChoice)
         draft.settings=draft.settings.copy(maxAttempts="801")
         assertEquals("最大尝试次数无效",draft.validationError(source))
         draft.settings=draft.settings.copy(maxAttempts="1",difficulty=5)
@@ -70,5 +72,19 @@ class RunSetupDraftTest {
         assertEquals((1..10).toList(),draft.goals.map { it.guildId })
         assertEquals(loaded.goals,draft.savedGoals())
         assertFalse(draft.dirty)
+    }
+
+    @Test fun targetScoreMergesDifferentiallyAndValidatesRange() {
+        val source = ready.copy(targetScore = 50_000L, valueAllowance = 1)
+        val draft = RunSetupDraft(source, emptyList())
+        draft.settings = draft.settings.copy(targetScore = 53_000L)
+        val updatedFromLaterLoad = source.copy(valueAllowance = 0, targetScore = 48_000L)
+        val merged = draft.settingsToSave(updatedFromLaterLoad)
+        assertEquals(53_000L, merged.targetScore)
+        assertEquals(0, merged.valueAllowance)
+        assertNull(draft.validationError(updatedFromLaterLoad))
+
+        draft.settings = draft.settings.copy(targetScore = LabyrinthRerollOptions.MAX_TARGET_SCORE + 1)
+        assertTrue(draft.validationError(updatedFromLaterLoad)?.contains("刷分目标无效") == true)
     }
 }

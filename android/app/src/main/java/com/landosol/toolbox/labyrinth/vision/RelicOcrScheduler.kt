@@ -63,6 +63,12 @@ internal class RelicOcrScheduler(
         return null
     }
 
+    @Synchronized fun isExhaustedWithoutRead(slot: String, fingerprint: Long): Boolean {
+        val state = slots[slot]?.takeIf { it.fingerprint == fingerprint } ?: return false
+        val inFlight = pending?.let { it.slot == slot && it.fingerprint == fingerprint && it.epoch == epoch } == true
+        return !inFlight && state.read == null && state.attempts >= maximumAttempts
+    }
+
     @Synchronized fun request(slot: String, fingerprint: Long, capturedAtMillis: Long = Long.MIN_VALUE): Ticket? {
         cached(slot, fingerprint)
         val state = slots.getValue(slot)

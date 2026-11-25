@@ -118,6 +118,14 @@ class LabyrinthStrategySettingsTest {
         assertEquals(RESPONSE_INTERVAL_FAST, DEFAULT_RESPONSE_INTERVAL_MILLIS)
     }
 
+    @Test fun `battleModelStyle fromStoredName parses known values and falls back to balanced`() {
+        assertEquals(LabyrinthBattleModelStyle.CONSERVATIVE, LabyrinthBattleModelStyle.fromStoredName("CONSERVATIVE"))
+        assertEquals(LabyrinthBattleModelStyle.BALANCED, LabyrinthBattleModelStyle.fromStoredName("BALANCED"))
+        assertEquals(LabyrinthBattleModelStyle.AGGRESSIVE, LabyrinthBattleModelStyle.fromStoredName("AGGRESSIVE"))
+        assertEquals(LabyrinthBattleModelStyle.BALANCED, LabyrinthBattleModelStyle.fromStoredName(null))
+        assertEquals(LabyrinthBattleModelStyle.BALANCED, LabyrinthBattleModelStyle.fromStoredName("UNKNOWN"))
+    }
+
     private fun productionDocument(): LabyrinthRoleDecisionDocument {
         val file = listOf(File("app/src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json"),
             File("src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json")).first { it.isFile }

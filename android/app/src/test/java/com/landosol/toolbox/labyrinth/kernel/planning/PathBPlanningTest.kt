@@ -216,10 +216,61 @@ class PathBPlanningTest {
         assertEquals(listOf(.6, .5, .25), estimate.teamWinProbs)
         assertEquals(.85, estimate.pPass, 1e-12)
         assertEquals(1.6, estimate.expectedTeams, 1e-12)
-        assertTrue(calls.flatten().size <= 16)
+        assertTrue(calls.flatten().size <= 48)
         assertEquals(calls.flatten().size, calls.flatten().distinct().size)
         assertTrue(calls[1].all { team -> team.none { it in lead } })
         assertTrue(calls[2].all { team -> team.none { it in lead || it in second } })
+    }
+
+    @Test fun modelBossPassIncludesDamageFromDisjointTeams() {
+        val profiles = profiles().filterKeys { it == "6001" || it.toInt() in 6003..6016 }
+        val state = baseState.copy(ownedCharacterIds = profiles.keys)
+        val teams = profiles.keys.sorted().map { it.toInt() * 100 + 1 }.chunked(5)
+        val damage = teams.zip(listOf(.55, .50, .45)).toMap()
+        val model = object : ContextualBattleValueEstimator {
+            override fun estimateWithSource(context: BattleValueContext, candidates: List<List<Int>>) =
+                BattleValueEstimate(candidates.map { value(.05, damage.getOrDefault(it, .10)) }, BattleValueSource.MODEL)
+        }
+
+        val estimate = ModelBattlePassEstimator(model, profiles).estimate(state, boss)!!
+        val independentPass = 1.0 - .95 * .95 * .95
+        assertEquals(List(3) { .05 }, estimate.teamWinProbs)
+        assertTrue("pPass=${estimate.pPass}, independentPass=$independentPass", estimate.pPass > independentPass + .50)
+    }
+
+    @Test fun modelCanChooseDamageAndRuleScoreSeedsWithoutALeadVanguard() {
+        val profiles = (6001..6016).associate { index ->
+            val id = index.toString()
+            val magic = index % 2 == 1
+            val damage = if (index == 6014) 25.0 else 10.0
+            id to LabyrinthRoleProfile(
+                id, id, position = index,
+                userScore = 90.0.takeIf { index in 6010..6013 },
+                physicalDamagePotential = damage.takeUnless { magic },
+                magicDamagePotential = damage.takeIf { magic },
+            )
+        }
+        val state = baseState.copy(ownedCharacterIds = profiles.keys)
+        val exam = boss.copy(maxTeams = 1)
+        val strongTeams = listOf(
+            listOf(6010, 6011, 6012, 6013, 6014),
+            listOf(6001, 6003, 6005, 6007, 6009),
+            listOf(6002, 6004, 6006, 6008, 6010),
+            listOf(6001, 6003, 6005, 6011, 6013),
+            listOf(6002, 6004, 6010, 6012, 6014),
+        )
+        for (strongTeam in strongTeams) {
+            val target = strongTeam.map { it * 100 + 1 }
+            val model = object : ContextualBattleValueEstimator {
+                override fun estimateWithSource(context: BattleValueContext, candidates: List<List<Int>>): BattleValueEstimate {
+                    assertFalse(context.ruleContext.frontlineSurvivalGateEnabled)
+                    return BattleValueEstimate(candidates.map { value(if (it == target) .95 else .05) }, BattleValueSource.MODEL)
+                }
+            }
+            assertNull(ModelBattlePassEstimator(model, profiles).estimate(state, exam))
+            val estimate = ModelBattlePassEstimator(model, profiles, requireLeadVanguard = false).estimate(state, exam)!!
+            assertEquals("team=$strongTeam", .95, estimate.pPass, 1e-12)
+        }
     }
 
     @Test fun modelRuleFallbackAndMissingProfilesReturnNull() {
@@ -274,7 +325,7 @@ class PathBPlanningTest {
             functions = LabyrinthRoleFunctions(reliableVanguard = if (index == 6001) 100.0 else null))
     }
 
-    private fun value(p: Double) = BattleValue(p, 1.0 - p, 0.0, p, 0.0, p)
+    private fun value(p: Double, damageMean: Double = 0.0) = BattleValue(p, 1.0 - p, 0.0, damageMean, 0.0, p)
 
     private fun slotCurve(state: PlanningState): Double {
         val gold = state.alphaRupee ?: 0

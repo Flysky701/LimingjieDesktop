@@ -15,7 +15,7 @@ import kotlin.math.abs
 
 internal fun LabyrinthRunPlanningContext.planningState(acquiredIds: Set<String>) = PlanningState(
     difficulty, currentArea, acquiredIds, observedRelicIds, markStacks, remainingShops,
-    enhanceNode21, reviveAvailable, alphaRupee,
+    enhanceNode21, reviveAvailable, alphaRupee, targetScore = targetScore,
 )
 
 internal fun pathBSource(usedModel: Boolean) = if (usedModel) "PathB-NN" else "PathB-官方分"

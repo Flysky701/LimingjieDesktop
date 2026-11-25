@@ -18,6 +18,12 @@ data class DesktopRunRecord(val id: String, val startedAt: Long, val alias: Stri
     val durationMillis get() = endedAt?.let { (it-startedAt).coerceAtLeast(0) }
 }
 
+internal fun syncScoreInReason(reason: String, score: Long?): String {
+    if (score == null || score <= 0L) return reason
+    if ("分数未识别" !in reason) return reason
+    return reason.replace("分数未识别", "分数$score")
+}
+
 /** Event journal. Each UTF-8 line is written under one exclusive writer lock and forced to disk.
  * Compaction only applies the documented retention policy; replacement is atomic. No credentials. */
 class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, private val now: () -> Long = System::currentTimeMillis,
@@ -65,7 +71,8 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
         val value = decorate(record)
         val pendingScore = pendingScores.remove(value.id)
         val score = if (value.singleRun) value.score ?: mutable.value.firstOrNull { it.id == value.id }?.score ?: pendingScore else value.score
-        val safe = value.copy(alias=DesktopLog.redact(value.alias),goal=DesktopLog.redact(value.goal),reason=DesktopLog.redact(value.reason),score=score)
+        val reason = if (value.singleRun) syncScoreInReason(value.reason, score) else value.reason
+        val safe = value.copy(alias=DesktopLog.redact(value.alias),goal=DesktopLog.redact(value.goal),reason=DesktopLog.redact(reason),score=score)
         Files.createDirectories(file.parent)
         // Repair a crash-truncated final line before appending, leaving it as an independently skipped line.
         FileChannel.open(file, CREATE, READ, WRITE).use { channel ->
@@ -82,6 +89,11 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
         if (scoreOnly) onScoreRecord(safe) else onRecord(safe)
         if(kept.size<all.size || Files.size(file)>8L*1024*1024) compact()
     }
+
+    @Synchronized
+    fun scoreFor(id: String): Long? =
+        mutable.value.firstOrNull { it.id == id }?.score ?: pendingScores[id]
+
     /** Late OCR patches exactly one run, including after finish; never changes its terminal outcome. */
     @Synchronized fun supplementScore(id: String, score: Long): Boolean {
         if (score <= 0) return false

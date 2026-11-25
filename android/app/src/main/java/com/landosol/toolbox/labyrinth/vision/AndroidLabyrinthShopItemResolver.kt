@@ -5,8 +5,12 @@ import android.graphics.Bitmap
 /** Every visible title is classified before a relic match can authorize a purchase. */
 class AndroidLabyrinthShopItemResolver(
     submitTextRead: (Bitmap, (String?) -> Unit) -> Unit = AndroidChineseRoleNameOcr::readAsync,
+    private val clock: () -> Long = android.os.SystemClock::elapsedRealtime,
 ) {
-    private val ocr = AndroidRelicRoiOcr(submitTextRead, maximumAttempts = 1)
+    constructor(submitTextRead: (Bitmap, (String?) -> Unit) -> Unit) :
+        this(submitTextRead, android.os.SystemClock::elapsedRealtime)
+
+    private val ocr = AndroidRelicRoiOcr(submitTextRead, maximumAttempts = 2, clock = clock)
     private val categories = LabyrinthShopCategoryResolution()
     private val accepted = mutableMapOf<String, Pair<Long, RelicOcrScheduler.Read>>()
 
@@ -31,6 +35,11 @@ class AndroidLabyrinthShopItemResolver(
                 accepted.remove(item.slotId)
                 return@map unknown
             }
+            if (item.status == LabyrinthShopItemStatus.DISABLED) {
+                accepted.remove(item.slotId)
+                categories.resetSlot(item.slotId)
+                return@map item
+            }
             // Real frames carry the localized pixel crop. Original fixed rectangles remain a mock/legacy fallback.
             val titleRect = item.titleRect ?: TITLE_RECTS[item.slotId]?.let { referenceRect ->
                 ReferenceFitMapper.map(bitmap.width, bitmap.height, STANDARD_REFERENCE, referenceRect)
@@ -45,29 +54,33 @@ class AndroidLabyrinthShopItemResolver(
                 if (!categories.needsRoleName(settled)) return@map settled
                 accepted.remove(item.slotId)
             }
-            val now = android.os.SystemClock.elapsedRealtime()
-            val attempt = categories.attempt(item.slotId, fingerprint, now)
-            val variant = minOf(attempt, 2)
+            val now = clock()
+            val titleAttempt = categories.attempt(item.slotId, fingerprint, now)
+            val variant = minOf(titleAttempt, 2)
             val rect = if (variant == 2) titleRect.copy(
                 top = maxOf(0, titleRect.top - 3),
                 height = minOf(bitmap.height - maxOf(0, titleRect.top - 3), titleRect.height + 6),
             ) else titleRect
-            val read = ocr.read(bitmap, "shop-title-${item.slotId}-$variant", rect,
-                scale = if (variant == 0) 2 else 3)
+            val ocrFingerprint = if (rect == titleRect) fingerprint else relicRoiFingerprint(bitmap, rect)
+            val attempt = if (variant == 2) categories.noteVariantChurn(item.slotId, ocrFingerprint, now) else titleAttempt
+            if (categories.isJitterExhausted(item.slotId, now)) {
+                return@map categories.resolve(item, null, null, attempt)
+            }
+            val ocrSlot = "shop-title-${item.slotId}-$variant"
+            val read = ocr.read(bitmap, ocrSlot, rect, scale = if (variant == 0) 2 else 3, fingerprint = ocrFingerprint)
             val resolved = categories.resolve(item, read?.text, read?.id, attempt)
             val labelPending = categories.needsRoleName(resolved) &&
                 categories.labelGraceOpen(item.slotId, now)
             if (resolved.categoryState == LabyrinthShopCategoryState.READY && read?.text != null && !labelPending) {
                 accepted[item.slotId] = fingerprint to read
+                categories.resetSlot(item.slotId)
             } else {
-                // Retire this crop variant only once its OCR actually completed with non-null text
-                // (never treat transient null failures as permanent variant exhaustion),
-                // or after the engine-silent backstop elapses.
+                val variantDone = read?.text != null || ocr.isExhaustedWithoutRead(ocrSlot, ocrFingerprint)
                 categories.noteVariantOutcome(
                     slot = item.slotId,
                     fingerprint = fingerprint,
                     variant = variant,
-                    completed = read?.text != null,
+                    completed = variantDone,
                     engineLastCompletedAt = ocr.lastCompletionAt(),
                     now = now,
                 )

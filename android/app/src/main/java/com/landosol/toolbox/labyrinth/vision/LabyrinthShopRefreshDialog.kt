@@ -10,6 +10,7 @@ data class LabyrinthShopRefreshDialog(
     val text: String? = null,
     val evidenceId: Long? = null,
     val capturedAtMillis: Long = Long.MIN_VALUE,
+    val isErrorPrompt: Boolean = false,
 ) {
     fun authorizesRefresh(expectedFee: Int): Boolean = kind == LabyrinthShopRefreshDialogKind.REFRESH &&
         confirmed && fee == expectedFee && expectedFee in setOf(300, 600)
@@ -17,8 +18,11 @@ data class LabyrinthShopRefreshDialog(
 
 /** Whole title + body text, deliberately excluding the blue generic button and wallet bar. */
 object LabyrinthShopRefreshDialogText {
+    private val errorPromptText = Regex("错误提示|通信错误|重新连接|返回标题")
+
     fun parse(text: String?, confirmations: Int = 1): LabyrinthShopRefreshDialog {
         val value = normalize(text)
+        val isErrorPrompt = errorPromptText.containsMatchIn(value)
         // EXIT wins even when the message also mentions refreshing. Never reuse the old visual
         // EXIT_CONFIRMATION label to decide this: the refresh modal has the same generic structure.
         val exit = Regex("(?:关闭|离开|退出|结束)(?:此|该|当前|这家|这个)?的?商店|商店(?:关闭|退出)|结束购物").containsMatchIn(value)
@@ -26,8 +30,11 @@ object LabyrinthShopRefreshDialogText {
             kind = LabyrinthShopRefreshDialogKind.EXIT,
             confirmed = confirmations >= 2,
             text = text,
+            isErrorPrompt = isErrorPrompt,
         )
-        if (!value.contains("更新") && !value.contains("刷新")) return LabyrinthShopRefreshDialog(text = text)
+        if (!value.contains("更新") && !value.contains("刷新")) {
+            return LabyrinthShopRefreshDialog(text = text, isErrorPrompt = isErrorPrompt)
+        }
 
         // A named fee is stronger than another amount (e.g. 持有余额) in the same modal. If there
         // is no fee label, accept only a single numeric amount; conflicting fees fail closed.
@@ -41,6 +48,7 @@ object LabyrinthShopRefreshDialogText {
             fee = fee,
             confirmed = confirmations >= 2 && fee != null,
             text = text,
+            isErrorPrompt = isErrorPrompt,
         )
     }
 

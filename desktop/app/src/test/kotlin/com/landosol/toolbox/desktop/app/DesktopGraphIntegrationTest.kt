@@ -80,9 +80,20 @@ class DesktopGraphIntegrationTest {
             withTimeout(3000) { graph.automationOverlayCoordinator.state.first { it?.paused == true } }
             assertTrue(graph.labyrinthEntryRecognitionSession.state.value.paused)
             assertEquals(AutomationActionResult.Paused, graph.automationActionExecutor.execute(sessionId, AutomationAction.Back))
-            graph.pauseTask()
+            // Explicit idempotent pause must not unpause; hiding preview while paused suspends capture without dropping CaptureState.
+            assertTrue(graph.setTaskPaused(true))
+            assertTrue(graph.labyrinthEntryRecognitionSession.state.value.paused)
+            graph.setPreviewRequested(false)
+            delay(350)
+            val pausedCaptures = fake.captures.get()
+            delay(700)
+            assertEquals("paused capture with hidden preview must not keep polling", pausedCaptures, fake.captures.get())
+            assertTrue("paused capture must keep CaptureState active", CaptureStateRegistry.isActive())
+            graph.setPreviewRequested(true)
+            assertTrue(graph.setTaskPaused(false))
             withTimeout(3000) { graph.automationOverlayCoordinator.state.first { it?.paused == false } }
             assertFalse(graph.labyrinthEntryRecognitionSession.state.value.paused)
+            withTimeout(3000) { while (fake.captures.get() == pausedCaptures) delay(20) }
             withTimeout(5000) { graph.stopAll("integration stop").join() }
             assertFalse(graph.labyrinthEntryRecognitionSession.state.value.running)
             assertNull(CaptureFrameBus.currentOwner()); assertFalse(CaptureStateRegistry.isActive())

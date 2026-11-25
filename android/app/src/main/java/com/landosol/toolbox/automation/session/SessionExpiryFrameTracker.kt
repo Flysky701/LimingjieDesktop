@@ -25,6 +25,8 @@ class SessionExpiryFrameTracker {
     @Volatile
     private var nodeMoveConfirmationPoint: ScreenPoint? = null
     @Volatile
+    private var errorPromptTextDetected: Boolean = false
+    @Volatile
     private var width: Int = 0
     @Volatile
     private var height: Int = 0
@@ -37,6 +39,19 @@ class SessionExpiryFrameTracker {
         battleFailureEndPoint = result.battleFailure?.endButtonRect?.let(::centre)
         battleEndConfirmationPoint = result.battleEndConfirmation?.advanceButtonRect?.let(::centre)
         nodeMoveConfirmationPoint = result.nodeMoveConfirmation?.confirmButtonRect?.let(::centre)
+        errorPromptTextDetected = result.shopRefreshDialog?.isErrorPrompt == true
+    }
+
+    fun reset() {
+        scores = emptyMap()
+        matches = emptyMap()
+        pageState = LabyrinthEntryPageState.UNKNOWN
+        battleFailureEndPoint = null
+        battleEndConfirmationPoint = null
+        nodeMoveConfirmationPoint = null
+        errorPromptTextDetected = false
+        width = 0
+        height = 0
     }
 
     private fun centre(rect: EntryPixelRect) = ScreenPoint(
@@ -45,8 +60,7 @@ class SessionExpiryFrameTracker {
     )
 
     /**
-     * 会话失效触发点：只在当前帧识别为已知页面、且该页的触发控件被模板命中时返回。
-     * 任何其他页面都返回 null，终止器因此不会点击（此前用固定坐标点底栏，在别的页面也会点）。
+     * 会话失效触发点：来自已识别页面的触发控件或当前帧中已识别的确认弹窗。
      *
      * - 黎明界主页：底栏「我的主页」标签模板。点已选中的「冒险」不联网（2026-09-17 实测），
      *   「我的主页」会请求主页数据，旧 enter 被拒即弹会话失效提示；
@@ -54,22 +68,26 @@ class SessionExpiryFrameTracker {
      *   结束 → 撤退（无报酬） → 确认 三步：确认才向服务端撤退，旧 enter 被拒即弹会话失效提示。
      *   每一步都按当前帧识别到的对话框阶段给出按钮，识别不到不点；
      * - 编组页 / 挑战页 / 地图页：编组页点「取消」回到挑战页，挑战页点「查看地图」打开地图视图，
-     *   地图页点「撤退（无报酬）」→ 二键确认弹窗点「确认」向服务端发起撤退，触发旧会话失效弹窗。
+     *   地图页优先走「撤退（无报酬）」→「确认」，也可用「返回」回黎明界主页。
      */
     val sessionInvalidationTrigger: ScreenPoint?
         get() = when (pageState) {
             LabyrinthEntryPageState.BATTLE_FAILED, LabyrinthEntryPageState.UNKNOWN ->
-                battleEndConfirmationPoint ?: battleFailureEndPoint.takeIf { pageState == LabyrinthEntryPageState.BATTLE_FAILED }
+                battleEndConfirmationPoint
+                    ?: nodeMoveConfirmationPoint.takeUnless { explicitSessionErrorPopup }
+                    ?: battleFailureEndPoint.takeIf { pageState == LabyrinthEntryPageState.BATTLE_FAILED }
             LabyrinthEntryPageState.BATTLE_TEAM_SELECTION ->
                 anchorCenter(EntryAnchorId.BATTLE_TEAM_CANCEL_BUTTON, TRIGGER_MIN_SCORE)
             LabyrinthEntryPageState.BATTLE_CHALLENGE ->
                 anchorCenter(EntryAnchorId.BATTLE_CHALLENGE_VIEW_MAP_BUTTON, TRIGGER_MIN_SCORE)
             LabyrinthEntryPageState.NODE_SELECTION,
             LabyrinthEntryPageState.NODE_MAP_VIEW,
-            -> nodeMoveConfirmationPoint
-                ?: battleEndConfirmationPoint
+            -> battleEndConfirmationPoint
+                ?: nodeMoveConfirmationPoint.takeUnless { explicitSessionErrorPopup }
                 ?: anchorCenter(EntryAnchorId.NODE_RETREAT_STANDARD, TRIGGER_MIN_SCORE)
                 ?: anchorCenter(EntryAnchorId.NODE_RETREAT, TRIGGER_MIN_SCORE)
+                ?: anchorCenter(EntryAnchorId.NODE_RETURN_STANDARD, TRIGGER_MIN_SCORE)
+                ?: anchorCenter(EntryAnchorId.NODE_RETURN, TRIGGER_MIN_SCORE)
             LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE,
             LabyrinthEntryPageState.DAWN_REALM_HOME_ACTIVE,
             -> anchorCenter(EntryAnchorId.DAWN_HOME_MY_HOME_TAB, TRIGGER_MIN_SCORE)
@@ -84,23 +102,20 @@ class SessionExpiryFrameTracker {
 
     val frameSize: Pair<Int, Int> get() = width to height
 
+    private val explicitSessionErrorPopup: Boolean
+        get() = errorPromptTextDetected ||
+            (scores[EntryAnchorId.SESSION_RETURN_TITLE] ?: 0.0) >= ANCHOR_ACTION_MIN_SCORE
+
     /**
-     * 「错误提示」弹窗出现：标题条锚点达到置信度门槛。
+     * 「错误提示」弹窗出现：标题条锚点达到置信度门槛，或 OCR 读到错误提示文案。
      *
-     * 失败页上的「结束确认」对话框用同一种蓝色标题条，位置也几乎重合，标题条锚点同样过线
-     * （2026-09-17 批次 195521：点「结束」后立刻判为弹窗，把「返回标题」的坐标点在了中间的
-     * 「撤退」上，随后卡在确认页）。只要当前帧结构上识别为结束确认对话框，就不是失效弹窗。
+     * 「结束确认」和地图上的双按钮确认框也可能命中蓝色标题条。
+     * 弹窗使背景变暗时，确认框仍可识别，而底层页面可能被判为 UNKNOWN。
      */
     val popupVisible: Boolean
-        get() {
-            val mapConfirmationVisible = (
-                pageState == LabyrinthEntryPageState.NODE_SELECTION ||
-                    pageState == LabyrinthEntryPageState.NODE_MAP_VIEW
-                ) && nodeMoveConfirmationPoint != null
-            return battleEndConfirmationPoint == null &&
-                !mapConfirmationVisible &&
-                (scores[EntryAnchorId.SESSION_ERROR_TITLE] ?: 0.0) >= POPUP_MIN_SCORE
-        }
+        get() = battleEndConfirmationPoint == null &&
+            (nodeMoveConfirmationPoint == null || explicitSessionErrorPopup) &&
+            ((scores[EntryAnchorId.SESSION_ERROR_TITLE] ?: 0.0) >= POPUP_MIN_SCORE || errorPromptTextDetected)
 
     /** 已回到标题页（点击屏幕开始游戏） */
     val titleReached: Boolean

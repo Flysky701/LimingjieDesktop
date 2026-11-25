@@ -71,7 +71,7 @@ class LabyrinthConfigImportPlanTest {
         val changes = rerollSummary(after = settings)
         assertTrue(changes.contains("刷开局默认公会：美食殿堂 → 咲恋救济院"))
         assertTrue(changes.contains("难度：难度 5 → 难度 2"))
-        assertTrue(changes.contains("路线评价模式：价值路线 v2 → 旧版固定模板"))
+        assertTrue(changes.contains("路线评价模式：高价值路线 → 经典模板路线"))
         assertTrue(changes.contains("第三格偏好：必须遗物 → 两者都行"))
         assertTrue(changes.contains("每区允许少拿格数：1 格 → 2 格"))
         assertTrue(changes.contains("区域 3 Boss：厄勒克特拉夫人（简单）、冰霜魔狼（简单） → 不限制"))
@@ -83,7 +83,7 @@ class LabyrinthConfigImportPlanTest {
             assertTrue(rerollSummary(before, settings.copy(thirdBlockChoice = choice))
                 .contains("第三格偏好：${before.thirdBlockChoice.label} → ${choice.label}"))
         }
-        assertTrue(rerollSummary(settings, LabyrinthRerollSettings()).contains("路线评价模式：旧版固定模板 → 价值路线 v2"))
+        assertTrue(rerollSummary(settings, LabyrinthRerollSettings()).contains("路线评价模式：经典模板路线 → 高价值路线"))
     }
 
     @Test fun `strategy numbers show units and zero baseline meaning`() {

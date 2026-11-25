@@ -19,9 +19,6 @@ import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.desktop.device.DeviceConnectionState
 import com.landosol.toolbox.labyrinth.*
 import com.landosol.toolbox.protocol.bilibili.GameServer
-import com.landosol.toolbox.ui.account.GeetestCaptchaDialog
-import com.landosol.toolbox.ui.labyrinth.LabyrinthScreen
-import com.landosol.toolbox.ui.labyrinth.LabyrinthStrategySettingsScreen
 import kotlinx.coroutines.*
 import java.time.Instant
 import java.time.ZoneId

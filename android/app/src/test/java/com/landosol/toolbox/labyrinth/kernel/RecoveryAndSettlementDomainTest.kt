@@ -177,14 +177,23 @@ class RecoveryAndSettlementDomainTest {
         val scoreReceipt = commit(score, 1_000)
         assertEquals(Stage.CHEST_SEQUENCE, settlement.stage)
 
+        settlement.onPageObserved(page, 1, 1_050)
+        assertEquals(Stage.CHEST_SEQUENCE, settlement.stage)
+        assertFalse(settlement.chestObserved)
+        assertNull(settlement.planTap(frame(page), page, WIDTH, HEIGHT, 0, 6, null).tapPlan)
+
         val stillScore = observeAndPlan(Page.RUN_CLEAR_RESULT, 1_100)
         assertEquals(Stage.SCORE_RESULT, settlement.stage)
         assertEquals(ActionKind.CLOSE_FINAL_SCORE, stillScore.tapPlan?.kind)
         val chest = observeAndPlan(Page.RUN_CLEAR_CHEST_ANIMATION, 1_200)
         assertFalse(requireNotNull(stillScore.permit).isCurrent(1_200))
         assertEquals(Stage.CHEST_SEQUENCE, settlement.stage)
+        assertTrue(settlement.chestObserved)
         assertEquals(ActionKind.ADVANCE_FINAL_SETTLEMENT, chest.tapPlan?.kind)
         commit(chest, 1_200)
+
+        assertNull(observeAndPlan(Page.RUN_CLEAR_RESULT, 1_250).tapPlan)
+        assertEquals(Stage.CHEST_SEQUENCE, settlement.stage)
 
         val chestResult = observeAndPlan(Page.RUN_CLEAR_CHEST_RESULT, 1_300)
         assertEquals(LabyrinthFallbackTap.BOTTOM_CENTER.rect(WIDTH, HEIGHT), chestResult.tapPlan?.rect)

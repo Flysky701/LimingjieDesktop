@@ -92,6 +92,7 @@ data class LabyrinthRouteJson(
     val customNodePlan: LabyrinthCustomNodePlan = LabyrinthCustomNodePlan(),
     /** Account evidence captured for this enterId; absent in legacy route documents. */
     val openingRelics: LabyrinthOpeningRelicState? = null,
+    val targetScore: Long = 0L,
 ) {
     val blockIds: List<Long> get() = nodes.map(LabyrinthNodeJson::blockId)
 
@@ -186,6 +187,7 @@ private data class LabyrinthRoutePolicyJson(
     val routeEvaluationMode: String = LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE.name,
     val valueAllowance: Int = 0,
     val customNodePlan: LabyrinthCustomNodePlan = LabyrinthCustomNodePlan(),
+    val targetScore: Long = 0L,
 )
 
 class RoomLabyrinthRerollCheckpointStore(
@@ -248,6 +250,7 @@ private fun LabyrinthRoutePolicy.toJson() = LabyrinthRoutePolicyJson(
     routeEvaluationMode = evaluationMode.name,
     valueAllowance = valueAllowance,
     customNodePlan = customNodePlan,
+    targetScore = targetScore,
 )
 
 private fun LabyrinthRoutePolicyJson.toDomain() = LabyrinthRoutePolicy(
@@ -266,6 +269,7 @@ private fun LabyrinthRoutePolicyJson.toDomain() = LabyrinthRoutePolicy(
     },
     area3BossIds = area3BossIds.toSet(),
     area5BossIds = area5BossIds.toSet(),
+    targetScore = targetScore.coerceIn(0L, LabyrinthRerollOptions.MAX_TARGET_SCORE),
 )
 
 class RoomLabyrinthRouteStore(
@@ -318,6 +322,7 @@ class RoomLabyrinthRouteStore(
             valueAllowance = config.routePolicy.valueAllowance,
             customNodePlan = config.routePolicy.customNodePlan,
             openingRelics = route.openingRelics,
+            targetScore = config.routePolicy.targetScore,
         )
         val saved = database.withTransaction {
             val merged = routeJson.withOpeningRelicsFrom(loadLatest(config.accountId))
@@ -454,6 +459,8 @@ class ExistingLabyrinthRouteResolver(
                         difficulty = difficulty,
                         policy = policy,
                         currentBlockId = value.currentBlockId,
+                        guildId = value.guildId ?: top.guildId ?: 0,
+                        enhanceNodeIds = top.enhanceNodeIds?.toSet(),
                     )
                 ) {
                     is RouteSearchResult.Found -> ExistingLabyrinthRouteResult.Found(
@@ -717,6 +724,8 @@ class LabyrinthRerollWorkflow(
                 nodes = entered.map,
                 difficulty = config.difficulty,
                 policy = config.routePolicy,
+                guildId = config.guildId,
+                enhanceNodeIds = openingRelicState?.enhanceNodeIds?.toSet(),
             )
             if (search is RouteSearchResult.Found) {
                 saveCheckpoint(
@@ -754,7 +763,7 @@ class LabyrinthRerollWorkflow(
                 config = config,
                 attempt = attempt,
                 expectedEnterId = entered.enterId,
-                retireStage = "路线不匹配，撤退",
+                retireStage = rejection?.message?.let { "${it}，撤退" } ?: "路线不匹配，撤退",
                 confirmationContext = "确认撤退后的服务端状态",
                 onProgress = onProgress,
             )

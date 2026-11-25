@@ -4,7 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RelicOcrSchedulerTest {
-    @Test fun `shop variants each get one read and stale callbacks cannot replace new stock`() {
+    @Test fun `a one-read budget still drops stale callbacks from previous stock`() {
         var time = 0L
         val shop = RelicOcrScheduler({ time }, maximumAttempts = 1)
         val old = requireNotNull(shop.request("title-0", 1))
@@ -32,6 +32,7 @@ class RelicOcrSchedulerTest {
         now = 100_000
         repeat(100) { assertNull(scheduler.request("a", 1)) }
         assertEquals(second.id, scheduler.cached("a", 1)?.id)
+        assertFalse(scheduler.isExhaustedWithoutRead("a", 1))
     }
     @Test fun `pixel change invalidates cache and allows fresh work`() {
         scheduler.complete(requireNotNull(scheduler.request("a", 1)), "1")
@@ -146,11 +147,21 @@ class RelicOcrSchedulerTest {
     }
 
     @Test fun `failures use bounded retry budget without poisoning cache with null read`() {
-        repeat(2) {
-            scheduler.complete(requireNotNull(scheduler.request("a", 1)), null)
-            assertNull(scheduler.cached("a", 1))
-            now += 500
-        }
+        val first = requireNotNull(scheduler.request("a", 1))
+        scheduler.complete(first, null)
+        assertFalse(scheduler.isExhaustedWithoutRead("a", 1))
+        assertNull(scheduler.cached("a", 1))
+
+        now = 350
+        val retry = requireNotNull(scheduler.request("a", 1))
+        assertFalse(scheduler.isExhaustedWithoutRead("a", 1))
+        scheduler.complete(retry, null)
+        assertTrue(scheduler.isExhaustedWithoutRead("a", 1))
+        assertFalse(scheduler.isExhaustedWithoutRead("a", 2))
+
+        now = 700
+        assertNotNull(scheduler.request("b", 1))
+        assertTrue(scheduler.isExhaustedWithoutRead("a", 1))
         assertNull(scheduler.request("a", 1))
         assertNull(scheduler.cached("a", 1))
     }

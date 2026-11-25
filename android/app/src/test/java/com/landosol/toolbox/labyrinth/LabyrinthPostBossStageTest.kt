@@ -23,10 +23,14 @@ class LabyrinthPostBossStageTest {
     }
 
     @Test
-    fun `result page still visible after the first close tap returns to the score stage`() {
+    fun `result page can reopen the score stage until a chest is observed`() {
         assertEquals(
             LabyrinthPostBossStage.SCORE_RESULT,
             labyrinthPostBossStageOnPage(LabyrinthPostBossStage.CHEST_SEQUENCE, Page.RUN_CLEAR_RESULT),
+        )
+        assertEquals(
+            LabyrinthPostBossStage.CHEST_SEQUENCE,
+            labyrinthPostBossStageOnPage(LabyrinthPostBossStage.CHEST_SEQUENCE, Page.RUN_CLEAR_RESULT, chestObserved = true),
         )
     }
 

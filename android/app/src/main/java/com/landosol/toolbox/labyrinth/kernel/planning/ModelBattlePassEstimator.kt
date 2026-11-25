@@ -14,11 +14,13 @@ import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValue
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueSource
 import com.landosol.toolbox.labyrinth.kernel.strategy.ContextualBattleValueEstimator
 import com.landosol.toolbox.labyrinth.kernel.strategy.buildBattleValueContext
+import com.landosol.toolbox.labyrinth.kernel.strategy.combinedMultiTeamPassProb
 
 class ModelBattlePassEstimator(
     private val estimator: ContextualBattleValueEstimator,
     private val profiles: Map<String, LabyrinthRoleProfile>,
     private val optimizer: LabyrinthTeamOptimizer? = null,
+    private val requireLeadVanguard: Boolean = true,
 ) : BattlePassEstimator {
     override fun estimate(state: PlanningState, exam: BattleExam): PassEstimate? {
         val owned = state.ownedCharacterIds.map(::canonicalLabyrinthRoleId).distinct().sorted()
@@ -34,7 +36,7 @@ class ModelBattlePassEstimator(
             optimizeBossVanguardSynergy = exam.isBoss,
             encounterStrategy = encounter,
             currentArea = exam.area,
-            frontlineSurvivalGateEnabled = true,
+            frontlineSurvivalGateEnabled = requireLeadVanguard,
         )
         val context = buildBattleValueContext(
             owned, profiles, exam.questId, exam.area, state.difficulty, rule,
@@ -50,8 +52,9 @@ class ModelBattlePassEstimator(
         var miss = 1.0
         var expectedTeams = 0.0
         val probabilities = ArrayList<Double>(teamCount)
+        val selectedValues = ArrayList<BattleValue>(teamCount)
         for (index in 0 until teamCount) {
-            val roundRule = rule.copy(frontlineSurvivalGateEnabled = index == 0)
+            val roundRule = rule.copy(frontlineSurvivalGateEnabled = index == 0 && requireLeadVanguard)
             val budget = (MAX_CANDIDATES - evaluated.size) / (teamCount - index)
             val teams = candidates(remaining, roundRule, budget, evaluated.keys)
             if (teams.isNotEmpty()) {
@@ -69,12 +72,14 @@ class ModelBattlePassEstimator(
             ) ?: return null
             val p = best.value.pWin
             probabilities += p
+            selectedValues += best.value
             expectedTeams += miss
             miss *= 1.0 - p
             val selected = best.key.toSet()
             remaining = remaining.filterNot { it.unitId in selected }
         }
-        return PassEstimate(1.0 - miss, expectedTeams, probabilities)
+        val pPass = if (exam.isBoss && selectedValues.size >= 2) combinedMultiTeamPassProb(selectedValues) else 1.0 - miss
+        return PassEstimate(pPass, expectedTeams, probabilities)
     }
 
     private fun candidates(
@@ -114,9 +119,22 @@ class ModelBattlePassEstimator(
             }
             yieldAll(ranked.chunked(TEAM_SIZE).asSequence().filter { it.size == TEAM_SIZE })
             yieldAll(vanguardSeeds)
-            for (talent in ranked.map { it.talentId }.distinct().filter { it != 0 }) {
+            val byRuleScore = ranked.sortedByDescending { (_, profile) ->
+                profile.effectiveUserScore ?: maxOf(profile.physicalDamagePotential ?: 0.0, profile.magicDamagePotential ?: 0.0)
+            }
+            yield(byRuleScore.take(TEAM_SIZE))
+            for (order in listOf(ranked, byRuleScore)) {
+                val (magic, physical) = order.partition { (_, profile) ->
+                    (profile.magicDamagePotential ?: 0.0) > (profile.physicalDamagePotential ?: 0.0)
+                }
+                yield((magic + physical).take(TEAM_SIZE))
+                yield((physical + magic).take(TEAM_SIZE))
+            }
+            for (talent in ranked.map { it.talentId }.distinct().filter { it in 1..5 }) {
                 val (same, other) = ranked.partition { it.talentId == talent }
                 yield((same + other).take(TEAM_SIZE))
+                val (sameByScore, otherByScore) = byRuleScore.partition { it.talentId == talent }
+                yield((sameByScore + otherByScore).take(TEAM_SIZE))
             }
             for (incoming in ranked) {
                 if (incoming in lead) continue
@@ -129,8 +147,8 @@ class ModelBattlePassEstimator(
 
     private companion object {
         const val TEAM_SIZE = 5
-        const val MAX_CANDIDATES = 16
-        const val MAX_RULE_SEEDS = 3
-        const val RULE_SEED_ROSTER_SIZE = 8
+        const val MAX_CANDIDATES = 48
+        const val MAX_RULE_SEEDS = 6
+        const val RULE_SEED_ROSTER_SIZE = 12
     }
 }

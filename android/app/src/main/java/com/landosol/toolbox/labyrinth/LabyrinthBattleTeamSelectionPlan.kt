@@ -246,19 +246,23 @@ data class LabyrinthBattleTeamSelectionPlan(
         },
     )
 
-    fun logText(): String = buildString {
-        appendLine("推荐第一队：")
-        recommendedIds.forEach { id -> appendLine("$id ${recommendedNames[id] ?: id}") }
+    fun logText(): String = describeLog(includeFrameDetails = true)
+
+    internal fun logKey(): String = describeLog(includeFrameDetails = false)
+
+    private fun describeLog(includeFrameDetails: Boolean): String = buildString {
+        appendLine("推荐第一队：${describe(recommendedIds, recommendedNames)}")
         appendLine("当前已选：${describe(currentlySelectedIds, currentlySelectedNames)}")
         appendLine("保持：${describe(alreadyCorrectIds, recommendedNames)}")
         appendLine("计划取消：${describe(needDeselectIds, currentlySelectedNames)}")
         appendLine("计划选择：${describe(needSelectIds, recommendedNames)}")
-        appendLine("当前可见计划取消：${describeTargets(visibleDeselectTargets)}")
-        appendLine("当前可见计划选择：${describeTargets(visibleSelectTargets)}")
+        appendLine("当前可见计划取消：${describeTargets(visibleDeselectTargets, includeFrameDetails)}")
+        appendLine("当前可见计划选择：${describeTargets(visibleSelectTargets, includeFrameDetails)}")
         if (unsafeVisibleMatches.isNotEmpty()) {
             appendLine(
                 "低置信度疑似目标：" + unsafeVisibleMatches.joinToString("；") {
-                    "${it.characterId} ${it.displayName} @${it.slotId} confidence=${formatSelectionConfidence(it.confidence)} ${it.reason}"
+                    val confidence = if (includeFrameDetails) " confidence=${formatSelectionConfidence(it.confidence)}" else ""
+                    "${it.characterId} ${it.displayName} @${it.slotId}$confidence ${it.reason}"
                 },
             )
         }
@@ -271,7 +275,7 @@ data class LabyrinthBattleTeamSelectionPlan(
                     .ifBlank { "无" },
         )
         appendLine("需要滚动：${if (scrollRequired) "是" else "否"}")
-        appendLine("viewportRevision：$viewportRevision")
+        if (includeFrameDetails) appendLine("viewportRevision：$viewportRevision")
         append(
             when {
                 teamReady && holdCurrentTeam -> "状态：普通战保留当前队伍，可开始战斗"
@@ -285,11 +289,16 @@ data class LabyrinthBattleTeamSelectionPlan(
     private fun describe(ids: List<String>, names: Map<String, String>): String =
         ids.joinToString(" / ") { id -> "$id ${names[id] ?: id}" }.ifBlank { "无" }
 
-    private fun describeTargets(targets: List<LabyrinthBattleTeamSelectionTarget>): String =
+    private fun describeTargets(
+        targets: List<LabyrinthBattleTeamSelectionTarget>,
+        includeFrameDetails: Boolean,
+    ): String =
         targets.joinToString("；") {
-            "${it.characterId} ${it.displayName} @${it.slotId} " +
-                "rect=${it.screenRect.left},${it.screenRect.top},${it.screenRect.width},${it.screenRect.height} " +
-                "confidence=${formatSelectionConfidence(it.confidence)}"
+            val target = "${it.characterId} ${it.displayName} @${it.slotId}"
+            if (includeFrameDetails) {
+                "$target rect=${it.screenRect.left},${it.screenRect.top},${it.screenRect.width},${it.screenRect.height} " +
+                    "confidence=${formatSelectionConfidence(it.confidence)}"
+            } else target
         }.ifBlank { "无" }
 }
 

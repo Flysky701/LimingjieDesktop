@@ -63,6 +63,7 @@ data class LabyrinthUiState(
     val maxAttempts: String = "100",
     val rerollUntilFound: Boolean = true,
     val retireExisting: Boolean = true,
+    val targetScore: Long = LabyrinthRerollOptions.DEFAULT_TARGET_SCORE,
     val isWorking: Boolean = false,
     val progress: String? = null,
     val startedAtMillis: Long? = null,
@@ -94,6 +95,7 @@ private data class LabyrinthChromeState(
     val maxAttempts: String = "100",
     val rerollUntilFound: Boolean = true,
     val retireExisting: Boolean = true,
+    val targetScore: Long = LabyrinthRerollOptions.DEFAULT_TARGET_SCORE,
     val isWorking: Boolean = false,
     val progress: String? = null,
     val startedAtMillis: Long? = null,
@@ -320,6 +322,7 @@ class LabyrinthController(
             maxAttempts = current.maxAttempts,
             rerollUntilFound = current.rerollUntilFound,
             retireExisting = current.retireExisting,
+            targetScore = current.targetScore,
             isWorking = current.isWorking,
             progress = current.progress,
             startedAtMillis = current.startedAtMillis,
@@ -378,6 +381,10 @@ class LabyrinthController(
         updateConfig { copy(retireExisting = value) }
     }
 
+    fun setTargetScore(value: Long) = updateNumeric {
+        if (value !in 0L..LabyrinthRerollOptions.MAX_TARGET_SCORE) this else copy(targetScore = value)
+    }
+
     fun start(retreatConfirmed: Boolean = false, guildIdOverride: Int? = null) {
         val admission = configurationAdmission() ?: return
         try { startAdmitted(retreatConfirmed, guildIdOverride) } finally { admission.close() }
@@ -423,17 +430,43 @@ class LabyrinthController(
      */
     fun startAfterBattleFailureReroll(accountId: Long): Boolean {
         val admission = configurationAdmission() ?: return false
-        return try { startAfterBattleFailureRerollAdmitted(accountId) } finally { admission.close() }
+        return try {
+            startForcedAbandonRerollAdmitted(
+                accountId = accountId,
+                failurePrefix = "连续3次战斗失败，无法自动重刷",
+                progressMessage = "连续3次战斗失败，正在撤退当前开局并重新刷取",
+            )
+        } finally {
+            admission.close()
+        }
     }
 
-    private fun startAfterBattleFailureRerollAdmitted(accountId: Long): Boolean {
+    fun startAfterScoreTargetRetireReroll(accountId: Long, reason: String): Boolean {
+        val admission = configurationAdmission() ?: return false
+        return try {
+            val detail = reason.ifBlank { "当前局面无法达到刷分目标" }
+            startForcedAbandonRerollAdmitted(
+                accountId = accountId,
+                failurePrefix = "未达刷分目标，无法自动重刷",
+                progressMessage = "$detail，正在撤退当前开局并重新刷取",
+            )
+        } finally {
+            admission.close()
+        }
+    }
+
+    private fun startForcedAbandonRerollAdmitted(
+        accountId: Long,
+        failurePrefix: String,
+        progressMessage: String,
+    ): Boolean {
         if (chrome.value.isWorking || chrome.value.captcha != null || !chrome.value.settingsReady) {
-            reportMessage("战斗失败后无法自动重刷：刷开局任务尚未就绪或已有任务运行")
+            reportMessage("$failurePrefix：刷开局任务尚未就绪或已有任务运行")
             return false
         }
         val account = uiState.value.selectedAccount
         if (account == null || account.id != accountId || account.id != settingsAccountId) {
-            reportMessage("战斗失败后无法自动重刷：当前账号已变化")
+            reportMessage("$failurePrefix：当前账号已变化")
             return false
         }
         val config = parseConfig(account.id) ?: return false
@@ -451,7 +484,7 @@ class LabyrinthController(
             it.copy(
                 startedAtMillis = System.currentTimeMillis(),
                 activeGuildId = rerollConfig.guildId,
-                message = "连续3次战斗失败，正在撤退当前开局并重新刷取",
+                message = progressMessage,
             )
         }
         requestFrozenStart()
@@ -1233,7 +1266,7 @@ class LabyrinthController(
             customNodePlan = settings.customNodePlan,
             selectedArea3BossIds = settings.area3BossIds, selectedArea5BossIds = settings.area5BossIds,
             maxAttempts = settings.maxAttempts, rerollUntilFound = settings.rerollUntilFound,
-            retireExisting = settings.retireExisting, settingsReady = true) }
+            retireExisting = settings.retireExisting, targetScore = settings.targetScore, settingsReady = true) }
     }
 
     fun dismissMessage() {
@@ -1268,6 +1301,7 @@ class LabyrinthController(
             customNodePlan = current.customNodePlan,
             area3BossIds = current.selectedArea3BossIds,
             area5BossIds = current.selectedArea5BossIds,
+            targetScore = current.targetScore,
         )
     }
 
@@ -1386,6 +1420,7 @@ class LabyrinthController(
             maxAttempts = it.maxAttempts,
             rerollUntilFound = it.rerollUntilFound,
             retireExisting = it.retireExisting,
+            targetScore = it.targetScore,
         )
     }
 

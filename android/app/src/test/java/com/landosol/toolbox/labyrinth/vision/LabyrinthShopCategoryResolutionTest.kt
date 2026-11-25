@@ -106,6 +106,41 @@ class LabyrinthShopCategoryResolutionTest {
         assertEquals(1, resolver.attempt("s", 7, 50_000))
     }
 
+    @Test fun `title jitter exhausts the slot after three transitions and ten seconds`() {
+        assertEquals(0, resolver.attempt("3", 100, 0))
+        resolver.noteVariantOutcome("3", 100, 0, true, engineLastCompletedAt = 500, now = 500)
+        assertEquals(1, resolver.attempt("3", 100, 600))
+        assertEquals(0, resolver.attempt("3", 101, 1_000))
+        assertEquals(0, resolver.attempt("3", 100, 5_000))
+        assertEquals(0, resolver.attempt("3", 101, 9_999))
+
+        val attempt = resolver.attempt("3", 101, 10_000)
+        assertEquals(3, attempt)
+        assertEquals(LabyrinthShopCategoryState.EXHAUSTED, resolver.resolve(item(), null, null, attempt).categoryState)
+        assertEquals(3, resolver.attempt("3", 102, 10_001))
+
+        assertTrue(resolver.labelGraceOpen("3", 11_000))
+        resolver.resetSlot("3")
+        assertEquals(0, resolver.attempt("3", 102, 23_000))
+        assertTrue(resolver.labelGraceOpen("3", 23_000))
+    }
+
+    @Test fun `expanded crop jitter uses the same slot budget with an unchanged title`() {
+        assertEquals(0, resolver.attempt("3", 100, 1_000))
+        resolver.noteVariantOutcome("3", 100, 0, true, engineLastCompletedAt = 2_000, now = 2_000)
+        resolver.noteVariantOutcome("3", 100, 1, true, engineLastCompletedAt = 3_000, now = 3_000)
+        assertEquals(2, resolver.attempt("3", 100, 4_000))
+        assertEquals(2, resolver.noteVariantChurn("3", 201, 4_000))
+        assertEquals(2, resolver.noteVariantChurn("3", 202, 6_000))
+        assertEquals(2, resolver.noteVariantChurn("3", 201, 8_000))
+        assertEquals(2, resolver.noteVariantChurn("3", 201, 11_000))
+
+        val attempt = resolver.noteVariantChurn("3", 202, 11_001)
+        assertEquals(3, attempt)
+        assertEquals(LabyrinthShopCategoryState.EXHAUSTED, resolver.resolve(item(), null, null, attempt).categoryState)
+        assertEquals(3, resolver.attempt("3", 100, 11_002))
+    }
+
     @Test fun `three completed unresolved reads skip item without assuming exhausted relic stock`() {
         val imprint = resolver.resolve(item("1"), "攻击型职能的随机印记", 1, 0)
         assertTrue(decide(listOf(resolver.resolve(item(), "看不清", 2, 0))) is LabyrinthShopDecision.Wait)

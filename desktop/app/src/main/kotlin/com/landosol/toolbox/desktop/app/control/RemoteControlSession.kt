@@ -11,6 +11,7 @@ import com.landosol.toolbox.desktop.app.adapters.storage.*
 import com.landosol.toolbox.desktop.app.strategy.BattleModelStatus
 import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
+import com.landosol.toolbox.desktop.ocr.OcrEngineTelemetry
 import com.landosol.toolbox.desktop.platform.DesktopSettings
 import com.landosol.toolbox.desktop.shared.*
 import com.landosol.toolbox.desktop.app.ui.RunConsoleState
@@ -67,16 +68,22 @@ private suspend fun decodeControlPreview(image: JsonObject): ImageBitmap? = try 
 internal fun <T> StateFlow<ControlUiSnapshot>.decodedListField(
     scope: CoroutineScope,
     name: String,
+    fallbackName: String? = null,
     read: (ControlUiSnapshot) -> List<T>,
 ): StateFlow<List<T>> {
+    fun source(snapshot: ControlUiSnapshot): Any? {
+        val raw = snapshot.document[name]
+        return if (fallbackName != null && raw !is JsonArray) fallbackName to snapshot.document[fallbackName] else raw
+    }
+
     val initial = value
-    var lastSource = initial.document[name]
+    var lastSource = source(initial)
     var lastList = read(initial)
     return map { snapshot ->
-        val source = snapshot.document[name]
-        if (source != lastSource) {
+        val nextSource = source(snapshot)
+        if (nextSource != lastSource) {
             lastList = read(snapshot)
-            lastSource = source
+            lastSource = nextSource
         }
         lastList
     }.stateIn(scope, SharingStarted.Eagerly, lastList)
@@ -89,6 +96,7 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)
     private val localError=MutableStateFlow<String?>(null)
     val error=localError.asStateFlow()
+    fun dismissError() { localError.value = null }
     private val models:StateFlow<ControlUiSnapshot> = port.snapshots.filter{it["console"] is JsonObject}.map(::ControlUiSnapshot).stateIn(scope,SharingStarted.Eagerly,ControlUiSnapshot(previous?.models?.value?.document ?: port.snapshots.value))
     private fun <T> field(name:String,read:(ControlUiSnapshot)->T):StateFlow<T> = models
         .map{it.document[name]}.distinctUntilChanged()
@@ -96,8 +104,27 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         .stateIn(scope,SharingStarted.Eagerly,read(models.value))
     private inline fun <reified T> listField(name:String):StateFlow<List<T>> =
         models.decodedListField(scope,name){it.model(name,emptyList<T>())}
-    // Decode the shared console once per change, then project its existing objects for each view.
-    private val consoleState=field("console"){it.console}
+    // Decode the shared console once per change, preserving lastGood if a snapshot section fails to decode.
+    private val consoleState: StateFlow<RunConsoleState> = run {
+        var lastGood = models.value.model("console", RunConsoleState())
+        models.map { it.document["console"] }.distinctUntilChanged().map { raw ->
+            var failed = false
+            val decoded = ControlUiSnapshot(JsonObject(mapOf("console" to (raw ?: JsonNull)))).model(
+                name = "console",
+                fallback = RunConsoleState(),
+                onFailure = lastGood,
+                onError = {
+                    failed = true
+                    localError.value = CONSOLE_DECODE_ERROR
+                },
+            )
+            if (!failed) {
+                lastGood = decoded
+                if (localError.value == CONSOLE_DECODE_ERROR) localError.value = null
+            }
+            decoded
+        }.stateIn(scope, SharingStarted.Eagerly, lastGood)
+    }
     private fun <T> consoleField(read:(RunConsoleState)->T):StateFlow<T> = consoleState
         .map(read).distinctUntilChanged().stateIn(scope,SharingStarted.Eagerly,read(consoleState.value))
     val context=object:Context() {
@@ -109,9 +136,11 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     }
     val dataDirectory get()=Path.of(models.value.text("dataDirectory") ?: ".")
     val debugUrl get()=models.value.text("debugUrl")
+    val incidentCount: StateFlow<Int> = field("incidentCount") { it.document["incidentCount"]?.jsonPrimitive?.intOrNull ?: 0 }
+    val notices: StateFlow<List<String>> = listField("notices")
     val gameClientResolution get()=models.value.model("gameClient",GameClientResolution.Unavailable as GameClientResolution)
     val gameClient=field("gameClient"){it.model("gameClient",GameClientResolution.Unavailable as GameClientResolution)}
-    val busy get()=port.connection.value!=WorkerConnectionStatus.CONNECTED||models.value.console.busy
+    val busy get()=port.connection.value!=WorkerConnectionStatus.CONNECTED||consoleState.value.busy
     val resolutionGuard=ResolutionView()
     val deviceConnection=ConnectionView()
     val device=DeviceView()
@@ -153,7 +182,7 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     }
     fun stopAll(reason:String="用户停止任务")=fire(ControlOps.STOP,buildJsonObject{put("reason",reason)})
     fun stopLabyrinthAutoRun(){stopAll()}
-    fun pauseTask(){fire(ControlOps.PAUSE)}
+    fun pauseTask(paused:Boolean?=null){fire(ControlOps.PAUSE,buildJsonObject{paused?.let{put("paused",it)}})}
     suspend fun connectDevice(serial:String,reconnect:Boolean=false){request(ControlOps.DEVICE_CONNECT,buildJsonObject{put("serial",serial);put("reconnect",reconnect)})}
     suspend fun disconnectDevice(){request(ControlOps.DEVICE_DISCONNECT)}
     suspend fun recheckResolution(){request(ControlOps.REFRESH,buildJsonObject{put("resolution",true)})}
@@ -168,11 +197,23 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         return ControlModelCodec.decode(reply["location"] ?: reply)
     }
     suspend fun stopCapture(){request(ControlOps.CAPTURE_STOP)}
+    suspend fun dismissNotices(){request(ControlOps.NOTICES_DISMISS)}
+    suspend fun replayStats(): Pair<Int, Int> {
+        val reply = request(ControlOps.REPLAYS_STATS)
+        return (reply["episodes"]?.jsonPrimitive?.intOrNull ?: 0) to (reply["battleSamples"]?.jsonPrimitive?.intOrNull ?: 0)
+    }
+    suspend fun exportReplays(path: String): String {
+        val reply = request(ControlOps.REPLAYS_EXPORT, buildJsonObject { put("path", path) })
+        return reply["message"]?.jsonPrimitive?.contentOrNull ?: "匿名回放已导出"
+    }
     suspend fun messageRequest(op:String):String=request(op)["message"]?.jsonPrimitive?.contentOrNull ?: "操作已完成"
     override fun close(){scope.cancel()}
 
     inner class ResolutionView {val status=field("resolution"){it.model("resolution",VisualResolutionStatus(message=VisualResolutionGuardMessage))}}
-    inner class OcrView {val status:StateFlow<OcrEngineStatus> = field("ocr"){it.model("ocr",OcrEngineStatus.NotLoaded as OcrEngineStatus)}}
+    inner class OcrView {
+        val status:StateFlow<OcrEngineStatus> = field("ocr"){it.model("ocr",OcrEngineStatus.NotLoaded as OcrEngineStatus)}
+        val telemetry:StateFlow<OcrEngineTelemetry> = field("ocrTelemetry"){it.model("ocrTelemetry",OcrEngineTelemetry())}
+    }
     inner class OverlayView {val state=consoleField{it.overlay}}
     inner class IdentityView {val state=field("identity"){it.model<DeviceIdentitySnapshot?>("identity",null)};fun current():DeviceIdentitySnapshot?=state.value}
     inner class DeviceView {
@@ -263,6 +304,14 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     }
     inner class LogView {
         val lines=listField<UserLogLine>("logs")
+        val keyLines: StateFlow<List<UserLogLine>> =
+            models.decodedListField(scope, "keyLogs", fallbackName = "logs") { snapshot ->
+                if (snapshot.document["keyLogs"] is JsonArray) {
+                    snapshot.model("keyLogs", emptyList())
+                } else {
+                    snapshot.model<List<UserLogLine>>("logs", emptyList()).filter { it.kind != UserLogKind.NORMAL }
+                }
+            }
         val revision=field("logRevision"){it.document["logRevision"]?.jsonPrimitive?.longOrNull ?: 0L}
         suspend fun load():List<UserLogLine> = ControlModelCodec.decode(request(ControlOps.LOG_LOAD).getValue("items"))
         fun text(lines:List<UserLogLine> = this.lines.value)=lines.joinToString("\n"){"${it.time} [${it.kind.label}] ${it.text}${if(it.repeats>1)" ×${it.repeats}"else ""}"}
@@ -301,21 +350,40 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         val next=ControlModelCodec.encode(after).jsonObject
         request(op,JsonObject(next.filter{(key,value)->key!="_type"&&old[key]!=value}))
     }
-    companion object {private const val VisualResolutionGuardMessage="自动执行要求 1920 × 1080 横屏，请检查实际截图尺寸"}
+    companion object {
+        private const val VisualResolutionGuardMessage = "自动执行要求 1920 × 1080 横屏，请检查实际截图尺寸"
+        private const val CONSOLE_DECODE_ERROR = "前后台状态同步解析失败，已保留上次有效状态"
+    }
 }
 
 class ControlUiSnapshot(val document:JsonObject) {
     val console:RunConsoleState by lazy{model("console",RunConsoleState())}
     fun text(name:String)=document[name]?.jsonPrimitive?.contentOrNull
-    inline fun <reified T> model(name:String,fallback:T):T = document[name]?.takeUnless{it is JsonNull}?.let{
+    inline fun <reified T> model(name:String,fallback:T):T =
+        model(name = name, fallback = fallback, onFailure = fallback)
+
+    inline fun <reified T> model(
+        name: String,
+        fallback: T,
+        onFailure: T,
+        noinline onError: ((Throwable) -> Unit)? = null,
+    ): T = document[name]?.takeUnless{it is JsonNull}?.let{
         try { ControlModelCodec.decode<T>(it) }
         catch (cancelled:CancellationException) { throw cancelled }
-        catch (_:Exception) { reportDecodeFailure(name); fallback }
+        catch (failure:Exception) {
+            reportDecodeFailure(name, failure)
+            onError?.invoke(failure)
+            onFailure
+        }
     } ?: fallback
+
     companion object {
         private val failedSections=java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-        fun reportDecodeFailure(name:String) {
-            if(failedSections.add(name)) System.err.println("Control snapshot decode failed for section: $name")
+        fun reportDecodeFailure(name:String, failure:Throwable? = null) {
+            if(failedSections.add(name)) {
+                System.err.println("Control snapshot decode failed for section: $name (${failure?.message ?: "unknown"})")
+                runCatching { DesktopLog.write('E', "ControlUI", "Control snapshot decode failed for section: $name", failure) }
+            }
         }
     }
 }

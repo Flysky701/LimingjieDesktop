@@ -93,6 +93,28 @@ class LabyrinthShopPolicyTest {
     }
 
     @Test
+    fun `generic shop skips an exhausted relic-like icon`() {
+        val policy = LabyrinthShopPolicy()
+        val exhausted = item("22005", "会心", 1, recognized = false, confidence = 0.82,
+            categoryState = LabyrinthShopCategoryState.EXHAUSTED)
+        val relic = item("bracelet", "会心", 1, recognized = true)
+        fun decide(items: List<LabyrinthShopItemMatch>, purchases: Int = 0) = policy.decide(
+            currentArea = 6,
+            items = items,
+            acquired = emptyList(),
+            refreshAvailable = true,
+            relicPurchasesInCycle = purchases,
+            coinBalance = 10_000,
+        )
+
+        assertEquals(relic, (decide(listOf(exhausted, relic)) as LabyrinthShopDecision.BuyRelic).item)
+        assertTrue(decide(listOf(exhausted), purchases = 3) is LabyrinthShopDecision.Refresh)
+        assertTrue(decide(listOf(exhausted)) is LabyrinthShopDecision.Close)
+        val ready = exhausted.copy(categoryState = LabyrinthShopCategoryState.READY)
+        assertTrue(decide(listOf(ready)) is LabyrinthShopDecision.Wait)
+    }
+
+    @Test
     fun `disabled recognized relic is never purchased and does not block close or refresh`() {
         val disabled = item(
             "too-expensive",

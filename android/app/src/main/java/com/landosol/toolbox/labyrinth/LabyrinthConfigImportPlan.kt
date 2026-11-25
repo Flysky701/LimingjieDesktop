@@ -163,6 +163,7 @@ data class LabyrinthConfigImportPlan(
         "singleBossRetryCountBeforeMulti", "maxAttempts" -> "${value.jsonPrimitive.content} 次"
         "difficulty" -> "难度 ${value.jsonPrimitive.content}"
         "valueAllowance" -> "${value.jsonPrimitive.content} 格"
+        "targetScore" -> if (value.jsonPrimitive.content.toLongOrNull() == 0L) "关闭" else "${value.jsonPrimitive.content} 分"
         else -> when (value.jsonPrimitive.booleanOrNull) {
             true -> "开启"
             false -> "关闭"
@@ -200,6 +201,7 @@ data class LabyrinthConfigImportPlan(
             "routeEvaluationMode" to "路线评价模式", "valueAllowance" to "每区允许少拿格数", "thirdBlockChoice" to "第三格偏好",
             "area3BossIds" to "区域 3 Boss", "area5BossIds" to "区域 5 Boss", "maxAttempts" to "最大尝试次数",
             "rerollUntilFound" to "刷到出", "retireExisting" to "允许彻底撤退当前开局",
+            "targetScore" to "刷分目标",
         )
     }
 }

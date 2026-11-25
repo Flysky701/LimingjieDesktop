@@ -1,9 +1,14 @@
 package com.landosol.toolbox.automation.session
 
 import com.landosol.toolbox.automation.ScreenPoint
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AnchorTriggerSessionExpiryTerminatorTest {
@@ -144,6 +149,32 @@ class AnchorTriggerSessionExpiryTerminatorTest {
     }
 
     @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `a newly recognised retreat confirmation interrupts the popup wait`() = runTest {
+        val retreat = ScreenPoint(1200f, 960f)
+        val confirm = ScreenPoint(1180f, 740f)
+        val triggers = listOf(retreat, confirm)
+        val taps = mutableListOf<ScreenPoint>()
+        val popupAfterTapTimeoutMillis = 12_000L
+        val terminator = AnchorTriggerSessionExpiryTerminator(
+            onTap = { taps.add(it) },
+            triggerPoint = { triggers.getOrNull(taps.size) },
+            returnTitlePoint = returnTitle,
+            popupVisible = { taps.size == triggers.size },
+            titleReached = { taps.lastOrNull() == returnTitle },
+            frameSize = { 1920 to 1080 },
+            popupAfterTapTimeoutMillis = popupAfterTapTimeoutMillis,
+            triggerTapDelayMillis = 0L,
+            returnTapDelayMillis = 0L,
+            clock = { testScheduler.currentTime },
+        )
+
+        assertEquals(ClientTerminationResult.TERMINATED, terminator.terminate())
+        assertEquals(listOf(retreat, confirm, returnTitle), taps)
+        assertTrue(testScheduler.currentTime < popupAfterTapTimeoutMillis)
+    }
+
+    @Test
     fun `skips the trigger tap when the expiry popup is already showing`() = runTest {
         val taps = mutableListOf<ScreenPoint>()
         val terminator = terminator(taps = taps, popupVisible = { true }, titleReached = { true })
@@ -209,5 +240,78 @@ class AnchorTriggerSessionExpiryTerminatorTest {
             frameReadyTimeoutMillis = 20L,
         )
         assertEquals(ClientTerminationResult.UNSUPPORTED, terminator.terminate())
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `pauses without tapping or spending timeout budget and resumes cleanly`() = runTest {
+        val taps = mutableListOf<ScreenPoint>()
+        var paused = true
+        var popupSeen = false
+        var titleSeen = false
+        val terminator = AnchorTriggerSessionExpiryTerminator(
+            onTap = { point -> taps += point; true },
+            triggerPoint = { adventureTab },
+            returnTitlePoint = returnTitle,
+            popupVisible = { popupSeen },
+            titleReached = { titleSeen },
+            frameSize = { 1920 to 1080 },
+            popupTimeoutMillis = 900L,
+            popupAfterTapTimeoutMillis = 300L,
+            titleTimeoutMillis = 5_000L,
+            triggerTapDelayMillis = 100L,
+            returnTapDelayMillis = 100L,
+            maxTriggerTaps = 3,
+            isPaused = { paused },
+            clock = { testScheduler.currentTime },
+        )
+
+        val job = launch { result = terminator.terminate() }
+        advanceTimeBy(2_500L)
+        assertEquals(emptyList<ScreenPoint>(), taps)
+        assertFalse(job.isCompleted)
+
+        paused = false
+        while (taps.isEmpty()) advanceTimeBy(100L)
+        popupSeen = true
+        while (taps.size < 2) advanceTimeBy(100L)
+        titleSeen = true
+        advanceUntilIdle()
+        job.join()
+
+        assertEquals(ClientTerminationResult.TERMINATED, result)
+        assertEquals(listOf(adventureTab, returnTitle), taps)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `cancels immediately during pause with zero taps`() = runTest {
+        val taps = mutableListOf<ScreenPoint>()
+        var cancelled = false
+        val terminator = AnchorTriggerSessionExpiryTerminator(
+            onTap = { point -> taps += point; true },
+            triggerPoint = { adventureTab },
+            returnTitlePoint = returnTitle,
+            popupVisible = { false },
+            titleReached = { false },
+            frameSize = { 1920 to 1080 },
+            popupTimeoutMillis = 900L,
+            maxTriggerTaps = 3,
+            isPaused = { true },
+            isCancelled = { cancelled },
+            clock = { testScheduler.currentTime },
+        )
+
+        val job = launch { result = terminator.terminate() }
+        advanceTimeBy(1_500L)
+        assertEquals(emptyList<ScreenPoint>(), taps)
+        assertFalse(job.isCompleted)
+
+        cancelled = true
+        advanceUntilIdle()
+        job.join()
+
+        assertEquals(ClientTerminationResult.REJECTED, result)
+        assertEquals(emptyList<ScreenPoint>(), taps)
     }
 }

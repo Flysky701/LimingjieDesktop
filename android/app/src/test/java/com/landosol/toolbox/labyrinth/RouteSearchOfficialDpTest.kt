@@ -113,7 +113,7 @@ class RouteSearchOfficialDpTest {
         val imported = LabyrinthConfigShareCodec.decode(LabyrinthConfigShareCodec.encode(share))
         assertEquals(settings, imported.reroll)
         val summary = LabyrinthConfigImportPlan(imported, imported.modules, 7, LabyrinthConfigurationValues()).changeSummary()
-        assertTrue(summary.any { it.contains("官方分数 DP") })
+        assertTrue(summary.any { it.contains("官方高分路线") })
         assertTrue(summary.any { it.contains("区域 3 / 5 第三格（硬条件）") && it.contains("必须事件") })
     }
 
@@ -139,11 +139,40 @@ class RouteSearchOfficialDpTest {
         val preview = LabyrinthRoutePreviewBuilder.build(decoded)
 
         assertEquals(policy.evaluationMode, decoded.evaluationMode)
-        assertEquals("官方分数 DP", preview.modeLabel)
+        assertEquals("官方高分路线", preview.modeLabel)
         assertTrue(preview.issues.toString(), preview.topologyVerified)
         assertEquals(3000.0, requireNotNull(preview.expectedScore), 0.0)
         assertEquals(3000L, requireNotNull(preview.hardUpperBound))
         assertTrue(preview.note.contains("3000"))
+    }
+
+    @Test
+    fun `opening matcher rejects routes that cannot reach configured targetScore`() {
+        val map = fiveAreaMap()
+        val matcher = LabyrinthOpeningRouteMatcher()
+        val officialReject = matcher.search(
+            enterId = 7L,
+            nodes = map,
+            difficulty = 5,
+            policy = policy.copy(targetScore = 50_000L),
+            guildId = 1,
+        )
+        assertTrue(officialReject is RouteSearchResult.Rejected)
+        assertFalse((officialReject as RouteSearchResult.Rejected).fatal)
+
+        val valueReject = matcher.search(
+            enterId = 7L,
+            nodes = map,
+            difficulty = 5,
+            policy = LabyrinthRoutePolicy(
+                evaluationMode = LabyrinthRouteEvaluationMode.VALUE_ROUTE,
+                valueAllowance = 3,
+                targetScore = 50_000L,
+            ),
+            guildId = 1,
+        )
+        assertTrue(valueReject is RouteSearchResult.Rejected)
+        assertFalse((valueReject as RouteSearchResult.Rejected).fatal)
     }
 
     private fun search(nodes: List<LabyrinthMapNode>, policy: LabyrinthRoutePolicy = this.policy): RouteSearchResult =

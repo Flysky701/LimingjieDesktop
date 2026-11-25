@@ -176,17 +176,17 @@ class LabyrinthBattleTeamActionRecoveryTest {
             assertEquals(ids, committedIds(session))
             assertEquals(setOf(signature), currentSignatures(session))
             assertNotNull(pendingBattleTeamAction(session))
+            val recommendation = requireNotNull(session.state.value.battleTeamRecommendation)
+            val plan = requireNotNull(session.state.value.battleTeamSelectionPlan)
 
-            // 画面一直停在编组页：可用池变空，推荐与计划都退化为不可用——开战被吞后停在编组页的现场。
+            // 画面一直停在编组页：已提交的角色仍留在原推荐和计划中，直到开战确认超时。
             for (now in listOf(1_700L, 2_400L, 3_100L, 3_900L)) {
                 assertNull(feedFrame(session, frame, now))
-                assertEquals("the commit must survive the acknowledged window", ids, committedIds(session))
+                assertEquals("the commit must survive the ACK window", ids, committedIds(session))
+                assertEquals(recommendation, session.state.value.battleTeamRecommendation)
+                assertEquals(plan, session.state.value.battleTeamSelectionPlan)
+                assertNull(session.state.value.battleTeamRecommendationUnavailableReason)
             }
-            assertTrue(
-                session.state.value.battleTeamRecommendationUnavailableReason.orEmpty()
-                    .contains("没有已获得的可用角色"),
-            )
-            assertNull(session.state.value.battleTeamSelectionPlan)
 
             // 动作确认上限（4s）之前不得释放。
             assertNull(feedFrame(session, frame, 4_700L))
@@ -229,7 +229,7 @@ class LabyrinthBattleTeamActionRecoveryTest {
     }
 
     @Test
-    fun `swallowed start with surplus roster never dispatches bogus edits during three-to-four-second ack window`() =
+    fun `swallowed start with surplus roster keeps the first team throughout the ack window`() =
         runBlocking {
             withSession(
                 specialEquipment = false,
@@ -244,17 +244,15 @@ class LabyrinthBattleTeamActionRecoveryTest {
                 assertEquals(firstTeamIds, committedIds(session))
                 assertNotNull(pendingBattleTeamAction(session))
 
-                // 3.0s–4.0s window: battleWait START_PAGE_GRACE_MILLIS (3s) has elapsed while START_BATTLE ACK (4s)
-                // is still pending and surplus roster yields a 2nd recommended team (r6..r10). Never click edits.
+                // The 4s start ACK still owns the frame after the 3s battle-wait grace expires.
                 for (now in listOf(1_700L, 3_100L, 4_300L, 4_700L)) {
                     assertNull("unexpected action at $now", feedFrame(session, frame, now))
                     awaitActions(session)
+                    assertNotNull(pendingBattleTeamAction(session))
                     assertEquals(firstTeamIds, committedIds(session))
+                    assertEquals(roleIds, session.state.value.battleTeamRecommendation?.members?.map { it.characterId })
+                    assertEquals(roleIds, session.state.value.battleTeamSelectionPlan?.recommendedIds)
                 }
-                assertEquals(
-                    listOf("r6", "r7", "r8", "r9", "r10"),
-                    session.state.value.battleTeamRecommendation?.members?.map { it.characterId },
-                )
 
                 // Past 4s ACK timeout -> releases commit cleanly and retries START_BATTLE.
                 assertNull(feedFrame(session, frame, 5_300L))

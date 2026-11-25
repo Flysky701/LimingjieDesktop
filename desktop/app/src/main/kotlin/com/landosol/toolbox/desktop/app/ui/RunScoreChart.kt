@@ -28,6 +28,29 @@ internal fun scoredClears(records: List<DesktopRunRecord>, limit: Int): List<Des
         .sortedWith(compareBy<DesktopRunRecord> { it.endedAt }.thenBy { it.id })
         .takeLast(limit)
 
+internal data class ScoreAxisBounds(val min: Long, val max: Long, val mid: Long)
+
+internal fun computeScoreAxisBounds(scores: List<Long>, zeroBaseline: Boolean): ScoreAxisBounds {
+    if (scores.isEmpty()) return ScoreAxisBounds(0L, 100L, 50L)
+    if (zeroBaseline) {
+        val max = scores.max().coerceAtLeast(1L)
+        return ScoreAxisBounds(0L, max, max / 2L)
+    }
+    val rawMin = scores.min()
+    val rawMax = scores.max()
+    if (rawMin == rawMax) {
+        val pad = (rawMax * 0.05).toLong().coerceAtLeast(10L)
+        val low = (rawMin - pad).coerceAtLeast(0L)
+        val high = rawMax + pad
+        return ScoreAxisBounds(low, high, (low + high) / 2L)
+    }
+    val span = (rawMax - rawMin).coerceAtLeast(1L)
+    val pad = (span * 0.08).toLong().coerceAtLeast(1L)
+    val low = (rawMin - pad).coerceAtLeast(0L)
+    val high = rawMax + pad
+    return ScoreAxisBounds(low, high, (low + high) / 2L)
+}
+
 private val chartLimits = mapOf("最近 50 局" to 50, "最近 100 局" to 100, "最近 200 局" to 200, "全部保留记录" to Int.MAX_VALUE)
 
 @Composable
@@ -38,29 +61,39 @@ internal fun RunScoreChart(
     expanded: Boolean,
     toggleExpanded: () -> Unit,
 ) {
-    ConsoleCard("单局分数与耗时", action = {
-        if (expanded) ChoiceMenu("范围", range, chartLimits.keys.toList(), clear = false, select = selectRange)
-        TextButton(onClick = toggleExpanded) {
-            Text(if (expanded) "收起图表" else "展开图表")
-            Symbol("expand_more", modifier = Modifier.size(18.dp).rotate(if (expanded) 180f else 0f))
-        }
-    }) {
+    var zeroBaseline by remember { mutableStateOf(false) }
+    ConsoleCard(
+        title = "单局分数与耗时",
+        action = {
+            if (expanded) {
+                TextButton(
+                    onClick = { zeroBaseline = !zeroBaseline },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                ) { Text(if (zeroBaseline) "从 0 起" else "自适应刻度", style = MaterialTheme.typography.labelSmall) }
+                ChoiceMenu("范围", range, chartLimits.keys.toList(), clear = false, select = selectRange)
+            }
+            TextButton(onClick = toggleExpanded) {
+                Text(if (expanded) "收起图表" else "展开图表")
+                Symbol("expand_more", modifier = Modifier.size(18.dp).rotate(if (expanded) 180f else 0f))
+            }
+        },
+    ) {
         if (expanded) {
             val samples = remember(records, range) { scoredClears(records, chartLimits.getValue(range)) }
             if (samples.isEmpty()) Text("暂无已通关且有分数的单局记录", color = Muted)
-            else RunTrend(samples)
+            else RunTrend(samples, zeroBaseline)
         }
     }
 }
 
 @Composable
-private fun RunTrend(samples: List<DesktopRunRecord>) {
+private fun RunTrend(samples: List<DesktopRunRecord>, zeroBaseline: Boolean) {
     val scores = remember(samples) { samples.map { it.score!! } }
-    val durations = remember(samples) { samples.map { it.durationMillis!! } }
-    val maxScore = remember(scores) { scores.max() }
-    val maxDuration = remember(durations) { durations.max() }
+    val durations = remember(samples) { samples.map { it.durationMillis ?: 0L } }
+    val bounds = remember(scores, zeroBaseline) { computeScoreAxisBounds(scores, zeroBaseline) }
+    val maxDuration = remember(durations) { durations.max().coerceAtLeast(1L) }
     val summary = remember(samples) {
-        "平均分 ${scores.average().toLong()} · 最高 $maxScore · 最低 ${scores.min()} · 平均耗时 ${formatDuration(durations.average().toLong())}"
+        "平均分 ${scores.average().toLong()} · 最高 ${scores.max()} · 最低 ${scores.min()} · 平均耗时 ${formatDuration(durations.average().toLong())}"
     }
     val scoreColor = Accent
     val durationColor = LocalDesktopColors.current.ok
@@ -74,26 +107,32 @@ private fun RunTrend(samples: List<DesktopRunRecord>) {
         Text("耗时 · 柱形", color = durationColor, style = MaterialTheme.typography.labelSmall)
     }
     Row(Modifier.fillMaxWidth().height(120.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        ChartAxis(maxScore, scoreColor, Alignment.End, Long::toString)
-        Canvas(Modifier.weight(1f).fillMaxHeight()
-            .semantics { contentDescription = "按通关顺序排列的单局分数折线和耗时柱形图" }
-            .pointerInput(samples) {
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        hovered = if (event.type == PointerEventType.Exit) null else event.changes.firstOrNull()?.let {
-                            (it.position.x / size.width.coerceAtLeast(1) * samples.size).toInt().coerceIn(samples.indices)
+        ChartAxis(listOf(bounds.max, bounds.mid, bounds.min), scoreColor, Alignment.End, Long::toString)
+        Canvas(
+            Modifier.weight(1f).fillMaxHeight()
+                .semantics { contentDescription = "按通关顺序排列的单局分数折线和耗时柱形图" }
+                .pointerInput(samples) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            hovered = if (event.type == PointerEventType.Exit) null else event.changes.firstOrNull()?.let {
+                                (it.position.x / size.width.coerceAtLeast(1) * samples.size).toInt().coerceIn(samples.indices)
+                            }
                         }
                     }
-                }
-            }) {
+                },
+        ) {
             val inset = 8.dp.toPx()
             val bottom = size.height - inset
             val height = bottom - inset
             val step = size.width / samples.size
             val barWidth = (step * 0.68f).coerceAtMost(18.dp.toPx())
+            val scoreSpan = (bounds.max - bounds.min).coerceAtLeast(1L).toDouble()
             fun x(index: Int) = step * (index + 0.5f)
-            fun scoreY(index: Int) = bottom - height * (scores[index].toDouble() / maxScore).toFloat()
+            fun scoreY(index: Int): Float {
+                val ratio = ((scores[index] - bounds.min).toDouble() / scoreSpan).toFloat().coerceIn(0f, 1f)
+                return bottom - height * ratio
+            }
 
             for (fraction in listOf(0f, 0.5f, 1f)) {
                 val y = bottom - fraction * height
@@ -101,7 +140,7 @@ private fun RunTrend(samples: List<DesktopRunRecord>) {
             }
             val path = Path()
             samples.indices.forEach { index ->
-                val barHeight = height * (durations[index].toDouble() / maxDuration.coerceAtLeast(1)).toFloat()
+                val barHeight = height * (durations[index].toDouble() / maxDuration).toFloat()
                 val center = x(index)
                 drawRect(durationColor.copy(alpha = 0.45f), Offset(center - barWidth / 2, bottom - barHeight), Size(barWidth, barHeight))
                 val y = scoreY(index)
@@ -115,7 +154,7 @@ private fun RunTrend(samples: List<DesktopRunRecord>) {
                 drawCircle(scoreColor, 4.dp.toPx(), Offset(center, scoreY(index)))
             }
         }
-        ChartAxis(maxDuration, durationColor, Alignment.Start, ::formatDuration)
+        ChartAxis(listOf(maxDuration, maxDuration / 2L, 0L), durationColor, Alignment.Start, ::formatDuration)
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(formatTime(samples.first().endedAt!!), style = MaterialTheme.typography.labelSmall, color = Muted)
@@ -123,15 +162,17 @@ private fun RunTrend(samples: List<DesktopRunRecord>) {
     }
     val index = hovered ?: samples.lastIndex
     val selected = samples[index]
-    Text("${formatTime(selected.endedAt!!)} · ${scores[index]} 分 · 耗时 ${formatDuration(durations[index])}\n" +
-        "${selected.alias} · ${selected.deviceName ?: "未记录设备"} · ${selected.strategyLabel()}",
-        style = MaterialTheme.typography.bodySmall)
+    Text(
+        "${formatTime(selected.endedAt!!)} · ${scores[index]} 分 · 耗时 ${formatDuration(durations[index])}\n" +
+            "${selected.alias} · ${selected.deviceName ?: "未记录设备"} · ${selected.strategyLabel()}",
+        style = MaterialTheme.typography.bodySmall,
+    )
 }
 
 @Composable
-private fun ChartAxis(maximum: Long, color: Color, alignment: Alignment.Horizontal, label: (Long) -> String) {
+private fun ChartAxis(ticks: List<Long>, color: Color, alignment: Alignment.Horizontal, label: (Long) -> String) {
     Column(Modifier.fillMaxHeight(), verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = alignment) {
-        for (tick in listOf(maximum, maximum / 2, 0L)) {
+        ticks.forEach { tick ->
             Text(label(tick), color = color, style = MaterialTheme.typography.labelSmall)
         }
     }

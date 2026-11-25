@@ -2,6 +2,7 @@ package com.landosol.toolbox.labyrinth.kernel.strategy
 
 import com.landosol.toolbox.labyrinth.LabyrinthRoleProfile
 import com.landosol.toolbox.labyrinth.LabyrinthTeamOptimizer
+import com.landosol.toolbox.labyrinth.formatBattleWinProbability
 import com.landosol.toolbox.labyrinth.hasEligibleVanguardAtActualFront
 import com.landosol.toolbox.labyrinth.isEligibleBattleVanguard
 import com.landosol.toolbox.labyrinth.labyrinthBattleTeamSignature
@@ -15,7 +16,7 @@ internal class ModelGuidedBattleTeamSearcher(
         val assessment: BattleModelAssessment,
     )
 
-    private data class EvaluatedTeam(val unitIds: List<Int>, val value: BattleValue)
+    private data class EvaluatedTeam(val unitIds: List<Int>, val value: BattleValue, val utility: Double)
 
     sealed interface Outcome {
         data class Resolved(val result: Result) : Outcome
@@ -40,6 +41,7 @@ internal class ModelGuidedBattleTeamSearcher(
         failedTeamSignatures: Set<String>,
         requestedBossTeamCount: Int,
         supplementLead: Boolean,
+        autoDowngradeBossMaxTeams: Int = 1,
     ): Outcome {
         val noEligibleCandidate = Outcome.Fallback(
             BattleModelDecisionStatus.NO_ELIGIBLE_CANDIDATE, "无满足前排与排除约束的合法候选队",
@@ -53,6 +55,11 @@ internal class ModelGuidedBattleTeamSearcher(
             )
         }
         val context = valueContext.ruleContext
+        val isBoss = valueContext.isBossBattle || requestedBossTeamCount > 1 || context.optimizeBossVanguardSynergy
+        val teamPriority = compareByDescending<EvaluatedTeam> { it.utility }
+            .thenByDescending { it.value.pWin }
+            .thenByDescending { it.value.damageMean }
+            .thenByDescending { it.value.winRemTime }
         val requireVanguard = context.frontlineSurvivalGateEnabled && !supplementLead
         val vanguardGate = optimizer?.scoringConfig?.vanguardGate(context)
         val positionOrder = compareBy<Int> { eligibleByUnitId.getValue(it).position ?: Int.MAX_VALUE }
@@ -60,15 +67,22 @@ internal class ModelGuidedBattleTeamSearcher(
         val affinities = estimator.unitAffinities(valueContext).orEmpty()
         val affinityOrder = compareByDescending<Int> { affinities[it] ?: Double.NEGATIVE_INFINITY }.thenBy { it }
         val talentByUnitId = valueContext.ownedUnits.associate { it.unitId to it.talentId }
+        val ruleSeeds = ruleTeams.mapNotNull { team ->
+            team.map { ownedByCharacter[it]?.unitId ?: return@mapNotNull null }.sorted()
+        }
 
         fun rankCandidates(
             availableIds: Set<Int>,
             enforceVanguard: Boolean,
-            ruleSeeds: List<List<String>>,
+            ruleSeeds: List<List<Int>>,
             evaluated: MutableMap<List<Int>, EvaluatedTeam>,
         ): Outcome.Fallback? {
             val byPosition = availableIds.sortedWith(positionOrder)
             val byAffinity = availableIds.sortedWith(affinityOrder)
+            val byRuleScore = byAffinity.sortedByDescending {
+                val profile = eligibleByUnitId.getValue(it)
+                profile.effectiveUserScore ?: maxOf(profile.physicalDamagePotential ?: 0.0, profile.magicDamagePotential ?: 0.0)
+            }
 
             fun evaluate(candidates: Sequence<List<Int>>, budget: Int): Outcome.Fallback? {
                 val pending = linkedSetOf<List<Int>>()
@@ -93,31 +107,43 @@ internal class ModelGuidedBattleTeamSearcher(
                     if (estimate.values.size != batch.size) {
                         return Outcome.Fallback(BattleModelDecisionStatus.LOAD_OR_INFERENCE_FAILED, "模型返回的胜率数量与候选队数不一致")
                     }
-                    batch.zip(estimate.values).forEach { (ids, value) -> evaluated[ids] = EvaluatedTeam(ids, value) }
+                    batch.zip(estimate.values).forEach { (ids, value) ->
+                        val utility = battleTeamUtility(value, valueContext.strategyStyle, isBoss, valueContext.reviveAvailable)
+                        evaluated[ids] = EvaluatedTeam(ids, value, utility)
+                    }
                 }
                 return null
             }
 
             val seeds = sequence {
-                yieldAll(ruleSeeds.asSequence().map { ids -> ids.mapNotNull { ownedByCharacter[it]?.unitId } })
+                yieldAll(ruleSeeds)
                 val optimizerContext = context.copy(frontlineSurvivalGateEnabled = enforceVanguard)
                 val optimizerSeeds = optimizer?.rankedBattleFormations(
                     availableIds.map(eligibleByUnitId::getValue), optimizerContext, failedTeamSignatures,
                 ).orEmpty()
-                for (team in optimizerSeeds) {
+                for (team in optimizerSeeds.take(MAX_RULE_SEEDS)) {
                     yield(team.members.map { ownedByCharacter.getValue(it.characterId).unitId })
                 }
                 yieldAll(byAffinity.chunked(teamSize).asSequence())
-                if (affinities.isNotEmpty()) {
-                    for (talent in 1..5) {
-                        val (same, other) = byAffinity.partition { talentByUnitId[it] == talent }
+                val seedOrders = listOf(byAffinity, byRuleScore)
+                for (talent in 1..5) {
+                    for (order in seedOrders) {
+                        val (same, other) = order.partition { talentByUnitId[it] == talent }
                         if (same.isNotEmpty()) yield((same + other).take(teamSize))
                     }
-                    val front = byPosition.take(maxOf(1, byPosition.size / 3)).toSet()
-                    val (vanguard, rear) = byAffinity.partition { it in front }
-                    for (count in 1..2) {
-                        yield((vanguard.take(count) + rear + vanguard.drop(count)).take(teamSize))
+                }
+                for (order in seedOrders) {
+                    val (magic, physical) = order.partition {
+                        val profile = eligibleByUnitId.getValue(it)
+                        (profile.magicDamagePotential ?: 0.0) > (profile.physicalDamagePotential ?: 0.0)
                     }
+                    if (magic.isNotEmpty()) yield((magic + physical).take(teamSize))
+                    if (physical.isNotEmpty()) yield((physical + magic).take(teamSize))
+                }
+                val front = byPosition.take(maxOf(1, byPosition.size / 3)).toSet()
+                val (vanguard, rear) = byAffinity.partition { it in front }
+                for (count in 1..2) {
+                    yield((vanguard.take(count) + rear + vanguard.drop(count)).take(teamSize))
                 }
             }
             evaluate(seeds, MAX_CANDIDATES)?.let { return it }
@@ -141,7 +167,7 @@ internal class ModelGuidedBattleTeamSearcher(
             for (round in 0 until SEARCH_ROUNDS) {
                 val remaining = MAX_CANDIDATES - evaluated.size
                 if (remaining == 0) break
-                val beam = evaluated.values.sortedWith(PRIORITY).take(BEAM_SIZE)
+                val beam = evaluated.values.sortedWith(teamPriority).take(BEAM_SIZE)
                 val neighbors = sequence {
                     val streams = ArrayDeque(beam.flatMap { team ->
                         (1..2).map { swaps(team.unitIds, byAffinity, it).iterator() }
@@ -162,35 +188,64 @@ internal class ModelGuidedBattleTeamSearcher(
         }
 
         val evaluated = linkedMapOf<List<Int>, EvaluatedTeam>()
-        rankCandidates(eligibleByUnitId.keys, requireVanguard, ruleTeams, evaluated)?.let { return it }
+        rankCandidates(eligibleByUnitId.keys, requireVanguard, ruleSeeds, evaluated)?.let { return it }
         if (evaluated.isEmpty()) return noEligibleCandidate
 
-        val ranked = evaluated.values.sortedWith(PRIORITY)
-        val maxTeams = minOf(requestedBossTeamCount, eligibleByUnitId.size / teamSize)
-        val safePacked = if (requestedBossTeamCount == 1) ranked.take(1) else packTeams(ranked, maxTeams)
+        val ranked = evaluated.values.sortedWith(teamPriority)
+        val leadSolo = ranked.first()
+        val fullTeamSlots = eligibleByUnitId.size / TEAM_SIZE
+        val autoDowngraded = requestedBossTeamCount == 1 && autoDowngradeBossMaxTeams > 1 &&
+            leadSolo.value.pWin < valueContext.strategyStyle.bossSoloMinPWin && fullTeamSlots >= 2
+        val effectiveTeamCount = minOf(
+            if (autoDowngraded) autoDowngradeBossMaxTeams else requestedBossTeamCount,
+            fullTeamSlots,
+        )
+        val safePacked = if (effectiveTeamCount > 1) {
+            packTeams(ranked, effectiveTeamCount, teamPriority)
+        } else listOf(leadSolo)
         val supplements = linkedMapOf<List<Int>, EvaluatedTeam>()
-        val supplementPacked = if (requireVanguard && safePacked.size < maxTeams) {
+        val supplementPacked = if (requireVanguard && safePacked.size < effectiveTeamCount) {
             val remainingIds = eligibleByUnitId.keys - safePacked.flatMap { it.unitIds }.toSet()
             if (remainingIds.size >= teamSize) {
                 rankCandidates(remainingIds, enforceVanguard = false, ruleSeeds = emptyList(), evaluated = supplements)
                     ?.let { return it }
             }
-            packTeams(supplements.values.sortedWith(PRIORITY), maxTeams - safePacked.size)
+            packTeams(supplements.values, effectiveTeamCount - safePacked.size, teamPriority)
         } else emptyList()
         val packing = safePacked + supplementPacked
-        val joint = if (requestedBossTeamCount > 1) {
-            1.0 - packing.fold(1.0) { miss, team -> miss * (1.0 - team.value.pWin) }
-        } else null
+        val joint = if (effectiveTeamCount > 1) combinedMultiTeamPassProb(packing.map { it.value }) else null
         val lead = packing.first().value
-        val tier = BattleConfidenceTier.classify(joint ?: lead.pWin)
+        val effectiveProb = joint ?: lead.pWin
+        val tier = BattleConfidenceTier.classify(effectiveProb)
+        val adoptionNote = if (tier == BattleConfidenceTier.UNSAFE) {
+            val usedRuleUnits = hashSetOf<Int>()
+            val ruleValues = mutableListOf<BattleValue>()
+            val ruleTeamLimit = effectiveTeamCount.coerceAtLeast(1)
+            for (ids in ruleSeeds) {
+                if (ruleValues.size == ruleTeamLimit) break
+                val team = evaluated[ids] ?: supplements[ids] ?: continue
+                if (ids.any { it in usedRuleUnits }) continue
+                usedRuleUnits += ids
+                ruleValues += team.value
+            }
+            val ruleProb = combinedMultiTeamPassProb(ruleValues)
+            val ruleTotalDamage = ruleValues.sumOf { it.damageMean }
+            val nnTotalDamage = packing.sumOf { it.value.damageMean }
+            if (ruleValues.isNotEmpty() && (effectiveProb >= ruleProb + 0.15 ||
+                    (packing.size >= 2 && nnTotalDamage >= ruleTotalDamage + 0.25))) {
+                "NN低胜率优选（${formatBattleWinProbability(effectiveProb)} 优于规则队 ${formatBattleWinProbability(ruleProb)}）"
+            } else null
+        } else null
         val teams = packing.map { team -> team.unitIds.sortedWith(positionOrder).map(eligibleByUnitId::getValue) }
         return Outcome.Resolved(Result(
             teams,
             BattleModelAssessment(
                 tier, lead.pWin, lead.winRemTime, lead.damageMean, evaluated.size + supplements.size,
-                adopted = tier != BattleConfidenceTier.UNSAFE, jointWinProbability = joint,
+                adopted = tier != BattleConfidenceTier.UNSAFE || adoptionNote != null, jointWinProbability = joint,
                 plannedTeams = teams.map { team -> team.map(LabyrinthRoleProfile::characterId) },
                 teamWinProbabilities = packing.map { it.value.pWin },
+                autoDowngradedToMultiTeam = autoDowngraded,
+                adoptionNote = adoptionNote,
             ),
         ))
     }
@@ -213,42 +268,62 @@ internal class ModelGuidedBattleTeamSearcher(
         }
     }
 
-    /** Exact over the evaluated pool. The small depth limit makes pairwise conflicts sufficient. */
-    private fun packTeams(ranked: List<EvaluatedTeam>, maxTeams: Int): List<EvaluatedTeam> {
-        val conflicts = Array(ranked.size) { index ->
-            BooleanArray(index) { prior -> ranked[index].unitIds.any { it in ranked[prior].unitIds } }
+    /** Exact over the shortlisted pool. The small depth limit makes pairwise conflicts sufficient. */
+    private fun packTeams(
+        evaluatedPool: Collection<EvaluatedTeam>,
+        maxTeams: Int,
+        teamPriority: Comparator<EvaluatedTeam>,
+    ): List<EvaluatedTeam> {
+        // Visit teams in opening order so the first selected team's utility breaks packing ties.
+        val topByUtility = evaluatedPool.sortedWith(teamPriority).take(PACK_POOL_LIMIT)
+        val topByDamage = evaluatedPool.sortedByDescending { it.value.damageMean }.take(PACK_POOL_LIMIT)
+        val pool = (topByUtility + topByDamage).distinctBy { it.unitIds }
+            .sortedWith(compareByDescending<EvaluatedTeam> { it.value.pWin }.thenByDescending { it.value.damageMean })
+        val conflicts = Array(pool.size) { index ->
+            BooleanArray(index) { prior -> pool[index].unitIds.any { it in pool[prior].unitIds } }
         }
         val chosen = IntArray(maxTeams)
+        val chosenValues = ArrayList<BattleValue>(maxTeams)
         var best = emptyList<EvaluatedTeam>()
-        var bestMiss = Double.POSITIVE_INFINITY
+        var bestProbability = Double.NEGATIVE_INFINITY
         var bestDamage = Double.NEGATIVE_INFINITY
+        var bestLeadUtility = Double.NEGATIVE_INFINITY
 
-        fun search(start: Int, size: Int, miss: Double, damage: Double) {
-            if (size > 0 && (miss < bestMiss || (miss == bestMiss && damage > bestDamage))) {
-                best = List(size) { ranked[chosen[it]] }
-                bestMiss = miss
-                bestDamage = damage
+        fun search(start: Int, damage: Double) {
+            val size = chosenValues.size
+            if (size > 0) {
+                val probability = combinedMultiTeamPassProb(chosenValues)
+                val leadUtility = pool[chosen[0]].utility
+                if (probability > bestProbability ||
+                    (probability == bestProbability && (damage > bestDamage ||
+                        (damage == bestDamage && leadUtility > bestLeadUtility)))) {
+                    best = List(size) { pool[chosen[it]] }
+                    bestProbability = probability
+                    bestDamage = damage
+                    bestLeadUtility = leadUtility
+                }
             }
             if (size == maxTeams) return
-            for (index in start until ranked.size) {
+            for (index in start until pool.size) {
                 if ((0 until size).any { conflicts[index][chosen[it]] }) continue
-                val value = ranked[index].value
+                val value = pool[index].value
                 chosen[size] = index
-                search(index + 1, size + 1, miss * (1.0 - value.pWin), damage + value.damageMean)
+                chosenValues += value
+                search(index + 1, damage + value.damageMean)
+                chosenValues.removeAt(size)
             }
         }
-        search(0, 0, 1.0, 0.0)
+        search(0, 0.0)
         return best
     }
 
     private companion object {
         const val TEAM_SIZE = 5
-        const val MAX_CANDIDATES = 256
+        const val MAX_CANDIDATES = 384
+        const val MAX_RULE_SEEDS = 32
         const val BATCH_SIZE = 64
-        const val BEAM_SIZE = 6
-        const val SEARCH_ROUNDS = 2
-        val PRIORITY = compareByDescending<EvaluatedTeam> { it.value.pWin }
-            .thenByDescending { it.value.winRemTime }
-            .thenByDescending { it.value.damageMean }
+        const val BEAM_SIZE = 8
+        const val SEARCH_ROUNDS = 3
+        const val PACK_POOL_LIMIT = 48
     }
 }

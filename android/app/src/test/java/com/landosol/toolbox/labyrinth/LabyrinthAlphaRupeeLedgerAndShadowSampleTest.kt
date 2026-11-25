@@ -88,6 +88,12 @@ class LabyrinthAlphaRupeeLedgerAndShadowSampleTest {
         // Duplicate completion call without new START_BATTLE is a no-op.
         assertNull(recorder.completeAttempt(0, observedAtMillis = 26_000L, runtime = runtime))
 
+        // A start with no visual acknowledgement must not emit a sample or close the round.
+        assertTrue(recorder.beginAttempt(context, team, LabyrinthCombatKind.BOSS, null, labyrinthGuildId = 1, startedAtMillis = 27_000L))
+        recorder.cancelPendingAttempt()
+        assertFalse(recorder.hasPendingAttempt())
+        assertNull(recorder.completeAttempt(0, observedAtMillis = 28_000L, runtime = runtime))
+
         // Retry on the same node reuses round_id with a new sample_id.
         assertTrue(recorder.beginAttempt(context, team, LabyrinthCombatKind.BOSS, null, labyrinthGuildId = 1, startedAtMillis = 30_000L))
         val win = requireNotNull(recorder.completeAttempt(0, observedAtMillis = 60_000L, runtime = runtime))
@@ -110,5 +116,31 @@ class LabyrinthAlphaRupeeLedgerAndShadowSampleTest {
         val payload = events.last().payload as BattleSamplePayload
         assertEquals(timeout.sampleId, payload.sample.sampleId)
         assertFalse(recorder.hasPendingAttempt())
+    }
+
+    @Test fun shadowBattleSamplesExcludeMultiTeamBossAttempts() {
+        fun shouldRecord(
+            kind: LabyrinthCombatKind? = LabyrinthCombatKind.BOSS,
+            mode: LabyrinthBossTeamMode = LabyrinthBossTeamMode.SINGLE_TEAM,
+            plannedTeams: Int = 1,
+            committedTeamCount: Int = 1,
+            fallbackActive: Boolean = false,
+            editorTab: Int? = null,
+            combatTeamIndex: Int = 1,
+        ) = labyrinthShouldRecordShadowBattleAttempt(
+            kind, mode, plannedTeams, committedTeamCount, fallbackActive, editorTab, combatTeamIndex,
+        )
+
+        assertFalse(shouldRecord(kind = null))
+        for (kind in listOf(LabyrinthCombatKind.NORMAL, LabyrinthCombatKind.EX)) {
+            assertTrue(kind.name, shouldRecord(kind = kind, mode = LabyrinthBossTeamMode.MULTI_TEAM))
+        }
+        assertTrue(shouldRecord())
+        assertTrue(shouldRecord(editorTab = 3, combatTeamIndex = 3))
+        assertFalse(shouldRecord(mode = LabyrinthBossTeamMode.MULTI_TEAM))
+        assertFalse(shouldRecord(fallbackActive = true))
+        assertFalse(shouldRecord(combatTeamIndex = 2))
+        assertFalse(shouldRecord(plannedTeams = 2))
+        assertFalse(shouldRecord(committedTeamCount = 2))
     }
 }

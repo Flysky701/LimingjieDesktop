@@ -156,19 +156,22 @@ internal fun labyrinthBalancedBattleRecommendation(
     requestedBossTeamCount: Int, allowSupplementLead: Boolean, teamIndex: Int,
     battleValueContext: BattleValueContext? = null,
     modelFallbackTrace: BattleModelTrace? = null,
+    autoDowngradeBossMaxTeams: Int = 1,
 ): LabyrinthBalancedBattlePlanningOutput {
     if (planner == null) return LabyrinthBalancedBattlePlanningOutput(
         LabyrinthBattleTeamRecommendationResult.Unavailable(unavailableReason ?: "角色决策资料未加载"), false)
     return try {
+        val valueContext = if (allowSupplementLead) battleValueContext?.copy(isBossBattle = true) else battleValueContext
         val result = if (retryNumber > 0) planner.retryRecommendation(
             acquiredCharacterIds = eligibleIds, context = context,
             failedTeamSignatures = failedSignatures, retryNumber = retryNumber,
             lastFailedTeamSignature = lastFailedSignature, requestedBossTeamCount = requestedBossTeamCount,
-            allowSupplementLead = allowSupplementLead, battleValueContext = battleValueContext,
+            allowSupplementLead = allowSupplementLead, battleValueContext = valueContext,
             modelFallbackTrace = modelFallbackTrace,
         ) else planner.initialRecommendation(acquiredCharacterIds = eligibleIds, context = context,
             requestedBossTeamCount = requestedBossTeamCount, allowSupplementLead = allowSupplementLead,
-            battleValueContext = battleValueContext, modelFallbackTrace = modelFallbackTrace)
+            battleValueContext = valueContext, modelFallbackTrace = modelFallbackTrace,
+            autoDowngradeBossMaxTeams = autoDowngradeBossMaxTeams)
         LabyrinthBalancedBattlePlanningOutput(result, true)
     } catch (failure: Throwable) {
         // Runtime cancellation is not an unavailable recommendation or an automatic stop.

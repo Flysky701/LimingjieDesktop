@@ -20,4 +20,13 @@ class RunChartSamplesTest {
         )
         assertEquals(listOf(clear, later), scoredClears(rows, 2))
     }
+
+    @Test fun adaptiveScoreAxisHandlesEmptyEqualAndSpreadSamples() {
+        assertEquals(ScoreAxisBounds(0L, 100L, 50L), computeScoreAxisBounds(emptyList(), zeroBaseline = false))
+        assertEquals(ScoreAxisBounds(0L, 1000L, 500L), computeScoreAxisBounds(listOf(800L, 1000L), zeroBaseline = true))
+        val flat = computeScoreAxisBounds(listOf(1000L), zeroBaseline = false)
+        assertEquals(ScoreAxisBounds(950L, 1050L, 1000L), flat)
+        val spread = computeScoreAxisBounds(listOf(1000L, 1200L), zeroBaseline = false)
+        assertEquals(ScoreAxisBounds(984L, 1216L, 1100L), spread)
+    }
 }

@@ -8,6 +8,7 @@ package com.landosol.toolbox.automation.session
 interface GameSessionResetBackend {
     /** 本后端的终止策略类型（决定重置流程是否还需要重启客户端） */
     val kind: ClientTerminationKind
+    val lastDiagnosticStep: String? get() = null
 
     suspend fun terminateClient(): ClientTerminationResult
     suspend fun relaunchClient(): GameClientRelaunchResult
@@ -25,6 +26,7 @@ class CompositeSessionResetBackend(
     private val relauncher: Relauncher,
 ) : GameSessionResetBackend {
     override val kind: ClientTerminationKind get() = terminator.kind
+    override val lastDiagnosticStep: String? get() = terminator.lastDiagnosticStep
     override suspend fun terminateClient(): ClientTerminationResult = terminator.terminate()
     override suspend fun relaunchClient(): GameClientRelaunchResult = relauncher.relaunch()
     override fun isSupported(): Boolean = terminator.isSupported()

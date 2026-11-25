@@ -2,6 +2,7 @@ package com.landosol.toolbox.desktop.app.control
 
 import com.landosol.toolbox.account.*
 import com.landosol.toolbox.desktop.app.DesktopAppGraph
+import com.landosol.toolbox.desktop.app.UserLogKind
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopGoal
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopPreferences
 import com.landosol.toolbox.desktop.app.strategy.BattleModelHealth
@@ -22,10 +23,10 @@ import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.awt.Desktop
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption.CREATE_NEW
-import java.nio.file.StandardOpenOption.WRITE
+import java.nio.file.StandardCopyOption
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -93,12 +94,13 @@ class GraphControlService(
             )
         }
         val console = graph.ux.console.value.copy(task = graph.labyrinthController.uiState.value,
-            entry = entry.copy(lastResult = sanitizedLastResult), batch = graph.labyrinthBatchController.state.value,
+            entry = entry.copy(lastResult = sanitizedLastResult, nodeBindings = null), batch = graph.labyrinthBatchController.state.value,
             halt = graph.labyrinthBatchController.haltReason.value, overlay = graph.automationOverlayCoordinator.state.value,
             device = graph.device.state.value, busy = graph.busy || stopping.get(),
             starting = graph.taskStarting.value, stopping = graph.taskStopping.value || stopping.get())
         val records = graph.ux.history.records.value
         val logs = graph.log.lines.value
+        val keyLogs = logs.filter { it.kind != UserLogKind.NORMAL }
         val historyJson = cached("history", records) { historyRevision++; model(records.takeLast(50)) }
         val logsJson = cached("logs", logs) { logRevision++; model(logs.takeLast(50)) }
         val preview = if (includePreview) previewDocument() else JsonNull
@@ -115,6 +117,7 @@ class GraphControlService(
             put("catalog", catalogJson.encode(graph.ux.catalog.value))
             put("resolution", cachedModel("resolution", graph.resolutionGuard.status.value))
             put("ocr", cachedModel("ocr", graph.ocr.status.value))
+            put("ocrTelemetry", cachedModel("ocrTelemetry", graph.ocr.telemetry()))
             put("battleModel", cachedModel("battleModel", graph.battleModelStatus.value))
             put("credentials", cachedModel("credentials", graph.ux.credentials.value))
             put("identity", cachedModel("identity", graph.identityStore.current()))
@@ -128,10 +131,12 @@ class GraphControlService(
             put("historyRevision", historyRevision)
             put("historyTotal", graph.ux.history.records.value.size)
             put("logs", logsJson)
+            put("keyLogs", cached("keyLogs", keyLogs) { model(keyLogs) })
             put("logRevision", logRevision)
             put("logTotal", graph.log.lines.value.size)
             put("dataDirectory", graph.dataDirectory.toString())
             put("debugUrl", graph.debugUrl)
+            put("incidentCount", graph.incidentCount)
             put("preview", preview)
             put("notices", cachedModel("notices", graph.notices.value))
             put("binding", binding)
@@ -178,7 +183,7 @@ class GraphControlService(
         if (graph.sharedData != null && op in GLOBAL_EDITS) error("请在全局账号、策略或设置页修改共享数据")
         when (op) {
             ControlOps.START -> startTask(args)
-            ControlOps.PAUSE -> graph.pauseTask()
+            ControlOps.PAUSE -> graph.setTaskPaused(args["paused"]?.jsonPrimitive?.booleanOrNull)
             ControlOps.DISMISS_MESSAGE -> graph.labyrinthController.dismissMessage()
             ControlOps.SAVE_REROLL -> saveReroll(decode(args.required("value")))
             ControlOps.SAVE_SETUP -> {
@@ -377,15 +382,44 @@ class GraphControlService(
             ControlOps.LOG_CLEAR -> graph.log.clear()
             ControlOps.LOG_ADD -> graph.log.add(args.requiredString("text"), kind = enumValueOf(args.string("kind") ?: "NORMAL"))
             ControlOps.DIAGNOSTICS_EXPORT -> {
-                val target = Path.of(args.requiredString("path"))
+                val target = Path.of(args.requiredString("path")).toAbsolutePath().normalize()
                 withContext(Dispatchers.IO) {
                     val url = checkNotNull(graph.debugUrl) { "诊断面板不可用" } + "logs.zip"
-                    java.net.URI(url).toURL().openConnection().apply { connectTimeout = 5_000; readTimeout = 15_000 }.getInputStream().use { input ->
-                        Files.newOutputStream(target, CREATE_NEW, WRITE).use(input::copyTo)
+                    val parent = checkNotNull(target.parent) { "目标路径无效" }
+                    Files.createDirectories(parent)
+                    val temp = Files.createTempFile(parent, "limingjie-debug-", ".zip.tmp")
+                    try {
+                        java.net.URI(url).toURL().openConnection().apply { connectTimeout = 5_000; readTimeout = 15_000 }.getInputStream().use { input ->
+                            Files.newOutputStream(temp).use(input::copyTo)
+                        }
+                        try {
+                            Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                        } catch (_: AtomicMoveNotSupportedException) {
+                            Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
+                        }
+                    } finally {
+                        Files.deleteIfExists(temp)
                     }
                 }
                 graph.log.add("诊断包已导出：${target.fileName}")
             }
+            ControlOps.REPLAYS_STATS -> {
+                val stats = graph.replayStats()
+                return buildJsonObject {
+                    put("episodes", stats.episodes)
+                    put("battleSamples", stats.battleSamples)
+                }
+            }
+            ControlOps.REPLAYS_EXPORT -> {
+                val target = Path.of(args.requiredString("path")).toAbsolutePath().normalize()
+                val stats = graph.exportReplays(target)
+                return buildJsonObject {
+                    put("exported", stats.episodes)
+                    put("battleSamples", stats.battleSamples)
+                    put("message", "已导出 ${stats.episodes} 局路线与 ${stats.battleSamples} 条战斗样本到 ${target.fileName}")
+                }
+            }
+            ControlOps.NOTICES_DISMISS -> graph.dismissNotices()
             ControlOps.OPEN_DATA -> openFolder(graph.dataDirectory)
             ControlOps.OPEN_LOGS -> openFolder(graph.dataDirectory.resolve("logs"))
             ControlOps.OPEN_CRASH -> withContext(Dispatchers.IO) {

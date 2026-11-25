@@ -33,6 +33,31 @@ class ControlSessionConsoleTest {
         }
     }
 
+    @Test fun malformedConsoleSnapshotPreservesLastValidStateAndRecovers() = runBlocking<Unit> {
+        val port = ConsolePort("connected-device")
+        val ui = withContext(Dispatchers.Main) { ControlSessionUi(port) }
+        try {
+            awaitConsole(ui, "connected-device", false)
+            val validBefore = ui.ux.console.value
+
+            port.snapshots.value = buildJsonObject {
+                put("console", buildJsonObject { put("busy", JsonPrimitive("not-a-boolean")) })
+            }
+            val errorMessage = withTimeout(5_000) { ui.error.first { it != null } }
+            assertNotNull(errorMessage)
+            withContext(Dispatchers.Main) {
+                assertSame(validBefore, ui.ux.console.value)
+                assertEquals(DeviceConnectionState.Connecting("connected-device"), ui.device.state.value)
+            }
+
+            port.publish("recovered-device", stopping = true)
+            awaitConsole(ui, "recovered-device", true)
+            withTimeout(5_000) { ui.error.first { it == null } }
+        } finally {
+            withContext(Dispatchers.Main) { ui.close() }
+        }
+    }
+
     private suspend fun awaitConsole(ui: ControlSessionUi, serial: String, stopping: Boolean) = withTimeout(5_000) {
         ui.ux.console.first { it.device == DeviceConnectionState.Connecting(serial) && it.stopping == stopping }
         ui.device.state.first { it == DeviceConnectionState.Connecting(serial) }

@@ -442,4 +442,38 @@ class LabyrinthBatchControllerTest {
         assertEquals(listOf("reroll:3", "invalidate", "start:b1-run001"), ports.log)
         assertFalse(batch.state.value?.reusedVerifiedOpeningForFirstRun == true)
     }
+
+    @Test
+    fun `retired score target does not count toward ATTEMPTS or CLEARS and immediately starts next cycle`() = runTest {
+        val ports = FakePorts()
+        val batch = controller(ports)
+        batch.start(
+            batchId = "score-batch",
+            accountId = 7L,
+            goals = listOf(goal(guild = 1, count = 2, mode = LabyrinthBatchGoalMode.ATTEMPTS)),
+            difficulty = 5,
+        )
+        val firstRun = currentRunId(batch)
+
+        batch.onRunTerminal(LabyrinthRunTerminalEvent.RetiredScoreTarget(firstRun, "上界 46000 低于目标 50000"))
+
+        val state = batch.state.value!!
+        assertEquals(0, state.goals.single().completedCount)
+        assertEquals(0, state.goals.single().failedCount)
+        assertEquals(0, state.abnormalRuns)
+        assertEquals(1, state.scoreRetiredRuns)
+        assertEquals(LabyrinthBatchStage.RUNNING_LABYRINTH, state.stage)
+        assertEquals(LabyrinthRunOutcome.RETIRED_SCORE_TARGET, state.lastRecordedOutcome)
+        assertEquals(
+            listOf("reroll:1", "invalidate", "start:$firstRun", "reroll:1", "invalidate", "start:score-batch-run002"),
+            ports.log,
+        )
+    }
+
+    @Test
+    fun `legacy batch checkpoint json without scoreRetiredRuns defaults to zero`() {
+        val legacyJson = """{"batchId":"legacy","accountId":7,"goals":[{"guildId":1,"targetCount":1,"mode":"CLEARS"}],"currentDifficulty":5,"updatedAt":1000}"""
+        val decoded = kotlinx.serialization.json.Json.decodeFromString(LabyrinthBatchCheckpoint.serializer(), legacyJson)
+        assertEquals(0, decoded.scoreRetiredRuns)
+    }
 }

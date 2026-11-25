@@ -321,7 +321,8 @@ class LabyrinthNodeSession(
         val nextAreaFromRoute = nextRouteNode
             ?.takeIf { node -> node.area > state.currentArea }
             ?.area
-        if (currentNode?.isAreaLastPoint == true || nextAreaFromRoute != null) {
+        val isRouteLastNode = clickedRouteIndex >= 0 && clickedRouteIndex == routeNodes.lastIndex
+        if (currentNode?.isAreaLastPoint == true || nextAreaFromRoute != null || isRouteLastNode) {
             // 检查是否还有下一个区域；路线顺序优先于可能缺失的协议标记。
             val nextArea = nextAreaFromRoute ?: state.currentArea + 1
             val hasNextArea = allMapNodes.any { it.area == nextArea }

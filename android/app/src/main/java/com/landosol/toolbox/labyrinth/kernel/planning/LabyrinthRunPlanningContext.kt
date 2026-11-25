@@ -19,6 +19,7 @@ data class LabyrinthRunPlanningContext(
     val scoreSettings: ScoreSettings = ScoreSettings.currentOfficial(),
     val passEstimator: BattlePassEstimator?,
     val cacheFingerprint: String,
+    val targetScore: Long = 0L,
 ) {
     companion object {
         fun fromRoute(
@@ -32,6 +33,7 @@ data class LabyrinthRunPlanningContext(
             alphaRupee: Int?,
             passEstimator: BattlePassEstimator?,
             estimatorTag: String = "",
+            targetScore: Long = route?.targetScore ?: 0L,
         ): LabyrinthRunPlanningContext {
             val nodes = allNodes.ifEmpty { route?.toLabyrinthRoute()?.nodes.orEmpty() }
             val cursor = route?.currentBlockId
@@ -60,11 +62,13 @@ data class LabyrinthRunPlanningContext(
                 append(remainingShops).append('|').append(enhanceNode21).append('|').append(reviveAvailable).append('|')
                 append(relics.joinToString(",")).append('|')
                 append(marks.entries.joinToString(",") { "${it.key.name}:${it.value}" }).append('|')
-                append(alphaRupee).append('|').append(passEstimator != null).append('|').append(estimatorTag)
+                append(alphaRupee).append('|').append(passEstimator != null).append('|').append(estimatorTag).append('|')
+                append(targetScore)
             }
             return LabyrinthRunPlanningContext(
                 enabled, difficulty, effectiveArea, exams, remainingShops, enhanceNode21, reviveAvailable,
                 relics, marks, alphaRupee, passEstimator = passEstimator, cacheFingerprint = fingerprint,
+                targetScore = targetScore,
             )
         }
     }

@@ -387,7 +387,8 @@ private fun RerollSettingsDialog(
                         thirdBlockChoice = draft.thirdBlockChoice, customNodePlan = draft.customNodePlan,
                         selectedArea3BossIds = draft.area3BossIds,
                         selectedArea5BossIds = draft.area5BossIds, maxAttempts = draft.maxAttempts,
-                        rerollUntilFound = draft.rerollUntilFound, retireExisting = draft.retireExisting),
+                        rerollUntilFound = draft.rerollUntilFound, retireExisting = draft.retireExisting,
+                        targetScore = draft.targetScore),
                     onDifficultySelected = { draft = draft.copy(difficulty = it) },
                     onPerfectStartChange = { draft = draft.copy(perfectStart = it) },
                     onRouteEvaluationModeSelected = { draft = draft.copy(routeEvaluationMode = it) },
@@ -399,6 +400,10 @@ private fun RerollSettingsDialog(
                     onMaxAttemptsChange = { draft = draft.copy(maxAttempts = it) },
                     onRerollUntilFoundChange = { draft = draft.copy(rerollUntilFound = it) },
                     onRetireExistingChange = { draft = draft.copy(retireExisting = it) },
+                    onTargetScoreChange = { input ->
+                        val filtered = input.filter(Char::isDigit).take(6)
+                        draft = draft.copy(targetScore = filtered.toLongOrNull() ?: 0L)
+                    },
                 )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
@@ -446,6 +451,7 @@ private fun RerollSettingsFields(
     onMaxAttemptsChange: (String) -> Unit,
     onRerollUntilFoundChange: (Boolean) -> Unit,
     onRetireExistingChange: (Boolean) -> Unit,
+    onTargetScoreChange: (String) -> Unit,
 ) {
     SelectionCard("难度", "检查当前开局后只显示已解锁难度") {
         ChoiceRow {
@@ -492,7 +498,7 @@ private fun RerollSettingsFields(
             )
         } else if (state.routeEvaluationMode == LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE) {
             CheckOption(
-                label = "完美开局（旧版模板）",
+                label = "完美开局（经典模板）",
                 checked = state.perfectStart,
                 enabled = !state.isWorking,
                 onCheckedChange = onPerfectStartChange,
@@ -543,13 +549,13 @@ private fun RerollSettingsFields(
         Text(
             when (state.routeEvaluationMode) {
                 LabyrinthRouteEvaluationMode.VALUE_ROUTE ->
-                    "价值路线中该偏好不绑定列号；选择“两者都行”时不会增加刷图门槛，同分路线优先遗物。"
+                    "高价值路线中该偏好不绑定列号；选择“两者都行”时不会增加刷图门槛，同分路线优先遗物。"
                 LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP ->
-                    "按官方结算分模型动态规划最优路线；Boss 筛选与第三格偏好仍作为硬条件。"
+                    "按官方结算分规则规划最高分路线；Boss 筛选与第三格偏好仍作为硬条件。"
                 LabyrinthRouteEvaluationMode.CUSTOM_NODES ->
                     "仅用于区域3/5第3列；自定义设置独立保存，必须有完整连通路线且Boss符合名单。"
                 LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE ->
-                    "旧版模板中该条件仅在勾选完美开局时生效。"
+                    "经典模板路线中该条件仅在勾选完美开局时生效。"
             },
             style = MaterialTheme.typography.bodySmall,
         )
@@ -583,6 +589,16 @@ private fun RerollSettingsFields(
         value = state.maxAttempts,
         enabled = !state.isWorking && !state.rerollUntilFound,
         onValueChange = onMaxAttemptsChange,
+    )
+    NumericField(
+        label = "刷分目标（最终结算总分，留空或 0 为关闭）",
+        value = if (state.targetScore > 0L) state.targetScore.toString() else "",
+        enabled = !state.isWorking,
+        onValueChange = onTargetScoreChange,
+    )
+    Text(
+        "开启后，开局筛选与局内 DP 判定本局无法达到目标分时将自动撤退并重开下一局。",
+        style = MaterialTheme.typography.bodySmall,
     )
     CheckOption(
         label = "允许彻底撤退当前开局（开始前确认）",

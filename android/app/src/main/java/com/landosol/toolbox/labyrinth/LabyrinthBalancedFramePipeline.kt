@@ -56,6 +56,8 @@ internal class LabyrinthBalancedFramePipeline<F : Any>(
     private val recycle: (F) -> Unit,
     private val timestampMillis: (F) -> Long,
     private val workerClock: () -> Long,
+    private val foregroundReady: () -> Boolean = { true },
+    private val onNotForeground: () -> Unit = {},
 ) {
     private val mailbox = LabyrinthBalancedMailbox<F>()
     private val observationScheduled = AtomicBoolean(false)
@@ -83,7 +85,7 @@ internal class LabyrinthBalancedFramePipeline<F : Any>(
         var handle: RefCountedFrameLease<F>? = null
         try {
             handle = RefCountedFrameLease.create(frame, recycle)
-            if (closed) { handle.close(); return }
+            if (closed || !admitted()) { handle.close(); return }
             if (mailbox.offer(handle)) fastReplacements.incrementAndGet()
             handle = null
             scheduleObservation()
@@ -98,15 +100,22 @@ internal class LabyrinthBalancedFramePipeline<F : Any>(
                     val input = mailbox.take() ?: break
                     try {
                         if (!closed && admitted()) {
-                            val fast = fastProcessor(input.value)
-                            observe(fast)
-                            latestFastFrame?.close()
-                            latestFastFrame = input.retain()
-                            if (pending != null) replacements++
-                            pending?.close()
-                            pending = input.retain()
-                            pump()
-                            changed()
+                            if (!foregroundReady()) {
+                                pending?.close()
+                                pending = null
+                                onNotForeground()
+                                changed()
+                            } else {
+                                val fast = fastProcessor(input.value)
+                                observe(fast)
+                                latestFastFrame?.close()
+                                latestFastFrame = input.retain()
+                                if (pending != null) replacements++
+                                pending?.close()
+                                pending = input.retain()
+                                pump()
+                                changed()
+                            }
                         }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
@@ -143,7 +152,7 @@ internal class LabyrinthBalancedFramePipeline<F : Any>(
     }
 
     private fun pump() {
-        if (closed || !admitted() || active != null || actorBusy) return
+        if (closed || !admitted() || !foregroundReady() || active != null || actorBusy) return
         val input = pending ?: return
         pending = null
         if (lastDetailAt != Long.MIN_VALUE && timestampMillis(input.value) - lastDetailAt < intervalMillis()) {

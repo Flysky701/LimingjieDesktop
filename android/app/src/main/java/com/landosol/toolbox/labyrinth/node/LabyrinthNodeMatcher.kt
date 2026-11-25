@@ -94,7 +94,8 @@ class LabyrinthNodeMatcher(
         val currentNodeType = currentNode?.blockType ?: LabyrinthNodeTypes.START
 
         // 判断是否完成当前区域
-        val isComplete = currentNode?.isAreaLastPoint == true
+        val isComplete = currentNode?.isAreaLastPoint == true ||
+            (currentNodeId != null && routeNodes.lastOrNull()?.blockId == currentNodeId && nextNode == null)
 
         return NodeMatchResult(
             currentNodeId = currentNodeId,

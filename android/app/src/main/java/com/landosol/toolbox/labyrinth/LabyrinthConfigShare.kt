@@ -88,8 +88,9 @@ object LabyrinthConfigShareCodec {
     }
     private val optionalStrategyFields = setOf("frontlineSurvivalMode")
     private val rerollTemplate by lazy {
-        json.encodeToJsonElement(LabyrinthRerollSettings()).jsonObject
+        JsonObject(json.encodeToJsonElement(LabyrinthRerollSettings()).jsonObject - "targetScore")
     }
+    private val optionalRerollFields = setOf("targetScore")
 
     @Serializable
     private data class Envelope(
@@ -128,7 +129,12 @@ object LabyrinthConfigShareCodec {
             )
         }
         configuration.personalScores?.let { modules["personalScores"] = json.encodeToJsonElement(it) }
-        configuration.reroll?.let { modules["reroll"] = json.encodeToJsonElement(it) }
+        configuration.reroll?.let { settings ->
+            val rerollFields = json.encodeToJsonElement(settings).jsonObject
+            modules["reroll"] = JsonObject(
+                if (settings.targetScore == LabyrinthRerollOptions.DEFAULT_TARGET_SCORE) rerollFields - "targetScore" else rerollFields,
+            )
+        }
         val text = json.encodeToString(Envelope("labyrinth-config", 1, configuration.appVersion, configuration.exportedAtMillis, JsonObject(modules)))
         val bytes = text.toByteArray(Charsets.UTF_8)
         require(bytes.size <= MAX_JSON_BYTES) { "配置内容过大，无法生成分享码" }
@@ -189,14 +195,15 @@ object LabyrinthConfigShareCodec {
         val reroll = envelope.modules["reroll"]?.let { element ->
             val supplied = element as? JsonObject ?: throw IllegalArgumentException("刷开局模块结构无效")
             val legacyKeys = rerollTemplate.keys - "customNodePlan"
-            val compatible = if (supplied.keys == legacyKeys) {
+            val compatible = if ((supplied.keys - optionalRerollFields) == legacyKeys) {
                 val mode = supplied.getValue("routeEvaluationMode").also { requirePrimitive(it, true) }
                 require(decodeValue<LabyrinthRouteEvaluationMode>(mode) != LabyrinthRouteEvaluationMode.CUSTOM_NODES) {
                     "自定义模式缺少节点配置"
                 }
                 JsonObject(supplied + ("customNodePlan" to rerollTemplate.getValue("customNodePlan")))
             } else supplied
-            val fields = requireFields(compatible, rerollTemplate)
+            val fields = requireFields(compatible, rerollTemplate, optionalRerollFields)
+            fields["targetScore"]?.let { requirePrimitive(it, false) }
             requireFields(fields.getValue("customNodePlan"), rerollTemplate.getValue("customNodePlan") as JsonObject)
             listOf("area3BossIds", "area5BossIds").forEach { key ->
                 requireArray(fields[key]).forEach { requirePrimitive(it, false) }

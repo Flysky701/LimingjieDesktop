@@ -52,6 +52,8 @@ internal class SettlementDomainModule(private val runtime: KernelRuntime) : Kern
         private set
     var unknownAttempts: Int = 0
         private set
+    var chestObserved: Boolean = false
+        private set
 
     private data class SettlementActionKey(
         val page: Page,
@@ -88,6 +90,7 @@ internal class SettlementDomainModule(private val runtime: KernelRuntime) : Kern
         stage = LabyrinthPostBossStage.NONE
         startedAt = Long.MIN_VALUE
         unknownAttempts = 0
+        chestObserved = false
         lastPage = null
         observedAt = Long.MIN_VALUE
         stableFrames = 0
@@ -96,11 +99,15 @@ internal class SettlementDomainModule(private val runtime: KernelRuntime) : Kern
     }
 
     internal fun restoreProgress(
-        stage: LabyrinthPostBossStage, startedAt: Long, unknownAttempts: Int,
+        stage: LabyrinthPostBossStage,
+        startedAt: Long,
+        unknownAttempts: Int,
+        chestObserved: Boolean = false,
     ) = synchronized(runtime) {
         this.stage = stage
         this.startedAt = startedAt
         this.unknownAttempts = unknownAttempts
+        this.chestObserved = chestObserved
     }
 
     /** Call when route completion is confirmed, even if the score page is still loading. */
@@ -124,7 +131,15 @@ internal class SettlementDomainModule(private val runtime: KernelRuntime) : Kern
         lastPage = page
         observedAt = timestampMillis
         stableFrames = postEntryStableFrames
-        val next = labyrinthPostBossStageOnPage(stage, page)
+        if ((stage == LabyrinthPostBossStage.SCORE_RESULT || stage == LabyrinthPostBossStage.CHEST_SEQUENCE) &&
+            (page == Page.RUN_CLEAR_CHEST_ANIMATION || page == Page.RUN_CLEAR_CHEST_RESULT)
+        ) {
+            chestObserved = true
+        }
+        val candidate = labyrinthPostBossStageOnPage(stage, page, chestObserved)
+        val next = if (stage == LabyrinthPostBossStage.CHEST_SEQUENCE &&
+            candidate == LabyrinthPostBossStage.SCORE_RESULT && postEntryStableFrames < POST_ENTRY_STABLE_FRAMES
+        ) stage else candidate
         var transition: KernelEvent? = null
         if (next != stage) {
             if (next == LabyrinthPostBossStage.SCORE_RESULT) {

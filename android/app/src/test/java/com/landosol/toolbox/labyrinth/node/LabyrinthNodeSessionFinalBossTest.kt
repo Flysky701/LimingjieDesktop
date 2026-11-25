@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth.node
 import com.landosol.toolbox.protocol.labyrinth.LabyrinthMapNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LabyrinthNodeSessionFinalBossTest {
@@ -29,6 +30,22 @@ class LabyrinthNodeSessionFinalBossTest {
         session.initialize(route, route, NodeTemplateSet(emptyMap()), currentNodeId = 50601)
 
         assertEquals(50701L, session.directFinalBossTarget()?.blockId)
+    }
+
+    @Test
+    fun `clicking the area five route ending boss completes the route without the area last flag`() {
+        val session = LabyrinthNodeSession()
+        val route = listOf(
+            node(50601, 5, 6, LabyrinthNodeTypes.RELIC),
+            node(50701, 5, 7, LabyrinthNodeTypes.BOSS),
+        )
+        session.initialize(route, route, NodeTemplateSet(emptyMap()), currentNodeId = 50601)
+
+        session.afterClick(50701)
+
+        assertEquals(50701L, session.getState().currentNodeId)
+        assertTrue(session.getState().isComplete)
+        assertTrue(LabyrinthNodeMatcher().matchClassified(emptyList(), route, route, 5, 50701).isComplete)
     }
 
     @Test

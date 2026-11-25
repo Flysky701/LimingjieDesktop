@@ -35,6 +35,7 @@ data class SharedRunShellCallbacks(
     val reconnectSession:(String)->Unit,
     val stopAll:()->Unit,
     val onDirtyChanged:(String,Boolean)->Unit={_,_->},
+    val dismissError:()->Unit={},
 )
 
 /** Dirty state reported for the single shared editor, independently of device tabs. */

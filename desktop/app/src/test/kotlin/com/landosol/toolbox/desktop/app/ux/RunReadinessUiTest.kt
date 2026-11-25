@@ -75,6 +75,8 @@ class RunReadinessUiTest {
             assertEquals(listOf(ControlOps.PREFS_PATCH), worker.requests.toList())
             assertFalse(runtime.settings.state.value.gameSettingsConfirmed) // A stale worker snapshot must not undo confirmation.
             compose.onNodeWithText("展开检查项").performClick()
+            compose.onNodeWithText("已就绪 · 202611250001").assertIsDisplayed()
+            compose.onNodeWithText("未下载 · 前往设置").assertDoesNotExist()
             compose.onNodeWithText("打开设置").performClick()
             compose.runOnIdle { assertEquals(Page.Settings, destination); busy = true }
             compose.onNodeWithContentDescription("确认已关闭角色加入动画").assertIsNotEnabled()
@@ -97,7 +99,7 @@ class RunReadinessUiTest {
             put("resolution", ControlModelCodec.encode(VisualResolutionStatus(1920, 1080, "画面尺寸正确")))
             put("ocr", ControlModelCodec.encode(OcrEngineStatus.Ready))
             put("credentials", ControlModelCodec.encode(mapOf(1L to true)))
-            put("database", "已就绪")
+            put("database", if (runtime) "未下载 · 前往设置" else "已就绪 · 202611250001")
             put("foreground", "com.bilibili.priconne")
         })
         override val connection = MutableStateFlow(WorkerConnectionStatus.CONNECTED)

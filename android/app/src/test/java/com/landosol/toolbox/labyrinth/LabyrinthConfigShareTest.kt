@@ -264,6 +264,35 @@ class LabyrinthConfigShareTest {
         assertEquals(LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE, imported.effectiveFrontlineSurvivalMode)
     }
 
+    @Test fun `reroll targetScore round trips when positive and stays omitted when zero for legacy compatibility`() {
+        val enabledSettings = LabyrinthRerollSettings(targetScore = 53_000L)
+        val enabledCode = LabyrinthConfigShareCodec.encode(
+            LabyrinthConfigShareCodec.create(
+                LabyrinthConfigurationValues(rerolls = mapOf(7L to enabledSettings)),
+                setOf(LabyrinthConfigModule.REROLL), 7L, "new-version", 1000L,
+            ),
+        )
+        assertTrue(unpack(enabledCode).contains("\"targetScore\":53000"))
+        val enabledDecoded = LabyrinthConfigShareCodec.decode(enabledCode)
+        assertEquals(53_000L, enabledDecoded.reroll?.targetScore)
+        val summary = LabyrinthConfigImportPlan(enabledDecoded, setOf(LabyrinthConfigModule.REROLL), 7L, LabyrinthConfigurationValues())
+            .changeSummary()
+        assertTrue(summary.any { it.contains("刷分目标") && it.contains("53000") })
+
+        val disabledCode = LabyrinthConfigShareCodec.encode(
+            LabyrinthConfigShareCodec.create(
+                LabyrinthConfigurationValues(rerolls = mapOf(7L to LabyrinthRerollSettings(targetScore = 0L))),
+                setOf(LabyrinthConfigModule.REROLL), 7L, "old-version", 1000L,
+            ),
+        )
+        assertFalse(unpack(disabledCode).contains("targetScore"))
+        assertEquals(0L, LabyrinthConfigShareCodec.decode(disabledCode).reroll?.targetScore)
+
+        val enabledText = unpack(enabledCode)
+        reject(pack(enabledText.replace("\"targetScore\":53000", "\"targetScore\":200001")))
+        reject(pack(enabledText.replace("\"targetScore\":53000", "\"targetScore\":\"53000\"")))
+    }
+
     private fun reject(input: String) {
         assertThrows(IllegalArgumentException::class.java) { LabyrinthConfigShareCodec.decode(input) }
     }

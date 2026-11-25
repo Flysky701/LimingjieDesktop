@@ -32,4 +32,28 @@ class RunConsolePresenterTest {
         log.add("关键动作",kind=UserLogKind.KEY);log.add("注意",kind=UserLogKind.WARNING);log.add("错误",true)
         assertEquals(listOf(UserLogKind.NORMAL,UserLogKind.KEY,UserLogKind.WARNING,UserLogKind.ERROR),log.lines.value.map{it.kind})
     }
+
+    @Test fun onlyOldestNormalLogsAreTrimmedUntilExplicitClear() {
+        val log = UserLog()
+        val normalMessages = List(2500) { "普通日志 $it" }
+        log.add("关键动作", kind = UserLogKind.KEY)
+        normalMessages.forEachIndexed { index, message ->
+            when (index) {
+                1000 -> log.add("注意", kind = UserLogKind.WARNING)
+                2000 -> log.add("错误", kind = UserLogKind.ERROR)
+            }
+            log.add(message)
+        }
+
+        val lines = log.lines.value
+        assertEquals(normalMessages.takeLast(2000), lines.filter { it.kind == UserLogKind.NORMAL }.map { it.text })
+        val keyPositions = lines.indices.filter { lines[it].kind != UserLogKind.NORMAL }
+        assertEquals(listOf(0, 501, 1502), keyPositions)
+        assertEquals(
+            listOf(UserLogKind.KEY to "关键动作", UserLogKind.WARNING to "注意", UserLogKind.ERROR to "错误"),
+            keyPositions.map { lines[it].kind to lines[it].text },
+        )
+        log.clear()
+        assertTrue(log.lines.value.isEmpty())
+    }
 }

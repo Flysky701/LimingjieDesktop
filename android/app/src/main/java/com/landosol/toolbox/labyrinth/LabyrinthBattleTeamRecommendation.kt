@@ -142,10 +142,11 @@ class LabyrinthBattleTeamRecommendationPlanner(
         allowSupplementLead: Boolean = false,
         battleValueContext: BattleValueContext? = null,
         modelFallbackTrace: BattleModelTrace? = null,
+        autoDowngradeBossMaxTeams: Int = 1,
     ): LabyrinthBattleTeamRecommendationResult = withFormationMode(acquiredCharacterIds, context) { ids, effectiveContext ->
         initialRecommendationCore(
             ids, effectiveContext, requestedBossTeamCount, allowSupplementLead,
-            battleValueContext, modelFallbackTrace,
+            battleValueContext, modelFallbackTrace, autoDowngradeBossMaxTeams,
         )
     }
 
@@ -218,8 +219,10 @@ class LabyrinthBattleTeamRecommendationPlanner(
         allowSupplementLead: Boolean = false,
         battleValueContext: BattleValueContext? = null,
         modelFallbackTrace: BattleModelTrace? = null,
+        autoDowngradeBossMaxTeams: Int = 1,
     ): LabyrinthBattleTeamRecommendationResult {
         require(requestedBossTeamCount in 1..3)
+        require(autoDowngradeBossMaxTeams <= 3)
         val canonicalIds = acquiredCharacterIds.map(::canonicalLabyrinthRoleId).distinct()
         val knownProfiles = profiles.withKnownRoleIdentities(canonicalIds)
         val resolved = canonicalIds.map(knownProfiles::getValue)
@@ -250,7 +253,7 @@ class LabyrinthBattleTeamRecommendationPlanner(
         )
         return modelRecommendation(
             ruleResult, plan.teamCharacterIds(), battleValueContext, resolved, context,
-            emptySet(), requestedBossTeamCount, supplementLead, modelFallbackTrace,
+            emptySet(), requestedBossTeamCount, supplementLead, modelFallbackTrace, autoDowngradeBossMaxTeams,
         )
     }
 
@@ -628,6 +631,7 @@ class LabyrinthBattleTeamRecommendationPlanner(
         requestedBossTeamCount: Int,
         supplementLead: Boolean,
         modelFallbackTrace: BattleModelTrace? = null,
+        autoDowngradeBossMaxTeams: Int = 1,
     ): LabyrinthBattleTeamRecommendationResult {
         if (battleValueContext == null || modelSearcher == null) {
             return ruleResult.withModelFallback(modelFallbackTrace ?: BattleModelTrace(
@@ -638,7 +642,7 @@ class LabyrinthBattleTeamRecommendationPlanner(
         }
         val result = when (val outcome = modelSearcher.searchOutcome(
             battleValueContext.copy(ruleContext = context), eligibleProfiles, ruleTeams,
-            failedTeamSignatures, requestedBossTeamCount, supplementLead,
+            failedTeamSignatures, requestedBossTeamCount, supplementLead, autoDowngradeBossMaxTeams,
         )) {
             is ModelGuidedBattleTeamSearcher.Outcome.Resolved -> outcome.result
             is ModelGuidedBattleTeamSearcher.Outcome.Fallback -> return ruleResult.withModelFallback(
@@ -714,6 +718,12 @@ class LabyrinthBattleTeamRecommendationPlanner(
         } else teams.size
         val summary = assessment.summary(teams.size)
         val reason = if (assessment.jointWinProbability == null) "按NN模型选队（$summary）" else "按NN模型多队编组（$summary）"
+        val downgradeReason = if (assessment.autoDowngradedToMultiTeam) {
+            val firstTeamWin = assessment.teamWinProbabilities.firstOrNull() ?: assessment.pWin
+            val teamCount = assessment.plannedTeams.size.coerceAtLeast(teams.size)
+            "单队NN胜率不足（${formatBattleWinProbability(firstTeamWin)}），已自动降级为${teamCount}队编组"
+        } else null
+        val adoptionNote = assessment.adoptionNote
         return LabyrinthBattleTeamRecommendationResult.Ready(
             LabyrinthBattleTeamRecommendation(
                 members = members,
@@ -721,13 +731,15 @@ class LabyrinthBattleTeamRecommendationPlanner(
                 score = evaluation.score,
                 vanguard = memberById.getValue(evaluation.vanguardCharacterId),
                 survivalAnchor = evaluation.survivalAnchorCharacterId?.let(memberById::get),
-                reasons = listOf(reason) + evaluation.reasons,
+                reasons = listOfNotNull(reason, downgradeReason, adoptionNote) + evaluation.reasons,
                 defenseMarkStacks = context.defenseMarkStacks,
                 targetCount = context.targetCount,
                 plannedBossTeamCount = teams.size,
                 safeBossTeamCount = safeTeamCount,
                 modelAssessment = assessment,
-                modelTrace = trace,
+                modelTrace = if (adoptionNote == null) trace else trace.copy(
+                    detail = listOfNotNull(trace.detail, adoptionNote).joinToString(" · "),
+                ),
             ),
         )
     }
@@ -792,7 +804,7 @@ internal fun labyrinthBattleTeamSelectionMessage(
 
 private fun formatBattleTeamScore(value: Double): String = "%.2f".format(value)
 
-private fun formatBattleWinProbability(value: Double): String = String.format(Locale.ROOT, "%.1f%%", value * 100.0)
+internal fun formatBattleWinProbability(value: Double): String = String.format(Locale.ROOT, "%.1f%%", value * 100.0)
 
 private fun BattleModelAssessment.summary(countFallback: Int = 1): String = if (jointWinProbability == null) {
     "NN胜率 ${formatBattleWinProbability(pWin)} · ${tier.label}"

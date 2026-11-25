@@ -13,11 +13,23 @@ enum class LabyrinthThirdBlockChoice(val label: String) {
     EITHER("两者都行"),
 }
 
-enum class LabyrinthRouteEvaluationMode(val label: String) {
-    VALUE_ROUTE("价值路线 v2"),
-    OFFICIAL_SCORE_DP("官方分数 DP"),
-    LEGACY_TEMPLATE("旧版固定模板"),
-    CUSTOM_NODES("自定义节点"),
+enum class LabyrinthRouteEvaluationMode(val label: String, val summary: String) {
+    VALUE_ROUTE(
+        label = "高价值路线",
+        summary = "不绑定列号，优先拿满 EX、角色、遗物、商店等高价值格，可设置每区允许少拿格数（默认推荐）",
+    ),
+    OFFICIAL_SCORE_DP(
+        label = "官方高分路线",
+        summary = "按官方结算分规则规划总分最高的连通路线，仅卡 Boss 名单与 3/5 区第 3 格偏好",
+    ),
+    LEGACY_TEMPLATE(
+        label = "经典模板路线",
+        summary = "按固定列位模板严格匹配开局；取消列位限制时仅筛选 Boss 名单",
+    ),
+    CUSTOM_NODES(
+        label = "节点模板路线",
+        summary = "按标准或自定义列位模板逐列严格匹配；可在配置中调整 1–4 区关键列位",
+    ),
 }
 
 enum class LabyrinthBossDifficulty(val label: String) {
@@ -82,6 +94,8 @@ object LabyrinthRerollOptions {
     val defaultThirdBlockChoice = LabyrinthThirdBlockChoice.RELIC
     const val MAX_DIFFICULTY = 5
     const val MAX_ATTEMPTS = 800
+    const val DEFAULT_TARGET_SCORE = 0L
+    const val MAX_TARGET_SCORE = 200_000L
 }
 
 /**

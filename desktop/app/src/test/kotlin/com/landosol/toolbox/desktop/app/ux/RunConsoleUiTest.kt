@@ -28,7 +28,7 @@ class RunConsoleUiTest {
         val state=snapshot.console
         compose.setContent {DesktopTheme(DesktopPreferences()){Column{
             StartControl(startMissing(DesktopTask.RECOGNIZE,state,false,false),false){starts++}
-            StopReasonCard(explainStop(state.halt,state.entry.message.orEmpty())){target=it}
+            StopReasonCard(explainStop(state.halt,state.entry.message.orEmpty()),onNavigate={target=it})
         }}}
         compose.onNodeWithText("开始 F5").assertIsNotEnabled()
         assertEquals(0,starts)

@@ -292,6 +292,58 @@ class VisionRedundancyHardeningTest {
     }
 
     @Test
+    fun `shop title null retries exhaust all variants without submitting the sold out crop`() {
+        val shopFrame = Bitmap.createBitmap(64, 48, Bitmap.Config.ARGB_8888)
+        val available = LabyrinthShopItemMatch(
+            slotId = "shop_item_2",
+            screenRect = EntryPixelRect(8, 8, 24, 24),
+            buyButtonRect = EntryPixelRect(10, 24, 16, 6),
+            buyButtonScore = 0.95,
+            status = LabyrinthShopItemStatus.AVAILABLE,
+            titleRect = EntryPixelRect(10, 10, 16, 8),
+        )
+        val soldOut = available.copy(
+            slotId = "shop_item_1",
+            status = LabyrinthShopItemStatus.DISABLED,
+            titleRect = EntryPixelRect(40, 10, 20, 8),
+        )
+        val frame = LabyrinthEntryFrameResult(
+            observation = LabyrinthEntryPageObservation(
+                LabyrinthEntryPageState.SHOP, 0.95,
+                mapOf(LabyrinthEntryPageState.SHOP to 0.95), LabyrinthAnchorScores(emptyMap()),
+            ),
+            matchedFeatures = emptyList(),
+            elapsedMillis = 1L,
+            shopObservation = LabyrinthShopObservation(items = listOf(soldOut, available)),
+        )
+        val startedAt = 1_000L
+        var now = startedAt
+        val cropSizes = mutableListOf<Pair<Int, Int>>()
+        val resolver = AndroidLabyrinthShopItemResolver(
+            submitTextRead = { crop, callback ->
+                cropSizes += crop.width to crop.height
+                callback(null)
+            },
+            clock = { now },
+        )
+        try {
+            val resolved = (0..6).map { step ->
+                now = startedAt + step * 350L
+                val items = requireNotNull(resolver.resolve(shopFrame, frame).shopObservation).items
+                assertEquals(soldOut, items.first())
+                items.last()
+            }
+            assertEquals(listOf(1, 1, 2, 2, 3, 3, 3), resolved.map { it.categoryAttempt })
+            assertTrue(resolved.dropLast(1).all { it.categoryState == LabyrinthShopCategoryState.READING })
+            assertEquals(LabyrinthShopCategoryState.EXHAUSTED, resolved.last().categoryState)
+            assertTrue(now - startedAt < 5_000L)
+            assertEquals(listOf(32 to 16, 32 to 16, 48 to 24, 48 to 24, 48 to 42, 48 to 42), cropSizes)
+        } finally {
+            shopFrame.recycle()
+        }
+    }
+
+    @Test
     fun `debug dashboard captures lossless PNG incidents and includes expanded diagnostic fields in logs zip`() {
         val server = LabyrinthDebugDashboardServer(port = 0, allowAddressReuse = false)
         server.attachOcrHealthSource { mapOf("status" to "Ready", "nullFailures" to 1L) }

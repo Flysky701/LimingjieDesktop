@@ -121,7 +121,13 @@ internal class LabyrinthShopScanController {
             phase = if (topCovered && bottomCovered) Phase.COMPLETE else Phase.BROWSE
             directionalSteps = 0; viewStartedAt = now
         }
-        return Step.Evaluate(complete)
+        return Step.Evaluate(
+            complete,
+            skipUnresolved = shop.items.any {
+                it.visibility == LabyrinthShopItemVisibility.FULL && it.status == LabyrinthShopItemStatus.AVAILABLE &&
+                    it.categoryState == LabyrinthShopCategoryState.EXHAUSTED
+            },
+        )
     }
 
     @Synchronized fun readTimedOut(now: Long) = viewStartedAt != Long.MIN_VALUE && now - viewStartedAt >= ITEM_READ_TIMEOUT
@@ -197,14 +203,17 @@ internal class LabyrinthShopScanController {
         return full.mapNotNull { item -> when {
             item.status == LabyrinthShopItemStatus.UNKNOWN -> item.slotId + "按钮待确认"
             item.status == LabyrinthShopItemStatus.DISABLED -> null
-            item.categoryState != LabyrinthShopCategoryState.READY || item.kind == LabyrinthShopItemKind.UNKNOWN -> item.slotId + "类别待确认"
-            item.kind == LabyrinthShopItemKind.ROLE_IMPRINT && (item.roleImprintLabel.isNullOrBlank() || item.imprintLabelPending) -> item.slotId + "印记形式或职能名待确认"
+            item.categoryState == LabyrinthShopCategoryState.READING -> item.slotId + "类别待确认"
+            item.categoryState == LabyrinthShopCategoryState.EXHAUSTED -> null
+            item.kind == LabyrinthShopItemKind.UNKNOWN -> item.slotId + "类别待确认"
+            item.kind == LabyrinthShopItemKind.ROLE_IMPRINT && item.imprintLabelPending -> item.slotId + "印记形式或职能名待确认"
             else -> null
         } }
     }
     private fun semanticKey(shop: LabyrinthShopObservation) = shop.items.filter { it.visibility == LabyrinthShopItemVisibility.FULL }
         .joinToString("|") { if (it.status == LabyrinthShopItemStatus.DISABLED) it.slotId + ":DISABLED"
-            else it.slotId + ":" + it.status + ":" + it.kind + ":" + (it.relicMatch?.relicId ?: "") + ":" +
+            else it.slotId + ":" + it.status + ":" + it.categoryState + ":" + it.kind + ":" +
+                (it.relicMatch?.relicId ?: "") + ":" +
                 (it.roleImprintLabel ?: "") + ":" + it.choiceRoleImprint + ":" + (it.titleText ?: "") }
     private fun invalidateView(capturedAfter: Long) {
         generation++; phase = Phase.BROWSE; pending = null; requiredAfter = capturedAfter

@@ -201,6 +201,12 @@ class LabyrinthBatchController(
         when (event) {
             is LabyrinthRunTerminalEvent.UserStopped -> halt(recorded, LabyrinthBatchHaltReason.USER_STOPPED, "用户停止")
             is LabyrinthRunTerminalEvent.FatalUnknown -> halt(recorded, LabyrinthBatchHaltReason.FATAL_RUN, event.reason)
+            is LabyrinthRunTerminalEvent.RetiredScoreTarget -> {
+                val updated = recorded.copy(message = "未达刷分目标撤退：${event.reason}")
+                val advanced = updated.advanceGoal(clock())
+                persist(advanced)
+                if (advanced.stage != LabyrinthBatchStage.COMPLETED) runCycle(advanced)
+            }
             is LabyrinthRunTerminalEvent.Cleared,
             is LabyrinthRunTerminalEvent.FailedMaxRetry,
             -> {

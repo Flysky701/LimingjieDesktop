@@ -436,6 +436,7 @@ class ShopDomainModule internal constructor(
         stacks: Map<LabyrinthRelicMark, Int>,
         observedAlphaCoin: Int? = null,
         scanComplete: Boolean = shopScan.complete,
+        notifyObserver: Boolean = true,
     ): LabyrinthShopDecision? = synchronized(runtime) {
         val shop = result.shopObservation ?: return@synchronized null
         if (shop.dialogState != LabyrinthShopDialogState.NONE) return@synchronized null
@@ -452,6 +453,7 @@ class ShopDomainModule internal constructor(
             coinBalance = coins,
             stockScanComplete = !scannedArea || scanComplete,
             allowSecondaryPurchases = true, allowClearancePurchases = true,
+            notifyObserver = notifyObserver,
         )
         if (decision is LabyrinthShopDecision.Close && decision.immediate ||
             decision is LabyrinthShopDecision.Wait && decision.kind == LabyrinthShopWaitKind.COINS) return@synchronized decision
@@ -482,7 +484,7 @@ class ShopDomainModule internal constructor(
         if (shop == null || shop.dialogState != LabyrinthShopDialogState.NONE) {
             return wait("商店商品识别尚未生成", "shop_stock_unavailable")
         }
-        var decision = currentShopDecision(result, policy, area, acquired, stacks, observedAlphaCoin)
+        var decision = currentShopDecision(result, policy, area, acquired, stacks, observedAlphaCoin, notifyObserver = false)
             ?: return wait("商店商品识别尚未生成", "shop_stock_unavailable")
         if (decision is LabyrinthShopDecision.Wait && decision.kind == LabyrinthShopWaitKind.COINS) {
             if (shopCoinUnconfirmedSince == Long.MIN_VALUE) shopCoinUnconfirmedSince = now
@@ -495,7 +497,9 @@ class ShopDomainModule internal constructor(
             val step = shopScan.observe(shop, now, capturedAt, currentArea = area)
             if (step !is Step.Evaluate) return scan(step)
             if (step.complete != wasComplete) {
-                decision = requireNotNull(currentShopDecision(result, policy, area, acquired, stacks, observedAlphaCoin, step.complete))
+                decision = requireNotNull(currentShopDecision(
+                    result, policy, area, acquired, stacks, observedAlphaCoin, step.complete, notifyObserver = false,
+                ))
             }
             if (decision is LabyrinthShopDecision.Wait) {
                 if (decision.kind == LabyrinthShopWaitKind.SCAN) return scan(shopScan.advance(shop, now))
@@ -546,6 +550,8 @@ class ShopDomainModule internal constructor(
                     missingRectReason = "商店已无计划购买项，但关闭按钮未稳定识别")
             }
             is LabyrinthShopDecision.Wait -> wait(decision.reason, "shop_policy_wait")
+        }.also { outcome ->
+            if (outcome.tapPlan != null) policy.notifyDecision(decision)
         }
     }
 

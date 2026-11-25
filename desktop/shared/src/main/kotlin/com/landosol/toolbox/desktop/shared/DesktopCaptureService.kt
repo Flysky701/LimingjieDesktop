@@ -43,6 +43,8 @@ class DesktopCaptureService(
     private val deferFrame: (CapturePixels) -> Boolean = { false },
     /** Controls only the UI copy; recognition must continue while the preview is hidden. */
     private val previewEnabled: () -> Boolean = { true },
+    private val captureSuspended: () -> Boolean = { false },
+    private val dispatchSuspended: () -> Boolean = { false },
 ) : AutoCloseable {
     private val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "desktop-capture").apply { isDaemon = true } }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
@@ -63,6 +65,10 @@ class DesktopCaptureService(
             var lastPreview = Long.MIN_VALUE
             try {
                 while (isActive) {
+                    if (captureSize != null && captureSuspended()) {
+                        delay(300)
+                        continue
+                    }
                     val started = System.nanoTime()
                     val capturedAt = android.os.SystemClock.elapsedRealtime()
                     CaptureTelemetry.callback()
@@ -92,12 +98,14 @@ class DesktopCaptureService(
                                 preview(frame.copy(pixels = frame.pixels.copyOf()))
                                 lastPreview = frame.timestampMillis
                             }
-                            val conversionStarted = System.nanoTime()
-                            val bitmap = frame.recognitionBitmap()
-                            val conversionMillis = (System.nanoTime() - conversionStarted) / 1_000_000
-                            CaptureTelemetry.converted()
-                            CaptureFrameBus.dispatch(bitmap.capturedFrame(frame.timestampMillis, ++frameSequence,
-                                capturedAtElapsedRealtimeMillis = capturedAt, captureConvertMillis = conversionMillis))
+                            if (!dispatchSuspended()) {
+                                val conversionStarted = System.nanoTime()
+                                val bitmap = frame.recognitionBitmap()
+                                val conversionMillis = (System.nanoTime() - conversionStarted) / 1_000_000
+                                CaptureTelemetry.converted()
+                                CaptureFrameBus.dispatch(bitmap.capturedFrame(frame.timestampMillis, ++frameSequence,
+                                    capturedAtElapsedRealtimeMillis = capturedAt, captureConvertMillis = conversionMillis))
+                            }
                         }
                     }
                     if (frame.pixels.all { it and 0xffffff == 0 }) {

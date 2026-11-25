@@ -6,15 +6,18 @@ import com.landosol.toolbox.automation.AutomationSessionId
 import com.landosol.toolbox.automation.GameClientResolution
 import com.landosol.toolbox.clanbattle.recognition.PixelImage
 import com.landosol.toolbox.desktop.app.DesktopAppGraph
+import com.landosol.toolbox.desktop.app.UserLogKind
 import com.landosol.toolbox.desktop.app.UserLogLine
 import com.landosol.toolbox.desktop.app.adapters.device.VisualResolutionStatus
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopGoal
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopPreferences
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
 import com.landosol.toolbox.desktop.app.adapters.storage.StrategyLibrary
+import com.landosol.toolbox.desktop.app.strategy.BattleModelStatus
 import com.landosol.toolbox.desktop.app.ui.RunConsoleState
 import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
+import com.landosol.toolbox.desktop.ocr.OcrEngineTelemetry
 import com.landosol.toolbox.desktop.platform.DesktopSettings
 import com.landosol.toolbox.desktop.platform.UserResourceLeases
 import com.landosol.toolbox.desktop.shared.DeviceIdentitySnapshot
@@ -23,6 +26,8 @@ import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.labyrinth.*
 import com.landosol.toolbox.labyrinth.kernel.event.GameEventCatalogRegistry
 import com.landosol.toolbox.labyrinth.node.NodeClassification
+import com.landosol.toolbox.labyrinth.node.NodeColumnKey
+import com.landosol.toolbox.labyrinth.node.NodeMatchResult
 import com.landosol.toolbox.labyrinth.node.NodeViewportPixels
 import com.landosol.toolbox.labyrinth.vision.*
 import kotlin.reflect.KClass
@@ -58,6 +63,8 @@ class GraphControlServiceTest {
         val service = GraphControlService(graph, "compact", "离线测试")
         try {
             val now = System.currentTimeMillis()
+            graph.log.add("synthetic-key", kind = UserLogKind.KEY)
+            val beforeFlood = service.snapshot(false)
             repeat(60) { i ->
                 graph.ux.history.put(com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord(
                     "run-$i", now + i, "synthetic", "test", "test"))
@@ -68,6 +75,9 @@ class GraphControlServiceTest {
             assertEquals(50, first.getValue("history").jsonArray.size)
             assertEquals(60, first.getValue("historyTotal").jsonPrimitive.int)
             assertEquals(50, first.getValue("logs").jsonArray.size)
+            val keyLogs = ControlModelCodec.decode<List<UserLogLine>>(first.getValue("keyLogs"))
+            assertEquals(UserLogKind.KEY, keyLogs.single { it.text == "synthetic-key" }.kind)
+            assertSame(beforeFlood["keyLogs"], first["keyLogs"])
             assertSame(first["history"], unchanged["history"])
             assertSame(first["settings"], unchanged["settings"])
             assertFalse(first.containsKey("crashes"))
@@ -283,6 +293,15 @@ class GraphControlServiceTest {
             nodeSearchMode = "typed", nodeSearchWindowCount = 12, nodeViewportSignature = "synthetic", nodeViewportPixels = pixels,
         )
         val member = LabyrinthRecommendedTeamMember("100101", "示例角色")
+        val nodeBindings = NodeMatchResult(
+            currentNodeId = 30101L,
+            currentNodeType = 1,
+            nextNode = null,
+            visibleNodes = emptyList(),
+            isComplete = false,
+            columnNodeCounts = mapOf(NodeColumnKey(3, 2) to 3),
+        )
+        assertEquals(nodeBindings, ControlModelCodec.decode<NodeMatchResult>(ControlModelCodec.encode(nodeBindings)))
         val state = LabyrinthEntryRecognitionSessionState(status = LabyrinthEntryRecognitionStatus.RUNNING,
             sessionId = AutomationSessionId(17L), dryRun = true, paused = true, receivedFrameCount = 7, frameCount = 5,
             lastResult = result, joinedCharacters = listOf(LabyrinthJoinedCharacter("100101", "示例角色", 0, .99, 1, 2)),
@@ -291,6 +310,9 @@ class GraphControlServiceTest {
             combatContext = LabyrinthCombatContext(LabyrinthCombatKind.EX, 1, 3),
             battleTeamRecommendation = LabyrinthBattleTeamRecommendation(listOf(member), LabyrinthTeamDamageType.PHYSICAL,
                 83.5, member, null, listOf("示例推荐原因"), 4, 3),
+            pathBDecisionSummary = LabyrinthPathBDecisionSummary("PathB-NN", "节点", "普通战斗", "test"),
+            nodeBindings = nodeBindings,
+            alphaRupeeBalance = 120,
             frameTrace = LabyrinthFrameTrace(listOf("NODE_MAP_VIEW"), actionRejectReason = "已暂停", nodeTargetBlockId = 123L,
                 nodeSearchWindowCount = 12, nodeTrackerReliable = true, nodeTrackerWorldLeft = 16.5))
         // A complete synthetic session state exercises the real snapshot path without starting capture.
@@ -304,12 +326,14 @@ class GraphControlServiceTest {
             assertEquals(state.copy(lastResult = result.copy(
                 nodeViewportPixels = null,
                 eventChoiceSelection = eventObservation.copy(sourceCatalog = null),
-            )), restored.entry)
+            ), nodeBindings = null), restored.entry)
             assertTrue(restored.busy)
             assertNull(restored.entry.lastResult?.nodeViewportPixels)
             assertNull(restored.entry.lastResult?.eventChoiceSelection?.sourceCatalog)
+            assertNull(restored.entry.nodeBindings)
             assertSame(pixels, mutable.value.lastResult?.nodeViewportPixels)
             assertSame(catalog, mutable.value.lastResult?.eventChoiceSelection?.sourceCatalog)
+            assertSame(nodeBindings, mutable.value.nodeBindings)
             assertTrue("snapshot must not contain raw viewport buffers", document.toString().length < 500_000)
         } finally { mutable.value = original }
     }
@@ -326,7 +350,7 @@ class GraphControlServiceTest {
             JsonElement::class, JsonObject::class, JsonArray::class, JsonPrimitive::class,
         )
         val collections = setOf<KClass<*>>(
-            List::class, Set::class, Collection::class, Iterable::class, Map::class, Array::class,
+            List::class, Set::class, Collection::class, Iterable::class, Map::class,
         )
         val visited = mutableSetOf<KClass<*>>()
         val unsupported = mutableListOf<String>()
@@ -388,6 +412,8 @@ class GraphControlServiceTest {
             StrategyLibrary::class,
             VisualResolutionStatus::class,
             OcrEngineStatus::class,
+            OcrEngineTelemetry::class,
+            BattleModelStatus::class,
             DeviceIdentitySnapshot::class,
             GameClientResolution::class,
             DeviceDescriptor::class,
@@ -396,6 +422,31 @@ class GraphControlServiceTest {
         )
         roots.forEach { root -> auditor.auditClass(root, root.simpleName ?: root.toString()) }
         assertTrue("Unsupported control model types reachable from snapshot: $unsupported", unsupported.isEmpty())
+    }
+
+    @Test fun noticesDismissAndReplayExportAndOverwriteDiagnosticsWork() = runBlocking {
+        val graph = DesktopAppGraph(directory.root.toPath().resolve("data"), suppliedDevice = NoIoDevice(), startupUpdates = false)
+        val service = GraphControlService(graph, "diag-replay", "诊断导出测试")
+        try {
+            graph.addNotice("配置损坏恢复测试通知")
+            assertEquals(listOf("配置损坏恢复测试通知"), service.snapshot(false).getValue("notices").jsonArray.map { it.jsonPrimitive.content })
+            service.execute(ControlOps.NOTICES_DISMISS, emptyArgs())
+            assertTrue(service.snapshot(false).getValue("notices").jsonArray.isEmpty())
+
+            val diagTarget = directory.root.toPath().resolve("existing-debug.zip")
+            java.nio.file.Files.writeString(diagTarget, "old-content")
+            service.execute(ControlOps.DIAGNOSTICS_EXPORT, buildJsonObject { put("path", diagTarget.toString()) })
+            assertTrue(java.nio.file.Files.size(diagTarget) > 20L)
+
+            val stats = service.execute(ControlOps.REPLAYS_STATS, emptyArgs())
+            assertEquals(0, stats.getValue("episodes").jsonPrimitive.int)
+            val replayTarget = directory.root.toPath().resolve("replays.jsonl")
+            val exported = service.execute(ControlOps.REPLAYS_EXPORT, buildJsonObject { put("path", replayTarget.toString()) })
+            assertEquals(0, exported.getValue("exported").jsonPrimitive.int)
+            assertTrue(java.nio.file.Files.exists(replayTarget))
+        } finally {
+            service.shutdown()
+        }
     }
 
     private class NoIoDevice : DeviceService {

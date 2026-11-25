@@ -72,6 +72,7 @@ data class LabyrinthBatchReusableOpening(
 enum class LabyrinthRunOutcome {
     CLEARED,
     FAILED_MAX_RETRY,
+    RETIRED_SCORE_TARGET,
     ABORTED_UNKNOWN,
     USER_STOPPED,
 }
@@ -85,6 +86,7 @@ sealed interface LabyrinthRunTerminalEvent {
 
     data class Cleared(override val runId: String, val summary: com.landosol.toolbox.labyrinth.LabyrinthRunSummary? = null) : LabyrinthRunTerminalEvent
     data class FailedMaxRetry(override val runId: String) : LabyrinthRunTerminalEvent
+    data class RetiredScoreTarget(override val runId: String, val reason: String) : LabyrinthRunTerminalEvent
     data class FatalUnknown(override val runId: String, val reason: String) : LabyrinthRunTerminalEvent
     data class UserStopped(override val runId: String) : LabyrinthRunTerminalEvent
 
@@ -92,6 +94,7 @@ sealed interface LabyrinthRunTerminalEvent {
         get() = when (this) {
             is Cleared -> LabyrinthRunOutcome.CLEARED
             is FailedMaxRetry -> LabyrinthRunOutcome.FAILED_MAX_RETRY
+            is RetiredScoreTarget -> LabyrinthRunOutcome.RETIRED_SCORE_TARGET
             is FatalUnknown -> LabyrinthRunOutcome.ABORTED_UNKNOWN
             is UserStopped -> LabyrinthRunOutcome.USER_STOPPED
         }
@@ -127,6 +130,7 @@ data class LabyrinthBatchCheckpoint(
     val updatedAt: Long,
     val lastRunSummary: com.landosol.toolbox.labyrinth.LabyrinthRunSummary? = null,
     val lastRecordedOutcome: LabyrinthRunOutcome? = null,
+    val scoreRetiredRuns: Int = 0,
 ) {
     init {
         require(goals.isNotEmpty()) { "a batch needs at least one goal" }
@@ -167,6 +171,7 @@ internal fun LabyrinthBatchCheckpoint.recordOutcome(
                 goal.completedCount
             },
         )
+        LabyrinthRunOutcome.RETIRED_SCORE_TARGET,
         LabyrinthRunOutcome.ABORTED_UNKNOWN,
         LabyrinthRunOutcome.USER_STOPPED,
         -> goal
@@ -178,6 +183,7 @@ internal fun LabyrinthBatchCheckpoint.recordOutcome(
         lastRecordedOutcome = outcome,
         lastRecordedRunId = runId,
         abnormalRuns = if (outcome == LabyrinthRunOutcome.ABORTED_UNKNOWN) abnormalRuns + 1 else abnormalRuns,
+        scoreRetiredRuns = if (outcome == LabyrinthRunOutcome.RETIRED_SCORE_TARGET) scoreRetiredRuns + 1 else scoreRetiredRuns,
         stage = LabyrinthBatchStage.RECORDING_RESULT,
         updatedAt = now,
     )

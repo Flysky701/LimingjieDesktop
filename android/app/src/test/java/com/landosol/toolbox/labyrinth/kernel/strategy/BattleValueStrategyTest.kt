@@ -1,9 +1,13 @@
 package com.landosol.toolbox.labyrinth.kernel.strategy
 
 import com.landosol.toolbox.labyrinth.*
+import com.landosol.toolbox.labyrinth.concurrent.LabyrinthFourThreadRuntime
 import com.landosol.toolbox.labyrinth.kernel.*
+import com.landosol.toolbox.labyrinth.kernel.planning.BattleExam
+import com.landosol.toolbox.labyrinth.kernel.planning.PlanningState
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
 import java.util.UUID
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Rule
@@ -97,13 +101,20 @@ class BattleValueStrategyTest {
             as LabyrinthBattleTeamRecommendationResult.Ready).recommendation
         val modelIds = ids.filterNot { it == rule.members.first().characterId }
         val modelUnitIds = modelIds.map { requireNotNull(labyrinthCharacterIdToUnitId(it)) }.sorted()
+        val ruleUnitIds = rule.members.map { requireNotNull(labyrinthCharacterIdToUnitId(it.characterId)) }.sorted()
 
         for ((probability, tier) in listOf(
             0.70 to BattleConfidenceTier.SAFE,
             0.50 to BattleConfidenceTier.MARGINAL,
             0.49 to BattleConfidenceTier.UNSAFE,
         )) {
-            val estimator = ModelEstimator { if (it == modelUnitIds) probability else 0.10 }
+            val estimator = ModelEstimator {
+                when (it) {
+                    modelUnitIds -> probability
+                    ruleUnitIds -> 0.40
+                    else -> 0.10
+                }
+            }
             val result = planner.withBattleValueEstimator(estimator)
                 .initialRecommendation(ids, valueContext.ruleContext, battleValueContext = valueContext)
                 as LabyrinthBattleTeamRecommendationResult.Ready
@@ -129,6 +140,93 @@ class BattleValueStrategyTest {
                     recommendation.score, 1e-12)
             }
         }
+    }
+
+    @Test fun modelStyleTradesSmallHighWinMarginsForSpeedAndBoostsOnlyNonBossRevives() {
+        val roster = modelRoster(6)
+        val baseContext = modelContext(roster)
+        val unitIds = baseContext.ownedUnits.map { it.unitId }
+        val slow = unitIds.take(5)
+        val fast = unitIds.takeLast(5)
+        val slowIds = roster.take(5).map { it.characterId }
+        val fastIds = roster.takeLast(5).map { it.characterId }
+
+        fun pick(
+            style: LabyrinthBattleModelStyle, slowWin: Double, fastWin: Double,
+            revive: Boolean = false, boss: Boolean = false,
+        ): List<String> {
+            val estimator = ModelEstimator(winRemTime = { if (it == fast) 0.90 else 0.10 }) {
+                when (it) {
+                    slow -> slowWin
+                    fast -> fastWin
+                    else -> 0.01
+                }
+            }
+            val result = requireNotNull(ModelGuidedBattleTeamSearcher(estimator, optimizer = null).search(
+                baseContext.copy(strategyStyle = style, reviveAvailable = revive, isBossBattle = boss),
+                roster, emptyList(), emptySet(), 1, supplementLead = false,
+            ))
+            return result.assessment.plannedTeams.single()
+        }
+
+        assertEquals(slowIds, pick(LabyrinthBattleModelStyle.CONSERVATIVE, 0.95, 0.91))
+        assertEquals(fastIds, pick(LabyrinthBattleModelStyle.BALANCED, 0.95, 0.91))
+        assertEquals(fastIds, pick(LabyrinthBattleModelStyle.AGGRESSIVE, 0.95, 0.91))
+        assertEquals(slowIds, pick(LabyrinthBattleModelStyle.AGGRESSIVE, 0.45, 0.40))
+        assertEquals(slowIds, pick(LabyrinthBattleModelStyle.BALANCED, 0.95, 0.89))
+        assertEquals(fastIds, pick(LabyrinthBattleModelStyle.BALANCED, 0.95, 0.89, revive = true))
+        assertEquals(slowIds, pick(LabyrinthBattleModelStyle.BALANCED, 0.95, 0.89, revive = true, boss = true))
+    }
+
+    @Test fun lowSingleBossWinAutomaticallyPlansThreeTeams() {
+        val roster = modelRoster(15)
+        val valueContext = modelContext(roster).copy(isBossBattle = true)
+        val chunks = valueContext.ownedUnits.map { it.unitId }.chunked(5)
+        val estimator = ModelEstimator { if (it in chunks) 0.65 else 0.02 }
+        val result = labyrinthBalancedBattleRecommendation(
+            planner = planner(roster).withBattleValueEstimator(estimator),
+            unavailableReason = null, eligibleIds = roster.map { it.characterId }, context = valueContext.ruleContext,
+            failedSignatures = emptySet(), lastFailedSignature = null, retryNumber = 0,
+            requestedBossTeamCount = 1, allowSupplementLead = false, teamIndex = 1,
+            battleValueContext = valueContext, autoDowngradeBossMaxTeams = 3,
+        ).result as LabyrinthBattleTeamRecommendationResult.Ready
+
+        val recommendation = result.recommendation
+        val assessment = requireNotNull(recommendation.modelAssessment)
+        assertTrue(assessment.autoDowngradedToMultiTeam)
+        assertTrue(assessment.adopted)
+        assertEquals(3, recommendation.plannedBossTeamCount)
+        assertEquals(chunks.toSet(), assessment.plannedTeams.map { team ->
+            team.map { requireNotNull(labyrinthCharacterIdToUnitId(it)) }.sorted()
+        }.toSet())
+        assertTrue(recommendation.reasons.first().startsWith("按NN模型多队编组"))
+        assertTrue("单队NN胜率不足（65.0%），已自动降级为3队编组" in recommendation.reasons)
+    }
+
+    @Test fun modelAdoptsUnsafeTeamWhenItClearlyBeatsEvaluatedRuleTeam() {
+        val roster = modelRoster(6)
+        val ids = roster.map { it.characterId }
+        val valueContext = modelContext(roster)
+        val planner = planner(roster)
+        val rule = (planner.initialRecommendation(ids, valueContext.ruleContext)
+            as LabyrinthBattleTeamRecommendationResult.Ready).recommendation
+        val modelIds = ids.filterNot { it == rule.members.first().characterId }
+        val modelUnitIds = modelIds.map { requireNotNull(labyrinthCharacterIdToUnitId(it)) }.sorted()
+        val estimator = ModelEstimator { if (it == modelUnitIds) 0.30 else 0.01 }
+
+        val result = planner.withBattleValueEstimator(estimator)
+            .initialRecommendation(ids, valueContext.ruleContext, battleValueContext = valueContext)
+            as LabyrinthBattleTeamRecommendationResult.Ready
+        val recommendation = result.recommendation
+        val assessment = requireNotNull(recommendation.modelAssessment)
+        val note = "NN低胜率优选（30.0% 优于规则队 1.0%）"
+        assertEquals(BattleConfidenceTier.UNSAFE, assessment.tier)
+        assertTrue(assessment.adopted)
+        assertEquals(modelIds.toSet(), recommendation.members.map { it.characterId }.toSet())
+        assertEquals(note, assessment.adoptionNote)
+        assertTrue(note in recommendation.reasons)
+        assertEquals(BattleModelTrace(BattleModelDecisionStatus.ADOPTED, 42, "NN胜率 30.0% · 无稳过队 · $note"),
+            recommendation.modelTrace)
     }
 
     @Test fun ruleBatchDiscardsModelResultsAndPreservesFailureReason() {
@@ -245,8 +343,33 @@ class BattleValueStrategyTest {
             val candidates = estimator.batches.flatten()
             assertTrue(overlapping in candidates)
             assertEquals(candidates.distinct().size, result.assessment.evaluatedCandidates)
-            assertTrue(candidates.size <= 256 && estimator.batches.all { it.size <= 64 })
+            assertTrue(candidates.size <= 384 && estimator.batches.all { it.size <= 64 })
         }
+    }
+
+    @Test fun bossPackingFindsCumulativeDamageTeamsOutsideTheTopWinCandidates() {
+        val roster = modelRoster(15)
+        val valueContext = modelContext(roster)
+        val (first, second, third) = valueContext.ownedUnits.map { it.unitId }.chunked(5)
+        val wins = mapOf(first to 0.10, second to 0.12, third to 0.08)
+        val damage = mapOf(first to 0.55, second to 0.50, third to 0.45)
+        val values = wins.map { (ids, win) -> BattleValue(win, 0.0, 1.0 - win, damage.getValue(ids), 0.0, win) }
+        val independent = 1.0 - wins.values.fold(1.0) { miss, win -> miss * (1.0 - win) }
+        val combined = combinedMultiTeamPassProb(values)
+        assertEquals(0.7181486, combined, 1e-6)
+        assertTrue(combined > independent + 0.40)
+
+        val estimator = ModelEstimator(damageMean = { damage[it] ?: 0.02 }) { wins[it] ?: 0.25 }
+        val result = requireNotNull(ModelGuidedBattleTeamSearcher(estimator, optimizer = null).search(
+            valueContext, roster, emptyList(), emptySet(), 3, supplementLead = false,
+        ))
+        val packed = result.teams.map { team ->
+            team.map { requireNotNull(labyrinthCharacterIdToUnitId(it.characterId)) }.sorted()
+        }
+        assertTrue(estimator.batches.flatten().count { it !in wins } > 48)
+        assertEquals(listOf(second, first, third), packed)
+        assertEquals(combined, requireNotNull(result.assessment.jointWinProbability), 1e-12)
+        assertTrue(result.assessment.adopted)
     }
 
     @Test fun bossRetainsSupplementAndReusesItsOwnWinProbabilityOnTheNextPage() {
@@ -492,6 +615,8 @@ class BattleValueStrategyTest {
     private class ModelEstimator(
         private val sourceForBatch: (Int) -> BattleValueSource = { BattleValueSource.MODEL },
         private val fallbackReason: String? = null,
+        private val damageMean: ((List<Int>) -> Double)? = null,
+        private val winRemTime: ((List<Int>) -> Double)? = null,
         private val probability: (List<Int>) -> Double,
     ) : ContextualBattleValueEstimator {
         val batches = mutableListOf<List<List<Int>>>()
@@ -505,10 +630,41 @@ class BattleValueStrategyTest {
             questIds.add(context.questId)
             val values = candidates.map { team ->
                 val win = probability(team)
-                BattleValue(win, 0.0, 1.0 - win, win, 0.0, win)
+                BattleValue(win, 0.0, 1.0 - win, damageMean?.invoke(team) ?: win, 0.0, winRemTime?.invoke(team) ?: win)
             }
             val source = sourceForBatch(batches.size)
             return BattleValueEstimate(values, source, fallbackReason.takeIf { source == BattleValueSource.RULE })
         }
+    }
+
+    @Test fun planningPassEstimatorRunsSafelyOnControlThreadWithTwelvePlusUnits() = runBlocking(LabyrinthFourThreadRuntime.controlDispatcher) {
+        assertTrue(LabyrinthFourThreadRuntime.isControlThread())
+        val roster = modelRoster(12).mapIndexed { index, profile ->
+            if (index == 0) profile.copy(roleClass = "掩护者", functions = LabyrinthRoleFunctions(selfSustain = 80.0))
+            else profile
+        }
+        val profiles = roster.associateBy { it.characterId }
+        val estimator = ModelEstimator { 0.80 }
+        val passEstimator = requireNotNull(
+            createPlanningBattlePassEstimator(
+                estimator = estimator,
+                profiles = profiles,
+                scoring = scorer.config,
+                requireLeadVanguard = true,
+            ),
+        )
+        val state = PlanningState(
+            difficulty = 5,
+            currentArea = 3,
+            ownedCharacterIds = profiles.keys,
+            relicIds = emptySet(),
+            markStacks = emptyMap(),
+            remainingShops = 1,
+            enhanceNode21 = false,
+            reviveAvailable = false,
+        )
+        val estimate = requireNotNull(passEstimator.estimate(state, BattleExam(questId = 770320101, area = 3, isBoss = false, maxTeams = 1, isEx = true)))
+        assertEquals(0.80, estimate.pPass, 1e-12)
+        assertTrue(estimator.batches.isNotEmpty())
     }
 }

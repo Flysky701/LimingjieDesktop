@@ -127,6 +127,7 @@ class LabyrinthShopPolicy(
         allowClearancePurchases: Boolean = true,
         planningContext: LabyrinthRunPlanningContext? = null,
         acquiredCharacterIds: Set<String> = emptySet(),
+        notifyObserver: Boolean = true,
     ): LabyrinthShopDecision {
         val inputs = if (planningContext == null) planningInputs?.invoke() else null
         val rawPlanning = planningContext ?: inputs?.first
@@ -147,8 +148,12 @@ class LabyrinthShopPolicy(
             is LabyrinthShopDecision.Close -> decision.copy(planningSource = decision.planningSource ?: "规则")
             is LabyrinthShopDecision.Wait -> decision
         }
-        if (inputs != null) observeDecision?.invoke(sourced)
+        if (notifyObserver && inputs != null) notifyDecision(sourced)
         return sourced
+    }
+
+    internal fun notifyDecision(decision: LabyrinthShopDecision) {
+        observeDecision?.invoke(decision)
     }
 
     private fun decideStock(
@@ -392,7 +397,8 @@ class LabyrinthShopPolicy(
             return LabyrinthShopDecision.Wait("${reading.slotId}正在确认商品类别（${reading.categoryAttempt}/3轮）")
         }
         val ambiguous = purchasable.firstOrNull { item ->
-            if (item.kind == LabyrinthShopItemKind.ROLE_IMPRINT) return@firstOrNull false
+            if (item.kind == LabyrinthShopItemKind.ROLE_IMPRINT || item.categoryState == LabyrinthShopCategoryState.EXHAUSTED)
+                return@firstOrNull false
             val relic = item.relicMatch ?: return@firstOrNull false
             !relic.recognized && relic.confidence >= ambiguousRelicLikeConfidence
         }

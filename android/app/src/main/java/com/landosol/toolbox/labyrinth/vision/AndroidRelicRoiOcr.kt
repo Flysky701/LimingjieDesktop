@@ -14,9 +14,17 @@ internal class AndroidRelicRoiOcr(
     /** See [RelicOcrScheduler.lastCompletionAt]. */
     fun lastCompletionAt(): Long = scheduler.lastCompletionAt()
 
-    fun read(bitmap: Bitmap, slot: String, rect: EntryPixelRect, scale: Int = 1, capturedAtMillis: Long = Long.MIN_VALUE,
-             readText: (Bitmap, (String?) -> Unit) -> Unit = submit): RelicOcrScheduler.Read? {
-        val fingerprint = relicRoiFingerprint(bitmap, rect)
+    fun isExhaustedWithoutRead(slot: String, fingerprint: Long): Boolean = scheduler.isExhaustedWithoutRead(slot, fingerprint)
+
+    fun read(
+        bitmap: Bitmap,
+        slot: String,
+        rect: EntryPixelRect,
+        scale: Int = 1,
+        capturedAtMillis: Long = Long.MIN_VALUE,
+        fingerprint: Long = relicRoiFingerprint(bitmap, rect),
+        readText: (Bitmap, (String?) -> Unit) -> Unit = submit,
+    ): RelicOcrScheduler.Read? {
         val cached = scheduler.cached(slot, fingerprint)
         val ticket = scheduler.request(slot, fingerprint, capturedAtMillis) ?: return cached
         val diagnosticId = RelicRoiOcrTelemetry.requested(slot, capturedAtMillis, android.os.SystemClock.elapsedRealtime())

@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth
 import com.landosol.toolbox.labyrinth.kernel.planning.RouteDpResult
 import com.landosol.toolbox.labyrinth.kernel.planning.RouteGraph
 import com.landosol.toolbox.labyrinth.kernel.planning.ScoreSettings
+import com.landosol.toolbox.labyrinth.kernel.planning.evaluateOpeningScoreTarget
 import com.landosol.toolbox.labyrinth.kernel.planning.solveRouteDp
 import com.landosol.toolbox.labyrinth.kernel.planning.toPlanningRouteGraph
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
@@ -35,6 +36,7 @@ data class LabyrinthRoutePolicy(
     val area3BossIds: Set<Int> = LabyrinthRerollOptions.defaultArea3BossIds,
     val area5BossIds: Set<Int> = LabyrinthRerollOptions.defaultArea5BossIds,
     val customNodePlan: LabyrinthCustomNodePlan = LabyrinthCustomNodePlan(),
+    val targetScore: Long = 0L,
 ) {
     fun targetAreas(difficulty: Int): List<Int> = if (difficulty == 1) listOf(1, 2, 3) else AREA_REQUIREMENTS.keys.toList()
 
@@ -285,15 +287,48 @@ class LabyrinthOpeningRouteMatcher(
         difficulty: Int = LabyrinthRerollOptions.DEFAULT_DIFFICULTY,
         policy: LabyrinthRoutePolicy,
         currentBlockId: Long? = null,
-    ): RouteSearchResult = when (policy.evaluationMode) {
-        LabyrinthRouteEvaluationMode.CUSTOM_NODES ->
-            LabyrinthCustomNodeRouteEvaluator(policy).search(enterId, nodes, difficulty, currentBlockId)
-        LabyrinthRouteEvaluationMode.VALUE_ROUTE ->
-            searchValueRoute(enterId, nodes, difficulty, policy, currentBlockId)
-        LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP ->
-            searchOfficialScoreRoute(enterId, nodes, difficulty, policy, currentBlockId)
-        LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE ->
-            searchLegacyTemplate(enterId, nodes, difficulty, policy, currentBlockId)
+        guildId: Int = 0,
+        enhanceNodeIds: Set<Int>? = null,
+    ): RouteSearchResult {
+        val initial = when (policy.evaluationMode) {
+            LabyrinthRouteEvaluationMode.CUSTOM_NODES ->
+                LabyrinthCustomNodeRouteEvaluator(policy).search(enterId, nodes, difficulty, currentBlockId)
+            LabyrinthRouteEvaluationMode.VALUE_ROUTE ->
+                searchValueRoute(enterId, nodes, difficulty, policy, currentBlockId)
+            LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP ->
+                return searchOfficialScoreRoute(enterId, nodes, difficulty, policy, currentBlockId, guildId, enhanceNodeIds)
+            LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE ->
+                searchLegacyTemplate(enterId, nodes, difficulty, policy, currentBlockId)
+        }
+        if (initial !is RouteSearchResult.Found || policy.targetScore <= 0L || currentBlockId != null) {
+            return initial
+        }
+        val settings = ScoreSettings.currentOfficial()
+        if (difficulty !in settings.scoreRates) return initial
+        val evaluation = evaluateOpeningScoreTarget(
+            graph = linearScoreTargetGraph(initial.route.nodes),
+            difficulty = difficulty,
+            targetScore = policy.targetScore,
+            settings = settings,
+            guildId = guildId,
+            enhanceNodeIds = enhanceNodeIds,
+        )
+        return if (evaluation.shouldRetire) {
+            RouteSearchResult.Rejected(evaluation.gate.reason, fatal = false)
+        } else {
+            initial
+        }
+    }
+
+    private fun linearScoreTargetGraph(nodes: List<LabyrinthMapNode>): RouteGraph {
+        val linear = nodes.mapIndexed { index, node ->
+            val next = nodes.getOrNull(index + 1)
+            node.copy(
+                nextBlockIds = listOfNotNull(next?.blockId),
+                isAreaLastPoint = next?.area != node.area,
+            )
+        }
+        return linear.toPlanningRouteGraph()
     }
 
     private fun searchOfficialScoreRoute(
@@ -302,6 +337,8 @@ class LabyrinthOpeningRouteMatcher(
         difficulty: Int,
         policy: LabyrinthRoutePolicy,
         currentBlockId: Long?,
+        guildId: Int,
+        enhanceNodeIds: Set<Int>?,
     ): RouteSearchResult {
         val settings = ScoreSettings.currentOfficial()
         if (difficulty !in settings.scoreRates) return RouteSearchResult.NoRoute
@@ -312,11 +349,38 @@ class LabyrinthOpeningRouteMatcher(
         if (areas.isEmpty() || !areas.containsAll(policy.requiredAreas)) return RouteSearchResult.NoRoute
         val graph = officialRouteGraph(nodes.filter { it.area in areas }, areas, policy, current)
             ?: return RouteSearchResult.NoRoute
+        val enforceTarget = policy.targetScore > 0L && currentBlockId == null
         val best = if (policy.requiredBlockTypes.isEmpty()) {
-            solveRouteDp(graph, settings, difficulty).bestRoute
+            if (enforceTarget) {
+                val evaluation = evaluateOpeningScoreTarget(
+                    graph = graph,
+                    difficulty = difficulty,
+                    targetScore = policy.targetScore,
+                    settings = settings,
+                    guildId = guildId,
+                    enhanceNodeIds = enhanceNodeIds,
+                )
+                if (evaluation.shouldRetire) {
+                    return RouteSearchResult.Rejected(evaluation.gate.reason, fatal = false)
+                }
+                evaluation.bestRoute
+            } else {
+                solveRouteDp(graph, settings, difficulty).bestRoute
+            }
         } else {
-            scoreWithRequiredBlockTypes(graph, settings, difficulty, policy.requiredBlockTypes)
-                ?: return RouteSearchResult.NoRoute
+            val requiredResult = scoreWithRequiredBlockTypes(
+                graph = graph,
+                settings = settings,
+                difficulty = difficulty,
+                requiredTypes = policy.requiredBlockTypes,
+                targetScore = if (enforceTarget) policy.targetScore else 0L,
+                guildId = guildId,
+                enhanceNodeIds = enhanceNodeIds,
+            ) ?: return RouteSearchResult.NoRoute
+            if (requiredResult.rejectedReason != null) {
+                return RouteSearchResult.Rejected(requiredResult.rejectedReason, fatal = false)
+            }
+            requiredResult.route
         }
         return RouteSearchResult.Found(LabyrinthRoute(enterId, best.map { byId.getValue(it.blockId) }))
     }
@@ -394,12 +458,20 @@ class LabyrinthOpeningRouteMatcher(
         )
     }
 
+    private data class RequiredBlockScoreResult(
+        val route: List<LabyrinthMapNode>,
+        val rejectedReason: String? = null,
+    )
+
     private fun scoreWithRequiredBlockTypes(
         graph: RouteGraph,
         settings: ScoreSettings,
         difficulty: Int,
         requiredTypes: Set<Int>,
-    ): List<LabyrinthMapNode>? {
+        targetScore: Long = 0L,
+        guildId: Int = 0,
+        enhanceNodeIds: Set<Int>? = null,
+    ): RequiredBlockScoreResult? {
         // Paths with different outstanding requirements need separate DP continuations.
         val statesByBlock = mutableMapOf<Long, MutableMap<Set<Int>, Long>>()
         var nextId = 0L
@@ -426,7 +498,22 @@ class LabyrinthOpeningRouteMatcher(
             originals.mapValues { (id, node) -> node.copy(blockId = id, nextBlockIds = children.getValue(id)) },
             children, starts, originals.keys.toList(), areaEnds, clearEnds,
         )
-        return solveRouteDp(expanded, settings, difficulty).bestRoute.map { originals.getValue(it.blockId) }
+        if (targetScore > 0L) {
+            val evaluation = evaluateOpeningScoreTarget(
+                graph = expanded,
+                difficulty = difficulty,
+                targetScore = targetScore,
+                settings = settings,
+                guildId = guildId,
+                enhanceNodeIds = enhanceNodeIds,
+            )
+            return if (evaluation.shouldRetire) {
+                RequiredBlockScoreResult(emptyList(), evaluation.gate.reason)
+            } else {
+                RequiredBlockScoreResult(evaluation.bestRoute.map { originals.getValue(it.blockId) })
+            }
+        }
+        return RequiredBlockScoreResult(solveRouteDp(expanded, settings, difficulty).bestRoute.map { originals.getValue(it.blockId) })
     }
 
     private fun searchLegacyTemplate(

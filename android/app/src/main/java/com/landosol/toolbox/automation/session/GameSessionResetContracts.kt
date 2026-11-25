@@ -85,6 +85,7 @@ class FixedGameClientPresenceObserver(
  */
 interface GameClientTerminator {
     val kind: ClientTerminationKind
+    val lastDiagnosticStep: String? get() = null
 
     /** 触发终止动作，不做确认（确认交给 workflow 的在场观察） */
     suspend fun terminate(): ClientTerminationResult

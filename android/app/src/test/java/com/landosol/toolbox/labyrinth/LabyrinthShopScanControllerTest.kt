@@ -52,6 +52,60 @@ class LabyrinthShopScanControllerTest {
         assertTrue(decision(top, verified) is LabyrinthShopDecision.Refresh)
     }
 
+    @Test fun areaThreeSkipsExhaustedRelicAndCompletesAfterReadyPurchases() {
+        val driver = Driver()
+        val policy = LabyrinthShopPolicy()
+        val relic = oneStar("bracelet").copy(titleText = "再生之手镯", roleImprintLabel = null)
+        val rect = relic.screenRect
+        val exhausted = LabyrinthShopItemMatch(
+            slotId = "shop_item_2", screenRect = rect, buyButtonRect = rect, buyButtonScore = 0.9,
+            status = LabyrinthShopItemStatus.AVAILABLE, kind = LabyrinthShopItemKind.UNKNOWN,
+            titleText = "霹雳斩赤刃", categoryState = LabyrinthShopCategoryState.EXHAUSTED, categoryAttempt = 3,
+            relicMatch = LabyrinthRelicMatch(
+                slotId = "shop_item_2", relicId = null, displayName = null, attribute = null,
+                attributeBonus = null, effect = null, confidence = 0.82, screenRect = rect, iconRect = rect,
+                suspectedRelicId = "22005", suspectedDisplayName = "霹雳斩赤刃", rivalMargin = 0.0374,
+            ),
+        )
+        val imprint = item().copy(slotId = "shop_item_3")
+        val top = shop(top = true, bottom = true, position = 0, fingerprint = 81)
+            .copy(items = listOf(relic, exhausted, imprint))
+        fun decide(view: LabyrinthShopObservation, step: LabyrinthShopScanController.Step.Evaluate, coins: Int) =
+            policy.decide(3, view.items, emptyList(), refreshAvailable = false,
+                coinBalance = coins, stockScanComplete = step.complete)
+
+        val first = driver.stable(top, 3) as LabyrinthShopScanController.Step.Evaluate
+        assertEquals(LabyrinthShopScanController.Step.Evaluate(complete = false, skipUnresolved = true), first)
+        assertEquals(relic, (decide(top, first, 10_000) as LabyrinthShopDecision.BuyRelic).item)
+
+        driver.controller.purchased(driver.now)
+        driver.now += LabyrinthShopScanController.SETTLE_MILLIS + 1
+        val afterRelic = top.copy(items = listOf(disabled(), exhausted, imprint), visualFingerprint = 82)
+        val next = driver.stable(afterRelic, 3) as LabyrinthShopScanController.Step.Evaluate
+        assertEquals(imprint, (decide(afterRelic, next, 8_500) as LabyrinthShopDecision.BuyRoleImprint).item)
+
+        driver.controller.purchased(driver.now)
+        driver.now += LabyrinthShopScanController.SETTLE_MILLIS + 1
+        val afterPurchases = afterRelic.copy(items = listOf(exhausted), visualFingerprint = 83)
+        val last = driver.stable(afterPurchases, 3) as LabyrinthShopScanController.Step.Evaluate
+        assertEquals(LabyrinthShopWaitKind.SCAN, (decide(afterPurchases, last, 7_500) as LabyrinthShopDecision.Wait).kind)
+        assertTrue(driver.controller.advance(afterPurchases, driver.now) is LabyrinthShopScanController.Step.Wait)
+        assertTrue(driver.controller.complete)
+        val verified = driver.next(afterPurchases, 3) as LabyrinthShopScanController.Step.Evaluate
+        assertEquals(LabyrinthShopScanController.Step.Evaluate(complete = true, skipUnresolved = true), verified)
+        assertTrue(decide(afterPurchases, verified, 7_500) is LabyrinthShopDecision.Close)
+    }
+
+    @Test fun namelessImprintStopsBlockingScanWhenItsGraceWindowEnds() {
+        val driver = Driver()
+        val nameless = item().copy(roleImprintLabel = null, imprintLabelPending = true)
+        val view = shop(bottom = true, position = 1000, fingerprint = 8).copy(items = listOf(nameless))
+        assertTrue(driver.stable(view) is LabyrinthShopScanController.Step.Wait)
+
+        val expired = view.copy(items = listOf(nameless.copy(imprintLabelPending = false)))
+        assertTrue(driver.next(expired) is LabyrinthShopScanController.Step.Evaluate)
+    }
+
     @Test fun noMotionRequiresSeparateExecutedInputsEvenWithAnInconclusiveScrollbar() {
         for (knownViewport in listOf(false, true)) {
             val driver = Driver()

@@ -271,6 +271,23 @@ class LandosolToolboxApplication : Application() {
                 }
             },
             runTerminalListener = { event -> labyrinthBatchController.onRunTerminal(event) },
+            targetScoreProvider = { accountId ->
+                accountId?.let { labyrinthConfiguration.load(it).targetScore } ?: 0L
+            },
+            scoreRetireRerollRequester = { accountId, reason ->
+                val stage = labyrinthBatchController.state.value?.stage
+                if (stage in setOf(
+                        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.REROLLING,
+                        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.INVALIDATING_OLD_CLIENT_SESSION,
+                        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.RUNNING_LABYRINTH,
+                        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.RECORDING_RESULT,
+                    )
+                ) {
+                    true
+                } else {
+                    labyrinthController.startAfterScoreTargetRetireReroll(accountId, reason)
+                }
+            },
             channelPrompts = channelLoginPromptAssistant("LabyrinthEntry"),
             sessionManager = automationSessionManager,
             processorFactory = { finalBossOnly ->
@@ -553,10 +570,26 @@ class LandosolToolboxApplication : Application() {
         // is rejected by the server, which is the popup we want (labyrinth-full-automation §5.1).
         val terminator = com.landosol.toolbox.automation.session.AnchorTriggerSessionExpiryTerminator(
             onTap = { point ->
-                when (accessibilityActionBackend.execute(AutomationAction.Tap(point))) {
-                    com.landosol.toolbox.automation.AutomationBackendResult.Completed -> true
-                    else -> false
+                var outcome: Boolean? = null
+                while (outcome == null) {
+                    val session = automationSessionManager.current()
+                        ?.takeIf { it.mode == com.landosol.toolbox.automation.AutomationMode.SESSION_RESET }
+                    if (session == null) {
+                        outcome = false
+                    } else if (session.paused) {
+                        kotlinx.coroutines.delay(250L)
+                    } else {
+                        when (automationActionExecutor.execute(session.id, AutomationAction.Tap(point))) {
+                            is com.landosol.toolbox.automation.AutomationActionResult.Executed,
+                            is com.landosol.toolbox.automation.AutomationActionResult.DryRun,
+                            -> outcome = true
+                            com.landosol.toolbox.automation.AutomationActionResult.Paused ->
+                                kotlinx.coroutines.delay(250L)
+                            else -> outcome = false
+                        }
+                    }
                 }
+                outcome
             },
             triggerPoint = { frameTracker.sessionInvalidationTrigger },
             returnTitlePoint = SESSION_RETURN_TITLE_POINT,
@@ -567,6 +600,15 @@ class LandosolToolboxApplication : Application() {
             available = LandosolAccessibilityService::isConnected,
             returnTitleAnchorPoint = { frameTracker.anchorCenter(EntryAnchorId.SESSION_RETURN_TITLE) },
             trace = { step -> android.util.Log.d("LabyrinthReset", "trigger-terminator $step") },
+            isPaused = {
+                automationSessionManager.current()?.let {
+                    it.mode == com.landosol.toolbox.automation.AutomationMode.SESSION_RESET && it.paused
+                } == true || automationOverlayCoordinator.state.value?.paused == true
+            },
+            isCancelled = {
+                automationSessionManager.current()?.mode != com.landosol.toolbox.automation.AutomationMode.SESSION_RESET ||
+                    automationOverlayCoordinator.state.value == null
+            },
         )
         val resetDashboard = labyrinthDebugDashboard
         GameSessionResetWorkflow(
@@ -575,6 +617,13 @@ class LandosolToolboxApplication : Application() {
             backend = CompositeSessionResetBackend(
                 terminator = terminator,
                 relauncher = Relauncher {
+                    while (true) {
+                        val session = automationSessionManager.current()
+                            ?.takeIf { it.mode == com.landosol.toolbox.automation.AutomationMode.SESSION_RESET }
+                            ?: return@Relauncher GameClientRelaunchResult.LAUNCH_UNAVAILABLE
+                        if (!session.paused) break
+                        kotlinx.coroutines.delay(250L)
+                    }
                     val target = gamePackageName
                         ?: return@Relauncher GameClientRelaunchResult.LAUNCH_UNAVAILABLE
                     val intent = gameLaunchIntent(target)
@@ -587,6 +636,7 @@ class LandosolToolboxApplication : Application() {
             ),
             captureActive = CaptureStateRegistry::isActive,
             processorFactory = {
+                frameTracker.reset()
                 // The reset only needs page/dialog anchors. 2026-09-18 live: with the default
                 // map-node scan on, one map frame behind the expiry popup took 6.9 s, the frame
                 // tracker saw nothing for 10 s and the terminator timed out on a visible popup.

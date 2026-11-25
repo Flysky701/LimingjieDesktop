@@ -24,7 +24,7 @@ class LabyrinthRoutePreviewTest {
         assertEquals(listOf("起点", "角色", "普战", "遗物"), floor.nodes.map { it.label })
         assertEquals(listOf(1, 2, 3, 4), floor.nodes.map { it.column })
         assertEquals(listOf(false, false, true, false), floor.nodes.map { it.specified })
-        assertTrue(preview.modeLabel.contains("自定义"))
+        assertEquals("节点模板路线", preview.modeLabel)
         assertEquals("仅路线结构，不含收益估算", preview.note)
     }
 

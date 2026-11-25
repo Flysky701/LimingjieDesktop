@@ -1,5 +1,6 @@
 package com.landosol.toolbox.desktop.app.control
 
+import com.landosol.toolbox.desktop.app.UserLogKind
 import com.landosol.toolbox.desktop.app.UserLogLine
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
 import com.landosol.toolbox.labyrinth.LabyrinthRoleRatingItem
@@ -108,6 +109,27 @@ class ControlSessionListTest {
         }
     }
 
+    @Test fun keyLogsUseSnapshotListOrFilterLegacyTail() = runBlocking<Unit> {
+        val key = line("old key").copy(kind = UserLogKind.KEY)
+        val warning = line("warning").copy(kind = UserLogKind.WARNING)
+        val error = line("error").copy(error = true, kind = UserLogKind.ERROR)
+        val tail = listOf(line("normal"), warning, error)
+        val keyLogs = listOf(key, warning, error)
+        val port = ListPort("a", "run-1", document(tail, emptyList(), keyLogs = keyLogs))
+        val ui = withContext(Dispatchers.Main) { ControlSessionUi(port) }
+        try {
+            assertEquals(keyLogs, ui.log.keyLines.value)
+
+            port.snapshots.value = document(tail, emptyList())
+            withTimeout(5_000) { ui.log.keyLines.first { it == listOf(warning, error) } }
+
+            port.snapshots.value = document(listOf(key, line("other normal")), emptyList())
+            withTimeout(5_000) { ui.log.keyLines.first { it == listOf(key) } }
+        } finally {
+            withContext(Dispatchers.Main) { ui.close() }
+        }
+    }
+
     private suspend fun awaitLists(ui: ControlSessionUi, text: String) = withTimeout(5_000) {
         ui.log.lines.first { it.singleOrNull()?.text == text }
         ui.ux.history.records.first { it.singleOrNull()?.id == text }
@@ -117,12 +139,18 @@ class ControlSessionListTest {
     private fun line(text: String) = UserLogLine("12:00:00", text, false)
     private fun record(id: String) = DesktopRunRecord(id, 10, "synthetic", "test", "test")
     private fun role(id: String) = LabyrinthRoleRatingItem(id, id, 50.0, null, "synthetic")
-    private fun document(logs: List<UserLogLine>, history: List<DesktopRunRecord>, revision: Int = 0,
-                         catalog: List<LabyrinthRoleRatingItem> = emptyList()) = buildJsonObject {
+    private fun document(
+        logs: List<UserLogLine>,
+        history: List<DesktopRunRecord>,
+        revision: Int = 0,
+        catalog: List<LabyrinthRoleRatingItem> = emptyList(),
+        keyLogs: List<UserLogLine>? = null,
+    ) = buildJsonObject {
         put("console", JsonObject(emptyMap()))
         put("logs", ControlModelCodec.encode(logs)); put("history", ControlModelCodec.encode(history))
         put("catalog", ControlModelCodec.encode(catalog))
         put("revision", revision)
+        keyLogs?.let { put("keyLogs", ControlModelCodec.encode(it)) }
     }
 
     private class ListPort(override val instanceId: String, override val workerRunId: String, initial: JsonObject) : ControlSessionPort {

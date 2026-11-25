@@ -17,6 +17,7 @@ data class LabyrinthRerollSettings(
     val rerollUntilFound: Boolean = true,
     val retireExisting: Boolean = true,
     val customNodePlan: LabyrinthCustomNodePlan = LabyrinthCustomNodePlan(),
+    val targetScore: Long = LabyrinthRerollOptions.DEFAULT_TARGET_SCORE,
 ) {
     fun toConfig(accountId: Long): LabyrinthRerollConfig {
         require(validationError() == null)
@@ -27,7 +28,8 @@ data class LabyrinthRerollSettings(
                 evaluationMode = routeEvaluationMode, valueAllowance = valueAllowance,
                 thirdBlockChoice = thirdBlockChoice,
                 area3BossIds = area3BossIds.toSet(), area5BossIds = area5BossIds.toSet(),
-                customNodePlan = customNodePlan))
+                customNodePlan = customNodePlan,
+                targetScore = targetScore))
     }
 
     fun validationError(): String? = when {
@@ -35,6 +37,8 @@ data class LabyrinthRerollSettings(
         difficulty !in 1..LabyrinthRerollOptions.MAX_DIFFICULTY -> "难度无效"
         valueAllowance !in 0..LabyrinthRerollOptions.MAX_VALUE_ALLOWANCE -> "每区允许少拿格数无效"
         maxAttempts.toIntOrNull() !in 1..LabyrinthRerollOptions.MAX_ATTEMPTS -> "最大尝试次数无效"
+        targetScore !in 0L..LabyrinthRerollOptions.MAX_TARGET_SCORE ->
+            "刷分目标无效（范围 0–${LabyrinthRerollOptions.MAX_TARGET_SCORE}）"
         area3BossIds.any { id -> LabyrinthRerollOptions.area3Bosses.none { it.unitId == id } } -> "区域3 Boss无效"
         area5BossIds.any { id -> LabyrinthRerollOptions.area5Bosses.none { it.unitId == id } } -> "区域5 Boss无效"
         else -> customNodePlan.validationError()
@@ -54,6 +58,7 @@ fun LabyrinthUiState.rerollSettings() = LabyrinthRerollSettings(
     maxAttempts = maxAttempts,
     rerollUntilFound = rerollUntilFound,
     retireExisting = retireExisting,
+    targetScore = targetScore,
 )
 
 interface LabyrinthRerollSettingsStore {

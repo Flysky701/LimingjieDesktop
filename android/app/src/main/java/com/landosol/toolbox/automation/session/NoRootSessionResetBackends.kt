@@ -4,6 +4,7 @@ import com.landosol.toolbox.automation.AutomationAction
 import com.landosol.toolbox.automation.CoordinateMapper
 import com.landosol.toolbox.automation.PixelRect
 import com.landosol.toolbox.automation.ScreenPoint
+import kotlin.math.hypot
 import kotlinx.coroutines.delay
 
 /**
@@ -170,9 +171,8 @@ class AnchorTriggerSessionExpiryTerminator(
     private val available: () -> Boolean = { true },
     private val popupTimeoutMillis: Long = 30_000L,
     /**
-     * Wait for the expiry popup after a trigger tap. The tap starts a server round trip
-     * (retreat / page data request) whose rejection is what raises the popup, so this is
-     * longer than the per-attempt trigger wait.
+     * Allow time for a server response after a trigger tap. A newly recognised trigger
+     * advances the local dialog chain before this timeout.
      */
     private val popupAfterTapTimeoutMillis: Long = 12_000L,
     private val titleTimeoutMillis: Long = 30_000L,
@@ -183,6 +183,9 @@ class AnchorTriggerSessionExpiryTerminator(
     private val maxTriggerTaps: Int = 6,
     private val returnTitleAnchorPoint: () -> ScreenPoint? = { null },
     private val trace: (String) -> Unit = {},
+    private val isPaused: suspend () -> Boolean = { false },
+    private val isCancelled: suspend () -> Boolean = { false },
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : GameClientTerminator {
     override val kind: ClientTerminationKind get() = ClientTerminationKind.SESSION_EXPIRY
 
@@ -190,6 +193,7 @@ class AnchorTriggerSessionExpiryTerminator(
     @Volatile
     var lastStep: String = "idle"
         private set
+    override val lastDiagnosticStep: String get() = lastStep
 
     override suspend fun terminate(): ClientTerminationResult {
         fun step(name: String) { lastStep = name; trace(name) }
@@ -198,6 +202,10 @@ class AnchorTriggerSessionExpiryTerminator(
                 frameSize().let { (width, height) -> width > 0 && height > 0 }
             }
         ) {
+            if (isCancelled()) {
+                step("cancelled")
+                return ClientTerminationResult.REJECTED
+            }
             step("no-frame")
             return ClientTerminationResult.UNSUPPORTED
         }
@@ -211,6 +219,10 @@ class AnchorTriggerSessionExpiryTerminator(
         var taps = 0
         val perAttemptTimeout = popupTimeoutMillis / maxTriggerTaps
         while (!popup && taps < maxTriggerTaps) {
+            if (isCancelled()) {
+                step("cancelled")
+                return ClientTerminationResult.REJECTED
+            }
             step("await-trigger#${taps + 1}")
             var trigger: ScreenPoint? = null
             val recognised = await(perAttemptTimeout) {
@@ -218,6 +230,10 @@ class AnchorTriggerSessionExpiryTerminator(
                 trigger != null || popupVisible() || synchronizedWithoutExpiry()
             }
             if (!recognised) {
+                if (isCancelled()) {
+                    step("cancelled")
+                    return ClientTerminationResult.REJECTED
+                }
                 step("trigger-not-recognised-after-$taps-taps")
                 return ClientTerminationResult.TIMEOUT
             }
@@ -228,16 +244,33 @@ class AnchorTriggerSessionExpiryTerminator(
             }
             if (popup) break
             val target = trigger ?: continue
+            if (!waitWhilePaused()) {
+                step("cancelled")
+                return ClientTerminationResult.REJECTED
+            }
             step("tap-trigger#${taps + 1}@${target.x.toInt()},${target.y.toInt()}")
             if (!onTap(target)) {
-                step("trigger-tap-rejected")
-                return ClientTerminationResult.UNSUPPORTED
+                step(if (isCancelled()) "cancelled" else "trigger-tap-rejected")
+                return if (isCancelled()) ClientTerminationResult.REJECTED else ClientTerminationResult.UNSUPPORTED
             }
             taps++
-            delay(triggerTapDelayMillis)
-            val responseObserved = await(popupAfterTapTimeoutMillis) {
-                popupVisible() || synchronizedWithoutExpiry()
+            if (!activeDelay(triggerTapDelayMillis)) {
+                step("cancelled")
+                return ClientTerminationResult.REJECTED
             }
+            var triggerChanged = false
+            val responseObserved = await(popupAfterTapTimeoutMillis) {
+                if (popupVisible() || synchronizedWithoutExpiry()) return@await true
+                val next = triggerPoint()
+                triggerChanged = next != null &&
+                    hypot((next.x - target.x).toDouble(), (next.y - target.y).toDouble()) > NEXT_TRIGGER_MIN_DISTANCE
+                triggerChanged
+            }
+            if (isCancelled()) {
+                step("cancelled")
+                return ClientTerminationResult.REJECTED
+            }
+            if (triggerChanged) continue
             popup = popupVisible()
             if (!responseObserved) continue
             if (!popup && synchronizedWithoutExpiry()) {
@@ -253,13 +286,24 @@ class AnchorTriggerSessionExpiryTerminator(
         step("popup-visible")
         val confirm = returnTitleAnchorPoint() ?: mapping.toScreen(returnTitlePoint)
             ?: run { step("return-title-unmappable"); return ClientTerminationResult.TIMEOUT }
+        if (!waitWhilePaused()) {
+            step("cancelled")
+            return ClientTerminationResult.REJECTED
+        }
         step("tap-return-title@${confirm.x.toInt()},${confirm.y.toInt()}")
         if (!onTap(confirm)) {
-            step("return-title-tap-rejected")
-            return ClientTerminationResult.TIMEOUT
+            step(if (isCancelled()) "cancelled" else "return-title-tap-rejected")
+            return if (isCancelled()) ClientTerminationResult.REJECTED else ClientTerminationResult.TIMEOUT
         }
-        delay(returnTapDelayMillis)
+        if (!activeDelay(returnTapDelayMillis)) {
+            step("cancelled")
+            return ClientTerminationResult.REJECTED
+        }
         if (!await(titleTimeoutMillis) { titleReached() }) {
+            if (isCancelled()) {
+                step("cancelled")
+                return ClientTerminationResult.REJECTED
+            }
             step("title-timeout")
             return ClientTerminationResult.TIMEOUT
         }
@@ -269,17 +313,57 @@ class AnchorTriggerSessionExpiryTerminator(
 
     override fun isSupported(): Boolean = available()
 
+    private suspend fun waitWhilePaused(): Boolean {
+        while (isPaused()) {
+            if (isCancelled()) return false
+            delay(POLL_INTERVAL_MILLIS)
+        }
+        return !isCancelled()
+    }
+
+    private suspend fun activeDelay(durationMillis: Long): Boolean {
+        var remaining = durationMillis
+        var lastTick = clock()
+        while (remaining > 0L) {
+            if (isCancelled()) return false
+            if (isPaused()) {
+                delay(POLL_INTERVAL_MILLIS)
+                lastTick = clock()
+                continue
+            }
+            val stepMillis = minOf(POLL_INTERVAL_MILLIS, remaining)
+            delay(stepMillis)
+            val now = clock()
+            if (!isPaused()) {
+                remaining -= (now - lastTick).coerceAtLeast(stepMillis)
+            }
+            lastTick = now
+        }
+        return !isCancelled()
+    }
+
     private suspend fun await(timeoutMillis: Long, probe: suspend () -> Boolean): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMillis
-        while (System.currentTimeMillis() < deadline) {
+        var elapsed = 0L
+        var lastTick = clock()
+        while (elapsed < timeoutMillis) {
+            if (isCancelled()) return false
+            if (isPaused()) {
+                delay(POLL_INTERVAL_MILLIS)
+                lastTick = clock()
+                continue
+            }
             if (probe()) return true
             delay(POLL_INTERVAL_MILLIS)
+            val now = clock()
+            elapsed += (now - lastTick).coerceAtLeast(0L)
+            lastTick = now
         }
         return false
     }
 
     private companion object {
         const val POLL_INTERVAL_MILLIS = 500L
+        const val NEXT_TRIGGER_MIN_DISTANCE = 24.0
     }
 }
 

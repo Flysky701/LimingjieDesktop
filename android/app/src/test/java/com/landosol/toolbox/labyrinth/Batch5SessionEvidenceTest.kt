@@ -2,6 +2,8 @@ package com.landosol.toolbox.labyrinth
 
 import com.landosol.toolbox.automation.*
 import com.landosol.toolbox.labyrinth.concurrent.LabyrinthFourThreadRuntime
+import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds
+import com.landosol.toolbox.labyrinth.kernel.SessionLifecyclePayload
 import com.landosol.toolbox.labyrinth.vision.*
 import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -264,5 +266,80 @@ class Batch5SessionEvidenceTest {
             assertFalse(fixture.round().blocksPlanning())
             assertTrue(fixture.session.state.value.balancedDiagnostics!!.controlThread)
         } finally { fixture.awaitActions(); fixture.session.stop("fixture done") }
+    }
+
+    @Test fun `setPaused cancels background planning, emits kernel lifecycle, and suppresses finishFromPlanner`() = runBlocking {
+        val fixture = Fixture()
+        val entered = CountDownLatch(1)
+        val exit = CountDownLatch(1)
+        val token = AtomicReference<WorkToken>()
+        try {
+            fixture.start()
+            withContext(LabyrinthFourThreadRuntime.controlDispatcher) {
+                @Suppress("UNCHECKED_CAST")
+                val planning = fixture.get("battlePlanning") as LabyrinthBalancedPlanningSlot<List<Any?>, LabyrinthBalancedBattlePlanningOutput>
+                planning.request(listOf("stable-battle-scene")) {
+                    token.set(LabyrinthFourThreadRuntime.currentToken())
+                    entered.countDown()
+                    exit.await()
+                    LabyrinthBalancedBattlePlanningOutput(LabyrinthBattleTeamRecommendationResult.Unavailable("test"), false)
+                }
+            }
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+
+            assertTrue(fixture.session.setPaused(true))
+            assertTrue("pause must cancel active background planning", token.get().isCancelled)
+            val pauseEvent = fixture.session.kernelRuntime.log.filter(kind = KernelEventKinds.SESSION_LIFECYCLE).last()
+            assertEquals("pause", (pauseEvent.payload as SessionLifecyclePayload).phase)
+
+            withContext(LabyrinthFourThreadRuntime.controlDispatcher) {
+                fixture.invoke("finishFromPlanner", fixture.id, "pause should suppress stop", true)
+            }
+            delay(100)
+            assertTrue(fixture.session.state.value.running)
+            assertTrue(fixture.session.state.value.paused)
+
+            assertTrue(fixture.session.setPaused(false))
+            val resumeEvent = fixture.session.kernelRuntime.log.filter(kind = KernelEventKinds.SESSION_LIFECYCLE).last()
+            assertEquals("resume", (resumeEvent.payload as SessionLifecyclePayload).phase)
+        } finally {
+            exit.countDown()
+            fixture.awaitActions()
+            fixture.session.stop("fixture done")
+        }
+    }
+
+    @Test fun `balanced pipeline foreground gate skips vision and publishes waiting message when backgrounded`() = runBlocking {
+        val manager = AutomationSessionManager()
+        val fastCalls = AtomicInteger()
+        val detailCalls = AtomicInteger()
+        val foreground = AtomicBoolean(false)
+        val session = LabyrinthEntryRecognitionSession(
+            sessionManager = manager,
+            captureActive = { true },
+            processorFactory = { { detailCalls.incrementAndGet(); error("must not run detail processor") } },
+            fastProcessorFactory = { { fastCalls.incrementAndGet(); error("must not run fast processor") } },
+            actionExecutor = SessionBoundActionExecutor(manager) { AutomationBackendResult.Completed },
+            actionTargetReady = { foreground.get() },
+            actionsAvailable = { true },
+        )
+        try {
+            assertTrue(session.startAutomation() is LabyrinthEntryRecognitionStartResult.Started)
+            val pipeline = session.javaClass.getDeclaredField("balancedPipeline").apply { isAccessible = true }.get(session)!!
+            @Suppress("UNCHECKED_CAST")
+            val foregroundReady = pipeline.javaClass.getDeclaredField("foregroundReady").apply { isAccessible = true }.get(pipeline) as () -> Boolean
+            @Suppress("UNCHECKED_CAST")
+            val onNotForeground = pipeline.javaClass.getDeclaredField("onNotForeground").apply { isAccessible = true }.get(pipeline) as () -> Unit
+
+            assertFalse(foregroundReady())
+            onNotForeground()
+            assertEquals("游戏不在前台，保持会话并等待返回", session.state.value.message)
+            assertEquals(0, fastCalls.get())
+            assertEquals(0, detailCalls.get())
+            foreground.set(true)
+            assertTrue(foregroundReady())
+        } finally {
+            session.stop("fixture done")
+        }
     }
 }

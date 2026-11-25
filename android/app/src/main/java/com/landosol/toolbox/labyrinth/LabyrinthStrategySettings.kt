@@ -37,6 +37,35 @@ enum class LabyrinthBossTeamMode {
     SINGLE_TEAM,
 }
 
+@Serializable
+enum class LabyrinthBattleModelStyle(
+    val speedUtilityWeight: Double,
+    val reviveSpeedMultiplier: Double,
+    val bossSoloMinPWin: Double,
+    val label: String,
+    val summary: String,
+    val description: String,
+) {
+    CONSERVATIVE(
+        0.02, 1.25, 0.80, "稳健", "优先胜率，几乎不换速度",
+        "高胜率下仅微幅偏好快打；单队 Boss 低于 80% 时直接降级多队。",
+    ),
+    BALANCED(
+        0.08, 1.50, 0.70, "均衡", "兼顾稳过与速杀拿币（默认）",
+        "高胜率下适度以极小胜率余量换取更快击杀与更多金币；单队 Boss 低于 70% 时直接降级多队。",
+    ),
+    AGGRESSIVE(
+        0.15, 1.60, 0.60, "冲分", "更积极提速冲金币与高分上限",
+        "高胜率下更愿意优先快打以抬高商店购买力；单队 Boss 低于 60% 时才降级多队。",
+    ),
+    ;
+
+    companion object {
+        fun fromStoredName(name: String?): LabyrinthBattleModelStyle =
+            entries.firstOrNull { it.name == name } ?: BALANCED
+    }
+}
+
 /**
  * 「特别装备」自动穿戴模式（语义见 `android/docs/special-equipment.md`）。
  *
@@ -289,6 +318,7 @@ data class LabyrinthStrategySnapshot(
     val settings: LabyrinthStrategySettings,
     val roleRuntime: LabyrinthRoleDecisionRuntime?,
     val pathBPlanningEnabled: Boolean = false,
+    val battleModelStyle: LabyrinthBattleModelStyle = LabyrinthBattleModelStyle.BALANCED,
 )
 
 object LabyrinthStrategySettingsCodec {

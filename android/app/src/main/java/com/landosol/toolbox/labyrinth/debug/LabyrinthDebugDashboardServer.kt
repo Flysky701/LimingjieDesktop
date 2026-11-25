@@ -54,6 +54,7 @@ class LabyrinthDebugDashboardServer(
     private val ocrHealthSource = AtomicReference<(() -> Map<String, Any?>)?>(null)
     fun attachKernelEventSource(source: KernelEventLog?) { kernelSource = source }
     fun attachOcrHealthSource(source: (() -> Map<String, Any?>)?) { ocrHealthSource.set(source) }
+    fun incidentCount(): Int = synchronized(incidentLock) { recentIncidents.size }
 
     private data class Snapshot(
         val json: ByteArray,

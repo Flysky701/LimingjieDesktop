@@ -1,5 +1,6 @@
 package com.landosol.toolbox.automation.session
 
+import com.landosol.toolbox.automation.ScreenPoint
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorId
 import com.landosol.toolbox.labyrinth.vision.EntryAnchorMatch
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
@@ -11,6 +12,7 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import com.landosol.toolbox.labyrinth.vision.LabyrinthNodeMoveConfirmationObservation
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopRefreshDialogText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -83,6 +85,37 @@ class SessionExpiryFrameTrackerTest {
 
         tracker.record(result(LabyrinthEntryPageState.UNKNOWN, anchors = mapOf(errorTitle)))
         assertEquals(true, tracker.popupVisible)
+    }
+
+    @Test
+    fun `three-button end confirmation takes priority over node move confirmation`() {
+        val tracker = SessionExpiryFrameTracker()
+        val choice = LabyrinthBattleEndConfirmationObservation(
+            stage = LabyrinthBattleEndConfirmationStage.CHOICE,
+            confidence = 0.9,
+            advanceButtonRect = EntryPixelRect(835, 700, 255, 90),
+        )
+        val rightButton = LabyrinthNodeMoveConfirmationObservation(
+            confidence = 0.88,
+            confirmButtonRect = EntryPixelRect(1120, 700, 265, 90),
+            cancelButtonRect = EntryPixelRect(535, 700, 255, 90),
+        )
+
+        for (state in listOf(LabyrinthEntryPageState.BATTLE_FAILED, LabyrinthEntryPageState.NODE_SELECTION)) {
+            tracker.record(result(state, endConfirmation = choice, moveConfirmation = rightButton))
+            assertEquals(ScreenPoint(962.5f, 745f), tracker.sessionInvalidationTrigger)
+        }
+    }
+
+    @Test
+    fun `node selection falls back to the return anchor when retreat is absent`() {
+        val tracker = SessionExpiryFrameTracker()
+        val returnAnchor = EntryAnchorId.NODE_RETURN_STANDARD to
+            EntryAnchorMatch(score = 0.70, rect = EntryPixelRect(1550, 928, 320, 95))
+
+        tracker.record(result(LabyrinthEntryPageState.NODE_SELECTION, anchors = mapOf(returnAnchor)))
+
+        assertEquals(ScreenPoint(1710f, 975.5f), tracker.sessionInvalidationTrigger)
     }
 
     @Test
@@ -182,5 +215,102 @@ class SessionExpiryFrameTrackerTest {
         val confirmPoint = requireNotNull(tracker.sessionInvalidationTrigger)
         assertEquals(1182.5f, confirmPoint.x, 0.01f)
         assertEquals(742.5f, confirmPoint.y, 0.01f)
+    }
+
+    @Test
+    fun `map retreat confirmation still wins over the session error title on an unknown page`() {
+        val tracker = SessionExpiryFrameTracker()
+        val errorTitle = EntryAnchorId.SESSION_ERROR_TITLE to
+            EntryAnchorMatch(score = 0.55, rect = EntryPixelRect(859, 272, 200, 44))
+        val confirmation = LabyrinthNodeMoveConfirmationObservation(
+            confidence = 0.88,
+            confirmButtonRect = EntryPixelRect(975, 690, 415, 105),
+            cancelButtonRect = EntryPixelRect(545, 690, 415, 105),
+        )
+
+        tracker.record(
+            result(
+                LabyrinthEntryPageState.UNKNOWN,
+                anchors = mapOf(errorTitle),
+                moveConfirmation = confirmation,
+            ),
+        )
+
+        assertEquals(false, tracker.popupVisible)
+        assertEquals(ScreenPoint(1182.5f, 742.5f), tracker.sessionInvalidationTrigger)
+    }
+
+    @Test
+    fun `return title anchor distinguishes an expiry popup from a node confirmation`() {
+        val tracker = SessionExpiryFrameTracker()
+        val errorTitle = EntryAnchorId.SESSION_ERROR_TITLE to
+            EntryAnchorMatch(score = 0.55, rect = EntryPixelRect(859, 272, 200, 44))
+        val returnTitle = EntryAnchorId.SESSION_RETURN_TITLE to
+            EntryAnchorMatch(score = 0.45, rect = EntryPixelRect(756, 692, 410, 94))
+        val confirmation = LabyrinthNodeMoveConfirmationObservation(
+            confidence = 0.88,
+            confirmButtonRect = EntryPixelRect(975, 690, 415, 105),
+            cancelButtonRect = EntryPixelRect(545, 690, 415, 105),
+        )
+
+        tracker.record(
+            result(
+                LabyrinthEntryPageState.UNKNOWN,
+                anchors = mapOf(errorTitle, returnTitle),
+                moveConfirmation = confirmation,
+            ),
+        )
+
+        assertEquals(true, tracker.popupVisible)
+        assertNull(tracker.sessionInvalidationTrigger)
+    }
+
+    @Test
+    fun `error prompt OCR distinguishes an expiry popup without either session anchor`() {
+        val tracker = SessionExpiryFrameTracker()
+        val confirmation = LabyrinthNodeMoveConfirmationObservation(
+            confidence = 0.88,
+            confirmButtonRect = EntryPixelRect(975, 690, 415, 105),
+            cancelButtonRect = EntryPixelRect(545, 690, 415, 105),
+        )
+        val detected = result(LabyrinthEntryPageState.UNKNOWN, moveConfirmation = confirmation)
+
+        for (text in listOf("错 误\n提示", "通信 错误", "重新\n连接", "返回　标题")) {
+            val dialog = LabyrinthShopRefreshDialogText.parseRegions(text, 1, null, 0)
+            tracker.record(detected.copy(shopRefreshDialog = dialog))
+
+            assertEquals(text, true, dialog.isErrorPrompt)
+            assertEquals(text, true, tracker.popupVisible)
+            assertNull(text, tracker.sessionInvalidationTrigger)
+        }
+
+        tracker.record(detected)
+        assertEquals(false, tracker.popupVisible)
+        assertEquals(ScreenPoint(1182.5f, 742.5f), tracker.sessionInvalidationTrigger)
+    }
+
+    @Test
+    fun `reset clears evidence and dimensions from the previous round`() {
+        val tracker = SessionExpiryFrameTracker()
+        val errorTitle = EntryAnchorId.SESSION_ERROR_TITLE to
+            EntryAnchorMatch(score = 0.55, rect = EntryPixelRect(859, 272, 200, 44))
+        val dialog = LabyrinthShopRefreshDialogText.parseRegions("错误提示", 1, null, 0)
+        tracker.trackFrame(1920, 1080)
+        tracker.record(
+            result(LabyrinthEntryPageState.TITLE_WAITING_TAP, anchors = mapOf(errorTitle))
+                .copy(shopRefreshDialog = dialog),
+        )
+
+        assertEquals(true, tracker.titleReached)
+        assertEquals(true, tracker.popupVisible)
+        assertEquals(ScreenPoint(959f, 294f), tracker.anchorCenter(errorTitle.first))
+
+        tracker.reset()
+
+        assertEquals(0 to 0, tracker.frameSize)
+        assertEquals(false, tracker.titleReached)
+        assertEquals(false, tracker.popupVisible)
+        assertNull(tracker.anchorCenter(errorTitle.first))
+        assertNull(tracker.sessionInvalidationTrigger)
     }
 }

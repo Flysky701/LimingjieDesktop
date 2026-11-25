@@ -293,6 +293,8 @@ class DesktopAppGraph(
         onWarning = { log.add(it, true) }, onLost = { stopAll(it) },
         deferFrame = { resolutionGuard.deferTransitionFrame(it.width, it.height) },
         previewEnabled = { previewRequested },
+        captureSuspended = { automationOverlayCoordinator.state.value?.paused == true && !previewRequested },
+        dispatchSuspended = { automationOverlayCoordinator.state.value?.paused == true },
     )
     fun setPreviewRequested(requested: Boolean) = synchronized(previewLock) {
         previewRequested = requested
@@ -313,6 +315,70 @@ class DesktopAppGraph(
     } }
     val debugPort: Int? get() = labyrinthDebugDashboard?.boundPort
     val debugUrl get() = debugPort?.let { "http://127.0.0.1:$it/" }
+    val incidentCount: Int get() = labyrinthDebugDashboard?.incidentCount() ?: 0
+
+    data class ReplayExportStats(val episodes: Int, val battleSamples: Int)
+
+    private data class ExportableReplayBatch(
+        val episodes: List<com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthReplayEpisodeJson>,
+        val battleSamples: Int,
+    )
+
+    private suspend fun collectReplayBatch(): ExportableReplayBatch = withContext(Dispatchers.IO) {
+        val routeJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val entities = database.labyrinthRouteDao().getRecent(500)
+        data class RouteEntry(val createdAt: Long, val route: com.landosol.toolbox.labyrinth.LabyrinthRouteJson)
+        val byEnterId = linkedMapOf<Long, RouteEntry>()
+        entities.forEach { entity ->
+            val parsed = runCatching {
+                routeJson.decodeFromString(com.landosol.toolbox.labyrinth.LabyrinthRouteJson.serializer(), entity.routeJson)
+            }.getOrNull() ?: return@forEach
+            val existing = byEnterId[parsed.enterId]
+            if (existing == null) {
+                byEnterId[parsed.enterId] = RouteEntry(entity.createdAt, parsed)
+            } else {
+                // Keep earliest recorded start time for matching battle samples, and latest route JSON.
+                byEnterId[parsed.enterId] = RouteEntry(minOf(existing.createdAt, entity.createdAt), existing.route)
+            }
+        }
+        val routesAsc = byEnterId.values.sortedBy { it.createdAt }
+        val journalDir = dataDirectory.resolve("kernel-journals").toFile()
+        val samplesByEnterId = mutableMapOf<Long, MutableList<com.landosol.toolbox.labyrinth.kernel.strategy.ShadowBattleSample>>()
+        var totalSamples = 0
+        if (journalDir.isDirectory) {
+            journalDir.listFiles().orEmpty().filter { it.isDirectory }.forEach { sessionDir ->
+                val loaded = runCatching {
+                    com.landosol.toolbox.labyrinth.kernel.KernelJournalReader.verifyAndLoad(sessionDir)
+                }.getOrNull() ?: return@forEach
+                loaded.events.forEach { event ->
+                    val sample = (event.payload as? com.landosol.toolbox.labyrinth.kernel.BattleSamplePayload)?.sample
+                        ?: return@forEach
+                    totalSamples++
+                    val matched = routesAsc.lastOrNull { it.createdAt <= event.timestampMillis } ?: return@forEach
+                    samplesByEnterId.getOrPut(matched.route.enterId) { mutableListOf() }.add(sample)
+                }
+            }
+        }
+        val episodes = routesAsc.map { entry ->
+            com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthReplayExporter.toReplayEpisode(
+                route = entry.route,
+                battleSamples = samplesByEnterId[entry.route.enterId].orEmpty(),
+            )
+        }
+        ExportableReplayBatch(episodes, totalSamples)
+    }
+
+    suspend fun replayStats(): ReplayExportStats = collectReplayBatch().let { batch ->
+        ReplayExportStats(batch.episodes.size, batch.battleSamples)
+    }
+
+    suspend fun exportReplays(target: Path): ReplayExportStats = collectReplayBatch().let { batch ->
+        withContext(Dispatchers.IO) {
+            com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthReplayExporter.exportJsonl(batch.episodes, target.toFile())
+        }
+        log.add("匿名回放已导出：${target.fileName}（${batch.episodes.size} 局 · ${batch.battleSamples} 条战斗样本）")
+        ReplayExportStats(batch.episodes.size, batch.battleSamples)
+    }
     private var rerollHostJob: Job? = null
     @Volatile private var closed = false
     private val shutdownLock = Mutex()
@@ -596,6 +662,9 @@ class DesktopAppGraph(
                         )
                     },
                     pathBPlanningEnabled = desktopSettings.pathBPlanningEnabled,
+                    battleModelStyle = com.landosol.toolbox.labyrinth.LabyrinthBattleModelStyle.fromStoredName(
+                        desktopSettings.battleModelStyle,
+                    ),
                 )
             },
             rerollRequester = { accountId ->
@@ -612,7 +681,31 @@ class DesktopAppGraph(
             runTerminalListener = { event ->
                 (event as? com.landosol.toolbox.labyrinth.batch.LabyrinthRunTerminalEvent.Cleared)?.summary
                     ?.let { log.add(it.description(), kind = UserLogKind.KEY) }
+                (event as? com.landosol.toolbox.labyrinth.batch.LabyrinthRunTerminalEvent.RetiredScoreTarget)?.reason
+                    ?.let { log.add("未达刷分目标撤退：$it", kind = UserLogKind.KEY) }
                 labyrinthBatchController.onRunTerminal(event)
+            },
+            externalRunScoreProvider = { runId, sessionId ->
+                val recordId = runId?.let { "run:$it" } ?: "recognition:$sessionId"
+                runHistory.scoreFor(recordId)
+            },
+            targetScoreProvider = { accountId ->
+                val store: LabyrinthRerollSettingsStore = if (sharedData == null) labyrinthStrategySettings else sharedRerollCache
+                accountId?.let { store.load(it).targetScore } ?: 0L
+            },
+            scoreRetireRerollRequester = { accountId, reason ->
+                val stage = labyrinthBatchController.state.value?.stage
+                if (stage in setOf(
+                        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.REROLLING,
+                        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.INVALIDATING_OLD_CLIENT_SESSION,
+                        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.RUNNING_LABYRINTH,
+                        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.RECORDING_RESULT,
+                    )
+                ) {
+                    true
+                } else {
+                    labyrinthController.startAfterScoreTargetRetireReroll(accountId, reason)
+                }
             },
             channelPrompts = channelLoginPromptAssistant("LabyrinthEntry"),
             sessionManager = automationSessionManager,
@@ -915,10 +1008,26 @@ class DesktopAppGraph(
         // is rejected by the server, which is the popup we want (labyrinth-full-automation §5.1).
         val terminator = com.landosol.toolbox.automation.session.AnchorTriggerSessionExpiryTerminator(
             onTap = { point ->
-                when (accessibilityActionBackend.execute(AutomationAction.Tap(point))) {
-                    com.landosol.toolbox.automation.AutomationBackendResult.Completed -> true
-                    else -> false
+                var outcome: Boolean? = null
+                while (outcome == null) {
+                    val session = automationSessionManager.current()
+                        ?.takeIf { it.mode == com.landosol.toolbox.automation.AutomationMode.SESSION_RESET }
+                    if (session == null) {
+                        outcome = false
+                    } else if (session.paused) {
+                        kotlinx.coroutines.delay(250L)
+                    } else {
+                        when (automationActionExecutor.execute(session.id, AutomationAction.Tap(point))) {
+                            is com.landosol.toolbox.automation.AutomationActionResult.Executed,
+                            is com.landosol.toolbox.automation.AutomationActionResult.DryRun,
+                            -> outcome = true
+                            com.landosol.toolbox.automation.AutomationActionResult.Paused ->
+                                kotlinx.coroutines.delay(250L)
+                            else -> outcome = false
+                        }
+                    }
                 }
+                outcome
             },
             triggerPoint = { frameTracker.sessionInvalidationTrigger },
             returnTitlePoint = SESSION_RETURN_TITLE_POINT,
@@ -929,6 +1038,15 @@ class DesktopAppGraph(
             available = ::actionsAvailable,
             returnTitleAnchorPoint = { frameTracker.anchorCenter(EntryAnchorId.SESSION_RETURN_TITLE) },
             trace = { step -> android.util.Log.d("LabyrinthReset", "trigger-terminator $step") },
+            isPaused = {
+                automationSessionManager.current()?.let {
+                    it.mode == com.landosol.toolbox.automation.AutomationMode.SESSION_RESET && it.paused
+                } == true || automationOverlayCoordinator.state.value?.paused == true
+            },
+            isCancelled = {
+                automationSessionManager.current()?.mode != com.landosol.toolbox.automation.AutomationMode.SESSION_RESET ||
+                    automationOverlayCoordinator.state.value == null
+            },
         )
         val resetDashboard = labyrinthDebugDashboard
         GameSessionResetWorkflow(
@@ -937,6 +1055,13 @@ class DesktopAppGraph(
             backend = CompositeSessionResetBackend(
                 terminator = terminator,
                 relauncher = Relauncher {
+                    while (true) {
+                        val session = automationSessionManager.current()
+                            ?.takeIf { it.mode == com.landosol.toolbox.automation.AutomationMode.SESSION_RESET }
+                            ?: return@Relauncher GameClientRelaunchResult.LAUNCH_UNAVAILABLE
+                        if (!session.paused) break
+                        kotlinx.coroutines.delay(250L)
+                    }
                     val target = gamePackageName
                         ?: return@Relauncher GameClientRelaunchResult.LAUNCH_UNAVAILABLE
                     if (actionDevice.launch(target)) GameClientRelaunchResult.LAUNCH_REQUESTED else GameClientRelaunchResult.LAUNCH_UNAVAILABLE
@@ -944,6 +1069,7 @@ class DesktopAppGraph(
             ),
             captureActive = CaptureStateRegistry::isActive,
             processorFactory = {
+                frameTracker.reset()
                 // The reset only needs page/dialog anchors. 2026-09-18 live: with the default
                 // map-node scan on, one map frame behind the expiry popup took 6.9 s, the frame
                 // tracker saw nothing for 10 s and the terminator timed out on a visible popup.
@@ -1005,6 +1131,11 @@ class DesktopAppGraph(
 
                 override suspend fun invalidateClientSessionAndReturn(accountId: Long):
                     com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult {
+                    fun failure(detail: String) =
+                        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(detail).also {
+                            log.add("会话重置失败：$detail", kind = UserLogKind.WARNING)
+                        }
+
                     // AnchorTriggerSessionExpiryTerminator taps the recognised trigger, expects the
                     // "session expired" popup, taps 返回标题, then the entry planner navigates
                     // title → home → adventure → labyrinth home. READY means the stale local
@@ -1012,7 +1143,7 @@ class DesktopAppGraph(
                     // Spent before anything can fail, so it never outlives this sync.
                     val hardClosed = consumeGameClientHardClosed(accountId, gamePackageName)
                     if (!CaptureStateRegistry.isActive()) {
-                        return com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(
+                        return failure(
                             "屏幕捕获已停止" + (CaptureStateRegistry.lastStopReason()?.let { "（$it）" } ?: ""),
                         )
                     }
@@ -1027,7 +1158,7 @@ class DesktopAppGraph(
                                     if (hardClosed) "hard-close-cold-start" else "home-tab-session-expiry",
                                 )
                             } else {
-                                com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(
+                                failure(
                                     "重置流程 ${final.stage.name}/${final.status.name}" +
                                         (final.message?.let { "：$it" } ?: "") +
                                         (final.lastBlock.takeIf { it != SessionBlockKind.NONE }?.let { "，阻塞 $it" } ?: ""),
@@ -1035,9 +1166,9 @@ class DesktopAppGraph(
                             }
                         }
                         is GameSessionResetStartResult.Blocked ->
-                            com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure(started.reason)
+                            failure(started.reason)
                         is GameSessionResetStartResult.AlreadyRunning ->
-                            com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Failure("会话重置已在运行")
+                            failure("会话重置已在运行")
                     }
                 }
 
@@ -1256,7 +1387,14 @@ class DesktopAppGraph(
         finally { startingState.value = false }
         }.also { autoRunJob = it }
     }
-    fun pauseTask() { automationOverlayCoordinator.state.value?.let { current -> autoRunScope.launch { automationOverlayCoordinator.setPaused(current.sessionId, !current.paused) } } }
+    private val pauseLock = Mutex()
+    suspend fun setTaskPaused(paused: Boolean? = null): Boolean = pauseLock.withLock {
+        val current = automationOverlayCoordinator.state.value ?: return@withLock false
+        val target = paused ?: !current.paused
+        if (current.paused == target) return@withLock true
+        automationOverlayCoordinator.setPaused(current.sessionId, target)
+    }
+    fun pauseTask() { autoRunScope.launch { setTaskPaused(null) } }
     fun stopAll(reason: String = "用户停止任务"): Job = synchronized(startLock) {
         batchPreparedClient = null
         resolutionGuard.disarm()

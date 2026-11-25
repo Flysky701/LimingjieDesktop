@@ -20,4 +20,5 @@ import kotlinx.serialization.Serializable
     val battleOnnxEnabled: Boolean = false,
     val battleOnnxBundlePath: String = "",
     val pathBPlanningEnabled: Boolean = false,
+    val battleModelStyle: String = "BALANCED",
 )
