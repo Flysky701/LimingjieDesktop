@@ -7,6 +7,7 @@ import com.landosol.toolbox.automation.ScreenPoint
 import com.landosol.toolbox.labyrinth.*
 import com.landosol.toolbox.labyrinth.kernel.*
 import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds as K
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueContext
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
 import com.landosol.toolbox.labyrinth.vision.*
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState.*
@@ -47,6 +48,7 @@ data class BattleRetryPolicyContext(
     val preferPureBossDamageSystem: Boolean = true,
     val frontlineSurvivalGateEnabled: Boolean = false,
     val currentArea: Int? = null,
+    val battleValueContext: BattleValueContext? = null,
 )
 
 /** Live evidence and strategy supplied by the owner of the capture and run roster. */
@@ -233,6 +235,7 @@ class BattleDomainModule(
         val retryNumber: Int,
         val requestedTeams: Int,
         val supplement: Boolean,
+        val battleValueContext: BattleValueContext?,
     )
 
     private var cause: KernelEvent? = null
@@ -1013,11 +1016,12 @@ class BattleDomainModule(
             val total = bossMultiTeamTargetCount ?: requestedBossTeams ?: 3
             (total - if (supplement) combat.teamIndex - 1 else 0).coerceIn(1, 3)
         } else 1
-        val key = RecommendationKey(planner, roleContext, roster, failed, retryNumber, teams, supplement)
+        val battleValueContext = policy.battleValueContext
+        val key = RecommendationKey(planner, roleContext, roster, failed, retryNumber, teams, supplement, battleValueContext)
         cachedRecommendation?.let { if (it.first == key) return it.second }
         val result = if (retryNumber > 0) planner.retryRecommendation(
-            roster, roleContext, failed, retryNumber, failed.lastOrNull(), teams, supplement,
-        ) else planner.initialRecommendation(roster, roleContext, teams, supplement)
+            roster, roleContext, failed, retryNumber, failed.lastOrNull(), teams, supplement, battleValueContext,
+        ) else planner.initialRecommendation(roster, roleContext, teams, supplement, battleValueContext)
         cachedRecommendation = key to result
         return result
     }

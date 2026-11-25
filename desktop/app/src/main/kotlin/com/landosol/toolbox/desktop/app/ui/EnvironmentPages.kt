@@ -177,12 +177,44 @@ import javax.swing.filechooser.FileNameExtensionFilter
         Message(actions.message)
         if(group=="外观与通知")AppearanceSettings(graph)
         if (group == "运行环境") Panel("迷宫战斗价值估计") {
+            var bundlePath by remember(saved.battleOnnxBundlePath) { mutableStateOf(saved.battleOnnxBundlePath) }
+            fun saveBundlePath(path: String) {
+                bundlePath = path
+                actions.run { graph.settings.update { it.copy(battleOnnxBundlePath = path.trim()) } }
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(saved.battleOnnxEnabled, { enabled ->
                     actions.run { graph.settings.update { it.copy(battleOnnxEnabled = enabled) } }
                 })
                 Text("使用本地 ONNX 模型（下局生效）")
             }
+            OutlinedTextField(
+                bundlePath, { bundlePath = it },
+                label = { Text("本地模型目录") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = !actions.working,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    val chooser = JFileChooser().apply {
+                        dialogTitle = "选择本地模型目录"
+                        fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                        bundlePath.trim().takeIf { it.isNotEmpty() }?.let { selectedFile = File(it) }
+                    }
+                    if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+                        saveBundlePath(chooser.selectedFile.absolutePath)
+                    }
+                }, enabled = !actions.working) { Text("选择目录") }
+                OutlinedButton(onClick = { saveBundlePath(bundlePath.trim()) },
+                    enabled = !actions.working && bundlePath.trim() != saved.battleOnnxBundlePath) { Text("保存") }
+                TextButton(onClick = { saveBundlePath("") },
+                    enabled = !actions.working && (bundlePath.isNotEmpty() || saved.battleOnnxBundlePath.isNotEmpty())) {
+                    Text("恢复默认")
+                }
+            }
+            Text("留空时优先读取 LIMINGJIE_NN_BUNDLE，其次自动查找数据目录 models/s4_m2b_r1_seed43。",
+                color = Muted, style = MaterialTheme.typography.bodySmall)
         }
         if(group=="运行环境"&&shared)Panel("运行环境"){
             Text("各设备的连接、画面尺寸、触控和游戏客户端信息统一在设备管理中查看。",color=Muted)

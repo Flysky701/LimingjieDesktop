@@ -1,6 +1,7 @@
 package com.landosol.toolbox.desktop.app
 
 import android.util.Log
+import java.nio.file.Files
 import java.nio.file.Path
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.desktop.shared.*
@@ -14,6 +15,7 @@ import com.landosol.toolbox.desktop.app.adapters.cndb.*
 import com.landosol.toolbox.desktop.app.adapters.device.*
 import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.desktop.app.strategy.DesktopBattleModel
+import com.landosol.toolbox.desktop.app.strategy.modelPath
 import com.landosol.toolbox.desktop.app.adapters.storage.RunHistoryStore
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
 import com.landosol.toolbox.security.CredentialStore
@@ -109,7 +111,24 @@ class DesktopAppGraph(
     private val suppliedGameGateway: ((GameServer) -> BilibiliGameGateway)? = null,
 ) : AutoCloseable {
     val log = UserLog()
-    private val battleModel = DesktopBattleModel { log.add(it) }
+    private fun defaultBattleBundleDirectory(): Path {
+        val relative = Path.of("models", "s4_m2b_r1_seed43")
+        val candidates = listOfNotNull(
+            dataDirectory.resolve(relative),
+            runCatching { DataDirectories.resolve(emptyArray()) }.getOrNull()?.resolve(relative),
+            System.getProperty("jpackage.app-path")?.let { Path.of(it).toAbsolutePath().parent?.resolve(relative) },
+        ).distinct()
+        return candidates.firstOrNull { Files.isRegularFile(it.resolve("manifest.json")) }
+            ?: dataDirectory.resolve(relative)
+    }
+    private val battleModel = DesktopBattleModel(
+        directory = {
+            modelPath("limingjie.nn.bundle")?.let(Path::of)
+                ?: settings.state.value.battleOnnxBundlePath.trim().takeIf { it.isNotEmpty() }?.let(Path::of)
+                ?: defaultBattleBundleDirectory()
+        },
+        log = { log.add(it) },
+    )
     val ux by lazy { com.landosol.toolbox.desktop.app.ui.DesktopUxController(this) }
     private val noticeState = MutableStateFlow<List<String>>(emptyList())
     val notices = noticeState.asStateFlow()
@@ -484,8 +503,9 @@ class DesktopAppGraph(
                         val runtime = com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionDataParser.createRuntime(
                             settings.applyTo(document), settings,
                         )
-                        runtime.copy(battleValueEstimator = battleModel.select(
-                            this.settings.state.value.battleOnnxEnabled, runtime.battleValueEstimator))
+                        runtime.withBattleValueEstimator(
+                            battleModel.select(this.settings.state.value.battleOnnxEnabled, runtime.battleValueEstimator),
+                        )
                     },
                 )
             },

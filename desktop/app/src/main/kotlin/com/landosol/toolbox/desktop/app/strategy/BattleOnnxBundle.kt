@@ -3,6 +3,7 @@ package com.landosol.toolbox.desktop.app.strategy
 import ai.onnxruntime.*
 import com.landosol.toolbox.desktop.ocr.DesktopOrtEnvironment
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValue
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueContext
 import java.nio.ByteBuffer
 import java.nio.FloatBuffer
 import java.nio.LongBuffer
@@ -16,8 +17,17 @@ internal fun modelPath(key: String): String? =
     sequenceOf(System.getProperty(key), System.getenv(key), System.getenv(key.uppercase().replace('.', '_')))
         .firstOrNull { !it.isNullOrBlank() }
 
+internal data class EncodedBattleContext(
+    val contextFeatures: ContextFeatures,
+    val rosterCtx: FloatArray,
+    val contextSummary: FloatArray,
+    val unitAffinities: Map<Int, Double>,
+    val dModel: Int,
+)
+
 internal class BattleOnnxBundle private constructor(
     val features: BattleFeaturizer,
+    private val dModel: Int,
     private val towerA: OrtSession,
     private val towerB: OrtSession,
 ) : AutoCloseable {
@@ -49,6 +59,8 @@ internal class BattleOnnxBundle private constructor(
                 "global_feat_dim" to BattleFeatureCatalog.GLOBAL_FEATURES, "team_synergy_dim" to BattleFeatureCatalog.SYNERGY_FEATURES)
             sizes.forEach { (key, size) -> require(dims.int(key) == size) { "Unexpected dimension $key" } }
             val features = BattleFeaturizer(catalog, dims.int("roster_max_len"), dims.int("relic_max_len"))
+            val dModel = dims.int("d_model")
+            require(dModel > 0) { "Unexpected dimension d_model" }
             fun openTower(key: String, options: OrtSession.SessionOptions): OrtSession {
                 val spec = manifest.getValue(key).jsonObject
                 val name = "$key.onnx"
@@ -69,7 +81,7 @@ internal class BattleOnnxBundle private constructor(
                 options.setInterOpNumThreads(1)
                 val a = openTower("tower_a", options)
                 try {
-                    return BattleOnnxBundle(features, a, openTower("tower_b", options))
+                    return BattleOnnxBundle(features, dModel, a, openTower("tower_b", options))
                 } catch (error: Throwable) {
                     a.close()
                     throw error
@@ -81,18 +93,75 @@ internal class BattleOnnxBundle private constructor(
     /** Both native results and all inputs live through consume, including A's borrowed B inputs. */
     fun <T> run(rows: List<Map<String, BattleFeature>>, consume: (OrtSession.Result, OrtSession.Result) -> T): T {
         require(rows.isNotEmpty())
+        val names = towerA.inputNames + towerB.inputNames - setOf("roster_ctx", "context_summary")
+        return withInputs(names, { name -> tensor(rows.map { it.getValue(name) }) }) { inputs ->
+            towerA.run(towerA.inputNames.associateWith(inputs::getValue)).use { a ->
+                val feed = towerB.inputNames.associateWith { name -> inputs[name] ?: a.get(name).get() as OnnxTensor }
+                towerB.run(feed).use { b -> consume(a, b) }
+            }
+        }
+    }
+
+    fun encodeContext(context: BattleValueContext): EncodedBattleContext {
+        val contextFeatures = features.contextRow(context)
+        return withInputs(towerA.inputNames, { name -> tensor(listOf(contextFeatures.inputs.getValue(name))) }) { inputs ->
+            towerA.run(inputs).use { result ->
+                val roster = result.floatOutput("roster_ctx", 1, features.rosterLength, dModel).copyValues()
+                val summary = result.floatOutput("context_summary", 1, dModel).copyValues()
+                val affinity = result.floatOutput("unit_affinity", 1, features.rosterLength)
+                val affinities = contextFeatures.rosterPosByUnitId.mapValues { (_, index) ->
+                    affinity.get(index).toDouble().also { require(it.isFinite()) { "Invalid unit affinity" } }
+                }
+                EncodedBattleContext(contextFeatures, roster, summary, affinities, dModel)
+            }
+        }
+    }
+
+    fun scoreTeams(
+        encoded: EncodedBattleContext,
+        context: BattleValueContext,
+        candidates: List<List<Int>>,
+        batchSize: Int = 64,
+    ): List<BattleValue> = candidates.chunked(batchSize).flatMap { teams ->
+        val rows = teams.map { features.teamRow(encoded.contextFeatures, it) }
+        val fastRows = rows.filterNotNull()
+        val scores = if (fastRows.isEmpty()) emptyList() else scoreBatch(encoded, fastRows)
+        val fastScores = scores.iterator()
+        teams.mapIndexed { index, team ->
+            if (rows[index] != null) fastScores.next() else predict(listOf(features.row(context, team))).single()
+        }
+    }
+
+    private fun scoreBatch(encoded: EncodedBattleContext, rows: List<Map<String, BattleFeature>>): List<BattleValue> =
+        withInputs(towerB.inputNames, { name ->
+            when (name) {
+                "roster_ctx" -> repeatTensor(encoded.rosterCtx, rows.size, features.rosterLength, encoded.dModel)
+                "context_summary" -> repeatTensor(encoded.contextSummary, rows.size, encoded.dModel)
+                else -> tensor(rows.map { it.getValue(name) })
+            }
+        }) { inputs ->
+            towerB.run(inputs).use { readPredictions(it, rows.size) }
+        }
+
+    private inline fun <T> withInputs(
+        names: Iterable<String>,
+        create: (String) -> OnnxTensor,
+        consume: (Map<String, OnnxTensor>) -> T,
+    ): T {
         val inputs = mutableMapOf<String, OnnxTensor>()
         try {
-            for (name in towerA.inputNames + towerB.inputNames - setOf("roster_ctx", "context_summary")) {
-                inputs[name] = tensor(rows.map { it.getValue(name) })
-            }
-            towerA.run(towerA.inputNames.associateWith(inputs::getValue)).use { a ->
-                val feed = towerB.inputNames.associateWith { name -> inputs[name] ?: (a.get(name).get() as OnnxTensor) }
-                return towerB.run(feed).use { b -> consume(a, b) }
-            }
+            for (name in names) inputs[name] = create(name)
+            return consume(inputs)
         } finally {
             inputs.values.forEach(OnnxTensor::close)
         }
+    }
+
+    private fun repeatTensor(values: FloatArray, batchSize: Int, vararg rowShape: Int): OnnxTensor {
+        val buffer = FloatBuffer.allocate(Math.multiplyExact(batchSize, values.size))
+        repeat(batchSize) { buffer.put(values) }
+        val shape = (listOf(batchSize) + rowShape.toList()).map(Int::toLong).toLongArray()
+        return OnnxTensor.createTensor(environment, buffer.flip(), shape)
     }
 
     private fun tensor(rows: List<BattleFeature>): OnnxTensor {
@@ -119,18 +188,24 @@ internal class BattleOnnxBundle private constructor(
         }
     }
 
-    fun predict(rows: List<Map<String, BattleFeature>>): List<BattleValue> = run(rows) { _, b ->
-        fun output(name: String, width: Int): FloatBuffer {
-            val tensor = b.get(name).get() as OnnxTensor
-            require(tensor.info.type == OnnxJavaType.FLOAT &&
-                tensor.info.shape.contentEquals(longArrayOf(rows.size.toLong(), width.toLong()))) { "Invalid $name output" }
-            return tensor.floatBuffer
-        }
-        val probs = output("outcome_probs", 3)
-        val damage = output("damage_mean", 1)
-        val spread = output("damage_std", 1)
-        val time = output("win_rem_time", 1)
-        List(rows.size) {
+    private fun OrtSession.Result.floatOutput(name: String, vararg shape: Int): FloatBuffer {
+        val tensor = get(name).get() as OnnxTensor
+        require(tensor.info.type == OnnxJavaType.FLOAT &&
+            tensor.info.shape.contentEquals(shape.map(Int::toLong).toLongArray())) { "Invalid $name output" }
+        return tensor.floatBuffer
+    }
+
+    private fun FloatBuffer.copyValues(): FloatArray = FloatArray(remaining()).also { get(it) }
+
+    fun predict(rows: List<Map<String, BattleFeature>>): List<BattleValue> =
+        if (rows.isEmpty()) emptyList() else run(rows) { _, b -> readPredictions(b, rows.size) }
+
+    private fun readPredictions(result: OrtSession.Result, batchSize: Int): List<BattleValue> {
+        val probs = result.floatOutput("outcome_probs", batchSize, 3)
+        val damage = result.floatOutput("damage_mean", batchSize, 1)
+        val spread = result.floatOutput("damage_std", batchSize, 1)
+        val time = result.floatOutput("win_rem_time", batchSize, 1)
+        return List(batchSize) {
             val win = probs.get().toDouble()
             val timeout = probs.get().toDouble()
             val wipe = probs.get().toDouble()

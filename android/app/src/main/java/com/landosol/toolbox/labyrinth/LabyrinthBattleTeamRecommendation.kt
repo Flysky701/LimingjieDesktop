@@ -1,5 +1,12 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelAssessment
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueContext
+import com.landosol.toolbox.labyrinth.kernel.strategy.ContextualBattleValueEstimator
+import com.landosol.toolbox.labyrinth.kernel.strategy.LabyrinthBattleValueEstimator
+import com.landosol.toolbox.labyrinth.kernel.strategy.ModelGuidedBattleTeamSearcher
+import java.util.Locale
+
 data class LabyrinthRecommendedTeamMember(
     val characterId: String,
     val displayName: String,
@@ -20,6 +27,7 @@ data class LabyrinthBattleTeamRecommendation(
     /** Leading teams that passed the vanguard survival gate; the rest of [plannedBossTeamCount] are supplements. */
     val safeBossTeamCount: Int = plannedBossTeamCount,
     val excludedIncompleteCharacterIds: List<String> = emptyList(),
+    val modelAssessment: BattleModelAssessment? = null,
 ) {
     init {
         require(members.size in 1..5)
@@ -46,11 +54,12 @@ data class LabyrinthBattleTeamRecommendation(
             "一号位：${vanguard.characterId} ${vanguard.displayName} · " +
             "生存锚点：${survivalAnchor?.let { "${it.characterId} ${it.displayName}" } ?: "无"}",
         "推荐原因：" + reasons.take(3).joinToString("；").ifBlank { "当前角色池最多五人的最高分队伍" },
-    )
+    ) + listOfNotNull(modelAssessment?.summary())
 
     /** Compact running-overlay summary. Full details remain available while paused and in logs. */
     fun compactOverlayLine(): String =
-        "主力：$damageTypeLabel ${formatBattleTeamScore(score)} · 一号位 ${vanguard.displayName}"
+        "主力：$damageTypeLabel ${formatBattleTeamScore(score)} · 一号位 ${vanguard.displayName}" +
+            modelAssessment?.let { " · ${it.summary()}" }.orEmpty()
 
     fun logText(): String = buildString {
         append(overlayLines().joinToString(" | "))
@@ -87,7 +96,17 @@ sealed interface LabyrinthBattleTeamRecommendationResult {
 class LabyrinthBattleTeamRecommendationPlanner(
     private val profiles: Map<String, LabyrinthRoleProfile>,
     private val teamPlanSearcher: LabyrinthTeamPlanSearcher,
+    private val scorer: LabyrinthTeamScorer? = null,
+    private val battleValueEstimator: LabyrinthBattleValueEstimator? = null,
 ) {
+    private val modelSearcher = (battleValueEstimator as? ContextualBattleValueEstimator)?.let {
+        ModelGuidedBattleTeamSearcher(it, scorer?.let { scorer -> LabyrinthTeamOptimizer(scorer) })
+    }
+
+    fun withBattleValueEstimator(estimator: LabyrinthBattleValueEstimator): LabyrinthBattleTeamRecommendationPlanner =
+        if (estimator === battleValueEstimator) this
+        else LabyrinthBattleTeamRecommendationPlanner(profiles, teamPlanSearcher, scorer, estimator)
+
     fun initialRecommendation(
         acquiredCharacterIds: Collection<String>,
         context: LabyrinthRoleDecisionContext,
@@ -97,15 +116,12 @@ class LabyrinthBattleTeamRecommendationPlanner(
          * for this slot may lead without a qualified vanguard rather than leave the slot empty.
          */
         allowSupplementLead: Boolean = false,
+        battleValueContext: BattleValueContext? = null,
     ): LabyrinthBattleTeamRecommendationResult {
         require(requestedBossTeamCount in 1..3)
         val canonicalIds = acquiredCharacterIds.map(::canonicalLabyrinthRoleId).distinct()
         val knownProfiles = profiles.withKnownRoleIdentities(canonicalIds)
         val resolved = canonicalIds.map(knownProfiles::getValue)
-        val incompleteIds = resolved
-            .filterNot(LabyrinthRoleProfile::isStrictDecisionReady)
-            .map(LabyrinthRoleProfile::characterId)
-            .sorted()
         if (resolved.isEmpty()) {
             return LabyrinthBattleTeamRecommendationResult.Unavailable("没有已获得的可用角色")
         }
@@ -127,6 +143,20 @@ class LabyrinthBattleTeamRecommendationPlanner(
         } else {
             teamPlanSearcher.initialSearch(resolved, context)
         }
+        val ruleResult = initialRuleRecommendation(plan, resolved, context, supplementLead, poolHasVanguard)
+        return modelRecommendation(
+            ruleResult, plan.teamCharacterIds(), battleValueContext, resolved, context,
+            emptySet(), requestedBossTeamCount, supplementLead,
+        )
+    }
+
+    private fun initialRuleRecommendation(
+        plan: LabyrinthTeamPlan,
+        resolved: List<LabyrinthRoleProfile>,
+        context: LabyrinthRoleDecisionContext,
+        supplementLead: Boolean,
+        poolHasVanguard: Boolean,
+    ): LabyrinthBattleTeamRecommendationResult {
         if (context.frontlineSurvivalGateEnabled && !supplementLead && plan.teams.isNotEmpty() && plan.safeTeamCount == 0) {
             return LabyrinthBattleTeamRecommendationResult.Unavailable(
                 "当前角色池中没有满足生存资格的一号位；不再仅按掩护者职阶强行上T",
@@ -155,6 +185,10 @@ class LabyrinthBattleTeamRecommendationPlanner(
             )
         }
         val survivalAnchor = evaluation.survivalAnchorCharacterId?.let(memberById::get)
+        val incompleteIds = resolved
+            .filterNot(LabyrinthRoleProfile::isStrictDecisionReady)
+            .map(LabyrinthRoleProfile::characterId)
+            .sorted()
         val reasons = buildList {
             addAll(evaluation.reasons)
             if (incompleteIds.isNotEmpty()) {
@@ -310,6 +344,7 @@ class LabyrinthBattleTeamRecommendationPlanner(
         lastFailedTeamSignature: String? = null,
         requestedBossTeamCount: Int = 1,
         allowSupplementLead: Boolean = false,
+        battleValueContext: BattleValueContext? = null,
     ): LabyrinthBattleTeamRecommendationResult {
         require(requestedBossTeamCount in 1..3)
         val canonicalIds = acquiredCharacterIds.map(::canonicalLabyrinthRoleId).distinct()
@@ -344,7 +379,11 @@ class LabyrinthBattleTeamRecommendationPlanner(
                 labyrinthEncounterFormationRisk(it.members, context)
             }
             if (recovery != null && (bestRetryRisk == null || requireNotNull(recoveryRisk) <= bestRetryRisk)) {
-                return recovery
+                return modelRecommendation(
+                    recovery, listOf(recovery.recommendation.members.map { it.characterId }),
+                    battleValueContext, resolved, context, failedTeamSignatures,
+                    requestedBossTeamCount, retrySupplementLead,
+                )
             }
             // No unfailed healer swap is possible, or it puts more allies around the front
             // than the best available retry. Fall through to the fallback search.
@@ -365,6 +404,23 @@ class LabyrinthBattleTeamRecommendationPlanner(
                 excludedTeamSignatures = failedTeamSignatures,
             )
         }
+        val ruleResult = retryRuleRecommendation(
+            plan, resolved.size, context, failedTeamSignatures, retrySupplementLead, retryPoolHasVanguard,
+        )
+        return modelRecommendation(
+            ruleResult, plan.teamCharacterIds(), battleValueContext, resolved, context,
+            failedTeamSignatures, requestedBossTeamCount, retrySupplementLead,
+        )
+    }
+
+    private fun retryRuleRecommendation(
+        plan: LabyrinthTeamPlan,
+        rosterSize: Int,
+        context: LabyrinthRoleDecisionContext,
+        failedTeamSignatures: Set<String>,
+        retrySupplementLead: Boolean,
+        retryPoolHasVanguard: Boolean,
+    ): LabyrinthBattleTeamRecommendationResult {
         if (context.frontlineSurvivalGateEnabled && !retrySupplementLead && plan.teams.isNotEmpty() && plan.safeTeamCount == 0) {
             return LabyrinthBattleTeamRecommendationResult.Unavailable(
                 "战斗失败后角色池中没有满足生存资格的一号位；不能生成安全重试队伍",
@@ -373,7 +429,7 @@ class LabyrinthBattleTeamRecommendationPlanner(
         val retryLeadIsSupplement = plan.safeTeamCount == 0
         val evaluation = plan.teams.firstOrNull()
             ?: return LabyrinthBattleTeamRecommendationResult.Unavailable(plan.reason)
-        val expectedTeamSize = minOf(TEAM_SIZE, resolved.size)
+        val expectedTeamSize = minOf(TEAM_SIZE, rosterSize)
         if (evaluation.members.size != expectedTeamSize) {
             return LabyrinthBattleTeamRecommendationResult.Unavailable(
                 "失败重试规划未返回预期的${expectedTeamSize}人队伍：${plan.reason}",
@@ -419,6 +475,62 @@ class LabyrinthBattleTeamRecommendationPlanner(
             ),
         )
     }
+
+    private fun modelRecommendation(
+        ruleResult: LabyrinthBattleTeamRecommendationResult,
+        ruleTeams: List<List<String>>,
+        battleValueContext: BattleValueContext?,
+        eligibleProfiles: List<LabyrinthRoleProfile>,
+        context: LabyrinthRoleDecisionContext,
+        failedTeamSignatures: Set<String>,
+        requestedBossTeamCount: Int,
+        supplementLead: Boolean,
+    ): LabyrinthBattleTeamRecommendationResult {
+        if (battleValueContext == null || modelSearcher == null) return ruleResult
+        val result = modelSearcher.search(
+            battleValueContext.copy(ruleContext = context), eligibleProfiles, ruleTeams,
+            failedTeamSignatures, requestedBossTeamCount, supplementLead,
+        ) ?: return ruleResult
+        val assessment = result.assessment
+        if (!assessment.adopted) {
+            val ruleRecommendation = (ruleResult as? LabyrinthBattleTeamRecommendationResult.Ready)?.recommendation
+                ?: return ruleResult
+            val probability = formatBattleWinProbability(assessment.jointWinProbability ?: assessment.pWin)
+            val reason = "NN模型未找到稳过队（最高预测胜率 $probability < 50%），已回退规则推荐"
+            return LabyrinthBattleTeamRecommendationResult.Ready(
+                ruleRecommendation.copy(reasons = listOf(reason) + ruleRecommendation.reasons, modelAssessment = assessment),
+            )
+        }
+
+        val lead = result.teams.first()
+        val evaluation = scorer?.evaluate(lead, context)
+            ?: teamPlanSearcher.initialSearch(lead, context.copy(frontlineSurvivalGateEnabled = false)).teams.firstOrNull()
+            ?: return ruleResult
+        val members = lead.map { it.toRecommendedMember() }
+        val memberById = members.associateBy(LabyrinthRecommendedTeamMember::characterId)
+        val safeTeamCount = if (context.frontlineSurvivalGateEnabled) {
+            result.teams.takeWhile { it.first().isEligibleBattleVanguard(context) }.size
+        } else result.teams.size
+        return LabyrinthBattleTeamRecommendationResult.Ready(
+            LabyrinthBattleTeamRecommendation(
+                members = members,
+                damageType = evaluation.damageType,
+                score = evaluation.score,
+                vanguard = memberById.getValue(evaluation.vanguardCharacterId),
+                survivalAnchor = evaluation.survivalAnchorCharacterId?.let(memberById::get),
+                reasons = listOf(if (assessment.jointWinProbability == null) "按NN模型胜率选队" else "按NN模型联合胜率编组") +
+                    evaluation.reasons,
+                defenseMarkStacks = context.defenseMarkStacks,
+                targetCount = context.targetCount,
+                plannedBossTeamCount = result.teams.size,
+                safeBossTeamCount = safeTeamCount,
+                modelAssessment = assessment,
+            ),
+        )
+    }
+
+    private fun LabyrinthTeamPlan.teamCharacterIds(): List<List<String>> =
+        teams.map { team -> team.members.map(LabyrinthRoleProfile::characterId) }
 
     private fun LabyrinthRoleProfile.toRecommendedMember() = LabyrinthRecommendedTeamMember(
         characterId = characterId,
@@ -469,3 +581,11 @@ internal fun labyrinthBattleTeamSelectionMessage(
 }
 
 private fun formatBattleTeamScore(value: Double): String = "%.2f".format(value)
+
+private fun formatBattleWinProbability(value: Double): String = String.format(Locale.ROOT, "%.1f%%", value * 100.0)
+
+private fun BattleModelAssessment.summary(): String = if (jointWinProbability == null) {
+    "NN胜率 ${formatBattleWinProbability(pWin)} · ${tier.label}"
+} else {
+    "NN联合胜率 ${formatBattleWinProbability(jointWinProbability)} · ${tier.label}"
+}

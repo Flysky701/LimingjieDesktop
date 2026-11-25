@@ -18,4 +18,5 @@ import kotlinx.serialization.Serializable
     val wizardCompleted: Boolean = false,
     val gameSettingsConfirmed: Boolean = false,
     val battleOnnxEnabled: Boolean = false,
+    val battleOnnxBundlePath: String = "",
 )

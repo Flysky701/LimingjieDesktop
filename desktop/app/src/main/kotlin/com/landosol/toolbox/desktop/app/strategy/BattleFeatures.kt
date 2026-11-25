@@ -6,6 +6,15 @@ import kotlin.math.abs
 
 /** One unbatched input, in row-major order. IDs are 32-bit database keys until tensorization. */
 internal data class BattleFeature(val type: OnnxJavaType, val shape: List<Int>, val values: DoubleArray)
+
+internal data class ContextFeatures(
+    val inputs: Map<String, BattleFeature>,
+    val rosterPosByUnitId: Map<Int, Int>,
+    val relicIds: List<Int>,
+    val gold: Double,
+    val ownedNorm: Double,
+)
+
 private fun indices(ids: List<Int>, scalar: Boolean = false) = BattleFeature(OnnxJavaType.INT64,
     if (scalar) emptyList() else listOf(ids.size), DoubleArray(ids.size) { ids[it].toDouble() })
 private fun mask(ids: List<Int>) = BattleFeature(OnnxJavaType.BOOL, listOf(ids.size),
@@ -19,49 +28,65 @@ internal class BattleFeaturizer(val catalog: BattleFeatureCatalog, val rosterLen
 
     private fun width(id: Int) = catalog.units[id]?.width ?: 1_000_000_000
     private val positions = compareBy<Int>({ width(it) }, { it })
+    private fun sortedTeam(candidate: List<Int>) = candidate.filterNot { it == 0 }.distinct().sortedWith(positions).take(5)
 
     fun row(context: BattleValueContext, candidate: List<Int>): Map<String, BattleFeature> {
         val owned = context.ownedUnits.map { it.unitId }
-        val team = candidate.filterNot { it == 0 }.distinct().sortedWith(positions).take(5)
+        val team = sortedTeam(candidate)
         require(team.size <= rosterLength) { "Team exceeds model roster capacity" }
-        val slots = team.pad(5)
         val roster = (team + owned.filterNot { it in team }.sortedWith(positions)).pad(rosterLength)
-        val wave = catalog.quests[context.questId].orEmpty()
-        require(context.enemyIds == null || context.enemyIds == wave) { "Observed wave differs from catalog" }
+        val contextFeatures = contextFeatures(context, roster)
+        return contextFeatures.inputs + teamFeatures(contextFeatures, team)
+    }
+
+    fun contextRow(context: BattleValueContext): ContextFeatures {
+        val roster = context.ownedUnits.map { it.unitId }.sortedWith(positions).pad(rosterLength)
+        return contextFeatures(context, roster)
+    }
+
+    fun teamRow(context: ContextFeatures, candidate: List<Int>): Map<String, BattleFeature>? {
+        if (candidate.any { it != 0 && it !in context.rosterPosByUnitId }) return null
+        return teamFeatures(context, sortedTeam(candidate))
+    }
+
+    private fun contextFeatures(context: BattleValueContext, roster: List<Int>): ContextFeatures {
+        val catalogWave = catalog.quests[context.questId]
+        val wave = context.enemyIds ?: catalogWave
+            ?: throw IllegalArgumentException("Unknown quest ${context.questId} in battle catalog")
+        require(catalogWave == null || wave == catalogWave) { "Observed wave differs from catalog" }
         val enemies = wave.pad(5)
-        val relics = context.relicIds.pad(relicLength)
-        val count = owned.size
+        val relicIds = context.relicIds.toList()
+        val relics = relicIds.pad(relicLength)
+        val count = context.ownedUnits.size
         val gold = (context.alphaRupee ?: 0).coerceIn(0, 10000) / 10000.0
         val ownedNorm = minOf(count, 25) / 25.0
         val stacks = context.markStacks.pad(5)
+        val roleCounts = IntArray(9)
+        val talentCounts = IntArray(6)
+        for (unit in context.ownedUnits) {
+            val catalogUnit = catalog.units[unit.unitId]
+            val role = if (unit.roleId == 0) catalogUnit?.role ?: 0 else unit.roleId
+            val talent = if (unit.talentId == 0) catalogUnit?.talent ?: 0 else unit.talentId
+            if (role in roleCounts.indices) roleCounts[role]++
+            if (talent in talentCounts.indices) talentCounts[talent]++
+        }
         val global = buildList {
             addAll(stacks.map { it / 15.0 })
             for (threshold in listOf(4, 9, 15)) addAll(stacks.map { (it >= threshold).numeric() })
             add(ownedNorm)
             add(count / 60.0)
-            addAll(context.roleCounts().map { it / 20.0 })
-            addAll(context.talentCounts().map { it / 20.0 })
+            addAll(roleCounts.drop(1).map { it / 20.0 })
+            addAll(talentCounts.drop(1).map { it / 20.0 })
             add(gold)
             add((context.alphaRupee != null).numeric())
             add(context.difficulty.toDouble() / maxOf(1, catalog.maxDifficulty))
             add(context.area.toDouble() / maxOf(1, catalog.maxArea))
-            add(context.relicIds.isEmpty().numeric())
+            add(relicIds.isEmpty().numeric())
             add(context.reviveAvailable.numeric())
         }
-        val matrix = buildList {
-            for (i in slots.indices) for (j in slots.indices) {
-                if (i < team.size && j < team.size) {
-                    val diff = width(slots[j]).toDouble() - width(slots[i])
-                    add(diff / 1000.0)
-                    add((abs(diff) <= 300).numeric())
-                    add((abs(diff) <= 400).numeric())
-                } else addAll(listOf(0.0, 0.0, 0.0))
-            }
-        }
-        val synergy = synergy(team, context.relicIds, gold, ownedNorm)
         val enemyDim = BattleFeatureCatalog.ENEMY_FEATURES
         val unitDim = BattleFeatureCatalog.UNIT_FEATURES
-        return mapOf(
+        val inputs = mapOf(
             "quest_idx" to indices(listOf(catalog.questIndex[context.questId] ?: 0), scalar = true),
             "area_idx" to indices(listOf(maxOf(0, context.area)), scalar = true),
             "difficulty_idx" to indices(listOf(maxOf(0, context.difficulty)), scalar = true),
@@ -74,7 +99,28 @@ internal class BattleFeaturizer(val catalog: BattleFeatureCatalog, val rosterLen
             "relic_ids" to indices(relics.map { catalog.relicIndex[it] ?: 0 }),
             "relic_mask" to mask(relics),
             "global_feats" to floats(global, global.size),
-            "team_roster_pos" to indices(slots.mapIndexed { i, id -> if (id == 0) 0 else i }),
+        )
+        val rosterPositions = buildMap {
+            roster.forEachIndexed { index, id -> if (id != 0) put(id, index) }
+        }
+        return ContextFeatures(inputs, rosterPositions, relicIds, gold, ownedNorm)
+    }
+
+    private fun teamFeatures(context: ContextFeatures, team: List<Int>): Map<String, BattleFeature> {
+        val slots = team.pad(5)
+        val matrix = buildList {
+            for (i in slots.indices) for (j in slots.indices) {
+                if (i < team.size && j < team.size) {
+                    val diff = width(slots[j]).toDouble() - width(slots[i])
+                    add(diff / 1000.0)
+                    add((abs(diff) <= 300).numeric())
+                    add((abs(diff) <= 400).numeric())
+                } else addAll(listOf(0.0, 0.0, 0.0))
+            }
+        }
+        val synergy = synergy(team, context.relicIds, context.gold, context.ownedNorm)
+        return mapOf(
+            "team_roster_pos" to indices(slots.map { id -> if (id == 0) 0 else context.rosterPosByUnitId.getValue(id) }),
             "team_slot_mask" to mask(slots),
             "team_pos_matrix" to floats(matrix, 5, 5, 3),
             "team_synergy" to floats(synergy, synergy.size),
