@@ -19,6 +19,7 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -157,6 +158,23 @@ class GameSessionResetWorkflowTest {
         assertTrue(result is GameSessionResetStartResult.Blocked)
         assertNull(manager.current())
         assertEquals(GameSessionResetStatus.ERROR, session.state.value.status)
+    }
+
+    @Test
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun `cancelled save releases the session for the next reset`() = runTest {
+        val backend = FakeBackend()
+        val session = expiryWorkflow(backend, LabyrinthEntryActionPlanner())
+        try {
+            assertTrue(session.runOnceAfterRound { throw CancellationException("cancelled save") })
+            testScheduler.runCurrent()
+            assertEquals(GameSessionResetStatus.STOPPED, session.state.value.status)
+            assertNull(session.state.value.sessionId)
+            assertEquals(0, backend.terminateCalls)
+            assertTrue(session.start() is GameSessionResetStartResult.Started)
+        } finally {
+            session.stop()
+        }
     }
 
     @Test

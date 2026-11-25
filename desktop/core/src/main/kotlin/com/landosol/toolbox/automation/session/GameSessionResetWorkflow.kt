@@ -22,6 +22,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import com.landosol.toolbox.core.logging.AppLogger
 
 enum class GameSessionResetStatus { IDLE, RUNNING, STOPPED, ERROR }
@@ -252,34 +254,26 @@ class GameSessionResetWorkflow(
         clientHardClosed: Boolean,
     ): GameSessionResetStartResult {
         if (!captureActive()) {
-            val reason = "请先在权限中心开启屏幕捕获"
-            _state.value = _state.value.copy(status = GameSessionResetStatus.ERROR, message = reason)
-            return GameSessionResetStartResult.Blocked(reason)
+            return blockedStart("请先在权限中心开启屏幕捕获")
         }
         if (!backend.isSupported()) {
-            val reason = "当前设备没有可用的客户端终止策略"
-            _state.value = _state.value.copy(status = GameSessionResetStatus.ERROR, message = reason)
-            return GameSessionResetStartResult.Blocked(reason)
+            return blockedStart("当前设备没有可用的客户端终止策略")
         }
         val session = when (val started = sessionManager.start(AutomationMode.SESSION_RESET, dryRun = false)) {
             is AutomationSessionStartResult.AlreadyRunning -> {
-                val reason = "已有${started.session.mode.name}任务运行"
-                _state.value = _state.value.copy(status = GameSessionResetStatus.ERROR, message = reason)
-                return GameSessionResetStartResult.Blocked(reason)
+                return blockedStart("已有${started.session.mode.name}任务运行")
             }
             is AutomationSessionStartResult.Started -> started.session
         }
         val processor = runCatching(processorFactory).getOrElse { error ->
             sessionManager.stop(session.id)
-            val reason = "加载入口识别模板失败：${error.message ?: "未知错误"}"
-            _state.value = _state.value.copy(status = GameSessionResetStatus.ERROR, message = reason)
-            return GameSessionResetStartResult.Blocked(reason)
+            if (error is CancellationException) throw error
+            return blockedStart("加载入口识别模板失败：${error.message ?: "未知错误"}")
         }
         val entryPlanner = runCatching(entryActionPlannerFactory).getOrElse { error ->
             sessionManager.stop(session.id)
-            val reason = "初始化入口动作规划器失败：${error.message ?: "未知错误"}"
-            _state.value = _state.value.copy(status = GameSessionResetStatus.ERROR, message = reason)
-            return GameSessionResetStartResult.Blocked(reason)
+            if (error is CancellationException) throw error
+            return blockedStart("初始化入口动作规划器失败：${error.message ?: "未知错误"}")
         }.also { planner ->
             pauseStartedAt = Long.MIN_VALUE
             pausedDurationMillis = 0L
@@ -290,9 +284,7 @@ class GameSessionResetWorkflow(
         }
         if (registration is CaptureFrameRegistrationResult.Busy) {
             sessionManager.stop(session.id)
-            val reason = "截图帧正在由${registration.owner}使用"
-            _state.value = _state.value.copy(status = GameSessionResetStatus.ERROR, message = reason)
-            return GameSessionResetStartResult.Blocked(reason)
+            return blockedStart("截图帧正在由${registration.owner}使用")
         }
         lease = (registration as CaptureFrameRegistrationResult.Registered).lease
         activeSessionId = session.id
@@ -331,15 +323,7 @@ class GameSessionResetWorkflow(
             lease = null
             activeSessionId = null
             sessionManager.stop(session.id)
-            val reason = "任务控制通知不可用或已有任务占用，请检查通知权限与频道"
-            _state.update {
-                it.copy(
-                    status = GameSessionResetStatus.ERROR,
-                    sessionId = null,
-                    message = reason,
-                )
-            }
-            return GameSessionResetStartResult.Blocked(reason)
+            return blockedStart("任务控制通知不可用或已有任务占用，请检查通知权限与频道")
         }
         resetFlowJob?.cancel()
         resetFlowJob = actionScope.launch {
@@ -351,6 +335,11 @@ class GameSessionResetWorkflow(
             )
         }
         return GameSessionResetStartResult.Started(session.id)
+    }
+
+    private fun blockedStart(reason: String): GameSessionResetStartResult.Blocked {
+        _state.update { it.copy(status = GameSessionResetStatus.ERROR, sessionId = null, message = reason) }
+        return GameSessionResetStartResult.Blocked(reason)
     }
 
     suspend fun setPaused(paused: Boolean): Boolean = mutex.withLock {
@@ -382,25 +371,8 @@ class GameSessionResetWorkflow(
 
     suspend fun stop(reason: String = "用户停止会话重置"): Boolean = mutex.withLock {
         val sessionId = activeSessionId ?: return false
-        activeSessionId = null
         resetFlowJob?.cancel()
-        resetFlowJob = null
-        pauseStartedAt = Long.MIN_VALUE
-        pausedDurationMillis = 0L
-        inFlight.set(false)
-        lease?.let(CaptureFrameBus::unregister)
-        lease = null
-        val stopped = sessionManager.stop(sessionId)
-        overlayCoordinator.detach(sessionId)
-        _state.update {
-            it.copy(
-                status = GameSessionResetStatus.STOPPED,
-                sessionId = null,
-                paused = false,
-                message = reason,
-            )
-        }
-        stopped
+        finishFlowLocked(sessionId, GameSessionResetStatus.STOPPED, stage, reason)
     }
 
     /** 供外部在自动刷完成后触发下一轮前的重置 */
@@ -421,7 +393,7 @@ class GameSessionResetWorkflow(
         entryPlanner: LabyrinthEntryActionPlanner,
     ) {
         val activeDeadline = activeClock() + totalTimeoutMillis
-        val outcome = try {
+        try {
             awaitUnpaused(sessionId, activeDeadline)
             // 1. 保存本局结果。runOnceAfterRound 只把回调交给本流程，不在外层重复调用。
             setMessage("保存本局结果")
@@ -441,7 +413,6 @@ class GameSessionResetWorkflow(
             } else {
                 awaitObservedPage(sessionId, PAGE_PEEK_TIMEOUT_MILLIS, activeDeadline)
             }
-            throwIfResetFailed()
             awaitUnpaused(sessionId, activeDeadline)
             // A round can begin with a channel login dialog already over the title (2026-10-12
             // diag: the page read UNKNOWN, the flow hunted a 黎明界 trigger to invalidate a
@@ -450,7 +421,6 @@ class GameSessionResetWorkflow(
             // still logging in: there is no session to invalidate.
             val channelPrompt = if (clientHardClosed) null else channelPrompts?.peek()
             awaitUnpaused(sessionId, activeDeadline)
-            throwIfResetFailed()
             val pendingExpiryPopup = isExpiryReconnect(_state.value.lastBlock)
             val skipTermination = clientHardClosed || channelPrompt != null ||
                 (!pendingExpiryPopup && gameSessionResetSkipsTermination(observedPage, clientObserved))
@@ -471,7 +441,6 @@ class GameSessionResetWorkflow(
                 // backend to bring it up; the entry planner drives everything after that.
                 if (clientHardClosed || !clientObserved) {
                     awaitUnpaused(sessionId, activeDeadline)
-                    throwIfResetFailed()
                     transitionTo(sessionId, GameSessionResetStage.RELAUNCHING, "启动公主连结")
                     val relaunch = backend.relaunchClient()
                     if (relaunch != GameClientRelaunchResult.LAUNCH_REQUESTED) {
@@ -495,21 +464,13 @@ class GameSessionResetWorkflow(
 
             // 4-7. 入口规划器根据识别帧实际点击：标题 → 公告 → 主页 → 冒险 → 黎明界。
             awaitUnpaused(sessionId, activeDeadline)
-            throwIfResetFailed()
             transitionTo(sessionId, GameSessionResetStage.WAITING_LOGIN, "等待登录完成")
             awaitStageReached(sessionId, GameSessionResetStage.READY_FOR_NEXT_ROUND, activeDeadline, entryPlanner)
             awaitUnpaused(sessionId, activeDeadline)
-            Result.success(Unit)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Throwable) {
-            Result.failure(error)
-        }
-
-        if (outcome.isSuccess) {
             if (activeSessionId != sessionId) return
             runCatching { onNextRoundReady(sessionId) }
                 .onFailure { callbackError ->
+                    if (callbackError is CancellationException) throw callbackError
                     finishFlow(
                         sessionId = sessionId,
                         status = GameSessionResetStatus.ERROR,
@@ -524,9 +485,13 @@ class GameSessionResetWorkflow(
                 terminalStage = GameSessionResetStage.READY_FOR_NEXT_ROUND,
                 message = "会话重置完成，可以开始下一轮",
             )
-        } else {
-            val error = outcome.exceptionOrNull()
-            val detail = error?.message?.takeIf(String::isNotBlank) ?: "未知错误"
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) {
+                finishFlow(sessionId, GameSessionResetStatus.STOPPED, stage, "会话重置已被停止")
+            }
+            throw cancelled
+        } catch (error: Exception) {
+            val detail = error.message?.takeIf(String::isNotBlank) ?: "未知错误"
             finishFlow(
                 sessionId = sessionId,
                 status = GameSessionResetStatus.ERROR,
@@ -543,7 +508,6 @@ class GameSessionResetWorkflow(
         }
         while (true) {
             awaitUnpaused(sessionId, activeDeadline)
-            throwIfResetFailed()
             if (inFlight.compareAndSet(false, true)) break
             kotlinx.coroutines.delay(FRAME_POLL_MILLIS)
         }
@@ -587,6 +551,7 @@ class GameSessionResetWorkflow(
             kotlinx.coroutines.delay(FRAME_POLL_MILLIS)
         }
         if (activeSessionId != sessionId) error("会话重置已被停止")
+        throwIfResetFailed()
         if (activeClock() >= activeDeadline) error("会话重置超时")
     }
 
@@ -988,7 +953,16 @@ class GameSessionResetWorkflow(
         terminalStage: GameSessionResetStage,
         message: String,
     ) = mutex.withLock {
-        if (activeSessionId != sessionId) return@withLock
+        finishFlowLocked(sessionId, status, terminalStage, message)
+    }
+
+    private suspend fun finishFlowLocked(
+        sessionId: AutomationSessionId,
+        status: GameSessionResetStatus,
+        terminalStage: GameSessionResetStage,
+        message: String,
+    ): Boolean {
+        if (activeSessionId != sessionId) return false
         activeSessionId = null
         resetFlowJob = null
         pauseStartedAt = Long.MIN_VALUE
@@ -996,7 +970,7 @@ class GameSessionResetWorkflow(
         inFlight.set(false)
         lease?.let(CaptureFrameBus::unregister)
         lease = null
-        sessionManager.stop(sessionId)
+        val stopped = sessionManager.stop(sessionId)
         overlayCoordinator.detach(sessionId)
         stage = terminalStage
         _state.update {
@@ -1008,6 +982,7 @@ class GameSessionResetWorkflow(
                 message = message,
             )
         }
+        return stopped
     }
 
     private fun buildOverlayPresentation(sessionId: AutomationSessionId): AutomationOverlayPresentation {

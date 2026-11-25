@@ -12,6 +12,16 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthEventChoiceObservation
 class EventDomainModule(private val runtime: KernelRuntime) : KernelDomainModule {
     override val id = "game-event"
     override val domain = KernelDomain.EVENT
+
+    override fun status(): KernelModuleStatus = synchronized(runtime) {
+        val phase = when {
+            awaitingUnknownEvidence -> "awaiting_evidence"
+            observed != null -> "observed"
+            lastPage == "EVENT_CHOICE" || lastPage == "EVENT_ANIMATION" -> lastPage
+            else -> null
+        }
+        if (phase == null) super.status() else KernelModuleStatus(id, domain, true, phase)
+    }
     @Volatile var extensionPack = KernelEventExtensionPack()
         private set
     private var ruleProvenance: Map<String, String> = emptyMap()

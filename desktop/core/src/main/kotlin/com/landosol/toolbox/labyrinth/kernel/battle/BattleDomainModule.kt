@@ -141,6 +141,16 @@ class BattleDomainModule(
     override val id: String = "battle"
     override val domain: KernelDomain = KernelDomain.BATTLE
 
+    override fun status(): KernelModuleStatus = synchronized(runtime) {
+        val context = combatContext ?: return@synchronized super.status()
+        val phase = when {
+            awaitingRetryBattleAfterFailure -> "retry"
+            nested != null -> "nested_battle"
+            else -> "battle"
+        }
+        KernelModuleStatus(id, domain, true, phase, context.kind.name)
+    }
+
     private val frameActions = KernelFrameAction(runtime, domain)
     internal fun revokeFrameAction(reason: String) = frameActions.revoke(reason)
 

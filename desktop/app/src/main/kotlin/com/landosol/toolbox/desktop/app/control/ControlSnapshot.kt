@@ -1,5 +1,16 @@
 package com.landosol.toolbox.desktop.app.control
 
+import com.landosol.toolbox.desktop.platform.AppConfig
+import com.landosol.toolbox.desktop.platform.DesktopGoal
+import com.landosol.toolbox.desktop.platform.DesktopPreferences
+import com.landosol.toolbox.desktop.platform.DesktopSettings
+import com.landosol.toolbox.desktop.shared.DeviceIdentitySnapshot
+import com.landosol.toolbox.labyrinth.LabyrinthRerollSettings
+import com.landosol.toolbox.labyrinth.LabyrinthStrategySettings
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.json.*
 import kotlin.reflect.*
 import kotlin.reflect.full.*
@@ -46,6 +57,32 @@ fun controlArgs(vararg values:Pair<String,JsonElement>):JsonObject=JsonObject(ma
  * Only constructor properties are encoded (no callbacks, computed properties or Graph objects).
  */
 object ControlModelCodec {
+    private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
+    private val wireSerializers = mapOf<KClass<*>, KSerializer<*>>(
+        AppConfig::class to AppConfig.serializer(),
+        DesktopSettings::class to DesktopSettings.serializer(),
+        DesktopPreferences::class to DesktopPreferences.serializer(),
+        DesktopGoal::class to DesktopGoal.serializer(),
+        LabyrinthStrategySettings::class to LabyrinthStrategySettings.serializer(),
+        LabyrinthRerollSettings::class to LabyrinthRerollSettings.serializer(),
+        DeviceIdentitySnapshot::class to DeviceIdentitySnapshot.serializer(),
+    )
+
+    // V1 tags every model object, including models inside lists and map values.
+    // Map keys are user data and may themselves be named "_type".
+    private fun SerialDescriptor.tagModels(value: JsonElement): JsonElement = when {
+        value is JsonPrimitive -> value
+        kind == StructureKind.CLASS -> buildJsonObject {
+            put("_type", serialName.substringAfterLast('.'))
+            for ((name, field) in value.jsonObject) {
+                put(name, getElementDescriptor(getElementIndex(name)).tagModels(field))
+            }
+        }
+        kind == StructureKind.LIST -> JsonArray(value.jsonArray.map { getElementDescriptor(0).tagModels(it) })
+        kind == StructureKind.MAP -> JsonObject(value.jsonObject.mapValues { getElementDescriptor(1).tagModels(it.value) })
+        else -> value
+    }
+
     private val properties=ConcurrentHashMap<KClass<*>,Map<String,KProperty1<Any,*>>>()
     @Suppress("UNCHECKED_CAST") private fun properties(type:KClass<*>)=properties.getOrPut(type){type.memberProperties.associateBy{it.name} as Map<String,KProperty1<Any,*>>}
 
@@ -84,17 +121,25 @@ object ControlModelCodec {
         is DoubleArray->JsonArray(value.map(::encode))
         is ByteArray->JsonArray(value.map{JsonPrimitive(it.toInt())})
         is Array<*>->JsonArray(value.map(::encode))
-        else->{
-            val type=value::class
-            require(type.qualifiedName.orEmpty().startsWith("com.landosol.toolbox.")){"Unsupported control model ${type.qualifiedName}"}
-            require(type.isData||type.isValue||type.objectInstance!=null){"Control model must contain data only: ${type.simpleName}"}
-            val props=properties(type)
-            buildJsonObject {
-                put("_type",type.simpleName)
-                type.primaryConstructor?.parameters?.forEach{parameter->
-                    val name=checkNotNull(parameter.name)
-                    put(name,encode(checkNotNull(props[name]){"Missing model property $name"}.get(value)))
-                }
+        else -> encodeModel(value)
+    }
+
+    private fun encodeModel(value: Any): JsonElement {
+        val type = value::class
+        // Each entry pairs a concrete model with its own generated serializer.
+        @Suppress("UNCHECKED_CAST")
+        val serializer = wireSerializers[type] as KSerializer<Any>?
+        if (serializer != null) {
+            return serializer.descriptor.tagModels(json.encodeToJsonElement(serializer, value))
+        }
+        require(type.qualifiedName.orEmpty().startsWith("com.landosol.toolbox.")) { "Unsupported control model ${type.qualifiedName}" }
+        require(type.isData || type.isValue || type.objectInstance != null) { "Control model must contain data only: ${type.simpleName}" }
+        val props = properties(type)
+        return buildJsonObject {
+            put("_type", type.simpleName)
+            type.primaryConstructor?.parameters?.forEach { parameter ->
+                val name = checkNotNull(parameter.name)
+                put(name, encode(checkNotNull(props[name]) { "Missing model property $name" }.get(value)))
             }
         }
     }
@@ -103,6 +148,14 @@ object ControlModelCodec {
     fun decode(value:JsonElement,type:KType):Any? {
         if(value is JsonNull){require(type.isMarkedNullable){"Unexpected null for $type"};return null}
         val klass=type.classifier as? KClass<*> ?: error("Unsupported control type $type")
+        wireSerializers[klass]?.let { serializer ->
+            try {
+                return json.decodeFromJsonElement(serializer, value)
+            } catch (_: SerializationException) {
+                // Older inputs can use [{_k, _v}] even for scalar-keyed maps.
+                // The v1 decoder below also preserves its existing validation errors.
+            }
+        }
         val primitive=value as? JsonPrimitive
         when(klass) {
             JsonObject::class->return value.jsonObject

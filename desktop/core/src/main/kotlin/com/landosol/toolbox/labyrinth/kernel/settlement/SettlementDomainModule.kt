@@ -18,6 +18,7 @@ import com.landosol.toolbox.labyrinth.kernel.KernelEvent
 import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds as K
 import com.landosol.toolbox.labyrinth.kernel.KernelEventPayload
 import com.landosol.toolbox.labyrinth.kernel.KernelRuntime
+import com.landosol.toolbox.labyrinth.kernel.KernelModuleStatus
 import com.landosol.toolbox.labyrinth.kernel.PermitTransitionPayload
 import com.landosol.toolbox.labyrinth.kernel.StateReducedPayload
 import com.landosol.toolbox.labyrinth.labyrinthChestResultFallbackTap
@@ -45,6 +46,11 @@ internal data class SettlementPlan(
 internal class SettlementDomainModule(private val runtime: KernelRuntime) : KernelDomainModule {
     override val id: String = "settlement"
     override val domain: KernelDomain = KernelDomain.SETTLEMENT
+
+    override fun status(): KernelModuleStatus = synchronized(runtime) {
+        if (stage == LabyrinthPostBossStage.NONE) super.status()
+        else KernelModuleStatus(id, domain, true, stage.name, lastPage?.name.orEmpty())
+    }
 
     var stage: LabyrinthPostBossStage = LabyrinthPostBossStage.NONE
         private set

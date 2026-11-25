@@ -43,6 +43,7 @@ import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds as K
 import com.landosol.toolbox.labyrinth.kernel.KernelHookVerdict
 import com.landosol.toolbox.labyrinth.kernel.KernelFrameAction
 import com.landosol.toolbox.labyrinth.kernel.KernelRuntime
+import com.landosol.toolbox.labyrinth.kernel.KernelModuleStatus
 import com.landosol.toolbox.labyrinth.kernel.PermitTransitionPayload
 import com.landosol.toolbox.labyrinth.kernel.PolicyRuleEvaluatedPayload
 import com.landosol.toolbox.labyrinth.kernel.SessionLifecyclePayload
@@ -171,6 +172,18 @@ class RewardTailModule(
 ) : KernelDomainModule {
     override val id = "reward-tail"
     override val domain = KernelDomain.REWARD
+
+    override fun status(): KernelModuleStatus = synchronized(runtime) {
+        val phase = when {
+            pendingDispatch != null -> "dispatched"
+            hold.active -> "relic_hold"
+            roleRewardBatchActive -> "role_reward"
+            acquisition.active -> "character_acquisition"
+            page == Page.ITEM_REWARD || page == Page.LINK_CHOICE || page == Page.RELIC_CHOICE -> page?.name
+            else -> null
+        }
+        if (phase == null) super.status() else KernelModuleStatus(id, domain, true, phase)
+    }
 
     private val frameActions = KernelFrameAction(runtime, domain)
     internal fun revokeFrameAction(reason: String) = frameActions.revoke(reason)

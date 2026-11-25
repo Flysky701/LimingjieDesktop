@@ -23,6 +23,7 @@ import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds as K
 import com.landosol.toolbox.labyrinth.kernel.KernelHookVerdict
 import com.landosol.toolbox.labyrinth.kernel.KernelFrameAction
 import com.landosol.toolbox.labyrinth.kernel.KernelRuntime
+import com.landosol.toolbox.labyrinth.kernel.KernelModuleStatus
 import com.landosol.toolbox.labyrinth.kernel.PageStabilityRegistry
 import com.landosol.toolbox.labyrinth.kernel.StateReducedPayload
 import com.landosol.toolbox.labyrinth.node.LabyrinthMapScanDirection
@@ -118,6 +119,17 @@ class MapDomainModule(
 ) : KernelDomainModule {
     override val id: String = "map"
     override val domain: KernelDomain = KernelDomain.MAP
+
+    override fun status(): KernelModuleStatus = synchronized(runtime) {
+        val phase = when {
+            pending != null -> "transition"
+            inFlight != null -> "dispatched"
+            proposal != null -> "proposed"
+            stableFrames > 0 || frame?.observation?.page == NODE_SELECTION -> "observing"
+            else -> return@synchronized super.status()
+        }
+        KernelModuleStatus(id, domain, true, phase, pending?.targetNodeId?.toString().orEmpty())
+    }
 
     private val frameActions = KernelFrameAction(runtime, domain)
     internal fun revokeFrameAction(reason: String) = frameActions.revoke(reason)

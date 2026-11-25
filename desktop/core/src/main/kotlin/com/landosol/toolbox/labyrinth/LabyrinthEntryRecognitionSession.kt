@@ -20,21 +20,15 @@ import com.landosol.toolbox.labyrinth.kernel.strategy.LabyrinthBattleValueEstima
 import com.landosol.toolbox.labyrinth.kernel.strategy.buildBattleValueContext
 import com.landosol.toolbox.labyrinth.kernel.strategy.labyrinthCharacterIdToUnitId
 import com.landosol.toolbox.labyrinth.kernel.event.*
-import com.landosol.toolbox.labyrinth.kernel.battle.BattleDomainModule
 import com.landosol.toolbox.labyrinth.kernel.battle.BattleDomainSnapshot
 import com.landosol.toolbox.labyrinth.kernel.battle.BattleSpecialEquipmentPhase
 import com.landosol.toolbox.labyrinth.kernel.map.MapActionKind
-import com.landosol.toolbox.labyrinth.kernel.map.MapDomainModule
 import com.landosol.toolbox.labyrinth.kernel.map.MapNodeTarget
 import com.landosol.toolbox.labyrinth.kernel.map.MapRouteStability
 import com.landosol.toolbox.labyrinth.kernel.map.PendingNodeTransition as KernelNodeTransition
-import com.landosol.toolbox.labyrinth.kernel.recovery.RecoveryDomainModule
 import com.landosol.toolbox.labyrinth.kernel.recovery.RecoveryEvaluation
 import com.landosol.toolbox.labyrinth.kernel.reward.RewardActionKind
-import com.landosol.toolbox.labyrinth.kernel.reward.RewardTailModule
-import com.landosol.toolbox.labyrinth.kernel.settlement.SettlementDomainModule
 import com.landosol.toolbox.labyrinth.kernel.settlement.SettlementPlan
-import com.landosol.toolbox.labyrinth.kernel.shop.ShopDomainModule
 import com.landosol.toolbox.labyrinth.kernel.shop.ShopPlanOutcome
 import com.landosol.toolbox.labyrinth.kernel.shop.ShopPurchaseTarget
 import java.util.WeakHashMap
@@ -1369,19 +1363,21 @@ class LabyrinthEntryRecognitionSession(
     private val alphaRupeeLedger = LabyrinthAlphaRupeeLedger()
     private val shadowBattleRecorder = LabyrinthShadowBattleRecorder()
     @Volatile private var plannedShopImprintIsChoice: Boolean? = null
-    private val eventDomain = EventDomainModule(kernelRuntime).also(kernelRuntime::registerModule)
-    val encounterStack = KernelEncounterStack(kernelRuntime)
-    private val recoveryDomain = RecoveryDomainModule(kernelRuntime).also(kernelRuntime::registerModule)
-    private val settlementDomain = SettlementDomainModule(kernelRuntime).also(kernelRuntime::registerModule)
-    private val rewardTail = RewardTailModule(kernelRuntime, roleRewardChoicePlanner, relicChoicePolicy)
-        .also(kernelRuntime::registerModule)
-    private val shopDomain = ShopDomainModule(kernelRuntime, object : ShopPurchaseTarget() {
-        override var relicId by this@LabyrinthEntryRecognitionSession::plannedShopPurchaseRelicId
-        override var startedAt by this@LabyrinthEntryRecognitionSession::plannedShopPurchaseStartedAt
-        override var confirmedRelic by this@LabyrinthEntryRecognitionSession::pendingShopPurchase
-    }).also(kernelRuntime::registerModule)
-    private val battleDomain = BattleDomainModule(kernelRuntime, encounterStack).also(kernelRuntime::registerModule)
-    private val mapDomain = MapDomainModule(kernelRuntime, encounterStack).also(kernelRuntime::registerModule)
+    val kernelBundle = LabyrinthKernelBundle(
+        kernelRuntime, roleRewardChoicePlanner, relicChoicePolicy, object : ShopPurchaseTarget() {
+            override var relicId by this@LabyrinthEntryRecognitionSession::plannedShopPurchaseRelicId
+            override var startedAt by this@LabyrinthEntryRecognitionSession::plannedShopPurchaseStartedAt
+            override var confirmedRelic by this@LabyrinthEntryRecognitionSession::pendingShopPurchase
+        },
+    )
+    val encounterStack = kernelBundle.encounterStack
+    private val eventDomain = kernelBundle.event
+    private val recoveryDomain = kernelBundle.recovery
+    private val settlementDomain = kernelBundle.settlement
+    private val rewardTail = kernelBundle.reward
+    private val shopDomain = kernelBundle.shop
+    private val battleDomain = kernelBundle.battle
+    private val mapDomain = kernelBundle.map
     private var kernelRouteCause: KernelEvent? = null
     private var kernelNodeReceipt: KernelEvent? = null
     private var kernelEventReceipt: KernelEvent? = null
@@ -2527,7 +2523,7 @@ class LabyrinthEntryRecognitionSession(
         roleRewardJoinedSequenceStarted = false
         lastObservedRoleRewardSelectionSignature = null
         existingRunResumeHandoffArmed = false
-        // resetSession/resetNodeExecutionState reset the shop transaction, baseline and scan together.
+        // resetSession resets the shop transaction, baseline and scan together.
         shopRequiredCapturedAfter = Long.MIN_VALUE
         shopEvidenceVersion++
         pendingRelicSelection = null
@@ -3777,13 +3773,8 @@ class LabyrinthEntryRecognitionSession(
     /** Restart login/entry navigation while retaining any already-loaded route progress. */
     private fun restartEntryNavigationAfterSessionError() {
         resetKernelRoute("entry_navigation_restarted")
-        recoveryDomain.reset(kernelRuntime.traceId)
-        settlementDomain.reset(kernelRuntime.traceId)
-        rewardTail.reset(kernelRuntime.traceId)
-        shopDomain.reset(kernelRuntime.traceId)
+        kernelBundle.resetForEntryRestart()
         lastPublishedShopPathBTarget = null
-        battleDomain.reset(kernelRuntime.traceId)
-        mapDomain.reset(kernelRuntime.traceId)
         invalidateEventPermission("entry_navigation_restarted")
         nodeActionEvidence.reset()
         nodeEvidenceFrameWidth = 0
@@ -9895,13 +9886,7 @@ class LabyrinthEntryRecognitionSession(
 
     private fun resetNodeExecutionState() {
         battleRelicReviveConsumed = false
-        resetKernelRoute("route_reset")
-        mapDomain.reset(kernelRuntime.traceId)
-        battleDomain.reset(kernelRuntime.traceId)
-        shopDomain.reset(kernelRuntime.traceId)
         lastPublishedShopPathBTarget = null
-        rewardTail.reset(kernelRuntime.traceId)
-        settlementDomain.reset(kernelRuntime.traceId)
         nodeActionEvidence.reset()
         nodeEvidenceFrameWidth = 0
         nodeEvidenceFrameHeight = 0

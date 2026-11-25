@@ -3,11 +3,20 @@ package com.landosol.toolbox.labyrinth.kernel
 import java.util.UUID
 import java.util.concurrent.CancellationException
 
+data class KernelModuleStatus(
+    val id: String,
+    val domain: KernelDomain,
+    val active: Boolean,
+    val phase: String,
+    val detail: String = "",
+)
+
 interface KernelDomainModule {
     val id: String
     val domain: KernelDomain
     fun onKernelEvent(event: KernelEvent, ctx: KernelRuntime)
     fun reset(traceId: String)
+    fun status(): KernelModuleStatus = KernelModuleStatus(id, domain, active = false, phase = "idle")
 }
 
 interface KernelEventHook {
@@ -27,9 +36,14 @@ sealed interface KernelHookVerdict {
 
 data class KernelIntervention(val eventSeq: Long, val cause: KernelEvent, val verdict: KernelHookVerdict)
 
-class KernelRuntime(private val clock: () -> Long = System::currentTimeMillis, maxLogCapacity: Int = 2_000) {
+class KernelRuntime(
+    private val clock: () -> Long = System::currentTimeMillis,
+    maxLogCapacity: Int = 2_000,
+    val onTraceChanged: ((String) -> Unit)? = null,
+) {
     companion object { const val MAX_REENTRANCY_DEPTH = 8 }
     val log = KernelEventLog(maxLogCapacity)
+    val encounterStack = KernelEncounterStack(this)
     fun addSink(sink: KernelEventSink) = log.addSink(sink)
     fun removeSink(sink: KernelEventSink) = log.removeSink(sink)
     @Volatile var traceId: String = UUID.randomUUID().toString()
@@ -43,18 +57,23 @@ class KernelRuntime(private val clock: () -> Long = System::currentTimeMillis, m
 
     @Synchronized fun registerModule(module: KernelDomainModule) { modules[module.id] = module }
     @Synchronized fun unregisterModule(id: String) { modules.remove(id) }
+    @Synchronized fun moduleStatuses(): List<KernelModuleStatus> = modules.values.map { it.status() }
     @Synchronized fun registerHook(hook: KernelEventHook) { hooks[hook.id] = hook }
     @Synchronized fun unregisterHook(id: String) { hooks.remove(id) }
 
     @Synchronized fun resetSession(sessionId: String = UUID.randomUUID().toString()): KernelEvent {
         check(stack.isEmpty())
         resetDomains(sessionId)
-        traceId = sessionId
+        if (traceId != sessionId) {
+            traceId = sessionId
+            onTraceChanged?.invoke(sessionId)
+        }
         return emit(KernelDomain.RUNTIME, KernelEventKinds.SESSION_LIFECYCLE, SessionLifecyclePayload(sessionId, "start"))
     }
 
     @Synchronized internal fun resetDomains(nextTraceId: String = traceId) {
         modules.values.toList().forEach { it.reset(nextTraceId) }
+        encounterStack.resetSilent()
         latestIntervention = null
     }
 

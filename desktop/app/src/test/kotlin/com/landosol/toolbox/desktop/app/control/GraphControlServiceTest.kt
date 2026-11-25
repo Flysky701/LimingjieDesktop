@@ -19,8 +19,10 @@ import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
 import com.landosol.toolbox.desktop.ocr.OcrEngineTelemetry
 import com.landosol.toolbox.desktop.platform.DesktopSettings
+import com.landosol.toolbox.desktop.platform.AppConfig
 import com.landosol.toolbox.desktop.platform.UserResourceLeases
 import com.landosol.toolbox.desktop.shared.DeviceIdentitySnapshot
+import com.landosol.toolbox.desktop.shared.GamePackageIdentity
 import com.landosol.toolbox.gamedata.EventChoiceResource
 import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.labyrinth.*
@@ -33,6 +35,8 @@ import com.landosol.toolbox.labyrinth.vision.*
 import kotlin.reflect.KClass
 import kotlin.reflect.KType
 import kotlin.reflect.full.primaryConstructor
+import kotlin.reflect.full.memberProperties
+import kotlin.reflect.full.createType
 import com.landosol.toolbox.protocol.bilibili.GameServer
 import com.landosol.toolbox.protocol.bilibili.BilibiliGameSession
 import com.landosol.toolbox.protocol.bilibili.GameAccountProfile
@@ -57,6 +61,42 @@ import java.net.ServerSocket
 /** Synthetic local data only. Device calls fail unless a test explicitly supplies a fake result. */
 class GraphControlServiceTest {
     @get:Rule val directory = TemporaryFolder()
+
+    @Test fun generatedSerializersMatchTheConstructorBasedWireFormat() {
+        // Independent v1 encoder for the field types used by these seven models.
+        fun legacy(value: Any?): JsonElement = when (value) {
+            null -> JsonNull
+            is String -> JsonPrimitive(value)
+            is Number -> JsonPrimitive(value)
+            is Boolean -> JsonPrimitive(value)
+            is Enum<*> -> JsonPrimitive(value.name)
+            is Iterable<*> -> JsonArray(value.map(::legacy))
+            is Map<*, *> -> JsonObject(value.entries.associate { (key, item) -> key.toString() to legacy(item) })
+            else -> buildJsonObject {
+                val type = value::class
+                put("_type", type.simpleName)
+                val properties = type.memberProperties.associateBy { it.name }
+                for (parameter in checkNotNull(type.primaryConstructor).parameters) {
+                    val name = checkNotNull(parameter.name)
+                    put(name, legacy(properties.getValue(name).getter.call(value)))
+                }
+            }
+        }
+
+        val goal = DesktopGoal(4, 2, clears = false)
+        val config = AppConfig(DesktopSettings(windowY = -10), DesktopPreferences(goals = listOf(goal)), true)
+        val strategy = LabyrinthStrategySettings(personalRoleScores = mapOf("_type" to 3),
+            openingRosters = mapOf(4 to listOf(listOf("101"))))
+        val identity = DeviceIdentitySnapshot("test", "brand", "model", "14", 34, listOf("x86"), "id", 1920, 1080,
+            mapOf("_type" to GamePackageIdentity("v", 12, "test")), 15L)
+        for (model in listOf(config, config.environment, config.ui, goal, strategy, LabyrinthRerollSettings(), identity)) {
+            val wire = legacy(model)
+            assertEquals(model::class.simpleName, wire.toString(), ControlModelCodec.encode(model).toString())
+            assertEquals(model, ControlModelCodec.decode(wire, model::class.createType()))
+        }
+        val entries = Json.parseToJsonElement("""{"personalRoleScores":[{"_k":"101","_v":4}]}""")
+        assertEquals(mapOf("101" to 4), ControlModelCodec.decode<LabyrinthStrategySettings>(entries).personalRoleScores)
+    }
 
     @Test fun compactSnapshotsKeepFullRecordsAvailableAndRefreshFinishedRows() = runBlocking {
         val graph = DesktopAppGraph(directory.root.toPath(), suppliedDevice = NoIoDevice(), startupUpdates = false, dataOnly = true)

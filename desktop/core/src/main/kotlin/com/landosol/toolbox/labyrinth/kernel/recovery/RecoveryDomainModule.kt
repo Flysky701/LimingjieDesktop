@@ -17,6 +17,7 @@ import com.landosol.toolbox.labyrinth.kernel.KernelEvent
 import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds as K
 import com.landosol.toolbox.labyrinth.kernel.KernelEventPayload
 import com.landosol.toolbox.labyrinth.kernel.KernelRuntime
+import com.landosol.toolbox.labyrinth.kernel.KernelModuleStatus
 import com.landosol.toolbox.labyrinth.kernel.PermitTransitionPayload
 import com.landosol.toolbox.labyrinth.kernel.StateReducedPayload
 import com.landosol.toolbox.labyrinth.labyrinthActionLatchStuck
@@ -41,6 +42,14 @@ data class RecoveryEvaluation(
 class RecoveryDomainModule(private val runtime: KernelRuntime) : KernelDomainModule {
     override val id: String = "recovery"
     override val domain: KernelDomain = KernelDomain.RECOVERY
+
+    override fun status(): KernelModuleStatus = synchronized(runtime) {
+        when {
+            lastBlockKind != SessionBlockKind.NONE -> KernelModuleStatus(id, domain, true, "blocked", lastBlockKind.name)
+            postEntryUnknownSince != Long.MIN_VALUE -> KernelModuleStatus(id, domain, true, "unknown_page")
+            else -> super.status()
+        }
+    }
 
     var lastBlockKind: SessionBlockKind = SessionBlockKind.NONE
         private set

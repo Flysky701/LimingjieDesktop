@@ -81,6 +81,18 @@ class ShopDomainModule internal constructor(
     override val id = "shop"
     override val domain = KernelDomain.SHOP
 
+    override fun status(): KernelModuleStatus = synchronized(runtime) {
+        val page = lastObservedPage
+        val phase = when {
+            shopRefreshTransaction.pending != null -> "refresh"
+            plannedPurchaseRelicId != null || plannedRoleImprintLabel != null -> "purchase"
+            page != null && labyrinthPageUiOwner(page) == LabyrinthPageUiOwner.SHOP -> page.name
+            nodeEntry != null && page == null -> "entered"
+            else -> return@synchronized super.status()
+        }
+        KernelModuleStatus(id, domain, true, phase)
+    }
+
     internal var relicPurchasesThisCycle = 0
         private set
     internal var refreshesUsedInVisit = 0
