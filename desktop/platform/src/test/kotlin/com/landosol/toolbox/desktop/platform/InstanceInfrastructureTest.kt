@@ -88,8 +88,8 @@ class InstanceInfrastructureTest {
         assumeTrue(System.getProperty("os.name").startsWith("Windows"))
         val root=folder.root.toPath()
         val profile=InstanceCatalog(root.resolve("catalog"),root.resolve("legacy")).create("worker")
-        val independent=ProcessBuilder(InfrastructureFixture.command("sleep",root.toString())).start()
-        val worker=WorkerProcessLauncher.start(InfrastructureFixture.command("sleep",root.toString()),profile)
+        val independent=InfrastructureFixture.startIndependentChild()
+        val worker=WorkerProcessLauncher.start(listOf("cmd.exe", "/d", "/q", "/c", "pause"),profile)
         try {
             assertEquals(profile,worker.profile)
             assertTrue(worker.isAlive)
@@ -108,10 +108,18 @@ class InstanceInfrastructureTest {
 
 object InfrastructureFixture {
     fun command(vararg args:String):List<String> = listOf(
-        Path.of(System.getProperty("java.home"),"bin","java.exe").toString(),"-cp",
+        Path.of(System.getProperty("java.home"),"bin","java.exe").toString(),
+        "-XX:TieredStopAtLevel=1", "-XX:+UseSerialGC", "-XX:ActiveProcessorCount=2", "-cp",
         listOf(InfrastructureFixture::class.java,ResourceLease::class.java,kotlin.Unit::class.java,com.sun.jna.Native::class.java,com.sun.jna.platform.win32.Kernel32::class.java)
             .map { Path.of(it.protectionDomain.codeSource.location.toURI()).toString() }.distinct().joinToString(java.io.File.pathSeparator),
         InfrastructureFixture::class.java.name)+args
+
+    // A real process that neither loads a JVM nor depends on pipes owned by its parent.
+    fun startIndependentChild(): Process = ProcessBuilder("ping.exe", "-n", "61", "127.0.0.1")
+        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
+        .start()
+
     @JvmStatic fun main(args:Array<String>) {
         val root=Path.of(args[1])
         when(args[0]) {
@@ -119,24 +127,24 @@ object InfrastructureFixture {
                 Files.writeString(root.resolve("ready"),"ready"); Thread.sleep(60_000)
             }
             "owner" -> {
-                val worker=ProcessBuilder(command("worker",root.toString())).start()
+                val worker = ProcessBuilder("cmd.exe", "/d", "/q", "/c", "pause & ping.exe -n 61 127.0.0.1 >nul 2>&1")
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                    .start()
                 WorkerProcessContainment.own(worker.pid()).use {
-                    Files.writeString(root.resolve("worker.pid"),worker.pid().toString())
                     // The worker waits for containment before spawning a service-like child.
-                    Files.writeString(root.resolve("contained"),"ready")
-                    val deadline=System.nanoTime()+8_000_000_000
-                    while(!Files.exists(root.resolve("child.pid")) && System.nanoTime()<deadline) Thread.sleep(20)
+                    worker.outputStream.use { it.write("\r\n".toByteArray()) }
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
+                    var child: ProcessHandle? = null
+                    while (child == null && worker.isAlive && System.nanoTime() < deadline) {
+                        child = worker.children().use { it.findFirst().orElse(null) }
+                        if (child == null) Thread.sleep(20)
+                    }
+                    Files.writeString(root.resolve("worker.pid"), worker.pid().toString())
+                    Files.writeString(root.resolve("child.pid"), checkNotNull(child).pid().toString())
                     Files.writeString(root.resolve("ready"),"ready")
                     Thread.sleep(60_000)
                 }
             }
-            "worker" -> {
-                while(!Files.exists(root.resolve("contained"))) Thread.sleep(20)
-                val child=ProcessBuilder(command("sleep",root.toString())).start()
-                Files.writeString(root.resolve("child.pid"),child.pid().toString())
-                Thread.sleep(60_000)
-            }
-            else -> Thread.sleep(60_000)
         }
     }
 }

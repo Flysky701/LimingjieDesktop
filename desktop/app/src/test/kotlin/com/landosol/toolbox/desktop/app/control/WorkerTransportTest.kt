@@ -4,7 +4,6 @@ import com.landosol.toolbox.desktop.platform.WorkerProcessContainment
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.nio.file.Files
-import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -21,8 +20,7 @@ class WorkerTransportTest {
 
     @Test fun `two child JVMs keep commands and previews isolated and close independently`() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val java = Path.of(System.getProperty("java.home"), "bin", "java.exe").toString()
-        val command = listOf(java, "-cp", System.getProperty("limingjie.test.classpath"), "com.landosol.toolbox.desktop.app.control.WorkerProtocolFixtureKt")
+        val command = workerFixtureCommand("com.landosol.toolbox.desktop.app.control.WorkerProtocolFixtureKt")
         val launcher = WorkerLauncher(scope, WorkerProcessContainment::own, command)
         val aDirectory = temporary.newFolder("one").toPath()
         val a = launcher.start(UUID.randomUUID().toString(), "one", aDirectory)

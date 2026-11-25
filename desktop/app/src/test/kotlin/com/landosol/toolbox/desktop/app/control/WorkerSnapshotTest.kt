@@ -16,20 +16,25 @@ class WorkerSnapshotTest {
         val initial = buildJsonObject { put("settings", "keep"); put("captcha", JsonNull); put("finished", false) }
         val state = AtomicReference(initial)
         val receiver = WorkerStateReceiver()
-        val stall = AtomicBoolean()
         val stalled = CompletableDeferred<Unit>()
         val revoked = AtomicBoolean()
         val domain = object : WorkerDomain {
+            private var sentChange = false
+
             override suspend fun snapshot(includePreview: Boolean): JsonObject {
-                if (stall.get()) { stalled.complete(Unit); awaitCancellation() }
-                return state.get()
+                // Stall on the snapshot after the changed state to avoid queuing an idle pong.
+                if (sentChange) { stalled.complete(Unit); awaitCancellation() }
+                return state.get().also { sentChange = it !== initial }
             }
             override suspend fun execute(op: String, args: JsonObject) = JsonObject(emptyMap())
             override fun revokeActions(reason: String) { revoked.set(true) }
             override suspend fun shutdown() = Unit
         }
         ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { server ->
-            val worker = async(Dispatchers.IO) { runWorkerTransport(server.localPort, "test", "profile", "run", domain) }
+            val worker = async(Dispatchers.IO) {
+                runWorkerTransport(server.localPort, "test", "profile", "run", domain,
+                    snapshotIntervalMillis = 25, heartbeatMillis = 200)
+            }
             withContext(Dispatchers.IO) {
                 WorkerWire(server.accept().apply { soTimeout = 3_000 }).use { peer ->
                     assertEquals("hello", peer.read().wireString("kind"))
@@ -39,19 +44,22 @@ class WorkerSnapshotTest {
                     assertEquals(1L, first.getValue("sequence").jsonPrimitive.long)
                     assertEquals(initial, receiver.accept(first, peer.lastReadBytes))
                     // No duplicate state in the next interval, just a lightweight heartbeat.
+                    peer.socket.soTimeout = 1_000
                     assertEquals("pong", peer.read().wireString("kind"))
                     val changes = buildJsonObject { put("captcha", "new-ticket"); put("finished", true) }
                     val changed = JsonObject(initial + changes)
                     state.set(changed)
                     peer.write(wireMessage("ping", "profile", "run"))
-                    val second = peer.read()
+                    val second = withTimeout(3_000) {
+                        generateSequence { ensureActive(); peer.read() }.first { it.wireString("kind") != "pong" }
+                    }
                     assertEquals("state", second.wireString("kind"))
                     assertEquals(2L, second.getValue("sequence").jsonPrimitive.long)
                     assertEquals(changes, second["patch"])
                     assertEquals(changed, receiver.accept(second, peer.lastReadBytes))
-                    stall.set(true)
                     withTimeout(3_000) { stalled.await() }
                     peer.write(wireMessage("ping", "profile", "run"))
+                    peer.socket.soTimeout = 750
                     assertThrows(SocketTimeoutException::class.java) { peer.read() }
                 }
             }

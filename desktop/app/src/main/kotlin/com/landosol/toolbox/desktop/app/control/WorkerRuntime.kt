@@ -5,6 +5,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
@@ -18,6 +19,8 @@ internal suspend fun runWorkerTransport(
     runId: String,
     domain: WorkerDomain,
     leaseMillis: Long = WorkerProtocol.LEASE_MILLIS,
+    snapshotIntervalMillis: Long = 500,
+    heartbeatMillis: Long = 2_000,
 ) = withContext(Dispatchers.IO) {
     val socket = Socket()
     val work = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -93,6 +96,7 @@ internal suspend fun runWorkerTransport(
             }
         }
         work.launch {
+            val heartbeatNanos = TimeUnit.MILLISECONDS.toNanos(heartbeatMillis)
             var lastState: JsonObject? = null
             var lastSentAt = 0L
             var sequence = 0L
@@ -106,7 +110,7 @@ internal suspend fun runWorkerTransport(
                         sequence++
                         lastState = state
                         lastSentAt = now
-                    } else if (now - lastSentAt >= 2_000_000_000L) {
+                    } else if (now - lastSentAt >= heartbeatNanos) {
                         wire.write(wireMessage("pong", profileId, runId))
                         lastSentAt = now
                     }
@@ -115,7 +119,7 @@ internal suspend fun runWorkerTransport(
                     if (!closing.get()) DesktopLog.write('E', "Worker", "状态快照或发送失败，停止实例", failure)
                     stop("状态连接已失效，任务已停止")
                 }
-                delay(500)
+                delay(snapshotIntervalMillis)
             }
         }
         work.launch {

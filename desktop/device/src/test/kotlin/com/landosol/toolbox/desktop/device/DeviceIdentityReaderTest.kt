@@ -8,30 +8,27 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.Path
-import java.security.KeyStore
+import java.security.KeyPairGenerator
 import java.security.MessageDigest
-import java.security.PrivateKey
+import java.security.Signature
+import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
+import java.util.HexFormat
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import javax.security.auth.x500.X500Principal
 
 class DeviceIdentityReaderTest {
     @get:Rule val directory = TemporaryFolder()
     @Test fun slowApkTransferVerifiesSignatureCachesUpdateKeyAndDeletesPulledApk() = runTest {
         // Disposable, locally generated signing identity. No real game APK or credential is used.
-        val keyStoreFile = directory.root.toPath().resolve("synthetic.p12")
-        val keytool = Path.of(System.getProperty("java.home"), "bin", if (System.getProperty("os.name").startsWith("Windows")) "keytool.exe" else "keytool")
-        val process = ProcessBuilder(keytool.toString(), "-genkeypair", "-alias", "fixture", "-keystore", keyStoreFile.toString(), "-storepass", "fixture-only", "-keypass", "fixture-only", "-keyalg", "RSA", "-keysize", "2048", "-dname", "CN=Synthetic Device Fixture", "-validity", "3650").redirectErrorStream(true).start()
-        val output = process.inputStream.bufferedReader().use { it.readText() }
-        assertEquals(output, 0, process.waitFor())
-        val store = KeyStore.getInstance("PKCS12").apply { Files.newInputStream(keyStoreFile).use { load(it, "fixture-only".toCharArray()) } }
-        val cert = store.getCertificate("fixture") as X509Certificate
-        val expected = MessageDigest.getInstance("MD5").digest(cert.encoded).joinToString("") { "%02x".format(it) }
-        val config = ApkSigner.SignerConfig.Builder("fixture", store.getKey("fixture", "fixture-only".toCharArray()) as PrivateKey, listOf(cert)).build()
+        val config = fixtureSigner()
+        val expected = MessageDigest.getInstance("MD5").digest(config.certificates.single().encoded).joinToString("") { "%02x".format(it) }
         val unsigned = directory.root.toPath().resolve("unsigned.apk")
         ZipOutputStream(Files.newOutputStream(unsigned)).use { zip ->
             zip.putNextEntry(ZipEntry("AndroidManifest.xml")); zip.write(binaryManifest()); zip.closeEntry()
@@ -86,6 +83,37 @@ class DeviceIdentityReaderTest {
         DeviceIdentityReader(fake, directory.root.toPath(), setOf(FakeAdb.GAME)).read("fixture", 1920 to 1080)
         assertEquals(4, fake.calls.count { it.arguments.firstOrNull() == "pull" })
         Files.list(directory.root.toPath().resolve("cache/apk")).use { assertEquals(0L, it.count()) }
+    }
+
+    private fun fixtureSigner(): ApkSigner.SignerConfig {
+        val keyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val hex = HexFormat.of()
+        val algorithm = hex.parseHex("300d06092a864886f70d01010c0500") // sha384WithRSAEncryption
+        val versionAndSerial = hex.parseHex("a003020102020101") // X.509 v3, serial 1
+        val name = X500Principal("CN=Synthetic Device Fixture").encoded
+        val notBefore = der(0x17, "200101000000Z".toByteArray())
+        val notAfter = der(0x18, "21200101000000Z".toByteArray())
+        val validity = der(0x30, notBefore + notAfter)
+        val body = der(0x30, versionAndSerial + algorithm + name + validity + name + keyPair.public.encoded)
+        val signed = Signature.getInstance("SHA384withRSA").run {
+            initSign(keyPair.private)
+            update(body)
+            sign()
+        }
+        val encoded = der(0x30, body + algorithm + der(0x03, byteArrayOf(0) + signed))
+        val certificate = CertificateFactory.getInstance("X.509")
+            .generateCertificate(ByteArrayInputStream(encoded)) as X509Certificate
+        return ApkSigner.SignerConfig.Builder("fixture", keyPair.private, listOf(certificate)).build()
+    }
+
+    private fun der(tag: Int, content: ByteArray): ByteArray {
+        val size = content.size
+        val length = when {
+            size < 128 -> byteArrayOf(size.toByte())
+            size < 256 -> byteArrayOf(0x81.toByte(), size.toByte())
+            else -> byteArrayOf(0x82.toByte(), (size shr 8).toByte(), size.toByte())
+        }
+        return byteArrayOf(tag.toByte()) + length + content
     }
 
     @Test fun failedOrCancelledPullNeverCachesPartialApkAndDeletesTemporaryFile() = runBlocking {

@@ -17,11 +17,13 @@ import org.junit.rules.TemporaryFolder
 /** Only disposable child JVMs and temporary files; no graph or emulator. */
 class WorkerLifecycleTest {
     @get:Rule val temporary = TemporaryFolder()
-    private fun launcher(scope: CoroutineScope, timeout: Int = 8_000,
-                         contain: (Long) -> AutoCloseable = WorkerProcessContainment::own): WorkerLauncher {
-        val command = listOf(Path.of(System.getProperty("java.home"), "bin", "java.exe").toString(),
-            "-cp", System.getProperty("limingjie.test.classpath"), LifecycleWorkerFixture::class.java.name)
-        return WorkerLauncher(scope, contain, command, timeout)
+    private fun launcher(
+        scope: CoroutineScope,
+        receiveTimeoutMillis: Int = 8_000,
+        contain: (Long) -> AutoCloseable = WorkerProcessContainment::own,
+    ): WorkerLauncher {
+        val command = workerFixtureCommand(LifecycleWorkerFixture::class.java.name)
+        return WorkerLauncher(scope, contain, command, receiveTimeoutMillis, processExitGraceMillis = 150)
     }
     private suspend fun connectedPid(link: WorkerLink): Long = withTimeout(15_000) {
         link.snapshots.first { it["pid"] != null }["pid"]!!.jsonPrimitive.long
@@ -49,7 +51,7 @@ class WorkerLifecycleTest {
 
     @Test fun silentWorkerTimesOutAndIsReapedWithoutExplicitShutdown() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val link = launcher(scope, timeout = 500).start(UUID.randomUUID().toString(), "silent", temporary.newFolder().toPath())
+        val link = launcher(scope, receiveTimeoutMillis = 500).start(UUID.randomUUID().toString(), "silent", temporary.newFolder().toPath())
         try {
             val pid = connectedPid(link)
             withTimeout(5_000) { link.connection.first { it == WorkerConnectionStatus.LOST } }
@@ -88,6 +90,7 @@ object LifecycleWorkerFixture {
         val id = argument("--instance-id")
         val run = argument("--worker-run-id")
         val socket = Socket().apply {
+            receiveBufferSize = 8 * 1024
             connect(InetSocketAddress(InetAddress.getLoopbackAddress(), System.getenv(WorkerProtocol.PORT_ENV).toInt()), 5_000)
         }
         WorkerWire(socket).use { wire ->
@@ -104,3 +107,9 @@ object LifecycleWorkerFixture {
         }
     }
 }
+
+internal fun workerFixtureCommand(mainClass: String): List<String> = listOf(
+    Path.of(System.getProperty("java.home"), "bin", "java.exe").toString(),
+    "-XX:TieredStopAtLevel=1", "-XX:+UseSerialGC", "-XX:ActiveProcessorCount=2",
+    "-cp", System.getProperty("limingjie.test.classpath"), mainClass,
+)

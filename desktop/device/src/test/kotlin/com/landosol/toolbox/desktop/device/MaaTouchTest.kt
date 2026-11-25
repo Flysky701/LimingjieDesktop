@@ -7,12 +7,25 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class MaaTouchTest {
     @get:Rule val folder = TemporaryFolder()
+    private fun executor(path: String, output: Path): ProcessAdbExecutor {
+        val adb = AdbTestProcesses(folder.root.toPath())
+        return ProcessAdbExecutor(path, AdbProcessFactory { args ->
+            when {
+                args.any { "app_process" in it } -> adb.start("touch", output.toString())
+                args.any { "/proc/sys/kernel/random/boot_id" in it } ->
+                    adb.respond(stdout = "10000000-1111-2222-3333-444444444444")
+                else -> adb.respond()
+            }
+        })
+    }
+
     @Test fun headerAndPackagedAsset() {
         val header = MaaTouchProtocol.parseHeader(listOf("banner", "^ 10 1920 1080 255", "\$ 1234"))!!
         assertEquals(MaaTouchHeader(10, 1920, 1080, 255, 1234), header)
@@ -30,11 +43,7 @@ class MaaTouchTest {
     }
     @Test fun queuedGestureRechecksPermitBeforeWritingToProcess() = runBlocking {
         val output = folder.root.toPath().resolve("guarded-touch.txt")
-        val runner = ProcessAdbExecutor("synthetic-adb", AdbProcessFactory { args ->
-            if (args.any { "app_process" in it }) ProcessFixture.start("touch", output.toString())
-            else if (args.any { "/proc/sys/kernel/random/boot_id" in it }) ProcessFixture.start("echo", "10000000-1111-2222-3333-444444444444")
-            else ProcessFixture.start("echo")
-        })
+        val runner = executor("synthetic-adb", output)
         runner.use {
             val touch = MaaTouchConnection.open(runner, "synthetic", folder.root.toPath())
             val releaseWriter = CountDownLatch(1)
@@ -66,11 +75,7 @@ class MaaTouchTest {
 
     @Test fun persistentActorSerializesGesturesAndDetectsProcessExit() = runBlocking {
         val output = folder.root.toPath().resolve("touch.txt")
-        val runner = ProcessAdbExecutor("C:/中文 模拟器/adb.exe", AdbProcessFactory { args ->
-            if (args.any { "app_process" in it }) ProcessFixture.start("touch", output.toString())
-            else if (args.any { "/proc/sys/kernel/random/boot_id" in it }) ProcessFixture.start("echo", "10000000-1111-2222-3333-444444444444")
-            else ProcessFixture.start("echo")
-        })
+        val runner = executor("C:/中文 模拟器/adb.exe", output)
         runner.use {
             val touch = MaaTouchConnection.open(runner, "synthetic", folder.root.toPath())
             try {

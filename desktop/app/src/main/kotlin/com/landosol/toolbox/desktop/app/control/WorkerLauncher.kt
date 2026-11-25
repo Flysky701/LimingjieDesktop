@@ -19,21 +19,30 @@ internal suspend fun awaitWorkerReply(op: String, reply: Deferred<JsonObject>): 
     // transport heartbeat and caller cancellation, without the generic three-minute cutoff.
     if (op == ControlOps.DEVICE_CONNECT) reply.await() else withTimeout(180_000) { reply.await() }
 
-class WorkerLauncher(
+class WorkerLauncher internal constructor(
     private val scope: CoroutineScope,
     private val containProcess: (Long) -> AutoCloseable,
-    private val command: List<String> = applicationCommand(),
-    private val receiveTimeoutMillis: Int = WorkerProtocol.LEASE_MILLIS.toInt(),
+    private val command: List<String>,
+    private val receiveTimeoutMillis: Int,
+    private val processExitGraceMillis: Long,
     private val extraEnvironment: Map<String, String> = emptyMap(),
 ) {
+    constructor(
+        scope: CoroutineScope,
+        containProcess: (Long) -> AutoCloseable,
+        command: List<String> = applicationCommand(),
+        receiveTimeoutMillis: Int = WorkerProtocol.LEASE_MILLIS.toInt(),
+        extraEnvironment: Map<String, String> = emptyMap(),
+    ) : this(scope, containProcess, command, receiveTimeoutMillis, 8_000, extraEnvironment)
+
     init { require(receiveTimeoutMillis > 0) }
     fun start(instanceId: String, label: String, directory: Path, sharedData: SharedDataEndpoint? = null): WorkerLink =
-        ProcessWorkerLink(instanceId, label, directory, scope, command, containProcess, receiveTimeoutMillis, sharedData,
+        ProcessWorkerLink(instanceId, label, directory, scope, command, containProcess, receiveTimeoutMillis, processExitGraceMillis, sharedData,
             extraEnvironment = extraEnvironment)
 
     fun startRuntime(spec: RuntimeWorkerSpec, endpoint: SharedDataEndpoint): WorkerLink =
         ProcessWorkerLink(spec.sessionId, spec.device.name, spec.runtimeDirectory, scope, command,
-            containProcess, receiveTimeoutMillis, endpoint, listOf("--device-boot-id", checkNotNull(spec.device.bootId)),
+            containProcess, receiveTimeoutMillis, processExitGraceMillis, endpoint, listOf("--device-boot-id", checkNotNull(spec.device.bootId)),
             extraEnvironment)
 
     companion object {
@@ -54,6 +63,7 @@ private class ProcessWorkerLink(
     command: List<String>,
     private val containProcess: (Long) -> AutoCloseable,
     receiveTimeoutMillis: Int,
+    processExitGraceMillis: Long,
     sharedData: SharedDataEndpoint? = null,
     extraArguments: List<String> = emptyList(),
     extraEnvironment: Map<String, String>,
@@ -148,7 +158,7 @@ private class ProcessWorkerLink(
                 failRequests(mutableError.value ?: "实例已关闭")
                 // EOF revokes worker actions. Regardless of cancellation or handshake outcome,
                 // this job owns every child it published, including a late ProcessBuilder.start().
-                try { if (process?.isAlive == true) process?.waitFor(8, TimeUnit.SECONDS) }
+                try { if (process?.isAlive == true) process?.waitFor(processExitGraceMillis, TimeUnit.MILLISECONDS) }
                 finally { terminateOwnedProcess() }
             }
         }
