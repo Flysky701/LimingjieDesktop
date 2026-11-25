@@ -27,6 +27,8 @@ tasks.withType<Test>().configureEach {
     systemProperty("limingjie.test.classpath", sourceSets["test"].runtimeClasspath.asPath)
 }
 tasks.test {
+    // Full UI tests open native Compose dialogs that share the Windows desktop focus.
+    if (providers.gradleProperty("full").isPresent) maxParallelForks = 1
     exclude("**/*PackagedRuntimeTest*")
     for (key in listOf("limingjie.nn.bundle", "limingjie.nn.catalog")) {
         providers.systemProperty(key).orElse(providers.environmentVariable(key))
@@ -106,7 +108,7 @@ val packagedRuntimeTest by tasks.registering(Test::class) {
     shouldRunAfter(tasks.test)
 }
 tasks.check {
-    if (providers.gradleProperty("full").isPresent) dependsOn(packagedRuntimeTest)
+    if (providers.gradleProperty("includePackagedRuntime").isPresent) dependsOn(packagedRuntimeTest)
 }
 val probe = sourceSets.create("probe") {
     compileClasspath += sourceSets.main.get().output

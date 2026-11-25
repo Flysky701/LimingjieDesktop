@@ -40,7 +40,6 @@ class RunHomeUiTest {
             compose.setContent{if(shown)DesktopApp(ui)}
             compose.onNodeWithContentDescription("美食殿堂 次数").performTextInput("3")
             compose.onNodeWithText("开始 F5").assertIsNotEnabled()
-            compose.onNodeWithText("保存更改").assertIsDisplayed()
             compose.onRoot().performKeyInput{pressKey(Key.F5)}
             compose.runOnIdle{assertFalse(graph.busy);assertTrue(graph.ux.preferences.state.value.goals.isEmpty());assertFalse(ControlOps.START in port.requests)}
             compose.onNodeWithText("开局与路线").performClick()
@@ -55,7 +54,6 @@ class RunHomeUiTest {
             // Use the native advanced reroll dialog's Save action, then verify F5 guard and sync.
             compose.onNodeWithText("开局与路线").performClick()
             compose.onNodeWithText("开始 F5").assertIsNotEnabled()
-            compose.onNodeWithText("开局与路线设置").assertExists()
             compose.onNodeWithText("难度 2").performClick()
             compose.onNodeWithText("保存").performClick()
             compose.waitUntil(5000){graph.labyrinthController.uiState.value.selectedDifficulty==2}

@@ -1,18 +1,8 @@
 package com.landosol.toolbox.desktop.app.ux
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.graphics.toPixelMap
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.account.AccountListItem
 import com.landosol.toolbox.desktop.app.adapters.device.VisualResolutionStatus
@@ -29,11 +19,7 @@ import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
-import java.awt.image.BufferedImage
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
-import javax.imageio.ImageIO
 
 class RunReadinessUiTest {
     @get:Rule val compose = createComposeRule()
@@ -47,22 +33,13 @@ class RunReadinessUiTest {
         var destination: Page? = null
         try {
             compose.setContent {
-                DesktopTheme(DesktopPreferences(theme = DesktopThemeMode.DARK)) {
-                    Box(Modifier.width(316.dp).background(MaterialTheme.colorScheme.background).padding(8.dp).testTag("readiness-preview")) {
-                        RunReadiness(runtime, worker.console.copy(busy = busy), DesktopTask.BATCH, true, { destination = it }, global)
-                    }
+                DesktopTheme(DesktopPreferences()) {
+                    RunReadiness(runtime, worker.console.copy(busy = busy), DesktopTask.BATCH, true, { destination = it }, global)
                 }
             }
             compose.onNodeWithText("待确认游戏设置").assertIsDisplayed()
             compose.onNodeWithText("准备完成").assertDoesNotExist()
             compose.onNodeWithContentDescription("确认已关闭角色加入动画").assertIsOff()
-            val pixels = compose.onNodeWithTag("readiness-preview").captureToImage().toPixelMap()
-            val image = BufferedImage(pixels.width, pixels.height, BufferedImage.TYPE_INT_ARGB)
-            for (y in 0 until pixels.height) for (x in 0 until pixels.width) image.setRGB(x, y, pixels[x, y].toArgb())
-            val preview = Path.of("build/reports/run-readiness-improved.png")
-            Files.createDirectories(preview.parent)
-            ImageIO.write(image, "png", preview.toFile())
-
             compose.onNodeWithContentDescription("确认已关闭角色加入动画").performClick()
             compose.waitUntil(5_000) {
                 global.settings.state.value.gameSettingsConfirmed &&

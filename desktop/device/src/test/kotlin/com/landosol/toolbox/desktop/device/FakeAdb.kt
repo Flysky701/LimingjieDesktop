@@ -1,11 +1,9 @@
 package com.landosol.toolbox.desktop.device
 
-import java.awt.image.BufferedImage
-import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
-import javax.imageio.ImageIO
 
 internal class FakeAdb : AdbExecutor {
     data class Call(val arguments: List<String>, val serial: String?, val shell: Boolean, val timeoutMillis: Long, val screenshot: Boolean)
@@ -46,10 +44,10 @@ internal class FakeAdb : AdbExecutor {
             putInt(2); putInt(1); putInt(format); if (headerBytes == 16) putInt(0)
             put(byteArrayOf(0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x7f))
         }.array()
-        fun png(): ByteArray {
-            val image = BufferedImage(2, 1, BufferedImage.TYPE_INT_ARGB)
-            image.setRGB(0, 0, 0x44112233); image.setRGB(1, 0, 0x7f556677)
-            return ByteArrayOutputStream().apply { ImageIO.write(image, "png", this) }.toByteArray()
-        }
+        // 2×1 PNG with ARGB pixels 0x44112233 and 0x7f556677.
+        private val pngFixture = Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR4nGMQVDJ2CU0rrwcAB/gCXFF2Zo8AAAAASUVORK5CYII=",
+        )
+        fun png(): ByteArray = pngFixture.copyOf()
     }
 }

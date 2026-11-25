@@ -19,6 +19,13 @@ tasks.processResources {
     dependsOn(verifyMaaTouch)
     from("licenses") { into("META-INF/licenses") }
 }
+tasks.test {
+    if (!providers.gradleProperty("full").isPresent) {
+        // The default test worker is short-lived, so favor JVM startup over peak throughput.
+        jvmArgs("-XX:TieredStopAtLevel=1", "-XX:+UseSerialGC")
+        systemProperty("java.awt.headless", true)
+    }
+}
 
 val probe = sourceSets.create("probe") {
     compileClasspath += sourceSets.main.get().output

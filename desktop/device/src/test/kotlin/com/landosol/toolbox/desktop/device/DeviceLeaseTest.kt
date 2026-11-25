@@ -2,6 +2,7 @@ package com.landosol.toolbox.desktop.device
 
 import com.landosol.toolbox.desktop.platform.UserResourceLeases
 import kotlinx.coroutines.*
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -91,14 +92,15 @@ class DeviceLeaseTest {
         assertTrue(same.calls.any { it.arguments.take(2)==listOf("sh","-c") && it.arguments.last().contains(boot) })
     }
 
-    @Test fun unreadableBootStopsInputAndReconnectCannotAdoptAnotherBoot() = runBlocking {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun unreadableBootStopsInputAndReconnectCannotAdoptAnotherBoot() = runTest {
         val adb = FakeAdb()
         val lost = CompletableDeferred<String>()
         val opens = AtomicInteger()
         val touch = Touch()
-        AdbDeviceService(adb, folder.root.toPath(), emptySet(), onLost = { lost.complete(it) },
+        virtualAdbDeviceService(adb, folder.root.toPath(), onLost = { lost.complete(it) },
             touchFactory = TouchConnectionFactory { _, _, _ -> opens.incrementAndGet(); touch },
-            leases = leases(), expectedBootId = null).use { device ->
+            leases = leases()).useWithVirtualTime { device ->
             device.connect("fixture")
             adb.handler = { call ->
                 if (call.arguments == listOf("cat", "/proc/sys/kernel/random/boot_id")) {
@@ -106,11 +108,14 @@ class DeviceLeaseTest {
                     else AdbResult.Failure(AdbFailureKind.Timeout, "ADB 命令超时")
                 } else adb.default(call)
             }
+            val started = testScheduler.currentTime
             assertTrue(device.back(FakeAdb.GAME) is TouchResult.Rejected)
             assertTrue(lost.await().contains("ADB 命令超时"))
+            assertEquals(30_000L, testScheduler.currentTime - started)
             withTimeout(8_000) {
                 while (device.state.value !is DeviceConnectionState.Failed) delay(20)
             }
+            assertEquals(35_000L, testScheduler.currentTime - started)
             assertEquals(2, adb.calls.count { it.arguments == listOf("getprop", "sys.boot_completed") })
             assertEquals(1, opens.get())
             assertEquals(0, touch.sent.get())

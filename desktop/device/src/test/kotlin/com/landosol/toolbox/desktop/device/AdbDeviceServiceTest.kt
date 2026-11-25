@@ -3,6 +3,8 @@ package com.landosol.toolbox.desktop.device
 import com.landosol.toolbox.desktop.platform.UserResourceLeases
 
 import kotlinx.coroutines.*
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -27,6 +29,16 @@ class AdbDeviceServiceTest {
     }
     private fun service(fake: FakeAdb, touch: RecordingTouch = RecordingTouch(), events: MutableList<String> = CopyOnWriteArrayList(), lost: MutableList<String> = CopyOnWriteArrayList()) =
         AdbDeviceService(fake, directory.root.toPath(), emptySet(), events::add, lost::add, TouchConnectionFactory { _, _, _ -> touch }, UserResourceLeases(directory.root.toPath().resolve("user-runtime")))
+
+    private fun TestScope.virtualService(
+        fake: FakeAdb,
+        touch: RecordingTouch = RecordingTouch(),
+        events: MutableList<String> = CopyOnWriteArrayList(),
+        lost: MutableList<String> = CopyOnWriteArrayList(),
+    ) = virtualAdbDeviceService(
+        fake, directory.root.toPath(), TouchConnectionFactory { _, _, _ -> touch },
+        UserResourceLeases(directory.root.toPath().resolve("user-runtime")), events::add, lost::add,
+    )
 
     @Test fun duplicateConnectionKeepsSessionAndDoesNotBenchmarkOrNotifyLostAgain() = runBlocking {
         val adb = FakeAdb(); val lost = CopyOnWriteArrayList<String>(); val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
@@ -211,7 +223,7 @@ class AdbDeviceServiceTest {
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    @Test fun truncatedScreenshotAndTwentySecondOutageRecoverOnTheSameTcpEndpoint() = kotlinx.coroutines.test.runTest {
+    @Test fun truncatedScreenshotAndTwentySecondOutageRecoverOnTheSameTcpEndpoint() = runTest {
         val adb = FakeAdb()
         val touch = RecordingTouch()
         val events = CopyOnWriteArrayList<String>()
@@ -220,7 +232,7 @@ class AdbDeviceServiceTest {
         val captures = AtomicInteger()
         // Isolate the capture recovery; the monitor's independent probe has its own test.
         adb.handler = { call -> if (call.arguments == listOf("dumpsys", "window")) awaitCancellation() else adb.default(call) }
-        service(adb, touch, events, lost).use { device ->
+        virtualService(adb, touch, events, lost).useWithVirtualTime { device ->
             device.connect(serial)
             adb.calls.clear()
             val started = testScheduler.currentTime
@@ -247,8 +259,7 @@ class AdbDeviceServiceTest {
         }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    @Test fun alreadyConnectedOfflineTransportTriggersDisconnectAndReconnect() = kotlinx.coroutines.test.runTest {
+    @Test fun alreadyConnectedOfflineTransportTriggersDisconnectAndReconnect() = runTest {
         val adb = FakeAdb()
         val touch = RecordingTouch()
         val lost = CopyOnWriteArrayList<String>()
@@ -257,7 +268,7 @@ class AdbDeviceServiceTest {
         var disconnected = false
         var reconnected = false
         adb.handler = { call -> if (call.arguments == listOf("dumpsys", "window")) awaitCancellation() else adb.default(call) }
-        service(adb, touch, lost = lost).use { device ->
+        virtualService(adb, touch, lost = lost).useWithVirtualTime { device ->
             device.connect(serial)
             adb.calls.clear()
             adb.handler = { call -> when {
@@ -285,7 +296,7 @@ class AdbDeviceServiceTest {
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    @Test fun failedConnectDuringRecoveryRetriesAndRecovers() = kotlinx.coroutines.test.runTest {
+    @Test fun failedConnectDuringRecoveryRetriesAndRecovers() = runTest {
         val adb = FakeAdb()
         val touch = RecordingTouch()
         val lost = CopyOnWriteArrayList<String>()
@@ -294,7 +305,7 @@ class AdbDeviceServiceTest {
         var connectCalls = 0
         var reconnected = false
         adb.handler = { call -> if (call.arguments == listOf("dumpsys", "window")) awaitCancellation() else adb.default(call) }
-        service(adb, touch, lost = lost).use { device ->
+        virtualService(adb, touch, lost = lost).useWithVirtualTime { device ->
             device.connect(serial)
             adb.calls.clear()
             val started = testScheduler.currentTime
@@ -320,15 +331,14 @@ class AdbDeviceServiceTest {
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    @Test fun postTransportRecoveryTransientGlitchDoesNotTriggerPrematureLoss() = kotlinx.coroutines.test.runTest {
+    @Test fun postTransportRecoveryTransientGlitchDoesNotTriggerPrematureLoss() = runTest {
         val adb = FakeAdb()
         val touch = RecordingTouch()
         val lost = CopyOnWriteArrayList<String>()
         val serial = "127.0.0.1:16416"
         val captures = AtomicInteger()
         adb.handler = { call -> if (call.arguments == listOf("dumpsys", "window")) awaitCancellation() else adb.default(call) }
-        service(adb, touch, lost = lost).use { device ->
-            device.clockNanos = { 1_000_000_000_000L + testScheduler.currentTime * 1_000_000L }
+        virtualService(adb, touch, lost = lost).useWithVirtualTime { device ->
             device.connect(serial)
             adb.calls.clear()
             val started = testScheduler.currentTime
@@ -355,16 +365,16 @@ class AdbDeviceServiceTest {
         }
     }
 
-    @Test fun transientBootTimeoutKeepsLeaseAndMonitorWithoutStoppingTheTask() = runBlocking {
+    @Test fun transientBootTimeoutKeepsLeaseAndMonitorWithoutStoppingTheTask() = runTest {
         val adb = FakeAdb()
         val touch = RecordingTouch()
         val timedOut = CompletableDeferred<Unit>()
         val recovered = CompletableDeferred<Unit>()
         val lost = CopyOnWriteArrayList<String>()
-        AdbDeviceService(adb, directory.root.toPath(), emptySet(), onEvent = {
+        virtualAdbDeviceService(adb, directory.root.toPath(), onEvent = {
             if (it.contains("已确认原模拟器启动身份")) recovered.complete(Unit)
         }, onLost = lost::add, touchFactory = TouchConnectionFactory { _, _, _ -> touch },
-            leases = UserResourceLeases(directory.root.toPath().resolve("user-runtime"))).use { device ->
+            leases = UserResourceLeases(directory.root.toPath().resolve("user-runtime"))).useWithVirtualTime { device ->
             device.connect("fixture")
             adb.handler = { call ->
                 if (call.arguments == listOf("cat", "/proc/sys/kernel/random/boot_id") && timedOut.complete(Unit))
@@ -397,10 +407,11 @@ class AdbDeviceServiceTest {
         }
     }
 
-    @Test fun timedOutCaptureCannotUseBackupOnUnverifiedDevice() = runBlocking {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun timedOutCaptureCannotUseBackupOnUnverifiedDevice() = runTest {
         val adb = FakeAdb()
         val lost = CopyOnWriteArrayList<String>()
-        service(adb, lost = lost).use { device ->
+        virtualService(adb, lost = lost).useWithVirtualTime { device ->
             device.connect("fixture")
             val attempts = AtomicInteger()
             adb.handler = { call -> when {
@@ -409,7 +420,9 @@ class AdbDeviceServiceTest {
                     AdbResult.Failure(AdbFailureKind.DeviceOffline, "fixture offline")
                 else -> adb.default(call)
             } }
+            val started = testScheduler.currentTime
             assertTrue(runCatching { device.capture() }.exceptionOrNull() is DeviceOperationException)
+            assertEquals(30_000L, testScheduler.currentTime - started)
             assertEquals(1, attempts.get())
             assertTrue(lost.single().contains("fixture offline"))
         }
@@ -446,7 +459,7 @@ class AdbDeviceServiceTest {
             assertTrue(adb.calls.any { it.arguments == listOf("input", "keyevent", "3") })
         }
     }
-    @Test fun applicationLaunchDetectsExitZeroErrorAndForceStopPolls() = runBlocking {
+    @Test fun applicationLaunchDetectsExitZeroErrorAndForceStopPolls() = runTest {
         val adb = FakeAdb(); val polls = AtomicInteger()
         adb.handler = { call -> when {
             call.arguments.take(3) == listOf("cmd", "package", "resolve-activity") -> FakeAdb.success("priority=0\n${FakeAdb.GAME}/.MainActivity")
@@ -454,7 +467,7 @@ class AdbDeviceServiceTest {
             call.arguments.firstOrNull() == "pidof" -> if (polls.incrementAndGet() == 1) FakeAdb.success("123") else AdbResult.Failure(AdbFailureKind.NonZeroExit, "adb 退出码 1")
             else -> adb.default(call)
         } }
-        service(adb).use { device ->
+        virtualService(adb).useWithVirtualTime { device ->
             device.connect("fixture")
             assertFalse(device.launch(FakeAdb.GAME)); assertTrue(device.forceStop(FakeAdb.GAME)); assertEquals(2, polls.get())
         }
@@ -480,12 +493,12 @@ class AdbDeviceServiceTest {
             assertTrue(checks.all { it.serial=="fixture" && it.arguments==listOf("ps","-A","-w","-o","NAME") })
         }
     }
-    @Test fun uiAutomatorRetriesThreeTimesThenWarnsAndCanRecover() = runBlocking {
+    @Test fun uiAutomatorRetriesThreeTimesThenWarnsAndCanRecover() = runTest {
         val adb = FakeAdb(); val attempts = AtomicInteger(); val events = CopyOnWriteArrayList<String>()
         adb.handler = { call -> if (call.arguments.firstOrNull() == "uiautomator") {
             attempts.incrementAndGet(); FakeAdb.success("ERROR: could not get idle state")
         } else adb.default(call) }
-        service(adb, events = events).use { device ->
+        virtualService(adb, events = events).useWithVirtualTime { device ->
             device.connect("fixture")
             assertTrue(device.uiTree().isEmpty()); assertEquals(4, attempts.get()); assertTrue("无法读取渠道登录界面" in events)
             adb.handler = { call -> when (call.arguments) {
@@ -562,11 +575,11 @@ class AdbDeviceServiceTest {
         }
     }
 
-    @Test fun failedTouchRestartLosesConnectionAndReconnectDoesNotSendActions() = runBlocking {
+    @Test fun failedTouchRestartLosesConnectionAndReconnectDoesNotSendActions() = runTest {
         val adb = FakeAdb(); val lost = CopyOnWriteArrayList<String>(); val first = RecordingTouch(); val opens = AtomicInteger()
-        AdbDeviceService(adb, directory.root.toPath(), emptySet(), onLost = lost::add, leases=UserResourceLeases(directory.root.toPath().resolve("user-runtime")), touchFactory = TouchConnectionFactory { _, _, _ ->
+        virtualAdbDeviceService(adb, directory.root.toPath(), onLost = lost::add, leases = UserResourceLeases(directory.root.toPath().resolve("user-runtime")), touchFactory = TouchConnectionFactory { _, _, _ ->
             when (opens.incrementAndGet()) { 1 -> first; 2 -> throw DeviceOperationException("synthetic restart failure"); else -> RecordingTouch() }
-        }).use { device ->
+        }).useWithVirtualTime { device ->
             device.connect("fixture"); first.alive = false
             withTimeout(3000) { while (device.state.value !is DeviceConnectionState.Lost || lost.isEmpty()) delay(10) }
             assertEquals(TouchResult.Rejected("触控服务未连接"), device.back(FakeAdb.GAME))
@@ -575,11 +588,11 @@ class AdbDeviceServiceTest {
             assertTrue(first.gestures.isEmpty()); assertEquals(1, lost.size); assertEquals(3, opens.get())
         }
     }
-    @Test fun disconnectCancelsInFlightTouchRestart() = runBlocking {
+    @Test fun disconnectCancelsInFlightTouchRestart() = runTest {
         val first = RecordingTouch(); val restarting = CompletableDeferred<Unit>(); val opens = AtomicInteger()
-        AdbDeviceService(FakeAdb(), directory.root.toPath(), emptySet(), leases=UserResourceLeases(directory.root.toPath().resolve("user-runtime")), touchFactory = TouchConnectionFactory { _, _, _ ->
+        virtualAdbDeviceService(FakeAdb(), directory.root.toPath(), leases = UserResourceLeases(directory.root.toPath().resolve("user-runtime")), touchFactory = TouchConnectionFactory { _, _, _ ->
             if (opens.incrementAndGet() == 1) first else { restarting.complete(Unit); awaitCancellation() }
-        }).use { device ->
+        }).useWithVirtualTime { device ->
             device.connect("fixture"); first.alive = false
             withTimeout(3000) { restarting.await() }
             withTimeout(1000) { device.disconnect() }
@@ -587,7 +600,7 @@ class AdbDeviceServiceTest {
         }
     }
 
-    @Test fun transientAdbErrorDuringTouchRecoveryRetriesAndRecovers() = runBlocking {
+    @Test fun transientAdbErrorDuringTouchRecoveryRetriesAndRecovers() = runTest {
         val adb = FakeAdb()
         val first = RecordingTouch()
         val second = RecordingTouch()
@@ -600,7 +613,7 @@ class AdbDeviceServiceTest {
                 AdbResult.Failure(AdbFailureKind.DeviceOffline, "device offline")
             } else adb.default(call)
         }
-        AdbDeviceService(adb, directory.root.toPath(), emptySet(), onEvent = events::add, onLost = lost::add,
+        virtualAdbDeviceService(adb, directory.root.toPath(), onEvent = events::add, onLost = lost::add,
             leases = UserResourceLeases(directory.root.toPath().resolve("user-runtime")),
             touchFactory = TouchConnectionFactory { _, _, _ ->
                 when (opens.incrementAndGet()) {
@@ -608,7 +621,7 @@ class AdbDeviceServiceTest {
                     2 -> throw DeviceOperationException("transient touch adb drop", AdbFailureKind.DeviceOffline)
                     else -> second
                 }
-            }).use { device ->
+            }).useWithVirtualTime { device ->
             device.connect("fixture")
             first.alive = false
             withTimeout(6_000) {

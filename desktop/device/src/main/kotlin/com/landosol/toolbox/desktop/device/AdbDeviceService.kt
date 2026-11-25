@@ -16,17 +16,34 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
-class AdbDeviceService(
+class AdbDeviceService internal constructor(
     private val adb: AdbExecutor,
     private val dataDirectory: Path,
     private val gamePackages: Set<String>,
-    private val onEvent: (String) -> Unit = {},
-    private val onLost: (String) -> Unit = {},
-    private val touchFactory: TouchConnectionFactory = MaaTouchConnection,
-    private val leases: UserResourceLeases = UserResourceLeases(),
-    private val expectedBootId: String? = System.getProperty("limingjie.runtime.boot-id"),
-    private val verifiedPackageCache: Path = dataDirectory.resolve("cache/verified-packages"),
+    private val onEvent: (String) -> Unit,
+    private val onLost: (String) -> Unit,
+    private val touchFactory: TouchConnectionFactory,
+    private val leases: UserResourceLeases,
+    private val expectedBootId: String?,
+    private val verifiedPackageCache: Path,
+    backgroundDispatcher: CoroutineDispatcher,
+    private val clockNanos: () -> Long,
 ) : DeviceService {
+    constructor(
+        adb: AdbExecutor,
+        dataDirectory: Path,
+        gamePackages: Set<String>,
+        onEvent: (String) -> Unit = {},
+        onLost: (String) -> Unit = {},
+        touchFactory: TouchConnectionFactory = MaaTouchConnection,
+        leases: UserResourceLeases = UserResourceLeases(),
+        expectedBootId: String? = System.getProperty("limingjie.runtime.boot-id"),
+        verifiedPackageCache: Path = dataDirectory.resolve("cache/verified-packages"),
+    ) : this(
+        adb, dataDirectory, gamePackages, onEvent, onLost, touchFactory, leases, expectedBootId, verifiedPackageCache,
+        backgroundDispatcher = Dispatchers.IO, clockNanos = System::nanoTime,
+    )
+
     private class Session(val serial: String, val touchMode: TouchMode, val capturer: ScreenCapturer, @Volatile var ready: DeviceReady, val bootId: String, @Volatile var touch: TouchConnection?, val lease: ResourceLease) {
         val captures = Mutex()
         @Volatile var capturePaused = false
@@ -39,8 +56,7 @@ class AdbDeviceService(
         var touchRestarted = false
         var touchRestartedAt = 0L
     }
-    @Volatile internal var clockNanos: () -> Long = System::nanoTime
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + backgroundDispatcher)
     private val lifecycle = Mutex()
     private val closed = AtomicBoolean()
     private val connectingJobs = ConcurrentHashMap.newKeySet<Job>()

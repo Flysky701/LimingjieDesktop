@@ -9,6 +9,10 @@ allprojects { group = "com.landosol.toolbox.desktop"; version = "1.0.18+desktop.
 
 subprojects {
     tasks.withType<Test>().configureEach {
+        // Limit parallel forks to the audited standard suites.
+        if (name == "test" && project.path in setOf(":app", ":ocr", ":platform")) {
+            maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
+        }
         if (name == "test" && !providers.gradleProperty("full").isPresent) {
             exclude("**/*IntegrationTest*", "**/*UiTest*",
                 "**/WorkerTransportTest*", "**/WorkerLifecycleTest*", "**/DesktopTrayTest*",
