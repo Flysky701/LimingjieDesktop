@@ -116,7 +116,7 @@ class StrategyShareCodecTest {
         Files.writeString(file, "{broken")
         val notices = mutableListOf<String>()
         DesktopStrategyStore(root, { LabyrinthStrategySettings(playerWeight = 32) }, notices::add)
-        val backups = Files.list(file.parent).use { it.filter { p -> p.fileName.toString().startsWith("strategies.damaged-") }.toList() }
+        val backups = Files.list(file.parent).use { it.filter { p -> p.fileName.toString().startsWith("strategies.corrupt-") }.toList() }
         assertEquals("{broken", Files.readString(backups.single()))
         assertEquals(1, notices.size)
         val newer = "{\"version\":3,\"library\":{}}"

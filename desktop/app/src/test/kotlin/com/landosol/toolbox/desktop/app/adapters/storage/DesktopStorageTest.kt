@@ -16,11 +16,11 @@ class DesktopStorageTest {
         val settings = DesktopSettings(adbPath = "D:/中文 tools/adb.exe", networkMode = NetworkMode.DIRECT, wizardCompleted = true)
         DesktopSettingsStore(root).save(settings)
         assertEquals(settings, DesktopSettingsStore(root).state.value)
-        Files.writeString(root.resolve("settings/desktop.json"), "broken{")
+        Files.writeString(root.resolve("settings/app.json"), "broken{")
         var backup: Path? = null
         assertEquals(DesktopSettings(), DesktopSettingsStore(root) { backup = it }.state.value)
         assertEquals("broken{", Files.readString(backup!!))
-        assertFalse(Files.exists(root.resolve("settings/desktop.json")))
+        assertEquals(DesktopSettings(), DesktopSettingsStore(root).state.value)
     }
 
     @Test fun snapshotPersistsAndDeviceKeyCannotEscapeDirectory() {

@@ -31,7 +31,7 @@ import com.landosol.toolbox.labyrinth.*
     val needsAccount = LabyrinthConfigModule.REROLL in modules
     val ready = modules.isNotEmpty() && (!needsAccount || validAccount != null)
     val plan = if (configuration != null && ready) LabyrinthConfigImportPlan(configuration, modules, validAccount,
-        LabyrinthConfigurationValues(selectedProfile.settings, baseline.rerolls)) else null
+        baseline.configurationFor(selectedProfile.id)) else null
     val stale = library.revision != baseline.revision
     AlertDialog(onDismissRequest = { if (!actions.working) onClose() }, modifier = Modifier.widthIn(min = 560.dp, max = 720.dp),
         title = { Text(if (code == null) "分享配置" else "导入预览") },
@@ -89,7 +89,7 @@ import com.landosol.toolbox.labyrinth.*
         confirmButton = { Button(enabled = ready && !stale && !actions.working && (plan?.clearsPersonalScores != true || confirmEmpty),
             shape = MaterialTheme.shapes.small, onClick = { actions.run {
                 if (code == null) {
-                    val values = LabyrinthConfigurationValues(selectedProfile.settings, baseline.rerolls)
+                    val values = baseline.configurationFor(selectedProfile.id)
                     copyText(LabyrinthConfigShareCodec.encode(LabyrinthConfigShareCodec.create(values, modules, validAccount, AppVersion.display, System.currentTimeMillis())))
                     actions.message = "分享码已复制。"
                 } else {

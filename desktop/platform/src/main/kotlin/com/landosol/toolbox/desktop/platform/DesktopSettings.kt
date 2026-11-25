@@ -22,3 +22,27 @@ import kotlinx.serialization.Serializable
     val pathBPlanningEnabled: Boolean = false,
     val battleModelStyle: String = "BALANCED",
 )
+
+@Serializable enum class DesktopThemeMode(val label: String) { SYSTEM("跟随系统"), LIGHT("Light Modern"), DARK("Dark Modern") }
+@Serializable data class DesktopPreferences(
+    val theme: DesktopThemeMode = DesktopThemeMode.SYSTEM,
+    val largeText: Boolean = false,
+    val notifications: Boolean = true,
+    val sound: Boolean = false,
+    val originalRatings: Boolean = false,
+    val page: String = "Run",
+    val rightTab: String = "logs",
+    val previewExpanded: Boolean = false,
+    val animationConfirmedVersion: String = "",
+    val goals: List<DesktopGoal> = emptyList(),
+    val selectedTask: String = "BATCH",
+)
+@Serializable data class DesktopGoal(val guildId: Int, val count: Int, val clears: Boolean = true)
+
+@Serializable
+data class AppConfig(
+    val environment: DesktopSettings = DesktopSettings(),
+    val ui: DesktopPreferences = DesktopPreferences(),
+    // Workers inherit shared task defaults until preferences have first been saved locally.
+    val uiPreferencesSaved: Boolean = false,
+)

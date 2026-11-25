@@ -1,11 +1,11 @@
 package com.landosol.toolbox.desktop.app.adapters.storage
 
-import com.landosol.toolbox.desktop.app.control.ControlModelCodec
+import com.landosol.toolbox.core.AppContext
+import com.landosol.toolbox.core.config.AtomicConfigStore
+import com.landosol.toolbox.core.config.select
 import com.landosol.toolbox.desktop.shared.AtomicFiles
 import com.landosol.toolbox.labyrinth.*
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import java.nio.file.Files
@@ -16,17 +16,10 @@ import java.io.ByteArrayOutputStream
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
-data class StrategyIdentity(val id: String, val name: String, val revision: Long)
-data class StrategyProfile(val id: String, val name: String, val note: String = "", val revision: Long = 1,
-    val settings: LabyrinthStrategySettings = LabyrinthStrategySettings()) {
-    val identity get() = StrategyIdentity(id, name, revision)
-}
-data class StrategyImportUndo(val activeId: String, val profiles: List<StrategyProfile>, val rerolls: Map<Long, LabyrinthRerollSettings>)
-data class StrategyLibrary(val activeId: String = "", val profiles: List<StrategyProfile> = emptyList(),
-    val rerolls: Map<Long, LabyrinthRerollSettings> = emptyMap(), val revision: Long = 1,
-    val undoImport: StrategyImportUndo? = null) {
-    val active get() = profiles.first { it.id == activeId }
-}
+typealias StrategyIdentity = com.landosol.toolbox.labyrinth.config.StrategyIdentity
+typealias StrategyProfile = com.landosol.toolbox.labyrinth.config.StrategyProfile
+typealias StrategyImportUndo = com.landosol.toolbox.labyrinth.config.StrategyImportUndo
+typealias StrategyLibrary = com.landosol.toolbox.labyrinth.config.StrategyLibrary
 
 /** Explicit portable envelope. Never serialize accounts, runtime state or a Graph. */
 object StrategyShareCodec {
@@ -36,7 +29,7 @@ object StrategyShareCodec {
     private val settingKeys = json.encodeToJsonElement(LabyrinthStrategySettings.serializer(), LabyrinthStrategySettings()).jsonObject.keys
 
     fun encode(profile: StrategyProfile): String {
-        validate(profile.name, profile.note, profile.settings)
+        StrategyLibrary.validateProfile(profile.name, profile.note, profile.settings)
         val document = buildJsonObject {
             put("format", "limingjie-strategy"); put("version", 1)
             put("name", profile.name); put("note", profile.note)
@@ -70,103 +63,47 @@ object StrategyShareCodec {
                 document.getValue("note").jsonPrimitive.content, settings =
                     json.decodeFromJsonElement(LabyrinthStrategySettings.serializer(), document.getValue("settings")))
         } catch (failure: Exception) { throw IllegalArgumentException("策略内容不兼容或格式错误，未导入", failure) }
-        validate(profile.name, profile.note, profile.settings)
+        StrategyLibrary.validateProfile(profile.name, profile.note, profile.settings)
         return profile
-    }
-
-    internal fun validate(name: String, note: String, settings: LabyrinthStrategySettings) {
-        require(name.isNotBlank() && name.length <= 60 && name.none { it.isISOControl() }) { "策略名称须为 1–60 个字符，不能含换行" }
-        require(note.length <= 300) { "备注最多 300 个字符" }
-        settings.validationError()?.let { error(it) }
     }
 }
 
 /** The library is the sole durable source. Workers use an in-memory projection only. */
-class DesktopStrategyStore(directory: Path, legacy: () -> LabyrinthStrategySettings,
-    private val notice: (String) -> Unit, private val transient: Boolean = false,
-    private val legacyRerolls: () -> Map<Long, LabyrinthRerollSettings> = { emptyMap() },
+class DesktopStrategyStore private constructor(
+    private val store: AtomicConfigStore<StrategyLibrary>,
 ) : LabyrinthRerollSettingsStore {
-    private val file = directory.resolve("settings/strategies.json")
-    private val lock = Any()
-    private val libraryState = MutableStateFlow(load(legacy))
-    val library = libraryState.asStateFlow()
-    private val current = MutableStateFlow(libraryState.value.active.settings)
-    val state = current.asStateFlow()
+    constructor(directory: Path, legacy: () -> LabyrinthStrategySettings, notice: (String) -> Unit,
+        transient: Boolean = false, legacyRerolls: () -> Map<Long, LabyrinthRerollSettings> = { emptyMap() },
+    ) : this(DesktopLabyrinthConfigurationStore.open(directory, legacy, legacyRerolls, transient) {
+            notice("配置损坏，原文件已备份为 ${it.fileName}")
+        })
 
-    private fun load(legacy: () -> LabyrinthStrategySettings): StrategyLibrary {
-        if (!transient && Files.exists(file)) {
-            val raw = Files.readString(file)
-            val document = try { Json.parseToJsonElement(raw).jsonObject }
-                catch (_: Exception) { null }
-            // A newer library must not be replaced by an older application.
-            check(document == null || document["version"]?.jsonPrimitive?.intOrNull in listOf(null, 1, 2)) { "策略库格式较新，请使用更新的助手" }
-            val loaded = try {
-                require(document?.get("version")?.jsonPrimitive?.intOrNull in listOf(1, 2))
-                ControlModelCodec.decode<StrategyLibrary>(requireNotNull(document).getValue("library")).also(::validateLibrary)
-            } catch (_: Exception) { null }
-            if (loaded != null) {
-                if (document?.get("version")?.jsonPrimitive?.intOrNull == 2) return loaded
-                Files.copy(file, file.resolveSibling("strategies.before-upgrade-${UUID.randomUUID()}.json"))
-                return loaded.copy(rerolls = legacyRerolls()).also { validateLibrary(it); persist(it) }
+    constructor(context: AppContext, transient: Boolean, notice: (String) -> Unit) :
+        this(DesktopLabyrinthConfigurationStore.create(context, transient) { notice("配置损坏，原文件已备份为 ${it.fileName}") })
+
+    val library = store.state
+    val state = library.select { it.active.settings }
+
+    private suspend fun change(keepUndo: Boolean = false, update: (StrategyLibrary) -> StrategyLibrary) {
+        withContext(Dispatchers.IO) {
+            store.update { before ->
+                val next = update(before)
+                next.copy(revision = before.revision + 1, undoImport = if (keepUndo) next.undoImport else null)
             }
-            val backup = file.resolveSibling("strategies.damaged-${UUID.randomUUID()}.json")
-            Files.copy(file, backup)
-            notice("策略库损坏，原文件已备份为 ${backup.fileName}；已从原配置恢复。")
-        }
-        val profile = StrategyProfile(UUID.randomUUID().toString(), "我的策略", settings = legacy())
-        return StrategyLibrary(profile.id, listOf(profile), if (transient) emptyMap() else legacyRerolls()).also {
-            validateLibrary(it)
-            if (!transient) persist(it)
-        }
-    }
-
-    private fun validateLibrary(value: StrategyLibrary) {
-        require(value.profiles.isNotEmpty() && value.profiles.map { it.id }.distinct().size == value.profiles.size)
-        value.active
-        value.profiles.forEach {
-            require(it.id.isNotBlank() && it.revision > 0)
-            StrategyShareCodec.validate(it.name, it.note, it.settings)
-        }
-        value.rerolls.forEach { (id, settings) -> require(id > 0); require(settings.validationError() == null) }
-        require(value.revision > 0)
-        value.undoImport?.let { validateLibrary(StrategyLibrary(it.activeId, it.profiles, it.rerolls)) }
-    }
-
-    private fun persist(value: StrategyLibrary) {
-        val document = buildJsonObject { put("version", 2); put("library", ControlModelCodec.encode(value)) }
-        AtomicFiles.write(file, document.toString().toByteArray(Charsets.UTF_8))
-    }
-
-    private fun commit(next: StrategyLibrary) {
-        validateLibrary(next)
-        val detached = ControlModelCodec.decode<StrategyLibrary>(ControlModelCodec.encode(next))
-        if (!transient) persist(detached)
-        libraryState.value = detached
-        current.value = detached.active.settings
-    }
-
-    private suspend fun change(keepUndo: Boolean = false, update: (StrategyLibrary) -> StrategyLibrary) = withContext(Dispatchers.IO) {
-        synchronized(lock) {
-            val before = libraryState.value
-            val next = update(before)
-            commit(next.copy(revision = before.revision + 1, undoImport = if (keepUndo) next.undoImport else null))
         }
     }
 
     override fun load(accountId: Long): LabyrinthRerollSettings = library.value.rerolls[accountId] ?: LabyrinthRerollSettings()
 
-    override fun save(accountId: Long, settings: LabyrinthRerollSettings) = synchronized(lock) {
-        require(accountId > 0)
-        val before = libraryState.value
-        commit(before.copy(rerolls = before.rerolls + (accountId to settings), revision = before.revision + 1, undoImport = null))
+    override fun save(accountId: Long, settings: LabyrinthRerollSettings) {
+        store.update { it.copy(rerolls = it.rerolls + (accountId to settings), revision = it.revision + 1, undoImport = null) }
     }
 
     suspend fun importConfiguration(configuration: LabyrinthSharedConfiguration, modules: Set<LabyrinthConfigModule>,
         profileId: String, accountId: Long?, confirmEmptyScores: Boolean, expectedRevision: Long,
     ) = change(keepUndo = true) { value ->
         check(value.revision == expectedRevision) { "配置已变化，请重新预览后导入" }
-        val profile = value.profiles.firstOrNull { it.id == profileId } ?: error("目标策略不存在")
-        val next = configuration.replacement(LabyrinthConfigurationValues(profile.settings, value.rerolls), modules, accountId, confirmEmptyScores)
+        val next = configuration.replacement(value.configurationFor(profileId), modules, accountId, confirmEmptyScores)
         value.copy(profiles = value.profiles.map { if (it.id == profileId) it.copy(settings = next.strategy, revision = it.revision + 1) else it },
             rerolls = next.rerolls, undoImport = StrategyImportUndo(value.activeId, value.profiles, value.rerolls))
     }
@@ -212,7 +149,7 @@ class DesktopStrategyStore(directory: Path, legacy: () -> LabyrinthStrategySetti
         require(id != value.activeId) { "请先启用其他策略，再删除此策略" }
         require(value.profiles.any { it.id == id }) { "策略不存在" }
         // Keep the immediately preceding library for recovery of a mistaken deletion.
-        if (!transient) AtomicFiles.write(file.resolveSibling("strategies.before-delete.json"), Files.readAllBytes(file))
+        store.file?.let { AtomicFiles.write(it.resolveSibling("strategies.before-delete.json"), Files.readAllBytes(it)) }
         value.copy(profiles = value.profiles.filterNot { it.id == id })
     }
 }

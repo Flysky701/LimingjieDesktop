@@ -1,33 +1,58 @@
 package com.landosol.toolbox.labyrinth
 
 import com.landosol.toolbox.core.AppContext
-import java.io.File
+import com.landosol.toolbox.core.config.AtomicConfigStore
+import com.landosol.toolbox.core.config.LegacyConfigFormat
+import com.landosol.toolbox.labyrinth.config.*
+import kotlinx.serialization.json.Json
+import java.nio.file.Path
+import java.util.UUID
 
-/** Configuration data only; credentials, execution records and game assets stay in their own stores. */
 object DesktopLabyrinthConfigurationStore {
-    fun create(context: AppContext): LabyrinthConfigurationStore {
-        val file = LabyrinthAtomicConfigurationFile(File(context.filesDir, "labyrinth-configuration-v1.json"))
-        val initial = file.read()?.let(LabyrinthConfigurationPersistence::decode) ?: run {
-            val strategy = context.preferences("labyrinth-strategy")
-            val rawStrategy = strategy.getString("settings.v1", null)
-            val savedStrategy = LabyrinthStrategySettingsCodec.decode(rawStrategy).let {
-                if (rawStrategy != null && !strategy.getBoolean("settings.response-interval-default.migrated", false)) {
-                    it.copy(responseIntervalMillis = DEFAULT_RESPONSE_INTERVAL_MILLIS)
-                } else it
-            }
-            val reroll = context.preferences("labyrinth-reroll-settings")
-            val oldStore = JsonLabyrinthRerollSettingsStore(
-                read = { key -> reroll.getString(key, null) },
-                write = { _, _ -> error("旧配置仅用于读取") },
+    fun create(context: AppContext, transient: Boolean = false, onRecovered: (Path) -> Unit = {}): AtomicConfigStore<StrategyLibrary> =
+        open(context.dataDir.toPath(), legacyStrategy = {
+            val raw = if (transient) null else context.preferences("labyrinth-strategy").getString("settings.v1", null)
+            LabyrinthStrategySettingsCodec.decode(raw)
+        }, legacyRerolls = {
+            val prefs = context.preferences("labyrinth-reroll-settings")
+            val old = JsonLabyrinthRerollSettingsStore(
+                read = { prefs.getString(it, null) }, write = { _, _ -> error("旧配置仅用于读取") },
             )
-            val rerolls = reroll.all.keys.mapNotNull { key ->
-                key.takeIf { it.startsWith("account.") }?.removePrefix("account.")?.toLongOrNull()
-                    ?.takeIf { it > 0 }?.let { id -> id to oldStore.load(id) }
+            prefs.all.keys.filter { it.startsWith("account.") }.mapNotNull { key ->
+                key.removePrefix("account.").toLongOrNull()?.takeIf { it > 0 }?.let { it to old.load(it) }
             }.toMap()
-            LabyrinthConfigurationValues(savedStrategy, rerolls).also {
-                file.write(LabyrinthConfigurationPersistence.encode(it))
+        }, transient, onRecovered)
+
+    fun open(
+        directory: Path,
+        legacyStrategy: () -> LabyrinthStrategySettings,
+        legacyRerolls: () -> Map<Long, LabyrinthRerollSettings>,
+        transient: Boolean,
+        onRecovered: (Path) -> Unit,
+    ): AtomicConfigStore<StrategyLibrary> {
+        fun legacySnapshot() = AtomicConfigStore.readLegacy(directory.resolve("files/labyrinth-configuration-v1.json"),
+            onRecovered, LabyrinthConfigurationPersistence::decode)
+
+        fun initialLibrary(): StrategyLibrary {
+            val values = if (transient) LabyrinthConfigurationValues(legacyStrategy())
+                else legacySnapshot() ?: LabyrinthConfigurationValues(legacyStrategy(), legacyRerolls())
+            val profile = StrategyProfile(UUID.randomUUID().toString(), "我的策略", settings = values.strategy)
+            val undo = values.undoImport?.let {
+                StrategyImportUndo(profile.id, listOf(profile.copy(settings = it.strategy)), it.rerolls)
             }
+            return StrategyLibrary(profile.id, listOf(profile), values.rerolls, undoImport = undo)
         }
-        return LabyrinthConfigurationStore(initial) { file.write(LabyrinthConfigurationPersistence.encode(it)) }
+
+        return AtomicConfigStore(
+            directory.resolve("settings/strategies.json").takeUnless { transient }, StrategyLibrary.serializer(), ::initialLibrary,
+            schemaVersion = 3, validate = StrategyLibrary::validate, onRecovered = onRecovered,
+            legacyFormat = LegacyConfigFormat("version") { version, document ->
+                // v1/v2 used the control codec. Its extra _type fields are ignored by the typed reader.
+                val library = legacyJson.decodeFromJsonElement(StrategyLibrary.serializer(), requireNotNull(document["library"]))
+                if (version == 1) library.copy(rerolls = legacySnapshot()?.rerolls ?: legacyRerolls()) else library
+            },
+        )
     }
+
+    private val legacyJson = Json { ignoreUnknownKeys = true }
 }

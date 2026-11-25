@@ -1,6 +1,7 @@
 package com.landosol.toolbox.desktop.app.adapters.storage
 
 import com.landosol.toolbox.desktop.app.control.ControlModelCodec
+import com.landosol.toolbox.desktop.platform.*
 import com.landosol.toolbox.labyrinth.*
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.*
@@ -12,6 +13,81 @@ import java.nio.file.Files
 
 class DesktopConfigurationMigrationTest {
     @get:Rule val directory = TemporaryFolder()
+
+    @Test fun desktopAndUiMigrateLosslesslyAndAreNeverReimported() {
+        val root = directory.root.toPath()
+        val settings = Files.createDirectories(root.resolve("settings"))
+        val environment = DesktopSettings("D:/中文/adb.exe", "emulator-5554", PreferredTouchMode.COMPATIBILITY,
+            CloseBehavior.MINIMIZE, NetworkMode.DIRECT, 1550, 900, -12, 35, true, true, true, "D:/模型", true, "AGGRESSIVE")
+        val desktopJson = Json.encodeToString(DesktopSettings.serializer(), environment)
+        val uiJson = """{"theme":"DARK","largeText":true,"notifications":false,"sound":true,"originalRatings":true,
+            "page":"Strategies","rightTab":"history","previewExpanded":true,"animationConfirmedVersion":"abc",
+            "goals":[{"guildId":10,"count":3,"clears":false},{"guildId":2,"count":5}],"selectedTask":"REROLL"}"""
+        val ui = DesktopPreferences(DesktopThemeMode.DARK, true, false, true, true, "Strategies", "history", true, "abc",
+            listOf(DesktopGoal(10, 3, false), DesktopGoal(2, 5)), "REROLL")
+        Files.writeString(settings.resolve("desktop.json"), desktopJson)
+        Files.writeString(settings.resolve("ui.json"), uiJson)
+
+        val app = AppConfigStore(root)
+        assertEquals(AppConfig(environment, ui, true), app.state.value)
+        assertEquals(desktopJson, Files.readString(settings.resolve("desktop.json")))
+        assertEquals(uiJson, Files.readString(settings.resolve("ui.json")))
+        val before = Files.readString(settings.resolve("app.json"))
+        Files.writeString(settings.resolve("ui.json"), "invalid after migration")
+        val reopened = AppConfigStore(root) { fail("unexpected recovery of $it") }
+        assertEquals(app.state.value, reopened.state.value)
+        assertEquals(before, Files.readString(settings.resolve("app.json")))
+        DesktopSettingsStore(reopened).update { it.copy(windowX = 0) }
+        DesktopPreferencesStore(reopened).update { it.copy(page = "Run") }
+        assertEquals(AppConfig(environment.copy(windowX = 0), ui.copy(page = "Run"), true), AppConfigStore(root).state.value)
+    }
+
+    @Test fun corruptLegacyUiDoesNotDiscardEnvironmentOrDisableSharedTaskDefaults() {
+        val root = directory.root.toPath()
+        val settings = Files.createDirectories(root.resolve("settings"))
+        Files.writeString(settings.resolve("desktop.json"), """{"adbPath":"kept"}""")
+        Files.writeString(settings.resolve("ui.json"), "broken")
+        val backups = mutableListOf<java.nio.file.Path>()
+        val app = AppConfigStore(root, backups::add)
+        assertEquals("broken", Files.readString(backups.single()))
+        assertEquals("kept", app.state.value.environment.adbPath)
+        assertFalse(app.state.value.uiPreferencesSaved)
+        DesktopPreferencesStore(app).update { DesktopPreferences() }
+        assertTrue(AppConfigStore(root).state.value.uiPreferencesSaved)
+    }
+
+    @Test fun versionTwoLibraryPreservesAllProfilesRerollsAndUndoWithoutReadingFallbacks() {
+        val root = directory.root.toPath()
+        val settings = Files.createDirectories(root.resolve("settings"))
+        val profile = StrategyProfile("kept", "原策略", revision = 6)
+        val other = StrategyProfile("other", "备选", "备注", 8, LabyrinthStrategySettings(playerWeight = 11))
+        val rerolls = mapOf(18L to LabyrinthRerollSettings(guildId = 8))
+        val undo = StrategyImportUndo(profile.id, listOf(profile, other), emptyMap())
+        val library = StrategyLibrary(other.id, listOf(profile, other), rerolls, 22, undo)
+        val old = buildJsonObject { put("version", 2); put("library", ControlModelCodec.encode(library)) }
+        Files.writeString(settings.resolve("strategies.json"), old.toString())
+        val store = DesktopStrategyStore(root, { error("unexpected migration") }, {}, legacyRerolls = { error("unexpected migration") })
+        assertEquals(library, store.library.value)
+        assertEquals(library, DesktopStrategyStore(root, { error("already migrated") }, {}).library.value)
+    }
+
+    @Test fun legacyLabyrinthSnapshotTakesPrecedenceAndRetainsUndo() = runBlocking {
+        val root = directory.root.toPath()
+        val file = Files.createDirectories(root.resolve("files")).resolve("labyrinth-configuration-v1.json")
+        val previous = LabyrinthConfigurationUndo(LabyrinthStrategySettings(playerWeight = 18),
+            mapOf(2L to LabyrinthRerollSettings(guildId = 6)), setOf(LabyrinthConfigModule.REROLL), 2L)
+        val snapshot = LabyrinthConfigurationValues(LabyrinthStrategySettings(playerWeight = 35),
+            mapOf(2L to LabyrinthRerollSettings(guildId = 4)), previous)
+        val raw = Json.encodeToString(LabyrinthConfigurationValues.serializer(), snapshot)
+        Files.writeString(file, raw)
+        val store = DesktopStrategyStore(root, { error("older source") }, {}, legacyRerolls = { error("older source") })
+        assertEquals(snapshot.strategy, store.state.value)
+        assertEquals(snapshot.rerolls, store.library.value.rerolls)
+        store.undoImport(store.library.value.revision)
+        assertEquals(previous.strategy, store.state.value)
+        assertEquals(previous.rerolls, store.library.value.rerolls)
+        assertEquals(raw, Files.readString(file))
+    }
 
     @Test fun oldLibraryAndAccountPreferencesMigrateOnceWithoutLosingIdentityOrCandidates() {
         val root = directory.root.toPath()

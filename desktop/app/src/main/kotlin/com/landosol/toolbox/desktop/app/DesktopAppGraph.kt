@@ -152,8 +152,10 @@ class DesktopAppGraph(
     private val filesDir get() = context.filesDir
     private val cacheDir get() = context.cacheDir
     private val assets get() = context.assets
-    val settings = DesktopSettingsStore(dataDirectory) { addNotice("桌面设置已从默认值恢复，原文件已备份：$it") }
-    private var inheritTaskDefaults = sharedData != null && !Files.exists(dataDirectory.resolve("settings/ui.json"))
+    private val appConfig = AppConfigStore(dataDirectory) { addNotice("配置损坏，原文件已备份为 ${it.fileName}") }
+    val settings = DesktopSettingsStore(appConfig)
+    val preferences = DesktopPreferencesStore(appConfig)
+    private var inheritTaskDefaults = sharedData != null && !appConfig.state.value.uiPreferencesSaved
     fun markRuntimePreferencesEdited() { inheritTaskDefaults = false }
     private val network = NetworkProxyController().also { it.setMode(settings.state.value.networkMode) }
     private val power = PowerSaveController()
@@ -563,26 +565,7 @@ class DesktopAppGraph(
         LabyrinthRoleDecisionDataLoader(context).load()
     }
     val labyrinthStrategySettings by lazy {
-        com.landosol.toolbox.desktop.app.adapters.storage.DesktopStrategyStore(dataDirectory,
-            legacy = {
-                val raw = if (sharedData == null) context.preferences("labyrinth-strategy")
-                    .getString("settings.v1", null) else null
-                com.landosol.toolbox.labyrinth.LabyrinthStrategySettingsCodec.decode(raw)
-            },
-            notice = ::addNotice, transient = sharedData != null,
-            legacyRerolls = {
-                val prefs = context.preferences("labyrinth-reroll-settings")
-                val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-                prefs.all.keys.mapNotNull { key ->
-                    val id = key.removePrefix("account.").toLongOrNull()?.takeIf { key.startsWith("account.") && it > 0 }
-                    id?.let { accountId ->
-                        val settings = runCatching {
-                            json.decodeFromString(com.landosol.toolbox.labyrinth.LabyrinthRerollSettings.serializer(), prefs.getString(key, null)!!)
-                        }.getOrNull()?.takeIf { it.validationError() == null } ?: com.landosol.toolbox.labyrinth.LabyrinthRerollSettings()
-                        accountId to settings
-                    }
-                }.toMap()
-            })
+        DesktopStrategyStore(context, transient = sharedData != null, notice = ::addNotice)
     }
     @Volatile private var sharedStrategyIdentity: com.landosol.toolbox.desktop.app.adapters.storage.StrategyIdentity? = null
     @Volatile private var taskStrategy: com.landosol.toolbox.desktop.app.adapters.storage.StrategyProfile? = null

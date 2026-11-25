@@ -86,7 +86,7 @@ fun startMissing(task:DesktopTask,state:RunConsoleState,ocrReady:Boolean,hasGoal
 class DesktopUxController(private val graph:DesktopAppGraph) {
     var confirmNavigation:((()->Unit)->Unit)?=null
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Default+CoroutineExceptionHandler { _,e -> graph.log.add("体验面板：${e.message}",true) })
-    val preferences=DesktopPreferencesStore(graph.dataDirectory,graph::addNotice)
+    val preferences = graph.preferences
     val history=graph.runHistory
     private val foregroundMutable=MutableStateFlow<String?>(null)
     val foreground=foregroundMutable.asStateFlow()

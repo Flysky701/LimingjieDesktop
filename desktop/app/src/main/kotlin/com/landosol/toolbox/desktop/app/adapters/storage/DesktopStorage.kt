@@ -1,5 +1,8 @@
 package com.landosol.toolbox.desktop.app.adapters.storage
 
+import com.landosol.toolbox.core.config.AtomicConfigStore
+import com.landosol.toolbox.core.config.select
+import com.landosol.toolbox.desktop.platform.AppConfig
 import com.landosol.toolbox.desktop.platform.DesktopSettings
 import com.landosol.toolbox.desktop.platform.WindowsDpapi
 import com.landosol.toolbox.desktop.shared.AtomicFiles
@@ -7,9 +10,6 @@ import com.landosol.toolbox.desktop.shared.DeviceIdentitySnapshot
 import com.landosol.toolbox.desktop.shared.DeviceIdentityStore
 import com.landosol.toolbox.desktop.shared.SecretProtector
 import com.landosol.toolbox.desktop.shared.SecretUnavailableException
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -17,26 +17,39 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
 
-class DesktopSettingsStore(dataDirectory: Path, private val onRecovered: (Path) -> Unit = {}) {
-    private val file = dataDirectory.resolve("settings/desktop.json")
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-    private val mutableState = MutableStateFlow(load())
-    val state: StateFlow<DesktopSettings> = mutableState.asStateFlow()
-    private fun load(): DesktopSettings {
-        if (!Files.exists(file)) return DesktopSettings()
-        return try { json.decodeFromString<DesktopSettings>(Files.readString(file)) }
-        catch (_: SerializationException) {
-            val backup = file.resolveSibling("desktop.corrupt-${System.currentTimeMillis()}.json")
-            Files.move(file, backup)
-            onRecovered(backup)
-            DesktopSettings()
-        }
+class AppConfigStore(dataDirectory: Path, onRecovered: (Path) -> Unit = {}) {
+    private val directory = dataDirectory.resolve("settings")
+    private val store = AtomicConfigStore(
+        directory.resolve("app.json"), AppConfig.serializer(), ::AppConfig,
+        onRecovered = onRecovered,
+        migrateLegacy = {
+            val environment = AtomicConfigStore.readLegacy(directory.resolve("desktop.json"), onRecovered) {
+                legacyJson.decodeFromString(DesktopSettings.serializer(), it)
+            }
+            val ui = AtomicConfigStore.readLegacy(directory.resolve("ui.json"), onRecovered) {
+                legacyJson.decodeFromString(DesktopPreferences.serializer(), it)
+            }
+            if (environment == null && ui == null) null else AppConfig(
+                environment ?: DesktopSettings(), ui ?: DesktopPreferences(), uiPreferencesSaved = ui != null,
+            )
+        },
+    )
+    val state = store.state
+    internal fun update(change: (AppConfig) -> AppConfig) = store.update(change)
+
+    private companion object {
+        val legacyJson = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     }
-    @Synchronized fun save(settings: DesktopSettings) {
-        AtomicFiles.write(file, json.encodeToString(settings).toByteArray(Charsets.UTF_8))
-        mutableState.value = settings
+}
+
+class DesktopSettingsStore(private val app: AppConfigStore) {
+    constructor(dataDirectory: Path, onRecovered: (Path) -> Unit = {}) : this(AppConfigStore(dataDirectory, onRecovered))
+
+    val state = app.state.select(AppConfig::environment)
+    fun save(settings: DesktopSettings) = update { settings }
+    fun update(transform: (DesktopSettings) -> DesktopSettings) {
+        app.update { it.copy(environment = transform(it.environment)) }
     }
-    @Synchronized fun update(transform: (DesktopSettings) -> DesktopSettings) = save(transform(state.value))
 }
 
 class FileDeviceIdentityStore(dataDirectory: Path, private val onProblem: (String) -> Unit = {}) : DeviceIdentityStore {
