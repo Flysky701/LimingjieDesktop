@@ -199,6 +199,7 @@ import java.time.format.DateTimeFormatter
                 ReadinessItem("国服数据库",database,database.startsWith("已就绪"),"Settings"),
                 ReadinessItem("OCR 识别模型",when(ocr){OcrEngineStatus.Ready->"已加载";OcrEngineStatus.Loading->"加载中";OcrEngineStatus.NotLoaded->"尚未加载";is OcrEngineStatus.Failed->"加载失败"},ocr is OcrEngineStatus.Ready,"Settings"),
                 battleModelReadiness(settings.battleOnnxEnabled, s.entry.running, globalBattleModel, workerBattleModel),
+                ReadinessItem("Path B 全局规划", if (settings.pathBPlanningEnabled) "已开启" else "已关闭", true, "Settings"),
             )
             items.forEach{item->Row(Modifier.fillMaxWidth().heightIn(min=25.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(5.dp)) {
                 Text(item.title,style=MaterialTheme.typography.bodySmall,color=Muted)
@@ -219,6 +220,19 @@ import java.time.format.DateTimeFormatter
             Column {
                 Text("启用 ONNX 战斗选队", style = MaterialTheme.typography.bodySmall)
                 Text("EX / Boss 生效，下局生效", style = MaterialTheme.typography.labelSmall, color = Muted)
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 43.dp).toggleable(
+                value = settings.pathBPlanningEnabled, enabled = !actions.working, role = Role.Checkbox,
+                onValueChange = { checked -> actions.run { settingsOwner.settings.update { it.copy(pathBPlanningEnabled = checked) } } },
+            ),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            Checkbox(settings.pathBPlanningEnabled, null, enabled = !actions.working, modifier = Modifier.size(30.dp))
+            Column {
+                Text("启用 Path B 全局规划", style = MaterialTheme.typography.bodySmall)
+                Text("角色/遗物/商店/事件，下局生效", style = MaterialTheme.typography.labelSmall, color = Muted)
             }
         }
         if(needsConfirmation) {

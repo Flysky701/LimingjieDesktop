@@ -11,6 +11,7 @@ data class ScoreSettings(
     val normalPts: Int,
     val exPts: Int,
     val bossPts: Int,
+    val shopRefreshCosts: List<Int> = listOf(300, 600, 1200, 2400, 4800, 9999),
 ) {
     companion object {
         fun currentOfficial(): ScoreSettings = ScoreSettings(

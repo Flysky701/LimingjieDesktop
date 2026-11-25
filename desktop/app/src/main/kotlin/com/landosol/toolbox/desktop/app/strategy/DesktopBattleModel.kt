@@ -112,7 +112,9 @@ internal class DesktopBattleModel(
     private data class LoadedBundle(val version: BundleVersion, val id: String, val bundle: BattleOnnxBundle)
 
     private var loaded: LoadedBundle? = null
-    private var cachedContext: Pair<ContextKey, EncodedBattleContext>? = null
+    private val cachedContexts = object : LinkedHashMap<ContextKey, EncodedBattleContext>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<ContextKey, EncodedBattleContext>) = size > 16
+    }
     private var lastWarning: String? = null
     private val mutableStatus = MutableStateFlow(BattleModelStatus())
     val status: StateFlow<BattleModelStatus> = mutableStatus.asStateFlow()
@@ -129,7 +131,7 @@ internal class DesktopBattleModel(
         return object : ContextualBattleValueEstimator {
             override fun unitAffinities(context: BattleValueContext): Map<Int, Double>? =
                 synchronized(this@DesktopBattleModel) {
-                    if (active != null && active === loaded?.bundle) infer { encode(active, context).unitAffinities }
+                    if (active != null && active === loaded?.bundle) infer { encode(context, active::encodeContext).unitAffinities }
                     else null
                 }
 
@@ -142,7 +144,7 @@ internal class DesktopBattleModel(
                         loadFailure ?: "战斗模型已关闭或重新加载"
                     } else {
                         val values = if (candidates.isEmpty()) emptyList() else infer {
-                            active.scoreTeams(encode(active, context), context, candidates)
+                            active.scoreTeams(encode(context, active::encodeContext), context, candidates)
                         }
                         if (values != null) return BattleValueEstimate(values, BattleValueSource.MODEL)
                         fallbackReason
@@ -251,17 +253,20 @@ internal class DesktopBattleModel(
     private fun releaseBundle() {
         val previous = loaded
         loaded = null
-        cachedContext = null
+        cachedContexts.clear()
         previous?.bundle?.close()
     }
 
-    // Called with the owner locked so a cache entry always belongs to the active native sessions.
-    private fun encode(active: BattleOnnxBundle, context: BattleValueContext): EncodedBattleContext {
+    // Native callers check the active bundle while holding the same lock.
+    @Synchronized internal fun encode(
+        context: BattleValueContext,
+        encodeContext: (BattleValueContext) -> EncodedBattleContext,
+    ): EncodedBattleContext {
         val key = ContextKey(context)
-        cachedContext?.let { (previousKey, encoded) -> if (previousKey == key) return encoded }
-        return active.encodeContext(context).also { encoded ->
+        cachedContexts[key]?.let { return it }
+        return encodeContext(context).also { encoded ->
+            cachedContexts[key] = encoded
             mutableStatus.value = status.value.copy(towerAInvocations = towerAInvocations + 1)
-            cachedContext = key to encoded
         }
     }
 }

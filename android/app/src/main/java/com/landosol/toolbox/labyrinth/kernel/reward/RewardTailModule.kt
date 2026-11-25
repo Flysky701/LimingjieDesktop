@@ -1,6 +1,7 @@
 package com.landosol.toolbox.labyrinth.kernel.reward
 
 import com.landosol.toolbox.labyrinth.LabyrinthEventFreeRoleBlockedAction
+import com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthRunPlanningContext
 import com.landosol.toolbox.labyrinth.LabyrinthFallbackTap
 import com.landosol.toolbox.labyrinth.LabyrinthInviteButtonState
 import com.landosol.toolbox.labyrinth.LabyrinthObservedRelic
@@ -117,6 +118,8 @@ data class RelicChoiceInput(
     val frameHeight: Int,
     val relicEvidenceVersion: Long = 0,
     val frameEvidenceVersion: Long = relicEvidenceVersion,
+    val planningContext: LabyrinthRunPlanningContext? = null,
+    val acquiredCharacterIds: Set<String> = emptySet(),
 )
 
 data class RoleRewardFrameInput(
@@ -127,6 +130,7 @@ data class RoleRewardFrameInput(
     val defenseStacks: Int,
     val acquiredIds: Set<String>,
     val atMillis: Long,
+    val planningContext: LabyrinthRunPlanningContext? = null,
 )
 
 data class EventFreeRoleFrameInput(
@@ -140,6 +144,7 @@ data class EventFreeRoleFrameInput(
     val atMillis: Long,
     val shopChoiceImprintPending: Boolean = false,
     val routeActive: Boolean = false,
+    val planningContext: LabyrinthRunPlanningContext? = null,
 )
 
 data class CharacterAcquisitionState(
@@ -217,6 +222,7 @@ class RewardTailModule(
     private data class RoleCacheKey(
         val width: Int, val height: Int, val defenseStacks: Int, val acquired: Set<String>,
         val candidates: List<RoleCandidate>,
+        val planningFingerprint: String?,
     )
     private var roleRewardDecisionCacheKey: RoleCacheKey? = null
     private var cachedRoleDecision: LabyrinthRoleRewardChoiceDecision.Select? = null
@@ -435,6 +441,8 @@ class RewardTailModule(
             val decision = relicChoicePolicy.choose(
                 acquired = input.observedRelics, candidates = choices, lockedFocus = lockedFocus,
                 calibratedStacks = input.calibratedStacks, currentArea = input.currentArea,
+                planningContext = input.planningContext,
+                acquiredCharacterIds = input.acquiredCharacterIds + pendingAcquiredIds,
             ) ?: return waitForRelicChoice(rule, "等待可选择的遗物")
             val choice = decision.choice
             val relicId = choice.relicId
@@ -594,13 +602,13 @@ class RewardTailModule(
         val cacheKey = RoleCacheKey(input.frameWidth, input.frameHeight, input.defenseStacks, acquired,
             input.characterMatches.map {
                 RoleCandidate(it.slotId, it.characterId, it.displayName, it.screenRect, labyrinthRoleRewardIdentityIsActionSafe(it))
-            })
+            }, input.planningContext?.cacheFingerprint)
         val requestGeneration = generation
         val requestRound = roleRewardRound.epoch()
         val requestFrame = frame
         val choice = cachedRoleDecision?.takeIf { cacheKey == roleRewardDecisionCacheKey } ?: rolePlanner?.decide(
             input.characterMatches, acquired, LabyrinthRoleDecisionContext(defenseMarkStacks = input.defenseStacks),
-            input.frameWidth, input.frameHeight,
+            input.frameWidth, input.frameHeight, input.planningContext,
         ) ?: LabyrinthRoleRewardChoiceDecision.Wait("角色三选一决策资料未加载")
         if (!labyrinthRoleDecisionCanPublish(
                 requestFrame === frame, running, paused, requestGeneration, generation,
@@ -835,6 +843,7 @@ class RewardTailModule(
         val choice = rolePlanner?.decideFreeVisibleRole(
             visible, input.acquiredIds + pendingAcquiredIds + selected,
             LabyrinthRoleDecisionContext(defenseMarkStacks = input.defenseStacks),
+            input.planningContext,
         )
         val select = (choice as? LabyrinthRoleRewardChoiceDecision.Select)?.takeIf {
             it.actionSafe && it.buttonRect.fits(input.frameWidth, input.frameHeight)

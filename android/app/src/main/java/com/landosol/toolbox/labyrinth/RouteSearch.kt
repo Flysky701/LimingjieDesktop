@@ -1,5 +1,11 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.kernel.planning.RouteDpResult
+import com.landosol.toolbox.labyrinth.kernel.planning.RouteGraph
+import com.landosol.toolbox.labyrinth.kernel.planning.ScoreSettings
+import com.landosol.toolbox.labyrinth.kernel.planning.solveRouteDp
+import com.landosol.toolbox.labyrinth.kernel.planning.toPlanningRouteGraph
+import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
 import com.landosol.toolbox.protocol.labyrinth.LabyrinthMapNode
 import com.landosol.toolbox.protocol.labyrinth.LabyrinthRoute
 
@@ -37,19 +43,15 @@ data class LabyrinthRoutePolicy(
         if (!acceptsGeneric(route)) return false
         if (evaluationMode == LabyrinthRouteEvaluationMode.CUSTOM_NODES) {
             if (customNodePlan.validationError() != null || !customNodePlan.accepts(area, route)) return false
+        } else if (evaluationMode == LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP) {
+            return acceptsOfficialThirdBlock(area, route.firstOrNull { it.column == 3 }?.blockType) &&
+                bossMatches(area, route.last())
         } else if (perfectStart) {
             val requiredColumns = AREA_REQUIREMENTS[area]?.keys ?: return false
             if (route.mapTo(mutableSetOf(), LabyrinthMapNode::column) != requiredColumns) return false
             if (route.any { node -> node.blockType !in expectedTypes(area, node.column) }) return false
         }
-        val selectedBosses = when (area) {
-            3 -> area3BossIds
-            5 -> area5BossIds
-            else -> return true
-        }
-        if (selectedBosses.isEmpty()) return true
-        val boss = route.lastOrNull { it.blockType == BOSS_BLOCK_TYPE } ?: return false
-        return LabyrinthBossCatalog.unitIdForQuest(area, boss.questId) in selectedBosses
+        return bossMatches(area, route)
     }
 
     /** Compatibility overload for callers that only use generic route conditions. */
@@ -68,15 +70,21 @@ data class LabyrinthRoutePolicy(
 
     fun lastColumn(area: Int): Int? = AREA_REQUIREMENTS[area]?.keys?.maxOrNull()
 
-    internal fun bossMatches(area: Int, route: List<LabyrinthMapNode>): Boolean {
+    internal fun acceptsOfficialThirdBlock(area: Int, blockType: Int?): Boolean =
+        (area != 3 && area != 5) || blockType in expectedTypes(area, 3)
+
+    internal fun bossMatches(area: Int, route: List<LabyrinthMapNode>): Boolean =
+        bossMatches(area, route.lastOrNull { it.blockType == BOSS_BLOCK_TYPE })
+
+    internal fun bossMatches(area: Int, boss: LabyrinthMapNode?): Boolean {
         val selectedBosses = when (area) {
             3 -> area3BossIds
             5 -> area5BossIds
             else -> return true
         }
         if (selectedBosses.isEmpty()) return true
-        val boss = route.lastOrNull { it.blockType == BOSS_BLOCK_TYPE } ?: return false
-        return LabyrinthBossCatalog.unitIdForQuest(area, boss.questId) in selectedBosses
+        return boss?.blockType == BOSS_BLOCK_TYPE &&
+            LabyrinthBossCatalog.unitIdForQuest(area, boss.questId) in selectedBosses
     }
 
     private fun expectedTypes(area: Int, column: Int): Set<Int> {
@@ -257,23 +265,168 @@ internal class LabyrinthValueRouteEvaluator(
     }
 }
 
+/**
+ * Uses the kernel's default outcomes for opening maps: battles are assumed won, LINK and RELIC
+ * grant their modeled rewards, and EVENT and SHOP grant the block points. The kernel also credits
+ * area clears and applies the difficulty multiplier with a single final score floor.
+ */
+fun scoreRouteOfficialDp(
+    nodes: List<LabyrinthMapNode>,
+    difficulty: Int = LabyrinthRerollOptions.DEFAULT_DIFFICULTY,
+    settings: ScoreSettings = ScoreSettings.currentOfficial(),
+): RouteDpResult = solveRouteDp(nodes.toPlanningRouteGraph(), settings, difficulty)
+
 class LabyrinthOpeningRouteMatcher(
     private val searcher: LabyrinthRouteSearcher = LabyrinthRouteSearcher(),
 ) {
     fun search(
         enterId: Long,
         nodes: List<LabyrinthMapNode>,
-        difficulty: Int,
+        difficulty: Int = LabyrinthRerollOptions.DEFAULT_DIFFICULTY,
         policy: LabyrinthRoutePolicy,
         currentBlockId: Long? = null,
+    ): RouteSearchResult = when (policy.evaluationMode) {
+        LabyrinthRouteEvaluationMode.CUSTOM_NODES ->
+            LabyrinthCustomNodeRouteEvaluator(policy).search(enterId, nodes, difficulty, currentBlockId)
+        LabyrinthRouteEvaluationMode.VALUE_ROUTE ->
+            searchValueRoute(enterId, nodes, difficulty, policy, currentBlockId)
+        LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP ->
+            searchOfficialScoreRoute(enterId, nodes, difficulty, policy, currentBlockId)
+        LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE ->
+            searchLegacyTemplate(enterId, nodes, difficulty, policy, currentBlockId)
+    }
+
+    private fun searchOfficialScoreRoute(
+        enterId: Long,
+        nodes: List<LabyrinthMapNode>,
+        difficulty: Int,
+        policy: LabyrinthRoutePolicy,
+        currentBlockId: Long?,
     ): RouteSearchResult {
-        if (policy.evaluationMode == LabyrinthRouteEvaluationMode.CUSTOM_NODES) {
-            return LabyrinthCustomNodeRouteEvaluator(policy).search(enterId, nodes, difficulty, currentBlockId)
+        val settings = ScoreSettings.currentOfficial()
+        if (difficulty !in settings.scoreRates) return RouteSearchResult.NoRoute
+        val byId = nodes.associateBy(LabyrinthMapNode::blockId)
+        if (byId.size != nodes.size) return RouteSearchResult.NoRoute
+        val current = currentBlockId?.let { byId[it] ?: return RouteSearchResult.NoRoute }
+        val areas = policy.targetAreas(difficulty).filter { current == null || it >= current.area }
+        if (areas.isEmpty() || !areas.containsAll(policy.requiredAreas)) return RouteSearchResult.NoRoute
+        val graph = officialRouteGraph(nodes.filter { it.area in areas }, areas, policy, current)
+            ?: return RouteSearchResult.NoRoute
+        val best = if (policy.requiredBlockTypes.isEmpty()) {
+            solveRouteDp(graph, settings, difficulty).bestRoute
+        } else {
+            scoreWithRequiredBlockTypes(graph, settings, difficulty, policy.requiredBlockTypes)
+                ?: return RouteSearchResult.NoRoute
         }
-        if (policy.evaluationMode == LabyrinthRouteEvaluationMode.VALUE_ROUTE) {
-            return searchValueRoute(enterId, nodes, difficulty, policy, currentBlockId)
+        return RouteSearchResult.Found(LabyrinthRoute(enterId, best.map { byId.getValue(it.blockId) }))
+    }
+
+    private fun officialRouteGraph(
+        nodes: List<LabyrinthMapNode>,
+        areas: List<Int>,
+        policy: LabyrinthRoutePolicy,
+        current: LabyrinthMapNode?,
+    ): RouteGraph? {
+        val playable = nodes.filter {
+            it.blockType != LabyrinthNodeTypes.CLEAR && it.blockType != LabyrinthNodeTypes.UNKNOWN
         }
-        return searchLegacyTemplate(enterId, nodes, difficulty, policy, currentBlockId)
+        val floors = playable.groupBy(LabyrinthMapNode::area)
+        if (floors.keys != areas.toSet()) return null
+        val lastColumns = floors.mapValues { (_, floor) -> floor.maxOf(LabyrinthMapNode::column) }
+        if (lastColumns.any { (area, column) -> area in setOf(3, 5) && column < 3 }) return null
+
+        val ids = playable.mapTo(mutableSetOf(), LabyrinthMapNode::blockId)
+        val requiredIds = policy.requiredBlockIds + listOfNotNull(current?.blockId)
+        if (!ids.containsAll(requiredIds)) return null
+        val requiredByColumn = playable.filter { it.blockId in requiredIds }.groupBy { it.area to it.column }
+        if (requiredByColumn.values.any { it.size > 1 }) return null
+        val requiredColumns = floors.mapValues { (area, _) ->
+            requiredByColumn.keys.filter { it.first == area }.map { it.second } +
+                listOfNotNull(3.takeIf { area == 3 || area == 5 })
+        }
+        val graph = try {
+            playable.map { node ->
+                node.copy(nextBlockIds = node.nextBlockIds.filter(ids::contains))
+            }.toPlanningRouteGraph()
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+
+        // Work backwards from valid ends so pruning cannot turn a dead branch into a floor end.
+        val children = mutableMapOf<Long, List<Long>>()
+        val ends = mutableSetOf<Long>()
+        for (id in graph.order.asReversed()) {
+            val node = graph.nodes.getValue(id)
+            val area = node.area
+            val column = node.column
+            val lastColumn = lastColumns.getValue(area)
+            val atEnd = column == lastColumn
+            val required = requiredByColumn[area to column]?.single()
+            if ((required != null && required.blockId != id) ||
+                id in policy.forbiddenBlockIds || node.blockType in policy.forbiddenBlockTypes ||
+                (column == 3 && !policy.acceptsOfficialThirdBlock(area, node.blockType)) ||
+                (atEnd && !policy.bossMatches(area, node))
+            ) continue
+
+            val nextRequiredColumn = requiredColumns.getValue(area).filter { it > column }.minOrNull() ?: lastColumn
+            val successors = graph.children.getValue(id).filter { childId ->
+                val child = graph.nodes.getValue(childId)
+                childId in children && if (atEnd) {
+                    child.area == area + 1 && child.column == 1
+                } else {
+                    child.area == area && child.column in (column + 1)..nextRequiredColumn
+                }
+            }
+            val clears = atEnd && area == areas.last() && id in graph.clearEnds
+            if (!clears && successors.isEmpty()) continue
+            children[id] = successors
+            if (atEnd) ends += id
+        }
+        val starts = graph.starts.filter { it in children && graph.nodes.getValue(it).column == 1 }
+        if (starts.isEmpty()) return null
+        return RouteGraph(
+            graph.nodes.filterKeys(children::containsKey),
+            children,
+            starts,
+            graph.order.filter(children::containsKey),
+            ends,
+            graph.clearEnds.intersect(ends),
+        )
+    }
+
+    private fun scoreWithRequiredBlockTypes(
+        graph: RouteGraph,
+        settings: ScoreSettings,
+        difficulty: Int,
+        requiredTypes: Set<Int>,
+    ): List<LabyrinthMapNode>? {
+        // Paths with different outstanding requirements need separate DP continuations.
+        val statesByBlock = mutableMapOf<Long, MutableMap<Set<Int>, Long>>()
+        var nextId = 0L
+        fun stateId(blockId: Long, pending: Set<Int>): Long =
+            statesByBlock.getOrPut(blockId, ::mutableMapOf)
+                .getOrPut(pending - graph.nodes.getValue(blockId).blockType) { nextId++ }
+
+        val starts = graph.starts.map { stateId(it, requiredTypes) }
+        val originals = mutableMapOf<Long, LabyrinthMapNode>()
+        val children = mutableMapOf<Long, List<Long>>()
+        val areaEnds = mutableSetOf<Long>()
+        val clearEnds = mutableSetOf<Long>()
+        for (blockId in graph.order) {
+            val original = graph.nodes.getValue(blockId)
+            for ((pending, id) in statesByBlock.remove(blockId).orEmpty()) {
+                originals[id] = original
+                children[id] = graph.children.getValue(blockId).map { stateId(it, pending) }
+                if (blockId in graph.areaEnds) areaEnds += id
+                if (blockId in graph.clearEnds && pending.isEmpty()) clearEnds += id
+            }
+        }
+        if (clearEnds.isEmpty()) return null
+        val expanded = RouteGraph(
+            originals.mapValues { (id, node) -> node.copy(blockId = id, nextBlockIds = children.getValue(id)) },
+            children, starts, originals.keys.toList(), areaEnds, clearEnds,
+        )
+        return solveRouteDp(expanded, settings, difficulty).bestRoute.map { originals.getValue(it.blockId) }
     }
 
     private fun searchLegacyTemplate(

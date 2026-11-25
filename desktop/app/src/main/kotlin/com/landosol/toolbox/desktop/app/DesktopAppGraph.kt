@@ -67,6 +67,9 @@ import com.landosol.toolbox.automation.overlay.AutomationOverlayCoordinator
 import com.landosol.toolbox.data.local.AppDatabase
 import com.landosol.toolbox.labyrinth.LabyrinthEntryActionPlanner
 import com.landosol.toolbox.labyrinth.LabyrinthEntryActionPlannerConfig
+import com.landosol.toolbox.labyrinth.LabyrinthEventChoiceDecision
+import com.landosol.toolbox.labyrinth.LabyrinthPathBDecisionSummary
+import com.landosol.toolbox.labyrinth.LabyrinthRoleRewardChoiceDecision
 import com.landosol.toolbox.labyrinth.AndroidLabyrinthRoleDecisionDataLoader
 import com.landosol.toolbox.labyrinth.LabyrinthCnDatabaseUpdateResult
 import com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionDataResult
@@ -398,6 +401,38 @@ class DesktopAppGraph(
                 }
             }
         }
+        if (!dataOnly) autoRunScope.launch {
+            var visit: Pair<Any?, Int?>? = null
+            val logged = mutableSetOf<LabyrinthPathBDecisionSummary>()
+            labyrinthEntryRecognitionSession.state.collect { state ->
+                val nextVisit = (state.sessionId to state.routeProgress?.visitedCount).takeIf { state.running }
+                if (visit != nextVisit) {
+                    visit = nextVisit
+                    logged.clear()
+                }
+                if (nextVisit == null) return@collect
+                fun report(summary: LabyrinthPathBDecisionSummary?) {
+                    if (summary == null || !logged.add(summary)) return
+                    val source = if (summary.source == "PathB-NN") "PathB(NN)" else "PathB(官方分)"
+                    val message = "$source ${summary.title}：${summary.target}；${summary.detail}"
+                    log.add(message, kind = UserLogKind.KEY)
+                    DesktopLog.write('I', APP_LOG_TAG, message)
+                }
+                (state.roleRewardChoiceDecision as? LabyrinthRoleRewardChoiceDecision.Select)?.let { decision ->
+                    decision.planningSource?.takeIf { it.startsWith("PathB") }?.let { source ->
+                        report(LabyrinthPathBDecisionSummary(source, "角色三选一", decision.displayName,
+                            decision.explanation.joinToString("；")))
+                    }
+                }
+                (state.eventChoiceDecision as? LabyrinthEventChoiceDecision.Select)?.let { decision ->
+                    decision.planningSource?.takeIf { it.startsWith("PathB") }?.let { source ->
+                        report(LabyrinthPathBDecisionSummary(source, "事件选择", "${decision.eventId} ${decision.label}",
+                            decision.explanation))
+                    }
+                }
+                report(state.pathBDecisionSummary)
+            }
+        }
     }
 
     private fun logGameClient() {
@@ -537,6 +572,7 @@ class DesktopAppGraph(
             journalDirectoryProvider = { dataDirectory.resolve("kernel-journals").toFile() },
             strategyProvider = {
                 val settings = taskStrategy?.settings ?: labyrinthStrategySettings.state.value
+                val desktopSettings = this.settings.state.value
                 com.landosol.toolbox.labyrinth.LabyrinthStrategySnapshot(
                     settings,
                     roleDecisionRuntime?.document?.let { document ->
@@ -544,9 +580,10 @@ class DesktopAppGraph(
                             settings.applyTo(document), settings,
                         )
                         runtime.withBattleValueEstimator(
-                            battleModel.select(this.settings.state.value.battleOnnxEnabled, runtime.battleValueEstimator),
+                            battleModel.select(desktopSettings.battleOnnxEnabled, runtime.battleValueEstimator),
                         )
                     },
+                    pathBPlanningEnabled = desktopSettings.pathBPlanningEnabled,
                 )
             },
             rerollRequester = { accountId ->

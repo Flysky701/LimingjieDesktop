@@ -1,27 +1,36 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthRunPlanningContext
+import com.landosol.toolbox.labyrinth.kernel.planning.ShopDiscountModel
+import com.landosol.toolbox.labyrinth.kernel.planning.ShopItem
+import com.landosol.toolbox.labyrinth.kernel.planning.ShopItemKind
+import com.landosol.toolbox.labyrinth.kernel.planning.planShopVisit
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemKind
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryState
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemStatus
 
 sealed interface LabyrinthShopDecision {
+    val planningSource: String? get() = null
+
     data class BuyRelic(
         val item: LabyrinthShopItemMatch,
         val relicDecision: LabyrinthRelicChoiceDecision,
+        override val planningSource: String? = null,
     ) : LabyrinthShopDecision
 
     data class BuyRoleImprint(
         val item: LabyrinthShopItemMatch,
         val label: String,
         val reason: String,
+        override val planningSource: String? = null,
     ) : LabyrinthShopDecision {
         /** 选择印记 opens a full-roster picker after purchase; 随机印记 grants a role outright. */
         val opensRolePicker: Boolean get() = item.choiceRoleImprint
     }
 
-    data class Refresh(val reason: String) : LabyrinthShopDecision
-    data class Close(val reason: String) : LabyrinthShopDecision
+    data class Refresh(val reason: String, override val planningSource: String? = null) : LabyrinthShopDecision
+    data class Close(val reason: String, override val planningSource: String? = null) : LabyrinthShopDecision
     data class Wait(val reason: String) : LabyrinthShopDecision
 }
 
@@ -93,6 +102,8 @@ class LabyrinthShopPolicy(
     private val clearanceArea: Set<Int> = setOf(5),
     /** Rarities the clearance ladder may still buy after the refill dies. */
     private val clearanceRelicRarities: Set<Int> = setOf(3),
+    private val planningInputs: (() -> Pair<LabyrinthRunPlanningContext?, Set<String>>)? = null,
+    private val observeDecision: ((LabyrinthShopDecision) -> Unit)? = null,
 ) {
     fun decide(
         currentArea: Int?,
@@ -104,6 +115,38 @@ class LabyrinthShopPolicy(
         relicPurchasesInCycle: Int = 0,
         refreshAvailabilityKnown: Boolean = true,
         refreshesUsedInVisit: Int = 0,
+        planningContext: LabyrinthRunPlanningContext? = null,
+        acquiredCharacterIds: Set<String> = emptySet(),
+    ): LabyrinthShopDecision {
+        val inputs = if (planningContext == null) planningInputs?.invoke() else null
+        val decision = decideStock(currentArea, items, acquired, calibratedStacks, refreshAvailable, lockedFocus,
+            relicPurchasesInCycle, refreshAvailabilityKnown, refreshesUsedInVisit, planningContext ?: inputs?.first,
+            inputs?.second ?: acquiredCharacterIds)
+        val sourced = when (decision) {
+            is LabyrinthShopDecision.BuyRelic -> decision.copy(
+                planningSource = decision.planningSource ?: decision.relicDecision.planningSource ?: "规则",
+            )
+            is LabyrinthShopDecision.BuyRoleImprint -> decision.copy(planningSource = decision.planningSource ?: "规则")
+            is LabyrinthShopDecision.Refresh -> decision.copy(planningSource = decision.planningSource ?: "规则")
+            is LabyrinthShopDecision.Close -> decision.copy(planningSource = decision.planningSource ?: "规则")
+            is LabyrinthShopDecision.Wait -> decision
+        }
+        if (inputs != null) observeDecision?.invoke(sourced)
+        return sourced
+    }
+
+    private fun decideStock(
+        currentArea: Int?,
+        items: List<LabyrinthShopItemMatch>,
+        acquired: List<LabyrinthObservedRelic>,
+        calibratedStacks: Map<LabyrinthRelicMark, Int>,
+        refreshAvailable: Boolean,
+        lockedFocus: LabyrinthRelicMark?,
+        relicPurchasesInCycle: Int,
+        refreshAvailabilityKnown: Boolean,
+        refreshesUsedInVisit: Int,
+        planningContext: LabyrinthRunPlanningContext?,
+        acquiredCharacterIds: Set<String>,
     ): LabyrinthShopDecision {
         if (!buyRelics) return LabyrinthShopDecision.Close("策略已关闭商店购买，退出商店")
         val refreshAllowed = refreshEnabled && currentArea != null && currentArea >= finalArea
@@ -122,6 +165,63 @@ class LabyrinthShopPolicy(
         // that to 3 must affect areas 3 and 5 only, never hand area 4 a spending license.
         if (currentArea != null && currentArea in noPurchaseAreas) {
             return LabyrinthShopDecision.Close("区域${currentArea}按策略不购买商店商品，直接退出")
+        }
+
+        fun planShelf(
+            relics: List<LabyrinthShopItemMatch>,
+            imprint: LabyrinthShopItemMatch?,
+            relicDecision: LabyrinthRelicChoiceDecision? = null,
+        ): LabyrinthShopDecision? {
+            val planning = planningContext?.takeIf { it.enabled } ?: return null
+            val gold = planning.alphaRupee ?: return null
+            if (relicDecision != null && relicChoicePolicy.completesCapstone(relicDecision)) return null
+            if (!refreshAvailabilityKnown && refreshPermitted) return null
+            if (items.any { it.status == LabyrinthShopItemStatus.UNKNOWN ||
+                    (it.purchasable && (it.categoryState == LabyrinthShopCategoryState.READING ||
+                        it.relicMatch?.let { match -> !match.recognized && match.confidence >= ambiguousRelicLikeConfidence } == true)) }
+            ) return null
+            // Vision supplies the button state but has no price OCR. Use the reference shelf
+            // prices to compare affordable actions, retaining all of the existing item gates.
+            val offers = relics.mapNotNull { item ->
+                val relic = item.relicMatch ?: return@mapNotNull null
+                val id = relic.relicId?.toIntOrNull() ?: return@mapNotNull null
+                when (relic.rarity) {
+                    1 -> ShopItem(item.slotId, ShopItemKind.RELIC_1STAR, 1800, relicId = id)
+                    2 -> ShopItem(item.slotId, ShopItemKind.RELIC_2STAR, 2800, relicId = id)
+                    else -> null
+                }
+            } + listOfNotNull(imprint?.let {
+                if (it.roleImprintLabel == "全体选择印记") return null
+                if (it.choiceRoleImprint) ShopItem(it.slotId, ShopItemKind.ROLE_CHOICE_IMPRINT, 2800)
+                else ShopItem(it.slotId, ShopItemKind.ROLE_IMPRINT, 1200)
+            })
+            if (offers.size != relics.size + (if (imprint == null) 0 else 1) ||
+                offers.map { it.itemId }.distinct().size != offers.size || items.any { it.imprintLabelPending }) return null
+            val plan = tryPathB {
+                planShopVisit(offers, gold, planning.scoreSettings, planning.difficulty,
+                    ShopDiscountModel(planning.enhanceNode21, 40003 in planning.observedRelicIds),
+                    refreshCount = refreshesUsedInVisit,
+                    maxRefreshes = minOf(refreshBudget ?: Int.MAX_VALUE, planning.scoreSettings.shopRefreshCosts.size),
+                    refreshAvailable = refreshPermitted && refreshAvailable,
+                    remainingShops = planning.remainingShops.coerceAtLeast(1),
+                    ownedCharacterIds = acquiredCharacterIds.mapTo(hashSetOf(), ::canonicalLabyrinthRoleId))
+            } ?: return null
+            val plannedSlots = plan.buyIndices.map { offers[it].itemId }
+            val source = "PathB-官方分"
+            val explanation = "按当前余额与参考价估计商店收益 ${"%.1f".format(plan.expectedPts)} 分"
+            val selected = relics.firstOrNull { it.relicMatch == relicDecision?.choice }
+            if (selected != null && selected.slotId in plannedSlots && relicDecision != null) {
+                return LabyrinthShopDecision.BuyRelic(selected, relicDecision, relicDecision.planningSource
+                    ?.takeIf { it.startsWith("PathB") } ?: source)
+            }
+            // Keep the relic policy's identity and capstone priority when the DP prefers
+            // a different relic. That candidate will be considered again after the shelf moves.
+            if (relics.any { it.slotId in plannedSlots }) return null
+            if (imprint != null && imprint.slotId in plannedSlots) {
+                return LabyrinthShopDecision.BuyRoleImprint(imprint, requireNotNull(imprint.roleImprintLabel), explanation, source)
+            }
+            if (plan.shouldRefresh) return LabyrinthShopDecision.Refresh(explanation, source)
+            return LabyrinthShopDecision.Close(explanation, source)
         }
 
         // Exact role identity is required before spending coins on an imprint. A coarse
@@ -178,6 +278,7 @@ class LabyrinthShopPolicy(
             if (refreshPermitted && !refreshAvailabilityKnown) {
                 return LabyrinthShopDecision.Wait("遗物已买完，等待刷新按钮稳定识别")
             }
+            if (!clearance) planShelf(emptyList(), purchasableRoleImprint)?.let { return it }
             if (refreshPermitted && refreshAvailable) {
                 return LabyrinthShopDecision.Refresh(
                     if (visibleStockExhausted && relicPurchasesInCycle < relicsPerStockCycle) {
@@ -246,8 +347,11 @@ class LabyrinthShopPolicy(
                 calibratedStacks = calibratedStacks,
                 currentArea = currentArea,
                 lockedFocus = lockedFocus,
+                planningContext = planningContext,
+                acquiredCharacterIds = acquiredCharacterIds,
             )
             if (relicDecision != null) {
+                planShelf(recognizedRelicItems, purchasableRoleImprint, relicDecision)?.let { return it }
                 val item = recognizedRelicItems.first { it.relicMatch?.relicId == relicDecision.choice.relicId }
                 return LabyrinthShopDecision.BuyRelic(item, relicDecision)
             }
@@ -296,12 +400,14 @@ class LabyrinthShopPolicy(
             if (!refreshAvailabilityKnown) {
                 return LabyrinthShopDecision.Wait("当前商品行没有可购买遗物，等待刷新按钮稳定识别")
             }
+            if (!clearance) planShelf(emptyList(), purchasableRoleImprint)?.let { return it }
             if (refreshAvailable) {
                 return LabyrinthShopDecision.Refresh("当前商品行没有可购买遗物，按策略花300刷新下一轮遗物")
             }
         }
 
         if (purchasableRoleImprint != null) {
+            if (!clearance) planShelf(emptyList(), purchasableRoleImprint)?.let { return it }
             return LabyrinthShopDecision.BuyRoleImprint(
                 item = purchasableRoleImprint,
                 label = purchasableRoleImprint.roleImprintLabel ?: "职能印记",
@@ -320,6 +426,8 @@ class LabyrinthShopPolicy(
                 calibratedStacks = calibratedStacks,
                 currentArea = currentArea,
                 lockedFocus = lockedFocus,
+                planningContext = planningContext,
+                acquiredCharacterIds = acquiredCharacterIds,
             )
             if (relicDecision != null) {
                 val item = clearanceRelicItems.first { it.relicMatch?.relicId == relicDecision.choice.relicId }

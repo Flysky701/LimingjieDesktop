@@ -178,7 +178,8 @@ object LabyrinthConfigShareCodec {
             val supplied = element as? JsonObject ?: throw IllegalArgumentException("刷开局模块结构无效")
             val legacyKeys = rerollTemplate.keys - "customNodePlan"
             val compatible = if (supplied.keys == legacyKeys) {
-                require(supplied["routeEvaluationMode"] != JsonPrimitive(LabyrinthRouteEvaluationMode.CUSTOM_NODES.name)) {
+                val mode = supplied.getValue("routeEvaluationMode").also { requirePrimitive(it, true) }
+                require(decodeValue<LabyrinthRouteEvaluationMode>(mode) != LabyrinthRouteEvaluationMode.CUSTOM_NODES) {
                     "自定义模式缺少节点配置"
                 }
                 JsonObject(supplied + ("customNodePlan" to rerollTemplate.getValue("customNodePlan")))

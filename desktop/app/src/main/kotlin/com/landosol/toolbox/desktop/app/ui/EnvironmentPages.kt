@@ -190,6 +190,14 @@ import javax.swing.filechooser.FileNameExtensionFilter
                 }, enabled = !actions.working)
                 Text("使用本地 ONNX 战斗选队模型（EX / Boss 生效，下局生效）")
             }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(saved.pathBPlanningEnabled, { enabled ->
+                    actions.run { graph.settings.update { it.copy(pathBPlanningEnabled = enabled) } }
+                }, enabled = !actions.working)
+                Text("启用 Path B 全局收益规划（角色/遗物/商店/事件，下局生效）")
+            }
+            Text("搭配 ONNX 战斗模型按官方分与 Boss 通率估值；模型关闭时使用官方分与规则兜底", color = Muted,
+                style = MaterialTheme.typography.bodySmall)
             val modelState = when (battleModel.health) {
                 BattleModelHealth.DISABLED -> battleModel.health.label
                 BattleModelHealth.READY, BattleModelHealth.LOADED ->

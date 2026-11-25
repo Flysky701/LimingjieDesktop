@@ -56,6 +56,12 @@ data class LabyrinthConfigImportPlan(
                 "eventChoiceOverrides" -> addEventChanges(old.jsonObject, new.jsonObject)
                 "openingRosters" -> addRosterChanges(old.jsonObject, new.jsonObject, roleNames)
                 "customNodePlan" -> addCustomNodeChanges(old.jsonObject, new.jsonObject)
+                "thirdBlockChoice" -> {
+                    val label = if (after["routeEvaluationMode"]?.jsonPrimitive?.content ==
+                        LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP.name
+                    ) "区域 3 / 5 第三格（硬条件）" else FIELD_LABELS.getValue(key)
+                    add("$label：${display(key, old)} → ${display(key, new)}")
+                }
                 else -> add("${FIELD_LABELS.getValue(key)}：${display(key, old)} → ${display(key, new)}")
             }
         }

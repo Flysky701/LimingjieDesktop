@@ -153,9 +153,12 @@ internal fun runSetupBlock(dirty: Boolean, fullConfiguration: Boolean): String? 
                     Text(if(state.selectedAccount==null) "未选择账号" else "正在加载账号配置…",style=MaterialTheme.typography.bodySmall,color=Muted)
                 } else {
                     val settings = draft.settings
-                    val thirdBlock = if (settings.routeEvaluationMode == LabyrinthRouteEvaluationMode.CUSTOM_NODES) {
-                        settings.customNodePlan.thirdBlockChoice
-                    } else settings.thirdBlockChoice
+                    val thirdBlock = when (settings.routeEvaluationMode) {
+                        LabyrinthRouteEvaluationMode.CUSTOM_NODES -> settings.customNodePlan.thirdBlockChoice
+                        LabyrinthRouteEvaluationMode.VALUE_ROUTE,
+                        LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP,
+                        LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE -> settings.thirdBlockChoice
+                    }
                     Text("${settings.routeEvaluationMode.label} · ${thirdBlock.label}",style=MaterialTheme.typography.bodySmall,color=Muted)
                 }
                 if(selected==DesktopTask.REROLL) Text(if(draft.settings.retireExisting)"允许彻底撤退当前开局，开始前会再次确认。" else "不允许彻底撤退当前开局。",style=MaterialTheme.typography.bodySmall,color=Muted)

@@ -17,6 +17,11 @@ import com.landosol.toolbox.labyrinth.LabyrinthRouteJson
 import com.landosol.toolbox.labyrinth.labyrinthActiveBattleQuestId
 import com.landosol.toolbox.labyrinth.labyrinthBattleTeamSelectionMessage
 import com.landosol.toolbox.labyrinth.summary
+import com.landosol.toolbox.labyrinth.kernel.planning.BattleExam
+import com.landosol.toolbox.labyrinth.kernel.planning.ModelBattlePassEstimator
+import com.landosol.toolbox.labyrinth.kernel.planning.PlanningState
+import com.landosol.toolbox.labyrinth.kernel.planning.evaluateRelicChoices
+import com.landosol.toolbox.labyrinth.kernel.planning.evaluateRoleChoices
 import com.landosol.toolbox.labyrinth.kernel.strategy.*
 import java.nio.file.Files
 import java.nio.file.Path
@@ -180,6 +185,48 @@ class BattleOnnxGoldenTest {
                 recommendation.desktopDecisionText(combat))) {
                 assertTrue(text, "NN胜率" in text && "770220901" in text)
             }
+        }
+    }
+
+    @Test fun pathBMarginalsReuseInterleavedBossContexts() {
+        val directory = realBundleDirectory()
+        val runtime = roleRuntime()
+        val manifest = directory.resolve("manifest.json").readObject()
+        val catalog = BattleFeatureCatalog.load(directory.resolve("feature_pack.json"), manifest.string("catalog_sha256"))
+        val exams = listOf(BattleExam(770330401, 3, isBoss = true), BattleExam(770530301, 5, isBoss = true))
+        assertTrue(exams.all { it.questId in catalog.quests })
+
+        val profiles = runtime.profiles.values.filter { profile ->
+            profile.position != null && profile.characterId.toIntOrNull()?.let { it * 100 + 1 in catalog.units } == true
+        }
+        val front = profiles.single { it.characterId == "1052" }
+        val rear = profiles.filter { requireNotNull(it.position) > requireNotNull(front.position) }.take(6)
+        assertEquals(6, rear.size)
+        val roleCandidates = rear.drop(4).map { it.characterId }
+        val owned = (listOf(front) + rear.take(4)).map { it.characterId }.toSet()
+        val relicCandidates = listOf(40003) + catalog.relics.keys.filter { it != 40003 }.sorted().take(1)
+        assertTrue(relicCandidates.all { it in catalog.relics })
+        val state = PlanningState(5, 3, owned, emptySet(), emptyMap(), remainingShops = 1,
+            enhanceNode21 = false, reviveAvailable = false)
+
+        DesktopBattleModel({ directory }, {}).use { owner ->
+            val model = owner.select(true, runtime.battleValueEstimator) as ContextualBattleValueEstimator
+            val estimator = ModelBattlePassEstimator(model, runtime.profiles)
+            val roles = evaluateRoleChoices(state, roleCandidates, exams, estimator)
+            val relics = evaluateRelicChoices(state, relicCandidates, exams, estimator)
+            assertEquals(2, roles.size)
+            assertEquals(2, relics.size)
+            assertTrue(roles.all { it.usedModel && it.afterPassProb in 0.0..1.0 && it.totalScore.isFinite() })
+            assertTrue(relics.all { it.usedModel && it.afterPassProb in 0.0..1.0 && it.totalScore.isFinite() })
+            // Two Boss contexts each for the original roster, two additional roles and two relics.
+            val encodes = owner.towerAInvocations
+            assertEquals(10, encodes)
+            val started = System.nanoTime()
+            assertEquals(relics, evaluateRelicChoices(state, relicCandidates, exams, estimator))
+            assertEquals(roles, evaluateRoleChoices(state, roleCandidates, exams, estimator))
+            val warmMillis = (System.nanoTime() - started) / 1_000_000
+            assertEquals(encodes, owner.towerAInvocations)
+            assertTrue("Warm Boss marginal evaluation took ${warmMillis}ms", warmMillis < 5_000)
         }
     }
 

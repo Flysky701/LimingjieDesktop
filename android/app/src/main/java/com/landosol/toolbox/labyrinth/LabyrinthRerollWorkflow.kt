@@ -95,6 +95,9 @@ data class LabyrinthRouteJson(
 ) {
     val blockIds: List<Long> get() = nodes.map(LabyrinthNodeJson::blockId)
 
+    internal val evaluationMode: LabyrinthRouteEvaluationMode?
+        get() = LabyrinthRouteEvaluationMode.entries.firstOrNull { it.name == routeEvaluationMode }
+
     fun toLabyrinthRoute(): LabyrinthRoute = LabyrinthRoute(
         enterId = enterId,
         nodes = nodes.map { it.toLabyrinthMapNode() },

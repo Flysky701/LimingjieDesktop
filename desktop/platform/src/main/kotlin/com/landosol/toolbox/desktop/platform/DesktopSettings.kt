@@ -19,4 +19,5 @@ import kotlinx.serialization.Serializable
     val gameSettingsConfirmed: Boolean = false,
     val battleOnnxEnabled: Boolean = false,
     val battleOnnxBundlePath: String = "",
+    val pathBPlanningEnabled: Boolean = false,
 )
