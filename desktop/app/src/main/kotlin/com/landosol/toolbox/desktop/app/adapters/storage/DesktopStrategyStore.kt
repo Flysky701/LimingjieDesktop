@@ -3,9 +3,11 @@ package com.landosol.toolbox.desktop.app.adapters.storage
 import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.core.config.AtomicConfigStore
 import com.landosol.toolbox.core.config.select
+import com.landosol.toolbox.desktop.app.control.ControlModelCodec
 import com.landosol.toolbox.desktop.shared.AtomicFiles
 import com.landosol.toolbox.labyrinth.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import java.nio.file.Files
@@ -20,6 +22,17 @@ typealias StrategyIdentity = com.landosol.toolbox.labyrinth.config.StrategyIdent
 typealias StrategyProfile = com.landosol.toolbox.labyrinth.config.StrategyProfile
 typealias StrategyImportUndo = com.landosol.toolbox.labyrinth.config.StrategyImportUndo
 typealias StrategyLibrary = com.landosol.toolbox.labyrinth.config.StrategyLibrary
+
+// The v1/v2 files use the control wire format, including its entry-array representation of maps.
+private val strategyFiles = DesktopLabyrinthConfigurationStore { library ->
+    try {
+        ControlModelCodec.decode<StrategyLibrary>(library)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        throw IllegalArgumentException("旧版策略库格式无效", failure)
+    }
+}
 
 /** Explicit portable envelope. Never serialize accounts, runtime state or a Graph. */
 object StrategyShareCodec {
@@ -74,12 +87,12 @@ class DesktopStrategyStore private constructor(
 ) : LabyrinthRerollSettingsStore {
     constructor(directory: Path, legacy: () -> LabyrinthStrategySettings, notice: (String) -> Unit,
         transient: Boolean = false, legacyRerolls: () -> Map<Long, LabyrinthRerollSettings> = { emptyMap() },
-    ) : this(DesktopLabyrinthConfigurationStore.open(directory, legacy, legacyRerolls, transient) {
+    ) : this(strategyFiles.open(directory, legacy, legacyRerolls, transient) {
             notice("配置损坏，原文件已备份为 ${it.fileName}")
         })
 
     constructor(context: AppContext, transient: Boolean, notice: (String) -> Unit) :
-        this(DesktopLabyrinthConfigurationStore.create(context, transient) { notice("配置损坏，原文件已备份为 ${it.fileName}") })
+        this(strategyFiles.create(context, transient) { notice("配置损坏，原文件已备份为 ${it.fileName}") })
 
     val library = store.state
     val state = library.select { it.active.settings }

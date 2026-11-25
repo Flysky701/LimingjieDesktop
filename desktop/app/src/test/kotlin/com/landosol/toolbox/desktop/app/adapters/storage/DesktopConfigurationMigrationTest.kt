@@ -71,6 +71,22 @@ class DesktopConfigurationMigrationTest {
         assertEquals(library, DesktopStrategyStore(root, { error("already migrated") }, {}).library.value)
     }
 
+    @Test fun legacyEntryArrayMapsSurviveStrategyLibraryMigration() {
+        val root = directory.root.toPath()
+        val file = Files.createDirectories(root.resolve("settings")).resolve("strategies.json")
+        val raw = """{"version":2,"library":{"activeId":"kept","profiles":[{"id":"kept","name":"原策略",
+            "settings":{"personalRoleScores":[{"_k":"100101","_v":77}],"openingRosters":[]}}],
+            "rerolls":[{"_k":18,"_v":{"guildId":8}}],"revision":22}}"""
+        Files.writeString(file, raw)
+        val previous = ControlModelCodec.decode<StrategyLibrary>(Json.parseToJsonElement(raw).jsonObject.getValue("library"))
+        assertEquals(77, previous.active.settings.personalRoleScores["100101"])
+        assertEquals(8, previous.rerolls.getValue(18L).guildId)
+
+        val store = DesktopStrategyStore(root, { LabyrinthStrategySettings() }, {})
+        assertEquals(previous, store.library.value)
+        assertEquals(previous, DesktopStrategyStore(root, { error("already migrated") }, {}).library.value)
+    }
+
     @Test fun legacyLabyrinthSnapshotTakesPrecedenceAndRetainsUndo() = runBlocking {
         val root = directory.root.toPath()
         val file = Files.createDirectories(root.resolve("files")).resolve("labyrinth-configuration-v1.json")

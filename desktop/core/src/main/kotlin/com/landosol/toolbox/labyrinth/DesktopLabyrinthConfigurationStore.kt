@@ -4,11 +4,11 @@ import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.core.config.AtomicConfigStore
 import com.landosol.toolbox.core.config.LegacyConfigFormat
 import com.landosol.toolbox.labyrinth.config.*
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import java.nio.file.Path
 import java.util.UUID
 
-object DesktopLabyrinthConfigurationStore {
+class DesktopLabyrinthConfigurationStore(private val decodeLegacyLibrary: (JsonElement) -> StrategyLibrary) {
     fun create(context: AppContext, transient: Boolean = false, onRecovered: (Path) -> Unit = {}): AtomicConfigStore<StrategyLibrary> =
         open(context.dataDir.toPath(), legacyStrategy = {
             val raw = if (transient) null else context.preferences("labyrinth-strategy").getString("settings.v1", null)
@@ -47,12 +47,9 @@ object DesktopLabyrinthConfigurationStore {
             directory.resolve("settings/strategies.json").takeUnless { transient }, StrategyLibrary.serializer(), ::initialLibrary,
             schemaVersion = 3, validate = StrategyLibrary::validate, onRecovered = onRecovered,
             legacyFormat = LegacyConfigFormat("version") { version, document ->
-                // v1/v2 used the control codec. Its extra _type fields are ignored by the typed reader.
-                val library = legacyJson.decodeFromJsonElement(StrategyLibrary.serializer(), requireNotNull(document["library"]))
+                val library = decodeLegacyLibrary(requireNotNull(document["library"]))
                 if (version == 1) library.copy(rerolls = legacySnapshot()?.rerolls ?: legacyRerolls()) else library
             },
         )
     }
-
-    private val legacyJson = Json { ignoreUnknownKeys = true }
 }
