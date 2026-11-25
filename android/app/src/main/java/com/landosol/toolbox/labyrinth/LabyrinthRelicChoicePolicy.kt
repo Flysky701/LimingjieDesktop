@@ -1,5 +1,10 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthRunPlanningContext
+import com.landosol.toolbox.labyrinth.kernel.planning.PlanningState
+import com.landosol.toolbox.labyrinth.kernel.planning.RelicChoiceEval
+import com.landosol.toolbox.labyrinth.kernel.planning.RelicMarkAward
+import com.landosol.toolbox.labyrinth.kernel.planning.evaluateRelicChoices
 import com.landosol.toolbox.labyrinth.vision.LabyrinthRelicMatch
 import kotlinx.serialization.Serializable
 
@@ -74,6 +79,7 @@ data class LabyrinthRelicChoiceDecision(
     val stacksBefore: Map<LabyrinthRelicMark, Int>,
     val focusMark: LabyrinthRelicMark,
     val reason: String,
+    val planningSource: String? = null,
 )
 
 /** Stage-aware heuristic, not a simulation of individual relic effects or guaranteed optimal play. */
@@ -86,6 +92,8 @@ class LabyrinthRelicChoicePolicy(
         lockedFocus: LabyrinthRelicMark? = null,
         calibratedStacks: Map<LabyrinthRelicMark, Int> = emptyMap(),
         currentArea: Int? = null,
+        planningContext: LabyrinthRunPlanningContext? = null,
+        acquiredCharacterIds: Set<String> = emptySet(),
     ): LabyrinthRelicChoiceDecision? {
         val stacks = markStacks(acquired, calibratedStacks)
         val ownedIds = acquired.map { it.relicId }.toSet()
@@ -147,7 +155,22 @@ class LabyrinthRelicChoicePolicy(
                 (if (candidate.mark == debuff && debuffCanPivot && useful > 0) 1.0 else 0.0) +
                 (if (useful > 0) config.priorityBonus(candidate.mark) else 0.0)
         }
-        val choice = immediateCapstone ?: recognized.maxWithOrNull(
+        val usable = recognized.filter { stacks.getValue(it.mark) < config.capstoneTarget }
+        val ranked = if (planningContext?.enabled == true && immediateCapstone == null && usable.isNotEmpty()) {
+            val awards = usable.mapNotNull { candidate ->
+                candidate.match.relicId?.toIntOrNull()?.let { it to RelicMarkAward(candidate.mark, candidate.bonus) }
+            }.toMap()
+            if (awards.size == usable.size) evaluatePathB(
+                planningContext, acquiredCharacterIds, ownedIds.mapNotNull(String::toIntOrNull).toSet(), stacks, awards,
+            ) else null
+        } else null
+        val byId = ranked.orEmpty().associateBy { it.relicId }
+        val pathBChoice = usable.filter { it.match.relicId?.toIntOrNull() in byId }.maxWithOrNull(
+            compareBy<Candidate> { byId.getValue(requireNotNull(it.match.relicId).toInt()).totalScore }
+                .thenBy(::score).thenBy { it.bonus },
+        )
+        val pathB = pathBChoice?.match?.relicId?.toIntOrNull()?.let(byId::get)
+        val choice = immediateCapstone ?: pathBChoice ?: recognized.maxWithOrNull(
             compareBy<Candidate> { score(it) }.thenBy { it.bonus },
         ) ?: return null
         // A missing focus candidate alone doesn't force a switch; an available but clearly
@@ -167,6 +190,14 @@ class LabyrinthRelicChoicePolicy(
         val reason = when {
             immediateCapstone != null ->
                 "${choice.mark.label}可由${stacks.getValue(choice.mark)}层直接到达${config.capstoneTarget}层，优先取得高收益档位"
+            pathB != null -> buildString {
+                append("预计总收益 ${"%+.1f".format(pathB.totalScore)} 分（收集 ${"%+.1f".format(pathB.collectionDeltaPts)} 分")
+                if (pathB.usedModel) {
+                    append("，Boss通率 ${"%.0f".format(pathB.beforePassProb * 100)}%→${"%.0f".format(pathB.afterPassProb * 100)}%")
+                }
+                if (pathB.shopDiscountDeltaPts != 0.0) append("，商店折扣 ${"%+.1f".format(pathB.shopDiscountDeltaPts)} 分")
+                append("）；${choice.mark.label} ${stacks.getValue(choice.mark)}→$after 层")
+            }
             buildingBaseline ->
                 "区域$currentArea：补${config.baselineTarget}层仅作加分；${choice.mark.label}（${stacks.getValue(choice.mark)}→$after）"
             choice.mark == effectiveFocus ->
@@ -175,7 +206,46 @@ class LabyrinthRelicChoicePolicy(
             else ->
                 "按增量与档位收益选择${choice.mark.label}+${choice.bonus}；本轮没有${focus.label}，不切换主追印记"
         }
-        return LabyrinthRelicChoiceDecision(choice.match, phase, stacks, effectiveFocus, reason)
+        return LabyrinthRelicChoiceDecision(choice.match, phase, stacks, effectiveFocus, reason,
+            pathB?.let { pathBSource(it.usedModel) } ?: "规则")
+    }
+
+    private data class EstimateKey(
+        val context: LabyrinthRunPlanningContext,
+        val state: PlanningState,
+        val awards: Map<Int, RelicMarkAward>,
+    )
+
+    private var lastEvaluation: Pair<EstimateKey, List<RelicChoiceEval>?>? = null
+
+    internal fun completesCapstone(decision: LabyrinthRelicChoiceDecision): Boolean {
+        val mark = LabyrinthRelicMark.fromLabel(decision.choice.attribute) ?: return false
+        val before = decision.stacksBefore.getValue(mark)
+        val bonus = decision.choice.attributeBonus?.trim()?.toIntOrNull() ?: return false
+        return before < config.capstoneTarget && bonus >= config.capstoneTarget - before
+    }
+
+    @Synchronized
+    private fun evaluatePathB(
+        context: LabyrinthRunPlanningContext?,
+        ownedRoles: Set<String>,
+        ownedRelics: Set<Int>,
+        stacks: Map<LabyrinthRelicMark, Int>,
+        awards: Map<Int, RelicMarkAward>,
+    ): List<RelicChoiceEval>? {
+        val planning = context?.takeIf { it.enabled && it.passEstimator != null } ?: return null
+        val state = planning.planningState(ownedRoles).copy(relicIds = planning.observedRelicIds + ownedRelics, markStacks = stacks)
+        if (awards.keys.any { it in state.relicIds }) return null
+        val key = EstimateKey(planning, state, awards)
+        lastEvaluation?.takeIf { it.first == key }?.let { return it.second }
+        val evaluation = tryPathB {
+            evaluateRelicChoices(state, awards.keys, planning.upcomingExams, planning.passEstimator,
+                planning.scoreSettings, relicMarks = awards)
+        }?.takeIf { results ->
+            results.all { it.totalScore.isFinite() && (planning.upcomingExams.isEmpty() || it.usedModel) }
+        }
+        lastEvaluation = key to evaluation
+        return evaluation
     }
 
     fun markStacks(

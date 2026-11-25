@@ -1,6 +1,7 @@
 package com.landosol.toolbox.desktop.app
 
 import android.util.Log
+import java.nio.file.Files
 import java.nio.file.Path
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.desktop.shared.*
@@ -13,6 +14,11 @@ import com.landosol.toolbox.desktop.app.adapters.captcha.*
 import com.landosol.toolbox.desktop.app.adapters.cndb.*
 import com.landosol.toolbox.desktop.app.adapters.device.*
 import com.landosol.toolbox.desktop.app.control.*
+import com.landosol.toolbox.desktop.app.strategy.BattleModelStatus
+import com.landosol.toolbox.desktop.app.strategy.DesktopBattleModel
+import com.landosol.toolbox.desktop.app.strategy.battleDecisionPrefix
+import com.landosol.toolbox.desktop.app.strategy.desktopDecisionText
+import com.landosol.toolbox.desktop.app.strategy.resolveBattleBundleLocation
 import com.landosol.toolbox.desktop.app.adapters.storage.RunHistoryStore
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
 import com.landosol.toolbox.security.CredentialStore
@@ -61,6 +67,9 @@ import com.landosol.toolbox.automation.overlay.AutomationOverlayCoordinator
 import com.landosol.toolbox.data.local.AppDatabase
 import com.landosol.toolbox.labyrinth.LabyrinthEntryActionPlanner
 import com.landosol.toolbox.labyrinth.LabyrinthEntryActionPlannerConfig
+import com.landosol.toolbox.labyrinth.LabyrinthEventChoiceDecision
+import com.landosol.toolbox.labyrinth.LabyrinthPathBDecisionSummary
+import com.landosol.toolbox.labyrinth.LabyrinthRoleRewardChoiceDecision
 import com.landosol.toolbox.labyrinth.AndroidLabyrinthRoleDecisionDataLoader
 import com.landosol.toolbox.labyrinth.LabyrinthCnDatabaseUpdateResult
 import com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionDataResult
@@ -108,6 +117,26 @@ class DesktopAppGraph(
     private val suppliedGameGateway: ((GameServer) -> BilibiliGameGateway)? = null,
 ) : AutoCloseable {
     val log = UserLog()
+    private val battleModel = DesktopBattleModel(
+        locationResolver = { resolveBattleBundleLocation(settings.state.value.battleOnnxBundlePath, dataDirectory) },
+        log = {
+            Log.w("BattleModel", it)
+            log.add(it, kind = UserLogKind.WARNING)
+        },
+        onInfo = {
+            Log.i("BattleModel", it)
+            log.add(it, kind = UserLogKind.KEY)
+        },
+    )
+    val battleModelStatus: StateFlow<BattleModelStatus> get() = battleModel.status
+
+    fun refreshBattleModelStatus(forceReload: Boolean = false): BattleModelStatus = synchronized(startLock) {
+        // Preserve the estimator already selected for the current recognition run.
+        if (closed || (!dataOnly && (taskStarting.value || labyrinthEntryRecognitionSession.state.value.running))) {
+            return@synchronized battleModelStatus.value
+        }
+        battleModel.inspect(settings.state.value.battleOnnxEnabled, forceReload, ephemeralCheck = dataOnly)
+    }
     val ux by lazy { com.landosol.toolbox.desktop.app.ui.DesktopUxController(this) }
     private val noticeState = MutableStateFlow<List<String>>(emptyList())
     val notices = noticeState.asStateFlow()
@@ -123,7 +152,7 @@ class DesktopAppGraph(
     private val cacheDir get() = context.cacheDir
     private val assets get() = context.assets
     val settings = DesktopSettingsStore(dataDirectory) { addNotice("桌面设置已从默认值恢复，原文件已备份：$it") }
-    private var inheritTaskDefaults = sharedData != null && !java.nio.file.Files.exists(dataDirectory.resolve("settings/ui.json"))
+    private var inheritTaskDefaults = sharedData != null && !Files.exists(dataDirectory.resolve("settings/ui.json"))
     fun markRuntimePreferencesEdited() { inheritTaskDefaults = false }
     private val network = NetworkProxyController().also { it.setMode(settings.state.value.networkMode) }
     private val power = PowerSaveController()
@@ -180,8 +209,14 @@ class DesktopAppGraph(
         sharedHistoryForwarder
     }
 
-    suspend fun refreshSharedSettings() {
-        sharedData?.settings()?.let { global -> settings.save(global.copy(lastDevice = settings.state.value.lastDevice)) }
+    suspend fun refreshSharedSettings() = withContext(Dispatchers.IO) {
+        sharedData?.settings()?.let { global ->
+            val current = settings.state.value
+            val next = global.copy(lastDevice = current.lastDevice)
+            if (next != current) settings.save(next)
+        }
+        refreshBattleModelStatus()
+        Unit
     }
 
     suspend fun flushSharedRecords() {
@@ -337,6 +372,67 @@ class DesktopAppGraph(
             }
             ux.refreshDatabase()
         }
+        refreshBattleModelStatus()
+        autoRunScope.launch {
+            val modelSettings = settings.state.map { it.battleOnnxEnabled to it.battleOnnxBundlePath }.distinctUntilChanged()
+            if (dataOnly) {
+                modelSettings.collect { refreshBattleModelStatus() }
+            } else {
+                val recognizing = labyrinthEntryRecognitionSession.state.map { it.running }.distinctUntilChanged()
+                combine(modelSettings, recognizing, taskStarting) { config, running, starting ->
+                    config.takeUnless { running || starting }
+                }.distinctUntilChanged().collect { pending ->
+                    if (pending != null) refreshBattleModelStatus()
+                }
+            }
+        }
+        if (!dataOnly) autoRunScope.launch {
+            labyrinthEntryRecognitionSession.state.distinctUntilChanged { previous, next ->
+                previous.running == next.running && previous.combatContext == next.combatContext &&
+                    previous.battleTeamRecommendation == next.battleTeamRecommendation &&
+                    previous.battleTeamRecommendationUnavailableReason == next.battleTeamRecommendationUnavailableReason
+            }.collect { state ->
+                if (!state.running) return@collect
+                state.battleTeamRecommendation?.let {
+                    log.add(it.desktopDecisionText(state.combatContext), kind = UserLogKind.KEY)
+                }
+                state.battleTeamRecommendationUnavailableReason?.let {
+                    log.add("${battleDecisionPrefix(state.combatContext)} 编组建议不可用：$it", kind = UserLogKind.WARNING)
+                }
+            }
+        }
+        if (!dataOnly) autoRunScope.launch {
+            var visit: Pair<Any?, Int?>? = null
+            val logged = mutableSetOf<LabyrinthPathBDecisionSummary>()
+            labyrinthEntryRecognitionSession.state.collect { state ->
+                val nextVisit = (state.sessionId to state.routeProgress?.visitedCount).takeIf { state.running }
+                if (visit != nextVisit) {
+                    visit = nextVisit
+                    logged.clear()
+                }
+                if (nextVisit == null) return@collect
+                fun report(summary: LabyrinthPathBDecisionSummary?) {
+                    if (summary == null || !logged.add(summary)) return
+                    val source = if (summary.source == "PathB-NN") "PathB(NN)" else "PathB(官方分)"
+                    val message = "$source ${summary.title}：${summary.target}；${summary.detail}"
+                    log.add(message, kind = UserLogKind.KEY)
+                    DesktopLog.write('I', APP_LOG_TAG, message)
+                }
+                (state.roleRewardChoiceDecision as? LabyrinthRoleRewardChoiceDecision.Select)?.let { decision ->
+                    decision.planningSource?.takeIf { it.startsWith("PathB") }?.let { source ->
+                        report(LabyrinthPathBDecisionSummary(source, "角色三选一", decision.displayName,
+                            decision.explanation.joinToString("；")))
+                    }
+                }
+                (state.eventChoiceDecision as? LabyrinthEventChoiceDecision.Select)?.let { decision ->
+                    decision.planningSource?.takeIf { it.startsWith("PathB") }?.let { source ->
+                        report(LabyrinthPathBDecisionSummary(source, "事件选择", "${decision.eventId} ${decision.label}",
+                            decision.explanation))
+                    }
+                }
+                report(state.pathBDecisionSummary)
+            }
+        }
     }
 
     private fun logGameClient() {
@@ -476,13 +572,18 @@ class DesktopAppGraph(
             journalDirectoryProvider = { dataDirectory.resolve("kernel-journals").toFile() },
             strategyProvider = {
                 val settings = taskStrategy?.settings ?: labyrinthStrategySettings.state.value
+                val desktopSettings = this.settings.state.value
                 com.landosol.toolbox.labyrinth.LabyrinthStrategySnapshot(
                     settings,
                     roleDecisionRuntime?.document?.let { document ->
-                        com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionDataParser.createRuntime(
+                        val runtime = com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionDataParser.createRuntime(
                             settings.applyTo(document), settings,
                         )
+                        runtime.withBattleValueEstimator(
+                            battleModel.select(desktopSettings.battleOnnxEnabled, runtime.battleValueEstimator),
+                        )
                     },
+                    pathBPlanningEnabled = desktopSettings.pathBPlanningEnabled,
                 )
             },
             rerollRequester = { accountId ->
@@ -928,9 +1029,11 @@ class DesktopAppGraph(
                     }
                 }
 
-                override suspend fun startRun(accountId: Long, guildId: Int, runId: String): Boolean =
-                    labyrinthEntryRecognitionSession.startAutomation(accountId, runId) is
+                override suspend fun startRun(accountId: Long, guildId: Int, runId: String): Boolean {
+                    refreshSharedSettings()
+                    return labyrinthEntryRecognitionSession.startAutomation(accountId, runId) is
                         LabyrinthEntryRecognitionStartResult.Started
+                }
 
                 override suspend fun stopRun(reason: String) {
                     labyrinthEntryRecognitionSession.stop(reason, releaseCapture = false)
@@ -958,6 +1061,7 @@ class DesktopAppGraph(
     val labyrinthAutoRunWorkflow by lazy {
         LabyrinthAutoRunWorkflow(
             startRun = { accountId ->
+                refreshSharedSettings()
                 labyrinthEntryRecognitionSession.startAutomation(accountId) is
                     LabyrinthEntryRecognitionStartResult.Started
             },
@@ -1200,7 +1304,7 @@ class DesktopAppGraph(
                 sharedHistoryScope.cancel()
                 withContext(Dispatchers.Main) { viewModels.clear() }
                 databaseUpdateScope.cancel(); accountServerScope.cancel(); autoRunScope.cancel(); mainScope.cancel(); recognitionScope.cancel(); resetScope.cancel()
-                listOf<() -> Unit>({ captureService.close() }, { device.close() }, { ocr.close() }, { captchaHost.close() },
+                listOf<() -> Unit>({ captureService.close() }, { device.close() }, { ocr.close() }, { battleModel.close() }, { captchaHost.close() },
                     { labyrinthDebugDashboard?.close(); Unit }, { diagnostics.close() }, { database.close() }, { power.close() }, { network.close() })
                     .forEach { release -> runCatching(release).onFailure { Log.e(APP_LOG_TAG, "释放桌面资源失败", it) } }
                 DesktopBindings.release(installedServices)

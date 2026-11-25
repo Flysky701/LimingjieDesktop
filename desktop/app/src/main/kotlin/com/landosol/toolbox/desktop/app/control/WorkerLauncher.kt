@@ -24,14 +24,17 @@ class WorkerLauncher(
     private val containProcess: (Long) -> AutoCloseable,
     private val command: List<String> = applicationCommand(),
     private val receiveTimeoutMillis: Int = WorkerProtocol.LEASE_MILLIS.toInt(),
+    private val extraEnvironment: Map<String, String> = emptyMap(),
 ) {
     init { require(receiveTimeoutMillis > 0) }
     fun start(instanceId: String, label: String, directory: Path, sharedData: SharedDataEndpoint? = null): WorkerLink =
-        ProcessWorkerLink(instanceId, label, directory, scope, command, containProcess, receiveTimeoutMillis, sharedData)
+        ProcessWorkerLink(instanceId, label, directory, scope, command, containProcess, receiveTimeoutMillis, sharedData,
+            extraEnvironment = extraEnvironment)
 
     fun startRuntime(spec: RuntimeWorkerSpec, endpoint: SharedDataEndpoint): WorkerLink =
         ProcessWorkerLink(spec.sessionId, spec.device.name, spec.runtimeDirectory, scope, command,
-            containProcess, receiveTimeoutMillis, endpoint, listOf("--device-boot-id", checkNotNull(spec.device.bootId)))
+            containProcess, receiveTimeoutMillis, endpoint, listOf("--device-boot-id", checkNotNull(spec.device.bootId)),
+            extraEnvironment)
 
     companion object {
         fun applicationCommand(): List<String> {
@@ -53,6 +56,7 @@ private class ProcessWorkerLink(
     receiveTimeoutMillis: Int,
     sharedData: SharedDataEndpoint? = null,
     extraArguments: List<String> = emptyList(),
+    extraEnvironment: Map<String, String>,
 ) : WorkerLink {
     override val workerRunId: String = UUID.randomUUID().toString()
     private val mutableSnapshots = MutableStateFlow(JsonObject(emptyMap()))
@@ -82,8 +86,13 @@ private class ProcessWorkerLink(
             val builder = ProcessBuilder(command + listOf("--worker", "--instance-id", instanceId, "--worker-run-id", workerRunId, "--instance-name", label, "--data-dir", directory.toString()) + extraArguments)
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(directory.resolve("logs/worker-console.log").toFile()))
                 .redirectErrorStream(true)
+            extraEnvironment.forEach { (key, value) -> builder.environment().putIfAbsent(key, value) }
             builder.environment()[WorkerProtocol.TOKEN_ENV] = token
             builder.environment()[WorkerProtocol.PORT_ENV] = listener.localPort.toString()
+            // Packaged workers start a new JVM. Carry explicit model locations across that boundary.
+            for (key in listOf("limingjie.nn.bundle", "limingjie.nn.catalog")) {
+                System.getProperty(key)?.let { builder.environment()[key] = it }
+            }
             sharedData?.let {
                 builder.environment()[SharedDataEndpoint.PORT_ENV] = it.port.toString()
                 builder.environment()[SharedDataEndpoint.TOKEN_ENV] = it.token

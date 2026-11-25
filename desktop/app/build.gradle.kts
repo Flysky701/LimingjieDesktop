@@ -18,6 +18,7 @@ dependencies {
     implementation(project(":shared")); implementation(project(":device")); implementation(project(":ocr")); implementation(project(":platform"))
     implementation(compose.desktop.currentOs); implementation(compose.material3)
     implementation(kotlin("reflect"))
+    implementation(libs.onnx)
     testImplementation(libs.junit); testImplementation(libs.coroutines.test)
     testImplementation(compose.desktop.uiTestJUnit4)
 }
@@ -25,7 +26,18 @@ dependencies {
 tasks.withType<Test>().configureEach {
     systemProperty("limingjie.test.classpath", sourceSets["test"].runtimeClasspath.asPath)
 }
-tasks.test { exclude("**/*PackagedRuntimeTest*") }
+tasks.test {
+    exclude("**/*PackagedRuntimeTest*")
+    for (key in listOf("limingjie.nn.bundle", "limingjie.nn.catalog")) {
+        providers.systemProperty(key).orElse(providers.environmentVariable(key))
+            .orElse(providers.environmentVariable(key.uppercase().replace('.', '_'))).orNull?.let { value ->
+                val path = rootProject.file(value)
+                systemProperty(key, path.absolutePath)
+                inputs.files(path)
+                if (key == "limingjie.nn.bundle") inputs.files(path.resolveSibling("feature_pack.json"))
+            }
+    }
+}
 val packagedRuntimeTest by tasks.registering(Test::class) {
     group = "verification"
     description = "Check packaged worker isolation; reuse -PpackagedWorkerExecutable when supplied."

@@ -237,7 +237,8 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                             LocalConfiguration provides Configuration(maxWidth.value.toInt(),maxHeight.value.toInt(), androidx.compose.ui.platform.LocalDensity.current.fontScale)) {
                             when(if(runOnly)Page.Run else page) {
                                 Page.Run -> RunConsole(graph,state,selected,::selectTask,::configure,{navigate(it)},searchFocus,
-                                    setup,configuration,standaloneGuild,{if(!graph.busy)standaloneGuild=it},setupMessage ?: actions.message,sharedSettings)
+                                    setup,configuration,standaloneGuild,{if(!graph.busy)standaloneGuild=it},setupMessage ?: actions.message,
+                                    settingsOwner = sharedSettings ?: graph)
                                 Page.Accounts -> AccountsPage(graph)
                                 Page.Strategies -> StrategiesPage(graph)
                                 Page.Devices -> DevicesPage(graph)

@@ -6,6 +6,15 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthEventChoiceObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEventChoiceVisual
 import com.landosol.toolbox.labyrinth.vision.LabyrinthArenaEvent
 import com.landosol.toolbox.labyrinth.kernel.event.*
+import com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthRunPlanningContext
+import com.landosol.toolbox.labyrinth.kernel.planning.ShopDiscountModel
+import com.landosol.toolbox.labyrinth.kernel.planning.battleValue
+import com.landosol.toolbox.labyrinth.kernel.planning.evaluateRoleChoices
+import com.landosol.toolbox.labyrinth.kernel.planning.exWinDeltaPts
+import com.landosol.toolbox.labyrinth.kernel.planning.marginalGoldPts
+import com.landosol.toolbox.labyrinth.kernel.planning.normalWinDeltaPts
+import com.landosol.toolbox.labyrinth.kernel.planning.relicDeltaPts
+import com.landosol.toolbox.labyrinth.kernel.planning.unitDeltaPts
 import kotlin.math.max
 
 sealed interface LabyrinthEventChoiceDecision {
@@ -23,6 +32,7 @@ sealed interface LabyrinthEventChoiceDecision {
         val utilityEstimated: Boolean = true,
         val policyRuleId: String? = null,
         val ruleProvenance: String? = null,
+        val planningSource: String? = null,
     ) : LabyrinthEventChoiceDecision
 
     data class Wait(val reason: String) : LabyrinthEventChoiceDecision
@@ -73,9 +83,10 @@ class LabyrinthEventChoicePlanner(
 
     fun evaluate(observation: LabyrinthEventChoiceObservation, acquiredCharacterIds: Set<String>,
         context: LabyrinthRoleDecisionContext, relicStacks: Map<LabyrinthRelicMark, Int>,
-        rejectedChoiceIds: Set<String> = emptySet(), alphaCoin: Int? = null): LabyrinthEventEvaluation {
+        rejectedChoiceIds: Set<String> = emptySet(), alphaCoin: Int? = null,
+        planningContext: LabyrinthRunPlanningContext? = null): LabyrinthEventEvaluation {
         val rules = ruleEvaluation(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds, alphaCoin)
-        return LabyrinthEventEvaluation(choose(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds, rules),
+        return LabyrinthEventEvaluation(choose(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds, rules, planningContext),
             rules, observation.event.choices.associate { it.id to effects(observation.event.id, it) },
             provenanceFor(rules.rule?.id).takeIf { observation.catalogMatched })
     }
@@ -101,6 +112,7 @@ class LabyrinthEventChoicePlanner(
     private data class EstimateKey(
         val event: com.landosol.toolbox.gamedata.EventResource, val acquired: Set<String>,
         val context: LabyrinthRoleDecisionContext, val relicStacks: Map<LabyrinthRelicMark, Int>, val catalogRevision: Long,
+        val planningFingerprint: String?,
     )
     private val evaluationCache = linkedMapOf<EstimateKey, List<EvaluatedChoice>>()
 
@@ -116,12 +128,14 @@ class LabyrinthEventChoicePlanner(
          * refusal -- only the refusal itself can. Retiring them turns a hang into the next choice.
          */
         rejectedChoiceIds: Set<String> = emptySet(),
+        planningContext: LabyrinthRunPlanningContext? = null,
     ): LabyrinthEventChoiceDecision = choose(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds,
-        ruleEvaluation(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds))
+        ruleEvaluation(observation, acquiredCharacterIds, context, relicStacks, rejectedChoiceIds), planningContext)
 
     private fun choose(observation: LabyrinthEventChoiceObservation, acquiredCharacterIds: Set<String>,
         context: LabyrinthRoleDecisionContext, relicStacks: Map<LabyrinthRelicMark, Int>,
-        rejectedChoiceIds: Set<String>, evaluation: GameEventRuleEvaluation): LabyrinthEventChoiceDecision {
+        rejectedChoiceIds: Set<String>, evaluation: GameEventRuleEvaluation,
+        planningContext: LabyrinthRunPlanningContext?): LabyrinthEventChoiceDecision {
         val event = observation.event
         if (!observation.catalogMatched) {
             val choice = event.choices.sortedBy { it.slot }.firstOrNull {
@@ -312,17 +326,26 @@ class LabyrinthEventChoicePlanner(
             )
         }
         val canonicalAcquired = acquiredCharacterIds.map(::canonicalLabyrinthRoleId).toSet()
-        val cacheKey = EstimateKey(event, canonicalAcquired, context, relicStacks.toMap(), catalogRegistry?.revision ?: 0L)
+        val planning = planningContext?.takeIf { it.enabled }
+        val cacheKey = EstimateKey(event, canonicalAcquired, context, relicStacks.toMap(),
+            catalogRegistry?.revision ?: 0L, planning?.cacheFingerprint)
         val ranked = evaluationCache.getOrPut(cacheKey) {
-            val evaluation = EvaluationContext(canonicalAcquired, context, relicStacks)
-            event.choices.map { choice ->
-                val explicit = explicitEffects(event.id, choice)
-                val utility = if (explicit.isNotEmpty()) parsedUtility(explicit, evaluation)
-                    else optionUtility(choice.id.toIntOrNull(), evaluation, mutableSetOf()) {
-                        parsedUtility(effects(event.id, choice), evaluation)
-                    }
-                EvaluatedChoice(choice, utility.value, utility.detail)
-            }.sortedWith(
+            fun estimate(planning: LabyrinthRunPlanningContext?): List<EvaluatedChoice> {
+                val evaluation = EvaluationContext(canonicalAcquired, context, relicStacks, planning)
+                return event.choices.map { choice ->
+                    evaluation.usedModel = false
+                    val explicit = explicitEffects(event.id, choice)
+                    val utility = if (explicit.isNotEmpty()) parsedUtility(explicit, evaluation)
+                        else optionUtility(choice.id.toIntOrNull(), evaluation, mutableSetOf()) {
+                            parsedUtility(effects(event.id, choice), evaluation)
+                        }
+                    val source = planning?.let { pathBSource(evaluation.usedModel) }
+                    val detail = if (source == null) utility.detail
+                        else "预计收益 ${"%.1f".format(utility.value)} 分；${utility.detail}"
+                    EvaluatedChoice(choice, utility.value, detail, source)
+                }
+            }
+            (planning?.let { tryPathB { estimate(it) } } ?: estimate(null)).sortedWith(
                 compareByDescending<EvaluatedChoice>(EvaluatedChoice::utility)
                     .thenBy { it.choice.slot },
             ).also {
@@ -355,6 +378,7 @@ class LabyrinthEventChoicePlanner(
                 actionSafe = false,
                 policyRuleId = externalRule?.id,
                 ruleProvenance = provenanceFor(externalRule?.id),
+                planningSource = best.planningSource,
             ), observation, acquiredCharacterIds, rejectedChoiceIds,
         )
     }
@@ -464,18 +488,18 @@ class LabyrinthEventChoicePlanner(
         ROLE_CLASS_BY_CHOICE[choiceId]?.let { roleClass ->
             val pool = rolePool(roleClass, evaluation)
             return Utility(
-                pool.average * 2 + coinUtility(200, evaluation.relicStacks),
+                pool.average * 2 + coinUtility(200, evaluation),
                 "$roleClass 未获得角色${pool.values.size}人；随机×2平均边际${"%.2f".format(pool.average * 2)}；α币200",
             )
         }
         BATTLE_REWARDS[choiceId]?.let { (normal, reward) ->
-            val rate = (if (normal) strategy.normalWinRate else strategy.extremeWinRate) / 100.0
+            val (rate, battlePoints) = challengeUtility(!normal, evaluation)
             return Utility(
-                coinUtility(reward, evaluation.relicStacks) * rate,
+                coinUtility(reward, evaluation) * rate + battlePoints,
                 "${if (normal) "普通" else "极难"}战斗奖励α币$reward；按${(rate * 100).toInt()}%胜率估值",
             )
         }
-        val coins = { value: Int -> coinUtility(value, evaluation.relicStacks) }
+        val coins = { value: Int -> coinUtility(value, evaluation) }
         return when (choiceId) {
             11073 -> Utility(coins(1750), "50%×1500＋50%×2000，期望α币1750")
             11072 -> Utility(
@@ -484,22 +508,22 @@ class LabyrinthEventChoicePlanner(
                 "50%随机职阶自选1＋50%全角色自选1",
             )
             11071 -> Utility(
-                0.5 * randomRelicUtility(2, evaluation.relicStacks) +
-                    0.5 * randomRelicUtility(3, evaluation.relicStacks),
+                0.5 * randomRelicUtility(2, evaluation) +
+                    0.5 * randomRelicUtility(3, evaluation),
                 "50%★2遗物＋50%★3遗物",
             )
             11082 -> Utility(coins(1000), "固定α币1000")
             11081 -> Utility(
-                0.5 * randomRelicUtility(1, evaluation.relicStacks) +
+                0.5 * randomRelicUtility(1, evaluation) +
                     0.5 * randomClassRandomRoleUtility(2, evaluation),
                 "50%★1遗物＋50%随机职阶随机角色×2",
             )
             11101, 11102, 11103 -> Utility(coins((5000.0 / 3).toInt()), "猜拳三项奖励结构相同，固定按第一项消除随机点击")
             11111 -> Utility(coins(2000), "固定α币2000")
             11112 -> Utility(
-                (randomRelicUtility(1, evaluation.relicStacks) +
-                    randomRelicUtility(2, evaluation.relicStacks) +
-                    randomRelicUtility(3, evaluation.relicStacks)) / 3,
+                (randomRelicUtility(1, evaluation) +
+                    randomRelicUtility(2, evaluation) +
+                    randomRelicUtility(3, evaluation)) / 3,
                 "★1～3随机遗物按三档等权估值",
             )
             11121 -> Utility(coins(2000), "固定α币2000")
@@ -508,17 +532,17 @@ class LabyrinthEventChoicePlanner(
                 "纯加入＋全角色随机×2～4，按期望3人",
             )
             13141 -> Utility(
-                0.5 * (randomRelicUtility(1, evaluation.relicStacks) + continuation(2314, evaluation, visiting)) +
+                0.5 * (randomRelicUtility(1, evaluation) + continuation(2314, evaluation, visiting)) +
                     0.5 * coins(CHAIN_FAILURE_COIN),
                 "钓鱼第1段：50%★1遗物并继续；失败500α币",
             )
             23141 -> Utility(
-                0.25 * (randomRelicUtility(2, evaluation.relicStacks) + continuation(3314, evaluation, visiting)) +
+                0.25 * (randomRelicUtility(2, evaluation) + continuation(3314, evaluation, visiting)) +
                     0.75 * coins(CHAIN_FAILURE_COIN),
                 "钓鱼第2段：25%★2遗物并继续；失败500α币",
             )
             33141 -> Utility(
-                0.10 * randomRelicUtility(3, evaluation.relicStacks) + 0.90 * coins(CHAIN_FAILURE_COIN),
+                0.10 * randomRelicUtility(3, evaluation) + 0.90 * coins(CHAIN_FAILURE_COIN),
                 "钓鱼第3段：10%★3遗物；失败500α币",
             )
             13151 -> Utility(
@@ -553,13 +577,13 @@ class LabyrinthEventChoicePlanner(
 
     private fun parsedUtility(effects: List<GameEventEffectPrimitive>, evaluation: EvaluationContext): Utility {
         val battle = effects.filterIsInstance<GameEventEffectPrimitive.BattleChallenge>().firstOrNull()
-        val winRate = battle?.let { (if (it.extreme) strategy.extremeWinRate else strategy.normalWinRate) / 100.0 } ?: 1.0
+        val (winRate, battlePoints) = battle?.let { challengeUtility(it.extreme, evaluation) } ?: (1.0 to 0.0)
         val value = effects.sumOf { effect ->
             val reward = when (effect) {
-                is GameEventEffectPrimitive.AlphaCoin -> coinUtility(effect.amount, evaluation.relicStacks) * winRate
-                is GameEventEffectPrimitive.CostCondition -> -coinUtility(effect.amount ?: 0, evaluation.relicStacks)
+                is GameEventEffectPrimitive.AlphaCoin -> coinUtility(effect.amount, evaluation) * winRate
+                is GameEventEffectPrimitive.CostCondition -> coinUtility(-(effect.amount ?: 0), evaluation)
                 is GameEventEffectPrimitive.Relic -> (1..3).filter { it in effect.minStars..effect.maxStars }
-                    .map { randomRelicUtility(it, evaluation.relicStacks) }.averageOrZero() * effect.count
+                    .map { randomRelicUtility(it, evaluation) }.averageOrZero() * effect.count
                 is GameEventEffectPrimitive.RoleImprint -> {
                     fun marginal(count: Int) = when (effect.scope) {
                         RoleImprintScope.SPECIFIC_ROLE -> specificRoleUtility(effect.name, evaluation)
@@ -571,6 +595,7 @@ class LabyrinthEventChoicePlanner(
                     }
                     (marginal(effect.count) + marginal(effect.maxCount)) / 2.0
                 }
+                is GameEventEffectPrimitive.BattleChallenge -> if (effect == battle) battlePoints else 0.0
                 else -> 0.0
             }
             reward * effect.probability
@@ -595,8 +620,8 @@ class LabyrinthEventChoicePlanner(
         return evaluation.rolePools.getOrPut(roleClass) {
             val values = profiles.values.asSequence()
                 .filter { it.roleClass == roleClass && it.characterId !in evaluation.acquiredIds }
-                .filter(LabyrinthRoleProfile::isStrictDecisionReady)
-                .map { candidate -> candidateMarginal(candidate, evaluation) }
+                .filter { evaluation.planning != null || it.isStrictDecisionReady }
+                .map { candidate -> evaluation.officialUnitPoints ?: candidateMarginal(candidate, evaluation) }
                 .sortedDescending()
                 .toList()
             RolePool(values, values.averageOrZero())
@@ -606,8 +631,8 @@ class LabyrinthEventChoicePlanner(
     private fun allRoleValues(evaluation: EvaluationContext): List<Double> =
         evaluation.allRoleValues ?: profiles.values.asSequence()
             .filter { it.roleClass in ROLE_CLASSES && it.characterId !in evaluation.acquiredIds }
-            .filter(LabyrinthRoleProfile::isStrictDecisionReady)
-            .map { candidate -> candidateMarginal(candidate, evaluation) }
+            .filter { evaluation.planning != null || it.isStrictDecisionReady }
+            .map { candidate -> evaluation.officialUnitPoints ?: candidateMarginal(candidate, evaluation) }
             .sortedDescending()
             .toList()
             .also { evaluation.allRoleValues = it }
@@ -685,17 +710,64 @@ class LabyrinthEventChoicePlanner(
     private fun specificRoleUtility(name: String, evaluation: EvaluationContext): Double {
         val role = profiles.values.firstOrNull { it.displayName == name } ?: return 0.0
         if (role.characterId in evaluation.acquiredIds) return 0.0
+        evaluation.planning?.let { planning ->
+            val result = evaluation.specificRoles.getOrPut(role.characterId) {
+                tryPathB {
+                    evaluateRoleChoices(planning.planningState(evaluation.acquiredIds), listOf(role.characterId),
+                        planning.upcomingExams, planning.passEstimator, planning.scoreSettings).single()
+                }
+            }
+            if (result != null) {
+                evaluation.usedModel = evaluation.usedModel || result.usedModel
+                return result.totalScore
+            }
+            return requireNotNull(evaluation.officialUnitPoints)
+        }
         return candidateMarginal(role, evaluation)
     }
 
-    private fun randomRelicUtility(rarity: Int, stacks: Map<LabyrinthRelicMark, Int>): Double =
-        LabyrinthRelicMark.entries.map { relicMarkUtility(it, rarity.coerceIn(1, 3), stacks) }.average()
+    private fun randomRelicUtility(rarity: Int, evaluation: EvaluationContext): Double =
+        evaluation.planning?.let { relicDeltaPts(it.scoreSettings, it.difficulty).toDouble() }
+            ?: LabyrinthRelicMark.entries.map { relicMarkUtility(it, rarity.coerceIn(1, 3), evaluation.relicStacks) }.average()
 
     private fun bestRelicUtility(rarity: Int, stacks: Map<LabyrinthRelicMark, Int>): Double =
         LabyrinthRelicMark.entries.maxOf { relicMarkUtility(it, rarity, stacks) }
 
-    private fun coinUtility(coins: Int, stacks: Map<LabyrinthRelicMark, Int>): Double =
-        coins / 1800.0 * max(2.5, bestRelicUtility(1, stacks))
+    private fun coinUtility(coins: Int, evaluation: EvaluationContext): Double {
+        val planning = evaluation.planning
+            ?: return coins / 1800.0 * max(2.5, bestRelicUtility(1, evaluation.relicStacks))
+        return evaluation.coins.getOrPut(coins) {
+            // With no observed wallet, value the amount on its own as a reference payout.
+            val wallet = planning.alphaRupee
+            val before = wallet ?: 0
+            val delta = if (wallet == null) kotlin.math.abs(coins) else coins.coerceAtLeast(-wallet)
+            val points = marginalGoldPts(before, delta, planning.remainingShops,
+                planning.scoreSettings, planning.difficulty,
+                ShopDiscountModel(planning.enhanceNode21, 40003 in planning.observedRelicIds),
+                ownedCharacterIds = evaluation.acquiredIds)
+            if (wallet == null && coins < 0) -points else points
+        }
+    }
+
+    private fun challengeUtility(extreme: Boolean, evaluation: EvaluationContext): Pair<Double, Double> {
+        val ruleRate = (if (extreme) strategy.extremeWinRate else strategy.normalWinRate) / 100.0
+        val planning = evaluation.planning ?: return ruleRate to 0.0
+        val normal = normalWinDeltaPts(planning.scoreSettings, planning.difficulty)
+        val reward = if (extreme) exWinDeltaPts(planning.scoreSettings, planning.difficulty) else normal
+        val exam = planning.upcomingExams.singleOrNull { !it.isBoss && it.area == planning.currentArea }
+        val estimator = planning.passEstimator
+        if (exam != null && estimator != null && normal > 0) {
+            val state = planning.planningState(evaluation.acquiredIds)
+            val estimate = tryPathB { estimator.estimate(state, exam) }
+            if (estimate != null && estimate.pPass in 0.0..1.0) {
+                val value = battleValue(state, listOf(exam.copy(weight = reward.toDouble() / normal)),
+                    { _, _ -> estimate }, planning.scoreSettings)
+                evaluation.usedModel = true
+                return estimate.pPass to value
+            }
+        }
+        return ruleRate to (reward * ruleRate)
+    }
 
     private fun relicMarkUtility(
         mark: LabyrinthRelicMark,
@@ -732,17 +804,25 @@ class LabyrinthEventChoicePlanner(
         val acquiredIds: Set<String>,
         val context: LabyrinthRoleDecisionContext,
         val relicStacks: Map<LabyrinthRelicMark, Int>,
+        val planning: LabyrinthRunPlanningContext?,
         val rolePools: MutableMap<String, RolePool> = mutableMapOf(),
         var acquiredProfiles: List<LabyrinthRoleProfile>? = null,
         var allRoleValues: List<Double>? = null,
         val candidateMarginals: MutableMap<LabyrinthRoleProfile, Double> = mutableMapOf(),
         var baselineScore: Double? = null,
         var baselineScoreComputed: Boolean = false,
-    )
+    ) {
+        val officialUnitPoints = planning?.let { unitDeltaPts(it.scoreSettings, it.difficulty).toDouble() }
+        val coins = mutableMapOf<Int, Double>()
+        val specificRoles = mutableMapOf<String, com.landosol.toolbox.labyrinth.kernel.planning.RoleChoiceEval?>()
+        var usedModel = false
+    }
 
     private data class RolePool(val values: List<Double>, val average: Double)
     private data class Utility(val value: Double, val detail: String)
-    private data class EvaluatedChoice(val choice: EventChoiceResource, val utility: Double, val detail: String)
+    private data class EvaluatedChoice(
+        val choice: EventChoiceResource, val utility: Double, val detail: String, val planningSource: String?,
+    )
 
     private companion object {
         val ROLE_NAMES = mapOf("坦克" to "掩护者", "治疗" to "治疗者", "强化" to "增幅者", "增益" to "增益者",

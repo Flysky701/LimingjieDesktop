@@ -26,6 +26,7 @@ object ControlOps {
     const val DISMISS_MESSAGE="task.dismissMessage"
     const val PREFS_PATCH="preferences.patch" // only changed DesktopPreferences constructor fields
     const val SETTINGS_PATCH="settings.patch" // only changed DesktopSettings constructor fields
+    const val BATTLE_MODEL_CHECK="battleModel.check"
     const val ACCOUNT_NEW="account.new"
     const val ACCOUNT_EDIT="account.edit" // id:Long; reply editor:AccountEditorState (password always empty)
     const val ACCOUNT_SAVE="account.save" // editor:AccountEditorState; worker performs original validation

@@ -461,7 +461,7 @@ private fun RerollSettingsFields(
     }
     SelectionCard(
         title = "路线要求",
-        description = "保留价值路线与旧版模板；自定义节点按所选列寻找完整连通路线。",
+        description = "按所选模式筛选连通路线。",
     ) {
         Text("路线判定", style = MaterialTheme.typography.labelLarge)
         ChoiceRow {
@@ -497,7 +497,7 @@ private fun RerollSettingsFields(
                 enabled = !state.isWorking,
                 onCheckedChange = onPerfectStartChange,
             )
-        } else {
+        } else if (state.routeEvaluationMode == LabyrinthRouteEvaluationMode.CUSTOM_NODES) {
             val plan = state.customNodePlan
             val characterOrEvent = listOf(LabyrinthNodeTypes.LINK, LabyrinthNodeTypes.EVENT)
             val characterOrRelic = listOf(LabyrinthNodeTypes.LINK, LabyrinthNodeTypes.RELIC)
@@ -541,12 +541,16 @@ private fun RerollSettingsFields(
             }
         }
         Text(
-            if (state.routeEvaluationMode == LabyrinthRouteEvaluationMode.VALUE_ROUTE)
-                "价值路线中该偏好不绑定列号；选择“两者都行”时不会增加刷图门槛，同分路线优先遗物。"
-            else if (customMode)
-                "仅用于区域3/5第3列；自定义设置独立保存，必须有完整连通路线且Boss符合名单。"
-            else
-                "旧版模板中该条件仅在勾选完美开局时生效。",
+            when (state.routeEvaluationMode) {
+                LabyrinthRouteEvaluationMode.VALUE_ROUTE ->
+                    "价值路线中该偏好不绑定列号；选择“两者都行”时不会增加刷图门槛，同分路线优先遗物。"
+                LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP ->
+                    "按官方结算分模型动态规划最优路线；Boss 筛选与第三格偏好仍作为硬条件。"
+                LabyrinthRouteEvaluationMode.CUSTOM_NODES ->
+                    "仅用于区域3/5第3列；自定义设置独立保存，必须有完整连通路线且Boss符合名单。"
+                LabyrinthRouteEvaluationMode.LEGACY_TEMPLATE ->
+                    "旧版模板中该条件仅在勾选完美开局时生效。"
+            },
             style = MaterialTheme.typography.bodySmall,
         )
     }

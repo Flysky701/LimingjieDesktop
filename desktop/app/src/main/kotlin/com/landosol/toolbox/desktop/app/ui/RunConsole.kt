@@ -30,6 +30,9 @@ import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.desktop.app.*
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
+import com.landosol.toolbox.desktop.app.strategy.BattleModelHealth
+import com.landosol.toolbox.desktop.app.strategy.BattleModelStatus
+import com.landosol.toolbox.desktop.app.strategy.desktopDecisionText
 import com.landosol.toolbox.desktop.app.ui.theme.*
 import com.landosol.toolbox.desktop.device.DeviceConnectionState
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
@@ -46,13 +49,21 @@ import java.time.format.DateTimeFormatter
     configure:()->Unit,navigate:(Page)->Unit,searchFocus:FocusRequester,
     setup:RunSetupDraft,configuration:LabyrinthUiState,standaloneGuild:Int,selectGuild:(Int)->Unit,
     setupMessage:String?,
-    sharedSettings:ControlSessionUi?=null,
+    settingsOwner:ControlSessionUi=graph,
 ) {
     val preferences by graph.ux.preferences.state.collectAsState()
     val history by graph.ux.history.records.collectAsState()
     val actions=rememberActions(graph)
     val ready=(s.device as? DeviceConnectionState.Ready)?.device
     val enabled=!s.busy&&!LocalTaskBusy.current
+    val battleDecision = s.entry.battleTeamRecommendation?.let { recommendation ->
+        (listOf(recommendation.desktopDecisionText(s.entry.combatContext)) + recommendation.reasons.take(3)).joinToString("\n")
+    }
+    var lastBattleDecision by remember(s.entry.runId, s.batch?.batchId, s.entry.sessionId) { mutableStateOf<String?>(null) }
+    SideEffect {
+        if (battleDecision != null) lastBattleDecision = battleDecision
+        else if (!s.entry.running && s.entry.runId == null) lastBattleDecision = null
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val compact=maxWidth<1120.dp
         Row(Modifier.fillMaxSize().padding(if(compact)12.dp else 16.dp),horizontalArrangement=Arrangement.spacedBy(16.dp)) {
@@ -99,8 +110,21 @@ import java.time.format.DateTimeFormatter
                         val samples=history.filter{it.singleRun && it.durationMillis!=null && it.result=="通关"};if(samples.size>=2)Text("平均每次 ${formatDuration(samples.mapNotNull{it.durationMillis}.average().toLong())}",style=MaterialTheme.typography.bodySmall,color=Muted)
                     } }
                     val choice=s.entry.roleRewardChoiceDecision
-                    val decision=when(choice){is LabyrinthRoleRewardChoiceDecision.Select->"选择 ${choice.displayName}：${choice.explanation.joinToString("；")}";is LabyrinthRoleRewardChoiceDecision.Wait->choice.reason;null->s.entry.battleTeamRecommendation?.reasons?.joinToString("；") ?: s.entry.battleTeamRecommendationUnavailableReason ?: eventDecisionText(s.entry.eventChoiceDecision)}
-                    if(decision!=null)ConsoleCard("最近决策"){SelectionContainer{Text(decision,style=MaterialTheme.typography.bodySmall,maxLines=6,overflow=TextOverflow.Ellipsis)}}
+                    val decision = battleDecision ?: when (choice) {
+                        is LabyrinthRoleRewardChoiceDecision.Select -> "选择 ${choice.displayName}：${choice.explanation.joinToString("；")}"
+                        is LabyrinthRoleRewardChoiceDecision.Wait -> choice.reason
+                        null -> s.entry.battleTeamRecommendationUnavailableReason
+                            ?: eventDecisionText(s.entry.eventChoiceDecision) ?: lastBattleDecision
+                    }
+                    if (decision != null) ConsoleCard("最近决策") {
+                        SelectionContainer {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(decision.substringBefore('\n'), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                                val details = decision.substringAfter('\n', "")
+                                if (details.isNotBlank()) Text(details, style = MaterialTheme.typography.bodySmall, color = Muted)
+                            }
+                        }
+                    }
                 }
                 if(!s.busy) history.lastOrNull{!it.singleRun&&it.endedAt!=null}?.let{last->
                     Row(Modifier.fillMaxWidth().padding(horizontal=6.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -110,7 +134,7 @@ import java.time.format.DateTimeFormatter
                 }
             }
             Column(Modifier.width(if(compact)280.dp else 310.dp).fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                RunReadiness(graph,s,selected,preferences.goals.isNotEmpty(),navigate,sharedSettings ?: graph)
+                RunReadiness(graph,s,selected,preferences.goals.isNotEmpty(),navigate,settingsOwner)
                 Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) {
                     listOf("logs" to "日志","preview" to "画面").forEach{(key,label)->
                         FilterChip(selected=preferences.rightTab==key,onClick={actions.run{withContext(Dispatchers.IO){graph.ux.preferences.update{it.copy(rightTab=key)}}}},label={Text(label)},modifier=Modifier.weight(1f))
@@ -140,6 +164,8 @@ import java.time.format.DateTimeFormatter
     val ocr by graph.ocr.status.collectAsState()
     val preferences by graph.ux.preferences.state.collectAsState()
     val settings by settingsOwner.settings.state.collectAsState()
+    val globalBattleModel by settingsOwner.battleModel.collectAsState()
+    val workerBattleModel by graph.battleModel.collectAsState()
     val credentials by graph.ux.credentials.collectAsState()
     val ready=(s.device as? DeviceConnectionState.Ready)?.device
     val actions=rememberActions(graph)
@@ -171,7 +197,10 @@ import java.time.format.DateTimeFormatter
                 ReadinessItem("游戏前台",if(foreground==null)"开始前检查" else if(inForeground)"上次检查通过" else "请打开游戏",inForeground,"Devices",true),
                 ReadinessItem("账号",if(credentials[s.task.selectedAccount?.id]==false)"缺凭据" else s.task.selectedAccount?.alias ?: "未选择",s.task.selectedAccount!=null&&credentials[s.task.selectedAccount?.id]!=false,"Accounts"),
                 ReadinessItem("国服数据库",database,database.startsWith("已就绪"),"Settings"),
-                ReadinessItem("识别模型",when(ocr){OcrEngineStatus.Ready->"已加载";OcrEngineStatus.Loading->"加载中";OcrEngineStatus.NotLoaded->"尚未加载";is OcrEngineStatus.Failed->"加载失败"},ocr is OcrEngineStatus.Ready,"Settings"))
+                ReadinessItem("OCR 识别模型",when(ocr){OcrEngineStatus.Ready->"已加载";OcrEngineStatus.Loading->"加载中";OcrEngineStatus.NotLoaded->"尚未加载";is OcrEngineStatus.Failed->"加载失败"},ocr is OcrEngineStatus.Ready,"Settings"),
+                battleModelReadiness(settings.battleOnnxEnabled, s.entry.running, globalBattleModel, workerBattleModel),
+                ReadinessItem("Path B 全局规划", if (settings.pathBPlanningEnabled) "已开启" else "已关闭", true, "Settings"),
+            )
             items.forEach{item->Row(Modifier.fillMaxWidth().heightIn(min=25.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(5.dp)) {
                 Text(item.title,style=MaterialTheme.typography.bodySmall,color=Muted)
                 Spacer(Modifier.weight(1f))
@@ -179,6 +208,32 @@ import java.time.format.DateTimeFormatter
             }}
             TextButton(onClick={actions.run{graph.recheckResolution();graph.ux.refreshForeground();graph.ux.refreshDatabase()}},enabled=ready!=null&&!s.busy&&!actions.working){Text("重新检查",style=MaterialTheme.typography.bodySmall)}
             if(settingsOwner!==graph)TextButton(onClick={navigate(Page.Settings)}){Text("打开设置",style=MaterialTheme.typography.bodySmall)}
+        }
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 43.dp).toggleable(
+                value = settings.battleOnnxEnabled, enabled = !actions.working, role = Role.Checkbox,
+                onValueChange = { checked -> actions.run { settingsOwner.settings.update { it.copy(battleOnnxEnabled = checked) } } },
+            ),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            Checkbox(settings.battleOnnxEnabled, null, enabled = !actions.working, modifier = Modifier.size(30.dp))
+            Column {
+                Text("启用 ONNX 战斗选队", style = MaterialTheme.typography.bodySmall)
+                Text("EX / Boss 生效，下局生效", style = MaterialTheme.typography.labelSmall, color = Muted)
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 43.dp).toggleable(
+                value = settings.pathBPlanningEnabled, enabled = !actions.working, role = Role.Checkbox,
+                onValueChange = { checked -> actions.run { settingsOwner.settings.update { it.copy(pathBPlanningEnabled = checked) } } },
+            ),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            Checkbox(settings.pathBPlanningEnabled, null, enabled = !actions.working, modifier = Modifier.size(30.dp))
+            Column {
+                Text("启用 Path B 全局规划", style = MaterialTheme.typography.bodySmall)
+                Text("角色/遗物/商店/事件，下局生效", style = MaterialTheme.typography.labelSmall, color = Muted)
+            }
         }
         if(needsConfirmation) {
             HorizontalDivider(color=Line,modifier=Modifier.padding(vertical=3.dp))
@@ -200,6 +255,37 @@ import java.time.format.DateTimeFormatter
             Text("操作未完成：$message",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)
         }}
     }
+}
+
+private fun battleModelReadiness(
+    enabled: Boolean,
+    running: Boolean,
+    global: BattleModelStatus,
+    worker: BattleModelStatus,
+): ReadinessItem {
+    val applied = if (running) worker else global
+    val detail = when {
+        !enabled -> if (running && worker.health in setOf(BattleModelHealth.LOADED, BattleModelHealth.FALLBACK)) {
+            "下局关闭 · 当前用模型"
+        } else "已关闭（规则）"
+        running -> when (worker.health) {
+            BattleModelHealth.LOADED -> "已加载 · NN"
+            BattleModelHealth.FAILED, BattleModelHealth.FALLBACK -> worker.health.label
+            BattleModelHealth.READY, BattleModelHealth.DISABLED -> "下局生效 · 规则中"
+        }
+        else -> when (global.health) {
+            BattleModelHealth.READY, BattleModelHealth.LOADED ->
+                listOfNotNull("已就绪", global.bundleId).joinToString(" · ")
+            BattleModelHealth.FAILED ->
+                if (global.detail.orEmpty().contains("未找到模型包目录") || global.detail.orEmpty().contains("缺少 manifest.json")) {
+                    "未找到模型包"
+                } else global.health.label
+            BattleModelHealth.FALLBACK -> global.health.label
+            BattleModelHealth.DISABLED -> "正在检查模型包"
+        }
+    }
+    val warning = enabled && applied.health in setOf(BattleModelHealth.FAILED, BattleModelHealth.FALLBACK)
+    return ReadinessItem("战斗选队模型", detail, !warning, "Settings", warning)
 }
 @Composable internal fun ConsoleCard(title:String,modifier:Modifier=Modifier,action:(@Composable ()->Unit)?=null,content:@Composable ColumnScope.()->Unit){Surface(modifier.fillMaxWidth(),color=MaterialTheme.colorScheme.surface,shape=DesktopCorners.lg,border=BorderStroke(1.dp,Line)){Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)){Row(verticalAlignment=Alignment.CenterVertically){Text(title,Modifier.weight(1f),style=MaterialTheme.typography.titleSmall);action?.invoke()};content()}}}
 @Composable internal fun BatchStages(stage:LabyrinthBatchStage,paused:Boolean){val names=listOf("刷开局","重置会话","执行中","记录结果");val current=when(stage){LabyrinthBatchStage.REROLLING->0;LabyrinthBatchStage.INVALIDATING_OLD_CLIENT_SESSION->1;LabyrinthBatchStage.RUNNING_LABYRINTH->2;LabyrinthBatchStage.RECORDING_RESULT->3;else->-1};Row(horizontalArrangement=Arrangement.spacedBy(4.dp)){names.forEachIndexed{i,name->Surface(Modifier.weight(1f),shape=DesktopCorners.sm,color=if(stage==LabyrinthBatchStage.FAILED)MaterialTheme.colorScheme.errorContainer else if(i==current)MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerLow){Text(if(paused&&i==current)"已暂停" else name,Modifier.padding(vertical=6.dp,horizontal=3.dp),style=MaterialTheme.typography.bodySmall,maxLines=1)}}};if(current<0)Text(when(stage){LabyrinthBatchStage.COMPLETED->"全部目标已完成";LabyrinthBatchStage.PAUSED->"批量任务已停止 / 暂停";LabyrinthBatchStage.FAILED->"批量任务已停止";else->"等待开始"},color=Muted,style=MaterialTheme.typography.bodySmall)}

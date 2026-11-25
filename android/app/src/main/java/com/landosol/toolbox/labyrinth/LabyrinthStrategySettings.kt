@@ -288,6 +288,7 @@ data class LabyrinthStrategySettings(
 data class LabyrinthStrategySnapshot(
     val settings: LabyrinthStrategySettings,
     val roleRuntime: LabyrinthRoleDecisionRuntime?,
+    val pathBPlanningEnabled: Boolean = false,
 )
 
 object LabyrinthStrategySettingsCodec {

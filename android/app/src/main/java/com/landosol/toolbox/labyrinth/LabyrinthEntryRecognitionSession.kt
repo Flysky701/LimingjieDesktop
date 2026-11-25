@@ -2,6 +2,15 @@ package com.landosol.toolbox.labyrinth
 
 import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.labyrinth.kernel.*
+import com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthRunPlanningContext
+import com.landosol.toolbox.labyrinth.kernel.planning.ModelBattlePassEstimator
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelAssessment
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelDecisionStatus
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelTrace
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueContext
+import com.landosol.toolbox.labyrinth.kernel.strategy.ContextualBattleValueEstimator
+import com.landosol.toolbox.labyrinth.kernel.strategy.LabyrinthBattleValueEstimator
+import com.landosol.toolbox.labyrinth.kernel.strategy.buildBattleValueContext
 import com.landosol.toolbox.labyrinth.kernel.event.*
 import com.landosol.toolbox.labyrinth.kernel.battle.BattleDomainModule
 import com.landosol.toolbox.labyrinth.kernel.battle.BattleDomainSnapshot
@@ -215,6 +224,20 @@ internal fun labyrinthPersistedBossNode(route: LabyrinthRouteJson?): LabyrinthNo
     }
 }
 
+internal fun labyrinthActiveBattleQuestId(
+    combatKind: LabyrinthCombatKind?,
+    route: LabyrinthRouteJson?,
+    area: Int? = null,
+    exEncounterStrategy: LabyrinthExEncounterStrategy? = null,
+): Int? = when (combatKind) {
+    LabyrinthCombatKind.BOSS -> labyrinthPersistedBossNode(route)?.questId
+    LabyrinthCombatKind.NORMAL -> labyrinthPersistedCurrentNode(route)?.questId
+    LabyrinthCombatKind.EX -> labyrinthPersistedCurrentNode(route).let { node ->
+        node?.questId ?: LabyrinthExEncounterCatalog.questIdFor(area ?: node?.area, exEncounterStrategy)
+    }
+    null -> null
+}
+
 /** The active battle can remain on an area Boss after the saved cursor advances to the next START. */
 internal fun labyrinthBattleTeamArea(
     activeNodeArea: Int?,
@@ -225,6 +248,66 @@ internal fun labyrinthBattleTeamArea(
     ?: (if (combatKind == LabyrinthCombatKind.BOSS) labyrinthPersistedBossNode(route)?.area else null)
     ?: labyrinthPersistedCurrentNode(route)?.area
     ?: progressArea
+
+internal data class BattleModelInputs(
+    val questId: Int?,
+    val difficulty: Int?,
+    val relicIds: List<Int>,
+    val markStacks: Map<LabyrinthRelicMark, Int>,
+    val reviveAvailable: Boolean,
+    val estimator: LabyrinthBattleValueEstimator?,
+    val exEncounterId: String? = null,
+) {
+    fun valueContext(
+        acquiredCharacterIds: List<String>,
+        profiles: Map<String, LabyrinthRoleProfile>,
+        ruleContext: LabyrinthRoleDecisionContext,
+    ): BattleValueContext? {
+        if (estimator !is ContextualBattleValueEstimator || acquiredCharacterIds.isEmpty()) return null
+        return buildBattleValueContext(
+            acquiredCharacterIds = acquiredCharacterIds,
+            profiles = profiles,
+            questId = questId ?: return null,
+            area = ruleContext.currentArea ?: return null,
+            difficulty = difficulty ?: return null,
+            ruleContext = ruleContext,
+            relicIds = relicIds,
+            markStacksByMark = markStacks,
+            alphaRupee = null,
+            reviveAvailable = reviveAvailable,
+        )
+    }
+
+    fun skipTrace(
+        combatKind: LabyrinthCombatKind?,
+        area: Int?,
+        acquiredCharacterIds: List<String>,
+        profiles: Map<String, LabyrinthRoleProfile>,
+        ruleContext: LabyrinthRoleDecisionContext,
+    ): BattleModelTrace? {
+        if (estimator !is ContextualBattleValueEstimator) {
+            return BattleModelTrace(BattleModelDecisionStatus.MODEL_DISABLED, questId)
+        }
+        if (questId == null) {
+            val detail = when (combatKind) {
+                LabyrinthCombatKind.NORMAL -> "普通战节点缺少 questId"
+                LabyrinthCombatKind.BOSS -> "Boss 节点缺少 questId"
+                LabyrinthCombatKind.EX -> if (exEncounterId == null) "EX 遭遇未识别，无法确定 questId"
+                else "EX 遭遇 $exEncounterId 在${area?.let { "第${it}层" } ?: "未知层数"}没有 questId 映射"
+                null -> return BattleModelTrace(BattleModelDecisionStatus.CONTEXT_UNAVAILABLE, detail = "未确认战斗类型")
+            }
+            return BattleModelTrace(BattleModelDecisionStatus.NO_QUEST_ID, detail = detail)
+        }
+        val detail = when {
+            area == null || ruleContext.currentArea == null -> "缺少战斗所在层数"
+            difficulty == null -> "缺少迷宫难度"
+            acquiredCharacterIds.isEmpty() -> "没有已获得的角色"
+            valueContext(acquiredCharacterIds, profiles, ruleContext) == null -> "已获得角色无法匹配模型角色 ID"
+            else -> return null
+        }
+        return BattleModelTrace(BattleModelDecisionStatus.CONTEXT_UNAVAILABLE, questId, detail)
+    }
+}
 
 internal fun labyrinthBossEncounterStrategy(route: LabyrinthRouteJson?): LabyrinthExEncounterStrategy? {
     val boss = labyrinthPersistedBossNode(route) ?: return null
@@ -1133,6 +1216,13 @@ internal fun labyrinthSessionBlockObservation(
     return LabyrinthSessionBlockObservation(kind, returnTitleRect)
 }
 
+data class LabyrinthPathBDecisionSummary(
+    val source: String,
+    val title: String,
+    val target: String,
+    val detail: String,
+)
+
 data class LabyrinthEntryRecognitionSessionState(
     val status: LabyrinthEntryRecognitionStatus = LabyrinthEntryRecognitionStatus.IDLE,
     val sessionId: AutomationSessionId? = null,
@@ -1162,6 +1252,7 @@ data class LabyrinthEntryRecognitionSessionState(
     val frameTiming: LabyrinthFrameTiming? = null,
     val initial1088Recovery: LabyrinthInitial1088RecoveryDiagnostic? = null,
     val balancedDiagnostics: LabyrinthBalancedDiagnostics? = null,
+    val pathBDecisionSummary: LabyrinthPathBDecisionSummary? = null,
 ) {
     val running: Boolean get() = status == LabyrinthEntryRecognitionStatus.RUNNING
 }
@@ -1224,6 +1315,12 @@ class LabyrinthEntryRecognitionSession(
     private val eventPackProvider: (() -> CompiledEventPackSet)? = null,
     private val journalDirectoryProvider: (() -> File?)? = null,
 ) {
+    @Volatile var battleValueEstimator: LabyrinthBattleValueEstimator? = null
+        private set
+    private var battleRoleProfiles: Map<String, LabyrinthRoleProfile> = emptyMap()
+    private var pathBPlanningEnabled = false
+    private var planningEstimator: ModelBattlePassEstimator? = null
+    private var planningEstimatorRevision = 0L
     private val eventDomain = EventDomainModule(kernelRuntime).also(kernelRuntime::registerModule)
     val encounterStack = KernelEncounterStack(kernelRuntime)
     private val recoveryDomain = RecoveryDomainModule(kernelRuntime).also(kernelRuntime::registerModule)
@@ -1462,7 +1559,13 @@ class LabyrinthEntryRecognitionSession(
     private val manualPauseRequested = AtomicBoolean(false)
     private var balancedPipeline: LabyrinthBalancedFramePipeline<CapturedFrame>? = null
     private val diagnosticLane = LabyrinthBalancedDiagnosticLane(this.actionScope, ::publishBalancedDiagnostics)
-    private val rolePlanning = LabyrinthBalancedPlanningSlot<LabyrinthBalancedRolePlanningKey, LabyrinthRoleRewardChoiceDecision>(this.actionScope, clock, ::publishBalancedDiagnostics)
+    private data class RolePlanningRequestKey(
+        val role: LabyrinthBalancedRolePlanningKey,
+        val planningFingerprint: String?,
+    )
+    private val rolePlanning = LabyrinthBalancedPlanningSlot<RolePlanningRequestKey, LabyrinthRoleRewardChoiceDecision>(
+        this.actionScope, clock, ::publishBalancedDiagnostics,
+    )
     private val freeRolePlanning = LabyrinthBalancedPlanningSlot<List<Any?>, LabyrinthRoleRewardChoiceDecision>(this.actionScope, clock, ::publishBalancedDiagnostics)
     private val eventPlanning = LabyrinthEventPlanningLane(this.actionScope, clock, ::publishBalancedDiagnostics)
     private val eventActionPermit = LabyrinthEventActionPermit()
@@ -1667,7 +1770,7 @@ class LabyrinthEntryRecognitionSession(
     @Volatile
     private var lastPersistedObservationSignature: String? = null
     @Volatile
-    private var lastBattleTeamRecommendationKey: String? = null
+    private var lastBattleTeamRecommendationKey: Pair<String, BattleModelInputs>? = null
     @Volatile
     private var lastBattleTeamSelectionPlanLog: String? = null
     @Volatile
@@ -1840,6 +1943,8 @@ class LabyrinthEntryRecognitionSession(
     private val failedBattleTeamSignatures = linkedSetOf<String>()
     @Volatile
     private var battleRetryCount = 0
+    @Volatile
+    private var battleRelicReviveConsumed = false
     /** True from a successful "重新挑战" tap until the next battle attempt actually starts. */
     private var awaitingRetryBattleAfterFailure = false
     private var bossEditorTeamIndex: Int? = null
@@ -1849,6 +1954,8 @@ class LabyrinthEntryRecognitionSession(
     private var preparedBossFirstTeamIds: List<String> = emptyList()
     /** Chosen safe team count for the current Boss multi-team attempt; 1/2 teams leave later tabs empty. */
     private var bossMultiTeamTargetCount: Int? = null
+    private var plannedBossModelTeams: List<List<String>> = emptyList()
+    private var plannedBossModelAssessment: BattleModelAssessment? = null
     private var configuredBossTeamMode: LabyrinthBossTeamMode = LabyrinthBossTeamMode.MULTI_TEAM
     /** User-configured opening picks per guild; empty means every guild keeps its shipped plan. */
     private var configuredOpeningRosters: Map<Int, List<List<String>>> = emptyMap()
@@ -2264,36 +2371,7 @@ class LabyrinthEntryRecognitionSession(
         singleBossRetryCountBeforeMulti = 2
         pendingSingleBossFallbackToMulti = false
         bossFallbackMultiTeamActive = false
-        battleStrategySettingsSnapshot = strategySnapshot?.settings ?: LabyrinthStrategySettings()
-        eventCustomizationEnabledSnapshot = strategySnapshot?.settings?.eventCustomizationEnabled == true
-        eventChoiceOverridesSnapshot = strategySnapshot?.settings?.effectiveEventChoiceOverrides()?.toMap().orEmpty()
-        strategySnapshot?.let { snapshot ->
-            configuredBossTeamMode = snapshot.settings.bossTeamMode
-            bossTeamMode = configuredBossTeamMode
-            preferPureBossDamageSystem = snapshot.settings.preferPureBossDamageSystem
-            specialEquipmentSettings = snapshot.settings
-            responseIntervalMillis = snapshot.settings.responseIntervalMillis.toLong()
-            singleBossFallbackToMultiAfterThreeFailures =
-                snapshot.settings.singleBossFallbackToMultiAfterThreeFailures
-            singleBossRetryCountBeforeMulti = snapshot.settings.singleBossRetryCountBeforeMulti
-            rerollAfterThreeBattleFailures = snapshot.settings.rerollAfterThreeBattleFailures
-            relicChoicePolicy = snapshot.settings.relicPolicy()
-            shopPolicy = LabyrinthShopPolicy(
-                relicChoicePolicy = relicChoicePolicy,
-                finalArea = snapshot.settings.refreshFromArea,
-                buyRelics = snapshot.settings.buyRelics,
-                refreshEnabled = snapshot.settings.refreshShop,
-            )
-            configuredOpeningRosters = snapshot.settings.openingRosters
-            roleDisplayNames = snapshot.roleRuntime?.document?.characters
-                ?.associate { it.characterId to it.displayName }
-                .orEmpty()
-            roleRewardChoicePlanner = snapshot.roleRuntime?.rewardChoicePlanner
-            eventChoicePlanner = snapshot.roleRuntime?.eventChoicePlanner?.withExtensionPack(
-                sessionPacks.extensionPack, sessionPacks.ruleProvenance)
-            battleTeamRecommendationPlanner = snapshot.roleRuntime?.battleTeamRecommendationPlanner
-            battleTeamSelectionPlanner = snapshot.roleRuntime?.battleTeamSelectionPlanner
-        }
+        refreshSharedSettings(strategySnapshot, sessionPacks)
         val initialRunSnapshot = try {
             persistenceMutex.withLock { runStateStore?.begin(accountId, clock()) }
         } catch (failure: Throwable) {
@@ -3009,6 +3087,9 @@ class LabyrinthEntryRecognitionSession(
             frameCount = current.frameCount + 1,
             lastResult = result,
             initial1088Recovery = null,
+            pathBDecisionSummary = current.pathBDecisionSummary?.takeIf {
+                current.lastResult?.observation?.state == result.observation.state
+            },
             message = if (result.observation.state == LabyrinthEntryPageState.UNKNOWN) {
                 "未知或低置信度页面，动作已禁用"
             } else {
@@ -3201,6 +3282,13 @@ class LabyrinthEntryRecognitionSession(
         if (!refreshRoleRewardChoiceDecision(sessionId, result, frameWidth, frameHeight)) return
         if (activeSessionId != sessionId || _state.value.paused || stopRequested.get()) return
         refreshEventChoiceDecision(sessionId, result)
+        if (current.dryRun && pathBPlanningEnabled) {
+            when (pageState) {
+                LabyrinthEntryPageState.RELIC_CHOICE -> currentRelicChoice(result)?.let(::publishRelicPlanningDecision)
+                LabyrinthEntryPageState.SHOP -> currentShopDecision(result)?.let(::publishShopPlanningDecision)
+                else -> Unit
+            }
+        }
         refreshEffectiveCharacterScan(sessionId, result, frameWidth, frameHeight, timestampMillis)
         refreshBattleTeamRecommendation(sessionId, pageState, result.battleTeamSelection)
         refreshBattleTeamSelectionPlan(sessionId, pageState, result.battleTeamSelection)
@@ -3845,7 +3933,9 @@ class LabyrinthEntryRecognitionSession(
             val pendingSelectedIds = synchronized(pendingAcquiredCharacterIds) { pendingAcquiredCharacterIds.toSet() }
             val acquiredIds = _state.value.joinedCharacters.map(LabyrinthJoinedCharacter::characterId)
                 .plus(pendingSelectedIds).toSet()
+            val planningContext = buildRunPlanningContext()
             val cacheKey = buildString {
+                append(planningContext?.cacheFingerprint).append('|')
                 append("$frameWidth/$frameHeight/$defenseStacks/")
                 append(acquiredIds.sorted().joinToString(","))
                 result.characterMatches.forEach {
@@ -3869,7 +3959,7 @@ class LabyrinthEntryRecognitionSession(
             val started = System.nanoTime()
             planner.decide(candidates = result.characterMatches, acquiredCharacterIds = acquiredIds,
                 context = LabyrinthRoleDecisionContext(defenseMarkStacks = defenseStacks),
-                frameWidth = frameWidth, frameHeight = frameHeight).also {
+                frameWidth = frameWidth, frameHeight = frameHeight, planningContext = planningContext).also {
                 runCatching { Log.d("LabyrinthEntry", "roleRewardDecisionMillis=${(System.nanoTime() - started) / 1_000_000}") }
             }
         }
@@ -3908,13 +3998,15 @@ class LabyrinthEntryRecognitionSession(
         }
         val context = LabyrinthRoleDecisionContext(defenseMarkStacks = relicChoicePolicy
             .markStacks(_state.value.observedRelics, relicMarkStackCalibration).getValue(LabyrinthRelicMark.DEFENSE))
-        val key = LabyrinthBalancedRolePlanningKey(sessionId.toString(), roleDecisionGeneration.get(),
+        val planningContext = buildRunPlanningContext()
+        val roleKey = LabyrinthBalancedRolePlanningKey(sessionId.toString(), roleDecisionGeneration.get(),
             roleRewardRound.epoch(), balancedSceneEpoch, planner,
             candidates.map { LabyrinthBalancedRoleCandidateKey(it.slotId, it.characterId, it.displayName,
                 !it.characterId.isNullOrBlank() && !it.displayName.isNullOrBlank() && labyrinthRoleRewardIdentityIsActionSafe(it)) },
             acquired.toList(), context)
+        val key = RolePlanningRequestKey(roleKey, planningContext?.cacheFingerprint)
         val ready = rolePlanning.request(key) {
-            planner.decide(candidates, acquired, context, frameWidth, frameHeight)
+            planner.decide(candidates, acquired, context, frameWidth, frameHeight, planningContext)
         }
         val capturedAt = balancedDetailCapturedAt
         val decision = if (ready == null || capturedAt == null || capturedAt <= rolePlanning.readyAt) {
@@ -3998,6 +4090,7 @@ class LabyrinthEntryRecognitionSession(
         val context: LabyrinthRoleDecisionContext,
         val stacks: Map<LabyrinthRelicMark, Int>,
         val rejected: Set<String>,
+        val planningContext: LabyrinthRunPlanningContext?,
     )
 
     private fun eventPlanningInputs(
@@ -4005,14 +4098,16 @@ class LabyrinthEntryRecognitionSession(
         observation: LabyrinthEventChoiceObservation,
     ): EventPlanningInputs {
         val stacks = relicChoicePolicy.markStacks(_state.value.observedRelics, relicMarkStackCalibration).toMap()
-        val acquired = _state.value.joinedCharacters.map(LabyrinthJoinedCharacter::characterId).toCollection(linkedSetOf())
+        val planningContext = buildRunPlanningContext()
+        val acquired = if (planningContext != null) planningAcquiredIds()
+            else _state.value.joinedCharacters.map(LabyrinthJoinedCharacter::characterId).toSet()
         val rejected = eventChoiceRejectedIds.toSet()
         val context = LabyrinthRoleDecisionContext(defenseMarkStacks = stacks.getValue(LabyrinthRelicMark.DEFENSE),
             targetCount = combatContext?.targetCount ?: 1)
         val key = labyrinthEventPlanningSemanticKey(sessionId, roleDecisionGeneration.get(), balancedSceneEpoch,
             planner, observation, acquired.toList(), context, stacks, rejected.toList()) +
-            listOf(observation.rawText.takeIf { eventDomain.extensionPack.rules.isNotEmpty() })
-        return EventPlanningInputs(key, acquired, context, stacks, rejected)
+            listOf(observation.rawText.takeIf { eventDomain.extensionPack.rules.isNotEmpty() }, planningContext?.cacheFingerprint)
+        return EventPlanningInputs(key, acquired, context, stacks, rejected, planningContext)
     }
 
     private fun refreshBalancedEventChoice(
@@ -4024,7 +4119,8 @@ class LabyrinthEntryRecognitionSession(
             balancedDetailHeight, result.eventOcrDiagnostics)
         val planned = eventPlanning.updateEvaluated(inputs.key, observation, visual, balancedDetailCapturedAt,
             calculate = {
-                val evaluation = planner.evaluate(observation, inputs.acquired, inputs.context, inputs.stacks, inputs.rejected)
+                val evaluation = planner.evaluate(observation, inputs.acquired, inputs.context, inputs.stacks, inputs.rejected,
+                    planningContext = inputs.planningContext)
                 LabyrinthEventPlanningLane.Calculation(evaluation.decision, evaluation.rules)
             },
             revalidate = { planner.revalidateDecision(it, observation, inputs.acquired, inputs.rejected) })
@@ -4097,7 +4193,9 @@ class LabyrinthEntryRecognitionSession(
             refreshBalancedEventChoice(sessionId, result, planner)
             return
         }
-        val acquired = _state.value.joinedCharacters.map(LabyrinthJoinedCharacter::characterId).toSet()
+        val planningContext = buildRunPlanningContext()
+        val acquired = if (planningContext != null) planningAcquiredIds()
+            else _state.value.joinedCharacters.map(LabyrinthJoinedCharacter::characterId).toSet()
         var rules: GameEventRuleEvaluation? = null
         val planned = if (planner == null) {
             LabyrinthEventChoiceDecision.Wait("事件推荐资料未加载")
@@ -4116,6 +4214,7 @@ class LabyrinthEntryRecognitionSession(
                     ),
                     relicStacks = stacks,
                     rejectedChoiceIds = eventChoiceRejectedIds.toSet(),
+                    planningContext = planningContext,
                 ).also { rules = it.rules }.decision
             }.getOrElse { failure ->
                 LabyrinthEventChoiceDecision.Wait(
@@ -4173,6 +4272,7 @@ class LabyrinthEntryRecognitionSession(
                     } else started
                     if (activeSessionId != sessionId || activeRunStartedAt != expectedStartedAt || !balancedLifecycleCurrent(requestLifecycleEpoch)) return@withLock false
                     activeRunStartedAt = snapshot?.startedAt
+                    battleRelicReviveConsumed = false
                     openingRelicBaselineKnown = fixedOpening.complete
                     lastPersistedObservationSignature = null
                     relicFocusMark = null
@@ -4366,6 +4466,7 @@ class LabyrinthEntryRecognitionSession(
         }
         pendingBossTeamAdvance = null
         bossEditorTeamIndex = index
+        activeNodeArea = activeNodeArea ?: labyrinthPersistedBossNode(validatedRoute)?.area
         combatContext = (combatContext ?: LabyrinthCombatContext(LabyrinthCombatKind.BOSS))
             .copy(kind = LabyrinthCombatKind.BOSS, teamIndex = index)
         lastBattleTeamRecommendationKey = null
@@ -4711,6 +4812,117 @@ class LabyrinthEntryRecognitionSession(
         }
     }
 
+    private fun refreshSharedSettings(snapshot: LabyrinthStrategySnapshot?, sessionPacks: CompiledEventPackSet) {
+        pathBPlanningEnabled = snapshot?.pathBPlanningEnabled == true
+        val estimator = snapshot?.roleRuntime?.battleValueEstimator
+        val profiles = snapshot?.roleRuntime?.profiles.orEmpty()
+        if (battleValueEstimator !== estimator || battleRoleProfiles !== profiles) {
+            planningEstimator = (estimator as? ContextualBattleValueEstimator)?.let { ModelBattlePassEstimator(it, profiles) }
+            planningEstimatorRevision++
+        }
+        battleValueEstimator = estimator
+        battleRoleProfiles = profiles
+        battleStrategySettingsSnapshot = snapshot?.settings ?: LabyrinthStrategySettings()
+        eventCustomizationEnabledSnapshot = snapshot?.settings?.eventCustomizationEnabled == true
+        eventChoiceOverridesSnapshot = snapshot?.settings?.effectiveEventChoiceOverrides()?.toMap().orEmpty()
+        snapshot?.let {
+            configuredBossTeamMode = snapshot.settings.bossTeamMode
+            bossTeamMode = configuredBossTeamMode
+            preferPureBossDamageSystem = snapshot.settings.preferPureBossDamageSystem
+            specialEquipmentSettings = snapshot.settings
+            responseIntervalMillis = snapshot.settings.responseIntervalMillis.toLong()
+            singleBossFallbackToMultiAfterThreeFailures =
+                snapshot.settings.singleBossFallbackToMultiAfterThreeFailures
+            singleBossRetryCountBeforeMulti = snapshot.settings.singleBossRetryCountBeforeMulti
+            rerollAfterThreeBattleFailures = snapshot.settings.rerollAfterThreeBattleFailures
+            relicChoicePolicy = snapshot.settings.relicPolicy()
+            shopPolicy = LabyrinthShopPolicy(
+                relicChoicePolicy = relicChoicePolicy,
+                finalArea = snapshot.settings.refreshFromArea,
+                buyRelics = snapshot.settings.buyRelics,
+                refreshEnabled = snapshot.settings.refreshShop,
+                planningInputs = { buildRunPlanningContext(shopDomain.observedAlphaCoin) to planningAcquiredIds() },
+                observeDecision = ::publishShopPlanningDecision,
+            )
+            configuredOpeningRosters = snapshot.settings.openingRosters
+            roleDisplayNames = snapshot.roleRuntime?.document?.characters
+                ?.associate { it.characterId to it.displayName }
+                .orEmpty()
+            roleRewardChoicePlanner = snapshot.roleRuntime?.rewardChoicePlanner
+            eventChoicePlanner = snapshot.roleRuntime?.eventChoicePlanner?.withExtensionPack(
+                sessionPacks.extensionPack, sessionPacks.ruleProvenance)
+            battleTeamRecommendationPlanner = snapshot.roleRuntime?.let {
+                it.battleTeamRecommendationPlanner.withBattleValueEstimator(it.battleValueEstimator)
+            }
+            battleTeamSelectionPlanner = snapshot.roleRuntime?.battleTeamSelectionPlanner
+        }
+    }
+
+    private fun planningAcquiredIds(): Set<String> =
+        (_state.value.joinedCharacters.map(LabyrinthJoinedCharacter::characterId) +
+            synchronized(pendingAcquiredCharacterIds) { pendingAcquiredCharacterIds.toList() })
+            .mapTo(linkedSetOf(), ::canonicalLabyrinthRoleId)
+
+    private fun buildRunPlanningContext(observedAlphaCoin: Int? = null): LabyrinthRunPlanningContext? {
+        if (!pathBPlanningEnabled) return null
+        val route = validatedRoute ?: return null
+        val current = _state.value
+        val relicIds = current.observedRelics.mapNotNull { it.relicId.toIntOrNull() }.toSet()
+        return LabyrinthRunPlanningContext.fromRoute(
+            enabled = true,
+            route = route,
+            allNodes = route.toLabyrinthRoute().nodes,
+            currentArea = activeNodeArea ?: current.routeProgress?.currentArea,
+            observedRelicIds = relicIds,
+            markStacks = relicChoicePolicy.markStacks(current.observedRelics, relicMarkStackCalibration),
+            reviveAvailable = 50002 in relicIds && !battleRelicReviveConsumed,
+            alphaRupee = observedAlphaCoin,
+            passEstimator = planningEstimator,
+            estimatorTag = planningEstimatorRevision.toString(),
+        )
+    }
+
+    private fun publishPathBDecision(source: String?, title: String, target: String, detail: String) {
+        val summary = source?.takeIf { it.startsWith("PathB") }?.let {
+            LabyrinthPathBDecisionSummary(it, title, target, detail)
+        }
+        val current = _state.value
+        if (current.pathBDecisionSummary != summary) _state.value = current.copy(pathBDecisionSummary = summary)
+    }
+
+    private fun publishShopPlanningDecision(decision: LabyrinthShopDecision) {
+        when (decision) {
+            is LabyrinthShopDecision.BuyRelic -> publishPathBDecision(decision.planningSource, "商店",
+                "购买${decision.relicDecision.choice.displayName ?: decision.relicDecision.choice.relicId}",
+                decision.relicDecision.reason)
+            is LabyrinthShopDecision.BuyRoleImprint ->
+                publishPathBDecision(decision.planningSource, "商店", "购买${decision.label}", decision.reason)
+            is LabyrinthShopDecision.Refresh -> publishPathBDecision(decision.planningSource, "商店", "刷新", decision.reason)
+            is LabyrinthShopDecision.Close -> publishPathBDecision(decision.planningSource, "商店", "退出", decision.reason)
+            is LabyrinthShopDecision.Wait -> Unit
+        }
+    }
+
+    private fun battleModelInputs(
+        kind: LabyrinthCombatKind?,
+        area: Int?,
+        exEncounterStrategy: LabyrinthExEncounterStrategy?,
+        observedRelics: List<LabyrinthObservedRelic>,
+        markStacks: Map<LabyrinthRelicMark, Int>,
+    ): BattleModelInputs {
+        val route = validatedRoute
+        val relicIds = observedRelics.map(LabyrinthObservedRelic::relicId)
+        return BattleModelInputs(
+            questId = labyrinthActiveBattleQuestId(kind, route, area, exEncounterStrategy),
+            difficulty = route?.difficulty,
+            relicIds = relicIds.mapNotNull(String::toIntOrNull).distinct().sorted(),
+            markStacks = markStacks,
+            reviveAvailable = "50002" in relicIds && !battleRelicReviveConsumed,
+            estimator = battleValueEstimator,
+            exEncounterId = if (kind == LabyrinthCombatKind.EX) exEncounterStrategy?.id else null,
+        )
+    }
+
     /** Builds the recommendation consumed by the guarded battle-team execution stage. */
     private fun refreshBattleTeamRecommendation(
         sessionId: AutomationSessionId,
@@ -4801,11 +5013,14 @@ class LabyrinthEntryRecognitionSession(
             LabyrinthCombatKind.BOSS -> preferPureBossDamageSystem
             else -> false
         }
-        val defenseStacks = relicChoicePolicy.markStacks(
+        val markStacks = relicChoicePolicy.markStacks(
             current.observedRelics,
             relicMarkStackCalibration,
         )
-            .getValue(LabyrinthRelicMark.DEFENSE)
+        val defenseStacks = markStacks.getValue(LabyrinthRelicMark.DEFENSE)
+        val modelInputs = battleModelInputs(
+            currentCombatContext?.kind, battleArea, currentExEncounterStrategy, current.observedRelics, markStacks,
+        )
         val targetCount = encounterStrategy?.targetCount ?: currentCombatContext?.targetCount ?: 1
         val requestedBossTeamCount = if (
             currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
@@ -4881,7 +5096,7 @@ class LabyrinthEntryRecognitionSession(
             append(synchronized(failedBattleTeamSignatures) { failedBattleTeamSignatures.sorted().joinToString(";") })
             append("|used=")
             append(usedCharacterIds.sorted().joinToString(","))
-        }
+        } to modelInputs
         if (
             !balancedMode && cacheKey == lastBattleTeamRecommendationKey &&
             (current.battleTeamRecommendation != null ||
@@ -4917,17 +5132,34 @@ class LabyrinthEntryRecognitionSession(
         val retryNumber = battleRetryCount
         val unavailableReason = battleTeamRecommendationUnavailableReason
         val teamIndex = currentCombatContext?.teamIndex ?: 1
+        val profiles = battleRoleProfiles
+        val savedBossAssessment = plannedBossModelAssessment.takeIf { allowSupplementLead && retryNumber == 0 }
+        val savedBossTeams = if (savedBossAssessment == null) emptyList() else plannedBossModelTeams
         val computeRecommendation = {
-            labyrinthBalancedBattleRecommendation(planner, unavailableReason, eligibleCharacterIds,
-                decisionContext, failedSignatures, lastFailedSignature, retryNumber,
-                requestedBossTeamCount, allowSupplementLead, teamIndex)
+            val plannedRecommendation = savedBossAssessment?.let {
+                planner?.plannedBossRecommendation(
+                    savedBossTeams, it, teamIndex, modelInputs.questId, eligibleCharacterIds, failedSignatures, decisionContext,
+                )
+            }
+            if (plannedRecommendation != null) {
+                LabyrinthBalancedBattlePlanningOutput(plannedRecommendation, true)
+            } else {
+                val battleValueContext = modelInputs.valueContext(acquiredCharacterIds, profiles, decisionContext)
+                val modelFallbackTrace = if (battleValueContext == null) {
+                    modelInputs.skipTrace(currentCombatContext?.kind, battleArea, acquiredCharacterIds, profiles, decisionContext)
+                } else null
+                labyrinthBalancedBattleRecommendation(planner, unavailableReason, eligibleCharacterIds,
+                    decisionContext, failedSignatures, lastFailedSignature, retryNumber,
+                    requestedBossTeamCount, allowSupplementLead, teamIndex, battleValueContext, modelFallbackTrace)
+            }
         }
         val output = if (balancedMode) {
             val key = listOf(sessionId, roleDecisionGeneration.get(), balancedSceneEpoch, planner,
                 acquiredCharacterIds.toList(), eligibleCharacterIds.toList(), decisionContext,
                 failedSignatures.toList(), lastFailedSignature, retryNumber, requestedBossTeamCount,
                 allowSupplementLead, bossTeamMode, bossMultiTeamTargetCount, currentCombatContext,
-                usedCharacterIds.toList(), savedFrontlineMode, requestedFrontlineMode, candidateSelection)
+                usedCharacterIds.toList(), savedFrontlineMode, requestedFrontlineMode, candidateSelection,
+                modelInputs, savedBossAssessment)
             val ready = battlePlanning.request(key, computeRecommendation)
             if (ready == null || (balancedDetailCapturedAt ?: Long.MIN_VALUE) <= battlePlanning.readyAt) {
                 battleFormationExhaustedReason = null
@@ -4969,12 +5201,18 @@ class LabyrinthEntryRecognitionSession(
                     currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
                     bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM
                 ) {
-                    val teamIndex = currentCombatContext.teamIndex.coerceIn(1, 3)
-                    val absoluteTarget = (teamIndex - 1 + recommendation.plannedBossTeamCount).coerceIn(teamIndex, 3)
+                    val bossTeamIndex = teamIndex.coerceIn(1, 3)
+                    val absoluteTarget = (bossTeamIndex - 1 + recommendation.plannedBossTeamCount).coerceIn(bossTeamIndex, 3)
                     if (bossMultiTeamTargetCount == null || teamIndex == 1) {
                         bossMultiTeamTargetCount = absoluteTarget
                     } else if (savedFrontlineMode == LabyrinthFrontlineSurvivalMode.VERY_AGGRESSIVE) {
                         bossMultiTeamTargetCount = minOf(bossMultiTeamTargetCount!!, absoluteTarget)
+                    }
+                    if (teamIndex == 1) {
+                        plannedBossModelAssessment = recommendation.modelAssessment?.takeIf {
+                            it.adopted && it.plannedTeams.size > 1
+                        }
+                        plannedBossModelTeams = plannedBossModelAssessment?.plannedTeams.orEmpty()
                     }
                 }
                 _state.value = current.copy(
@@ -4990,6 +5228,7 @@ class LabyrinthEntryRecognitionSession(
             }
 
             is LabyrinthBattleTeamRecommendationResult.Unavailable -> {
+                if (teamIndex == 1) clearPlannedBossModelTeams()
                 battleFormationState.observe(
                     savedFrontlineMode, teamIndex, recommendationResult.formationMode,
                     recommendationResult.formationFallbackReason,
@@ -5269,6 +5508,7 @@ class LabyrinthEntryRecognitionSession(
                         initialStartExecuted = true
                         openingStateReset.set(false)
                         openingRelicBaselineKnown = false
+                        battleRelicReviveConsumed = false
                     }
                     if (decision.kind == LabyrinthEntryActionKind.RESUME_DAWN_REALM) {
                         // The next page may be the node map, a choice page, or an unfinished
@@ -5392,6 +5632,21 @@ class LabyrinthEntryRecognitionSession(
 
     private val currentShopArea get() = activeNodeArea ?: _state.value.routeProgress?.currentArea
 
+    private fun currentRelicChoice(result: LabyrinthEntryFrameResult): LabyrinthRelicChoiceDecision? =
+        relicChoicePolicy.choose(
+            acquired = _state.value.observedRelics,
+            candidates = result.relicChoiceSelection?.choices.orEmpty(),
+            lockedFocus = relicFocusMark,
+            calibratedStacks = relicMarkStackCalibration,
+            currentArea = currentShopArea,
+            planningContext = buildRunPlanningContext(),
+            acquiredCharacterIds = planningAcquiredIds(),
+        )
+
+    private fun publishRelicPlanningDecision(decision: LabyrinthRelicChoiceDecision) =
+        publishPathBDecision(decision.planningSource, "遗物选择",
+            decision.choice.displayName ?: decision.choice.relicId.orEmpty(), decision.reason)
+
     private fun currentShopDecision(result: LabyrinthEntryFrameResult) =
         shopDomain.currentShopDecision(result, shopPolicy, currentShopArea, _state.value.observedRelics, relicMarkStackCalibration)
 
@@ -5494,7 +5749,8 @@ class LabyrinthEntryRecognitionSession(
             battleWait.reset()
             return false
         }
-        val restartSafeBossContext = combatContext ?: labyrinthPersistedBossNode(validatedRoute)?.let {
+        val persistedBossNode = if (combatContext == null) labyrinthPersistedBossNode(validatedRoute) else null
+        val restartSafeBossContext = combatContext ?: persistedBossNode?.let {
             LabyrinthCombatContext(LabyrinthCombatKind.BOSS)
         }
         val bossSettlementNextRect = labyrinthBossSettlementNextButtonRect(
@@ -5506,6 +5762,7 @@ class LabyrinthEntryRecognitionSession(
         if (bossSettlementNextRect != null) {
             if (combatContext?.kind != LabyrinthCombatKind.BOSS) {
                 activeNodeType = LabyrinthNodeTypes.BOSS
+                activeNodeArea = activeNodeArea ?: persistedBossNode?.area
                 combatContext = restartSafeBossContext
                 _state.value = _state.value.copy(combatContext = combatContext)
             }
@@ -5819,6 +6076,7 @@ class LabyrinthEntryRecognitionSession(
             combatContext?.kind != LabyrinthCombatKind.BOSS
         ) {
             activeNodeType = LabyrinthNodeTypes.BOSS
+            activeNodeArea = activeNodeArea ?: persistedBossNode?.area
             combatContext = LabyrinthCombatContext(
                 kind = LabyrinthCombatKind.BOSS,
                 teamIndex = 1,
@@ -6242,12 +6500,14 @@ class LabyrinthEntryRecognitionSession(
             .plus(selectedIds)
             .toSet()
         val context = LabyrinthRoleDecisionContext(defenseMarkStacks = defenseStacks)
+        val planningContext = buildRunPlanningContext()
         val decision = if (balancedMode) {
             val candidates = viewport.visibleCharacters.toList()
             val key = listOf(sessionId, roleDecisionGeneration.get(), balancedSceneEpoch, planner,
                 candidates.sortedWith(compareBy({ it.screenRect.top }, { it.screenRect.left }))
-                    .map { listOf(it.characterId, it.trusted, it.selected) }, acquiredIds.toList(), context)
-            val ready = freeRolePlanning.request(key) { planner.decideFreeVisibleRole(candidates, acquiredIds, context) }
+                    .map { listOf(it.characterId, it.trusted, it.selected) }, acquiredIds.toList(), context,
+                planningContext?.cacheFingerprint)
+            val ready = freeRolePlanning.request(key) { planner.decideFreeVisibleRole(candidates, acquiredIds, context, planningContext) }
             if (ready == null || (balancedDetailCapturedAt ?: Long.MIN_VALUE) <= freeRolePlanning.readyAt) {
                 _state.value = _state.value.copy(message = "事件自由选角规划中，等待返回后的新详细帧")
                 return
@@ -6266,6 +6526,7 @@ class LabyrinthEntryRecognitionSession(
             candidates = viewport.visibleCharacters,
             acquiredCharacterIds = acquiredIds,
             context = context,
+            planningContext = planningContext,
         )
         when (decision) {
             is LabyrinthRoleRewardChoiceDecision.Wait -> {
@@ -6275,6 +6536,8 @@ class LabyrinthEntryRecognitionSession(
             }
 
             is LabyrinthRoleRewardChoiceDecision.Select -> {
+                publishPathBDecision(decision.planningSource, "事件自由选角", decision.displayName,
+                    decision.explanation.joinToString("；"))
                 if (!decision.actionSafe) {
                     noteEventFreeRoleBlocked(
                         sessionId,
@@ -7054,13 +7317,8 @@ class LabyrinthEntryRecognitionSession(
                         pendingRelicSelection = null
                         nodeLog("relic-choice-retry attempts=$relicChoiceCommitAttempts", warning = true)
                     }
-                    relicChoicePolicy.choose(
-                        acquired = _state.value.observedRelics,
-                        candidates = result.relicChoiceSelection?.choices.orEmpty(),
-                        lockedFocus = relicFocusMark,
-                        calibratedStacks = relicMarkStackCalibration,
-                        currentArea = _state.value.routeProgress?.currentArea,
-                    )?.let { decision ->
+                    currentRelicChoice(result)?.let { decision ->
+                        publishRelicPlanningDecision(decision)
                         if (!relicIdentityGate.confirmed(decision.choice)) return@let null
                         val mark = LabyrinthRelicMark.fromLabel(decision.choice.attribute)
                         val cardConfirmed = decision.choice.currentMarkStacks != null &&
@@ -7361,6 +7619,7 @@ class LabyrinthEntryRecognitionSession(
         if (observation.bossTeamIndex != null && combatContext?.kind == LabyrinthCombatKind.BOSS) {
             if (bossEditorPreparationStage == LabyrinthBossEditorPreparationStage.INACTIVE) {
                 // Also recovers a session that entered an already-open Boss editor directly.
+                clearPlannedBossModelTeams()
                 bossEditorPreparationStage = LabyrinthBossEditorPreparationStage.TEAM_1
                 bossEditorBlocked = false
                 pendingBossTeamAdvance = null
@@ -7372,6 +7631,7 @@ class LabyrinthEntryRecognitionSession(
                 )
                 bossEditorPreparationStage = preparation.stage
                 if (preparation.stage == LabyrinthBossEditorPreparationStage.COMPLETE) {
+                    clearPlannedBossModelTeams()
                     bossEditorTeamIndex = 1
                     bossEditorBlocked = false
                     pendingBossTeamAdvance = null
@@ -7406,6 +7666,7 @@ class LabyrinthEntryRecognitionSession(
             // but stopping here permanently makes the automation unrecoverable. Re-enter the
             // existing Boss editor preparation flow instead: it clears all three tabs and returns
             // to team 1 before any new recommendation is allowed to execute.
+            clearPlannedBossModelTeams()
             bossEditorPreparationStage = LabyrinthBossEditorPreparationStage.TEAM_1
             bossEditorTeamIndex = observation.bossTeamIndex
             bossEditorBlocked = false
@@ -8479,10 +8740,11 @@ class LabyrinthEntryRecognitionSession(
             LabyrinthCombatKind.BOSS -> preferPureBossDamageSystem
             else -> false
         }
-        val defenseStacks = relicChoicePolicy.markStacks(
+        val markStacks = relicChoicePolicy.markStacks(
             current.observedRelics,
             relicMarkStackCalibration,
-        ).getValue(LabyrinthRelicMark.DEFENSE)
+        )
+        val defenseStacks = markStacks.getValue(LabyrinthRelicMark.DEFENSE)
         val targetCount = encounterStrategy?.targetCount ?: context.targetCount
         val requestedFrontlineMode = battleFormationState.requestedMode(
             battleStrategySettingsSnapshot.effectiveFrontlineSurvivalMode,
@@ -8515,7 +8777,14 @@ class LabyrinthEntryRecognitionSession(
         }
         val teamIndex = context.teamIndex
         val unavailableReason = battleTeamRecommendationUnavailableReason
+        val modelInputs = battleModelInputs(
+            context.kind, battleArea, currentExEncounterStrategy, current.observedRelics, markStacks,
+        )
         val computeFeasibility = {
+            val battleValueContext = modelInputs.valueContext(acquiredCharacterIds, battleRoleProfiles, decisionContext)
+            val modelFallbackTrace = if (battleValueContext == null) {
+                modelInputs.skipTrace(context.kind, battleArea, acquiredCharacterIds, battleRoleProfiles, decisionContext)
+            } else null
             labyrinthBalancedBattleRecommendation(
                 planner = planner,
                 unavailableReason = unavailableReason,
@@ -8527,6 +8796,8 @@ class LabyrinthEntryRecognitionSession(
                 requestedBossTeamCount = requestedBossTeamCount,
                 allowSupplementLead = false,
                 teamIndex = teamIndex,
+                battleValueContext = battleValueContext,
+                modelFallbackTrace = modelFallbackTrace,
             )
         }
         val output = if (balancedMode) {
@@ -8544,6 +8815,7 @@ class LabyrinthEntryRecognitionSession(
                 requestedBossTeamCount,
                 context.kind,
                 bossTeamMode,
+                modelInputs,
             )
             val ready = battleRetryPlanning.request(key, computeFeasibility)
             if (ready == null || (balancedDetailCapturedAt ?: Long.MIN_VALUE) <= battleRetryPlanning.readyAt) {
@@ -8572,7 +8844,13 @@ class LabyrinthEntryRecognitionSession(
         }
     }
 
+    private fun clearPlannedBossModelTeams() {
+        plannedBossModelTeams = emptyList()
+        plannedBossModelAssessment = null
+    }
+
     private fun resetBattleRetryTracking() {
+        clearPlannedBossModelTeams()
         battleFormationState.reset()
         battleFormationExhaustedReason = null
         battleRetryCount = 0
@@ -8929,8 +9207,8 @@ class LabyrinthEntryRecognitionSession(
                         LabyrinthPostEntryActionKind.BATTLE_FAILURE_NEXT -> {
                             // "下一步" advances the relic-revive chain, it does not retry: spending
                             // the retry budget or clearing the failed-team books here would book the
-                            // run wrongly. Only cancel the battle wait and reset the frame budget,
-                            // so the "遗物效果结果" popup that follows is handled as a new page.
+                            // run wrongly. Reset the wait and frame budget for "遗物效果结果".
+                            battleRelicReviveConsumed = true
                             battleWait.reset()
                             postEntryStableFrames = 0
                             postEntryAttempts = 0
@@ -8959,6 +9237,7 @@ class LabyrinthEntryRecognitionSession(
                                 battleRetryPlanning.invalidate()
                             }
                             battleWait.reset()
+                            clearPlannedBossModelTeams()
                             bossEditorTeamIndex = null
                             pendingBossTeamAdvance = null
                             bossEditorBlocked = false
@@ -9074,6 +9353,7 @@ class LabyrinthEntryRecognitionSession(
     }
 
     private fun resetNodeExecutionState() {
+        battleRelicReviveConsumed = false
         resetKernelRoute("route_reset")
         mapDomain.reset(kernelRuntime.traceId)
         battleDomain.reset(kernelRuntime.traceId)
@@ -9172,6 +9452,7 @@ class LabyrinthEntryRecognitionSession(
         preparedBossFirstTeamIds = emptyList()
         bossMultiTeamTargetCount = null
         activeNodeType = null
+        activeNodeArea = null
         eventActionAttempts = 0
         activeNodeArea = null
         _state.value = _state.value.copy(
@@ -10904,13 +11185,7 @@ class LabyrinthEntryRecognitionSession(
                     if (lockedRelic != null) {
                         add("已派发遗物选择（等待确认）：${lockedRelic.displayName ?: lockedRelic.relicId}")
                     }
-                    relicChoicePolicy.choose(
-                        acquired = current.observedRelics,
-                        candidates = relics.choices,
-                        calibratedStacks = relicMarkStackCalibration,
-                        currentArea = current.routeProgress?.currentArea,
-                        lockedFocus = relicFocusMark,
-                    )?.takeIf { lockedRelic == null }?.let { decision ->
+                    if (lockedRelic == null) currentRelicChoice(result)?.let { decision ->
                         add("当前建议：${decision.choice.displayName ?: "未收录"} · ${decision.reason}")
                     }
                 }

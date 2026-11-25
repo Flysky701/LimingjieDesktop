@@ -1,5 +1,8 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.kernel.strategy.LabyrinthBattleValueEstimator
+import com.landosol.toolbox.labyrinth.kernel.strategy.RuleBattleValueEstimator
+
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -44,7 +47,13 @@ data class LabyrinthRoleDecisionRuntime(
     val teamPlanSearcher: LabyrinthTeamPlanSearcher,
     val battleTeamRecommendationPlanner: LabyrinthBattleTeamRecommendationPlanner,
     val battleTeamSelectionPlanner: LabyrinthBattleTeamSelectionPlanner,
-)
+    val battleValueEstimator: LabyrinthBattleValueEstimator,
+) {
+    fun withBattleValueEstimator(estimator: LabyrinthBattleValueEstimator): LabyrinthRoleDecisionRuntime = copy(
+        battleValueEstimator = estimator,
+        battleTeamRecommendationPlanner = battleTeamRecommendationPlanner.withBattleValueEstimator(estimator),
+    )
+}
 
 sealed interface LabyrinthRoleDecisionDataResult {
     data class Ready(val runtime: LabyrinthRoleDecisionRuntime) : LabyrinthRoleDecisionDataResult
@@ -87,6 +96,7 @@ object LabyrinthRoleDecisionDataParser {
         val optimizer = LabyrinthTeamOptimizer(scorer)
         val policy = LabyrinthRoleChoicePolicy(optimizer, document.roleChoice)
         val teamPlanSearcher = LabyrinthTeamPlanSearcher(optimizer, document.teamPlan)
+        val battleValueEstimator = RuleBattleValueEstimator(scorer)
         return LabyrinthRoleDecisionRuntime(
             document = document,
             profiles = profiles,
@@ -96,8 +106,11 @@ object LabyrinthRoleDecisionDataParser {
             battleTeamRecommendationPlanner = LabyrinthBattleTeamRecommendationPlanner(
                 profiles = profiles,
                 teamPlanSearcher = teamPlanSearcher,
+                scorer = scorer,
+                battleValueEstimator = battleValueEstimator,
             ),
             battleTeamSelectionPlanner = LabyrinthBattleTeamSelectionPlanner(profiles),
+            battleValueEstimator = battleValueEstimator,
         )
     }
 }

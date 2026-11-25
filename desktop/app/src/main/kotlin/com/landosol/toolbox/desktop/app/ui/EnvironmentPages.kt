@@ -16,6 +16,7 @@ import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.automation.GameClientResolution
 import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.desktop.app.adapters.device.inProgress
+import com.landosol.toolbox.desktop.app.strategy.BattleModelHealth
 import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
 import com.landosol.toolbox.desktop.platform.*
@@ -160,6 +161,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
     val saved by graph.settings.state.collectAsState()
     val device by graph.device.state.collectAsState()
     val ocr by graph.ocr.status.collectAsState()
+    val battleModel by graph.battleModel.collectAsState()
     val ready = (device as? DeviceConnectionState.Ready)?.device
     val actions = rememberActions(graph)
     var encryption by remember { mutableStateOf("尚未检查") }
@@ -176,6 +178,72 @@ import javax.swing.filechooser.FileNameExtensionFilter
             Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(14.dp)) {
         Message(actions.message)
         if(group=="外观与通知")AppearanceSettings(graph)
+        if (group == "运行环境") Panel("迷宫战斗价值估计") {
+            var bundlePath by remember(saved.battleOnnxBundlePath) { mutableStateOf(saved.battleOnnxBundlePath) }
+            fun saveBundlePath(path: String) {
+                bundlePath = path
+                actions.run { graph.settings.update { it.copy(battleOnnxBundlePath = path.trim()) } }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(saved.battleOnnxEnabled, { enabled ->
+                    actions.run { graph.settings.update { it.copy(battleOnnxEnabled = enabled) } }
+                }, enabled = !actions.working)
+                Text("使用本地 ONNX 战斗选队模型（EX / Boss 生效，下局生效）")
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(saved.pathBPlanningEnabled, { enabled ->
+                    actions.run { graph.settings.update { it.copy(pathBPlanningEnabled = enabled) } }
+                }, enabled = !actions.working)
+                Text("启用 Path B 全局收益规划（角色/遗物/商店/事件，下局生效）")
+            }
+            Text("搭配 ONNX 战斗模型按官方分与 Boss 通率估值；模型关闭时使用官方分与规则兜底", color = Muted,
+                style = MaterialTheme.typography.bodySmall)
+            val modelState = when (battleModel.health) {
+                BattleModelHealth.DISABLED -> battleModel.health.label
+                BattleModelHealth.READY, BattleModelHealth.LOADED ->
+                    battleModel.health.label + battleModel.bundleId?.let { "（$it）" }.orEmpty()
+                BattleModelHealth.FAILED, BattleModelHealth.FALLBACK ->
+                    battleModel.health.label + battleModel.detail?.let { "：$it" }.orEmpty()
+            }
+            Detail("模型状态", modelState)
+            Detail("生效目录", "${battleModel.resolvedPath.ifBlank { "未解析" }}（${battleModel.source.label}）")
+            if (battleModel.health == BattleModelHealth.DISABLED) {
+                battleModel.detail?.let { Text(it, color = Muted, style = MaterialTheme.typography.bodySmall) }
+            }
+            if (battleModel.overriddenByEnv) {
+                Text("当前路径由环境变量或 JVM 参数覆盖，下方自定义目录暂不生效。",
+                    color = com.landosol.toolbox.desktop.app.ui.theme.LocalDesktopColors.current.warn,
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            OutlinedTextField(
+                bundlePath, { bundlePath = it },
+                label = { Text("本地模型目录") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = !actions.working,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    val chooser = JFileChooser().apply {
+                        dialogTitle = "选择本地模型目录"
+                        fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                        bundlePath.trim().takeIf { it.isNotEmpty() }?.let { selectedFile = File(it) }
+                    }
+                    if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+                        saveBundlePath(chooser.selectedFile.absolutePath)
+                    }
+                }, enabled = !actions.working) { Text("选择目录") }
+                OutlinedButton(onClick = { saveBundlePath(bundlePath.trim()) },
+                    enabled = !actions.working && bundlePath.trim() != saved.battleOnnxBundlePath) { Text("保存") }
+                TextButton(onClick = { saveBundlePath("") },
+                    enabled = !actions.working && (bundlePath.isNotEmpty() || saved.battleOnnxBundlePath.isNotEmpty())) {
+                    Text("恢复默认")
+                }
+            }
+            OutlinedButton(onClick = {
+                actions.run { actions.message = graph.messageRequest(ControlOps.BATTLE_MODEL_CHECK) }
+            }, enabled = !actions.working) { Text("校验并重载") }
+        }
         if(group=="运行环境"&&shared)Panel("运行环境"){
             Text("各设备的连接、画面尺寸、触控和游戏客户端信息统一在设备管理中查看。",color=Muted)
             OutlinedButton(onClick=openDevices){Text("打开设备管理")}

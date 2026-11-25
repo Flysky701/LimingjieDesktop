@@ -1,12 +1,13 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.kernel.planning.ScoreSettings
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/** 只描述已保存路线的结构，不做收益估算；数值含义见各字段注释。 */
+/** 已保存路线的结构与官方分数模式的结算估算。 */
 @Serializable
 data class LabyrinthRoutePreview(
     val enterId: Long,
@@ -19,6 +20,8 @@ data class LabyrinthRoutePreview(
     val issues: List<String> = emptyList(),
     val floors: List<LabyrinthRoutePreviewFloor> = emptyList(),
     val note: String = "仅路线结构，不含收益估算",
+    val expectedScore: Double? = null,
+    val hardUpperBound: Long? = null,
 )
 
 @Serializable
@@ -40,12 +43,11 @@ data class LabyrinthRoutePreviewNode(
 )
 
 /**
- * 从保存的路线快照生成预览。只沿 [LabyrinthRouteJson.nodes] 与 [LabyrinthRouteJson.allNodes]
- * 做结构核对，不读取识别帧、不估算分数，因此可以安全地在后台线程随路线变化重建。
+ * 从保存的路线快照生成预览。官方分数只按已保存节点与难度估算。
  */
 object LabyrinthRoutePreviewBuilder {
     fun build(route: LabyrinthRouteJson): LabyrinthRoutePreview {
-        val mode = runCatching { LabyrinthRouteEvaluationMode.valueOf(route.routeEvaluationMode) }.getOrNull()
+        val mode = route.evaluationMode
         val specified = specifiedColumns(route)
         val issues = mutableListOf<String>()
         val nodes = route.nodes
@@ -92,6 +94,21 @@ object LabyrinthRoutePreviewBuilder {
             )
         }
 
+        val score = if (mode == LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP && issues.isEmpty()) {
+            val settings = ScoreSettings.currentOfficial()
+            if (route.difficulty in settings.scoreRates && nodes.all { it.area in settings.blockPts }) {
+                // Keep only the saved path, including its chosen entries into subsequent areas.
+                val path = nodes.mapIndexed { index, node ->
+                    val next = nodes.getOrNull(index + 1)
+                    node.toLabyrinthMapNode().copy(
+                        nextBlockIds = listOfNotNull(next?.blockId),
+                        isAreaLastPoint = next?.area != node.area,
+                    )
+                }
+                scoreRouteOfficialDp(path, route.difficulty, settings)
+            } else null
+        } else null
+
         return LabyrinthRoutePreview(
             enterId = route.enterId,
             guildId = route.guildId,
@@ -102,6 +119,13 @@ object LabyrinthRoutePreviewBuilder {
             topologyVerified = issues.isEmpty(),
             issues = issues,
             floors = floors,
+            note = when {
+                score != null -> "官方预计分 ${score.expectedScore.toLong()} · 路线上限 ${score.hardUpperBound}（假设战斗全胜）"
+                mode == LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP -> "官方分数暂不可用"
+                else -> "仅路线结构，不含收益估算"
+            },
+            expectedScore = score?.expectedScore,
+            hardUpperBound = score?.hardUpperBound,
         )
     }
 

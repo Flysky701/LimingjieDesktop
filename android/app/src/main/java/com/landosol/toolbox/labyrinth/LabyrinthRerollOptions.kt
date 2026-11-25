@@ -15,6 +15,7 @@ enum class LabyrinthThirdBlockChoice(val label: String) {
 
 enum class LabyrinthRouteEvaluationMode(val label: String) {
     VALUE_ROUTE("价值路线 v2"),
+    OFFICIAL_SCORE_DP("官方分数 DP"),
     LEGACY_TEMPLATE("旧版固定模板"),
     CUSTOM_NODES("自定义节点"),
 }

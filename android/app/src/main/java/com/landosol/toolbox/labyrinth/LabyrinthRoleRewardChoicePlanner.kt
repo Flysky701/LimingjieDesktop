@@ -1,11 +1,32 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthRunPlanningContext
+import com.landosol.toolbox.labyrinth.kernel.planning.PlanningState
+import com.landosol.toolbox.labyrinth.kernel.planning.RoleChoiceEval
+import com.landosol.toolbox.labyrinth.kernel.planning.evaluateRoleChoices
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import com.landosol.toolbox.labyrinth.vision.EntryReferenceRect
 import com.landosol.toolbox.labyrinth.vision.EntryReferenceSize
 import com.landosol.toolbox.labyrinth.vision.LabyrinthBattleCharacterMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthCharacterMatch
 import com.landosol.toolbox.labyrinth.vision.ReferenceFitMapper
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.abs
+
+internal fun LabyrinthRunPlanningContext.planningState(acquiredIds: Set<String>) = PlanningState(
+    difficulty, currentArea, acquiredIds, observedRelicIds, markStacks, remainingShops,
+    enhanceNode21, reviveAvailable, alphaRupee,
+)
+
+internal fun pathBSource(usedModel: Boolean) = if (usedModel) "PathB-NN" else "PathB-官方分"
+
+internal fun <T> tryPathB(evaluate: () -> T): T? = try {
+    evaluate()
+} catch (cancelled: CancellationException) {
+    throw cancelled
+} catch (_: Exception) {
+    null
+}
 
 /**
  * Role-reward cards are large, stationary portraits with a visible name row.  Do not inherit the
@@ -35,6 +56,7 @@ sealed interface LabyrinthRoleRewardChoiceDecision {
         /** False means this is a visible recommendation only; live mode must not tap it. */
         val actionSafe: Boolean = true,
         val safetyNote: String? = null,
+        val planningSource: String? = null,
     ) : LabyrinthRoleRewardChoiceDecision
 
     data class Wait(
@@ -62,6 +84,7 @@ class LabyrinthRoleRewardChoicePlanner(
         context: LabyrinthRoleDecisionContext,
         frameWidth: Int,
         frameHeight: Int,
+        planningContext: LabyrinthRunPlanningContext? = null,
     ): LabyrinthRoleRewardChoiceDecision {
         val bySlot = candidates.associateBy(LabyrinthCharacterMatch::slotId)
         val ordered = SLOT_IDS.mapNotNull(bySlot::get)
@@ -100,22 +123,29 @@ class LabyrinthRoleRewardChoicePlanner(
             requireStrictProfiles = false,
         )
         return when (choice) {
-            is LabyrinthOneRoleDecision.Ready -> choice.toSelection(
-                candidates = safeCandidates,
-                frameWidth = frameWidth,
-                frameHeight = frameHeight,
-                actionSafe = true,
-                safetyNote = buildList {
-                    weak.singleOrNull()?.let { failed ->
-                        add(
-                            "${failed.slotId}头像未达到安全线，已忽略该卡并在剩余2个可靠候选中选择",
-                        )
-                    }
-                    incompleteIds.takeIf { it.isNotEmpty() }?.let {
-                        add("部分角色资料不完整，按已有信息评分：${it.joinToString()}")
-                    }
-                }.takeIf { it.isNotEmpty() }?.joinToString("；"),
-            )
+            is LabyrinthOneRoleDecision.Ready -> {
+                val best = pathBChoice(planningContext, canonicalAcquiredIds - candidateIds.toSet(),
+                    choice.rankings.map { it.characterId })
+                toSelection(
+                    chosen = best?.let { knownProfiles.getValue(it.characterId) } ?: choice.chosen,
+                    reasons = best?.let {
+                        listOf(it.explain()) + choice.reasons.filter { reason -> reason.startsWith("画面候选") }
+                    } ?: choice.reasons,
+                    planningSource = best?.let { pathBSource(it.usedModel) } ?: "规则回退",
+                    candidates = safeCandidates,
+                    frameWidth = frameWidth,
+                    frameHeight = frameHeight,
+                    actionSafe = true,
+                    safetyNote = buildList {
+                        weak.singleOrNull()?.let { failed ->
+                            add("${failed.slotId}头像未达到安全线，已忽略该卡并在剩余2个可靠候选中选择")
+                        }
+                        incompleteIds.takeIf { it.isNotEmpty() }?.let {
+                            add("部分角色资料不完整，按已有信息评分：${it.joinToString()}")
+                        }
+                    }.takeIf { it.isNotEmpty() }?.joinToString("；"),
+                )
+            }
             is LabyrinthOneRoleDecision.Unavailable -> LabyrinthRoleRewardChoiceDecision.Wait(choice.reason)
         }
     }
@@ -133,16 +163,19 @@ class LabyrinthRoleRewardChoicePlanner(
         candidates: List<LabyrinthBattleCharacterMatch>,
         acquiredCharacterIds: Set<String>,
         context: LabyrinthRoleDecisionContext,
+        planningContext: LabyrinthRunPlanningContext? = null,
     ): LabyrinthRoleRewardChoiceDecision {
+        val owned = acquiredCharacterIds.mapTo(hashSetOf(), ::canonicalLabyrinthRoleId)
         val trusted = candidates
             .asSequence()
             .filter { match ->
                 match.trusted &&
                     !match.selected &&
                     !match.characterId.isNullOrBlank() &&
-                    match.characterId !in acquiredCharacterIds
+                    canonicalLabyrinthRoleId(requireNotNull(match.characterId)) !in owned &&
+                    match.screenRect.width > 0 && match.screenRect.height > 0
             }
-            .distinctBy { it.characterId }
+            .distinctBy { canonicalLabyrinthRoleId(requireNotNull(it.characterId)) }
             .toList()
         if (trusted.isEmpty()) {
             return LabyrinthRoleRewardChoiceDecision.Wait("事件自由选角：当前视口没有可靠且未获得的角色")
@@ -150,28 +183,18 @@ class LabyrinthRoleRewardChoicePlanner(
 
         // A stale/partial character catalog must not make the whole page unusable.  Ignore only
         // candidates with no scoring profile and choose among the identities we can audit.
-        val scorable = trusted.mapNotNull { match ->
-            val profile = profiles[match.characterId] ?: return@mapNotNull null
-            val score = profile.effectiveUserScore ?: return@mapNotNull null
-            RankedVisibleRole(match, profile, score)
-        }
-        if (scorable.isEmpty()) {
+        val ranked = trusted.mapNotNull { match ->
+            val profile = profiles[canonicalLabyrinthRoleId(requireNotNull(match.characterId))] ?: return@mapNotNull null
+            RankedVisibleRole(match, profile, profile.effectiveUserScore)
+        }.sortedWith(compareByDescending<RankedVisibleRole> { it.score }
+            .thenBy { it.match.screenRect.top }.thenBy { it.match.screenRect.left })
+        val scorable = ranked.filter { it.score != null }
+        val pathB = pathBChoice(planningContext, owned, ranked.map { it.profile.characterId })
+        val best = pathB?.let { result -> ranked.first { it.profile.characterId == result.characterId } }
+            ?: scorable.firstOrNull()
+        if (best == null) {
             return LabyrinthRoleRewardChoiceDecision.Wait("事件自由选角：当前可靠角色均缺少评分资料")
         }
-        // Rank what is on screen by the role's own score and take the top one.
-        //
-        // This deliberately does not run the placement optimizer the three-card reward page uses.
-        // That search enumerates team combinations per candidate, and this page shows a whole
-        // roster rather than three cards, so the cost scales with the page. The list also only
-        // offers roles this run has not got yet, so the question here is simply "which of these
-        // is best", which the role score already answers. Repeated picks re-enter with the
-        // previous choice marked selected/acquired, so multi-pick events walk down this same
-        // ranking in order.
-        val best = scorable.maxWith(
-            compareBy<RankedVisibleRole> { it.score }
-                .thenByDescending { it.match.screenRect.top }
-                .thenByDescending { it.match.screenRect.left },
-        )
         val card = best.match.screenRect
         val addRect = EntryPixelRect(
             left = card.left + (card.width * 0.05f).toInt(),
@@ -179,28 +202,59 @@ class LabyrinthRoleRewardChoicePlanner(
             width = (card.width * 0.22f).toInt().coerceAtLeast(4),
             height = (card.height * 0.24f).toInt().coerceAtLeast(4),
         )
-        val runnerUp = scorable.filter { it !== best }.maxByOrNull(RankedVisibleRole::score)
+        val runnerUp = scorable.firstOrNull { it !== best }
         return LabyrinthRoleRewardChoiceDecision.Select(
             characterId = requireNotNull(best.match.characterId),
             displayName = best.profile.displayName,
             buttonRect = addRect,
-            explanation = listOfNotNull(
+            explanation = pathB?.let { listOf(it.explain(), "本页可识别未获得角色${ranked.size}名") } ?: listOfNotNull(
                 "当前页最高分：${best.profile.displayName} ${"%.1f".format(best.score)}",
                 runnerUp?.let { "次选${it.profile.displayName} ${"%.1f".format(it.score)}" },
                 "本页可识别未获得角色${scorable.size}名",
             ),
             actionSafe = true,
             safetyNote = null,
+            planningSource = pathB?.let { pathBSource(it.usedModel) } ?: "规则回退",
         )
     }
 
     private data class RankedVisibleRole(
         val match: LabyrinthBattleCharacterMatch,
         val profile: LabyrinthRoleProfile,
-        val score: Double,
+        val score: Double?,
     )
 
-    private fun LabyrinthOneRoleDecision.Ready.toSelection(
+    private fun pathBChoice(
+        planningContext: LabyrinthRunPlanningContext?,
+        owned: Set<String>,
+        ruleOrder: List<String>,
+    ): RoleChoiceEval? {
+        val planning = planningContext?.takeIf { it.enabled } ?: return null
+        if (ruleOrder.isEmpty()) return null
+        val ruleRank = ruleOrder.withIndex().associate { it.value to it.index }
+        val ranked = tryPathB {
+            evaluateRoleChoices(planning.planningState(owned), ruleOrder, planning.upcomingExams,
+                planning.passEstimator, planning.scoreSettings)
+        }?.takeIf { results ->
+            results.all { it.totalScore.isFinite() } &&
+                (results.all { it.usedModel } || results.none { it.usedModel })
+        } ?: return null
+        val best = ranked.firstOrNull() ?: return null
+        val contenders = ranked.takeWhile { abs(best.totalScore - it.totalScore) < 1e-6 }
+        if (contenders.size == ranked.size && contenders.size > 1) return null
+        return contenders.minByOrNull { ruleRank.getValue(it.characterId) }
+    }
+
+    private fun RoleChoiceEval.explain(): String {
+        val boss = if (usedModel) "，Boss通率 ${"%.0f".format(beforePassProb * 100)}%→${"%.0f".format(afterPassProb * 100)}%" else ""
+        return "${if (usedModel) "PathB(NN)" else "PathB(官方分)"}：预计总收益 ${"%+.1f".format(totalScore)} 分" +
+            "（收集 ${"%+.1f".format(collectionDeltaPts)} 分$boss）"
+    }
+
+    private fun toSelection(
+        chosen: LabyrinthRoleProfile,
+        reasons: List<String>,
+        planningSource: String,
         candidates: List<LabyrinthCharacterMatch>,
         frameWidth: Int,
         frameHeight: Int,
@@ -225,6 +279,7 @@ class LabyrinthRoleRewardChoicePlanner(
             explanation = reasons,
             actionSafe = actionSafe,
             safetyNote = safetyNote,
+            planningSource = planningSource,
         )
     }
 
