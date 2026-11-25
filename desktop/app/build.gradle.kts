@@ -38,6 +38,60 @@ tasks.test {
             }
     }
 }
+val bundledBattleModelName = "s4_m2b_r1_seed43"
+val bundledBattleModelChecksums = mapOf(
+    "tower_a.onnx" to "0c5470cba376c318bb7bdee3314d109b554b2bacd5b0fa6ed1bef45c0b535362",
+    "tower_b.onnx" to "3798374413377f07f3c2e06fbe234a51be908ff1b48b7d6517cbae4c0a787ce9",
+    "manifest.json" to "27bda0804cfdf37d57413ccfb9d34e6b0c1cd3f5812b22d0a294745d08c1168d",
+    "golden_io.json" to "7848b03b63086d8fb82d7ecfa2dbdd164691c8bc86240c406143d8cb580dd160",
+    "feature_pack.json" to "5a1492aaef32d2588eb5e29a2a9ad740b73118a2965c11484dd841f4e57fded5",
+)
+
+fun sha256Hex(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().buffered().use { input ->
+        val buffer = ByteArray(1024 * 1024)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
+val syncBundledBattleModel by tasks.registering {
+    group = "distribution"
+    description = "Verifies and embeds the battle ONNX bundle into the Windows release app image."
+    dependsOn("createReleaseDistributable")
+    val explicitBundle = providers.gradleProperty("limingjieNnBundleDir")
+        .orElse(providers.environmentVariable("LIMINGJIE_NN_BUNDLE"))
+    val defaultBundle = rootProject.file("../../LimingjieNN/models/$bundledBattleModelName")
+    val targetDir = layout.buildDirectory.dir("compose/binaries/main-release/app/LimingjieAssistant/models/$bundledBattleModelName")
+    outputs.dir(targetDir)
+    doLast {
+        val sourceDir = explicitBundle.orNull?.let(::file) ?: defaultBundle
+        check(sourceDir.isDirectory) {
+            "Missing battle model bundle directory for $bundledBattleModelName: ${sourceDir.absolutePath}"
+        }
+        val destination = targetDir.get().asFile
+        if (destination.exists()) destination.deleteRecursively()
+        Files.createDirectories(destination.toPath())
+        for ((name, expectedHash) in bundledBattleModelChecksums) {
+            val sourceFile = sourceDir.resolve(name)
+            check(sourceFile.isFile) { "Missing battle model file: ${sourceFile.absolutePath}" }
+            val actualHash = sha256Hex(sourceFile)
+            check(actualHash == expectedHash) {
+                "Battle model checksum mismatch for $name: expected=$expectedHash actual=$actualHash"
+            }
+            Files.copy(sourceFile.toPath(), destination.resolve(name).toPath(), REPLACE_EXISTING)
+        }
+        sourceDir.resolve("SHA256SUMS.txt").takeIf(File::isFile)?.let { sums ->
+            Files.copy(sums.toPath(), destination.resolve("SHA256SUMS.txt").toPath(), REPLACE_EXISTING)
+        }
+    }
+}
+
 val packagedRuntimeTest by tasks.registering(Test::class) {
     group = "verification"
     description = "Check packaged worker isolation; reuse -PpackagedWorkerExecutable when supplied."
@@ -45,7 +99,7 @@ val packagedRuntimeTest by tasks.registering(Test::class) {
     classpath = sourceSets["test"].runtimeClasspath
     include("**/*PackagedRuntimeTest*")
     val executable = providers.gradleProperty("packagedWorkerExecutable")
-    if (!executable.isPresent) dependsOn("createReleaseDistributable")
+    if (!executable.isPresent) dependsOn(syncBundledBattleModel)
     systemProperty("limingjie.test.packagedWorker", executable
         .orElse(layout.buildDirectory.file("compose/binaries/main-release/app/LimingjieAssistant/LimingjieAssistant.exe")
             .map { it.asFile.absolutePath }).get())
@@ -156,7 +210,7 @@ val portableChecksum = layout.buildDirectory.file("dist/$portableName.sha256")
 tasks.register<Zip>("packagePortableZip") {
     group = "distribution"
     description = "Builds the Windows app image and portable ZIP with runtime, notices, and checksum."
-    dependsOn("createReleaseDistributable")
+    dependsOn("syncBundledBattleModel")
     archiveFileName.set(portableName)
     destinationDirectory.set(layout.buildDirectory.dir("dist"))
     isPreserveFileTimestamps = false
@@ -173,6 +227,9 @@ tasks.register<Zip>("packagePortableZip") {
     doFirst {
         check(System.getProperty("os.name").startsWith("Windows")) { "Portable Windows ZIP must be built on Windows" }
         check(layout.buildDirectory.file("compose/binaries/main-release/app/LimingjieAssistant/LimingjieAssistant.exe").get().asFile.isFile) { "jpackage app-image is missing" }
+        check(layout.buildDirectory.file("compose/binaries/main-release/app/LimingjieAssistant/models/$bundledBattleModelName/manifest.json").get().asFile.isFile) {
+            "Bundled battle model $bundledBattleModelName is missing from app image"
+        }
         listOf("../docs/USER-GUIDE.md", "../LICENSE", "../THIRD_PARTY_NOTICES.md", "licenses/DEPENDENCIES.md", "ocr/MODELS.md").forEach {
             check(rootProject.file(it).isFile) { "Missing distribution notice: $it" }
         }

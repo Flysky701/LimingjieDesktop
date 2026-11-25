@@ -6,9 +6,16 @@ import androidx.sqlite.execSQL
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.data.local.AccountEntity
 import com.landosol.toolbox.data.local.AppDatabase
+import com.landosol.toolbox.desktop.app.strategy.BattleBundleSource
+import com.landosol.toolbox.desktop.app.strategy.BattleOnnxBundle
+import com.landosol.toolbox.desktop.app.strategy.resolveBattleBundleLocation
 import com.landosol.toolbox.desktop.ocr.*
 import com.landosol.toolbox.desktop.platform.*
 import com.landosol.toolbox.desktop.shared.DesktopContext
+import com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionContext
+import com.landosol.toolbox.labyrinth.LabyrinthRoleProfile
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleRosterUnit
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueContext
 import java.net.*
 import java.nio.file.Files
 import java.nio.file.Path
@@ -16,8 +23,17 @@ import java.security.MessageDigest
 import javax.net.ssl.SSLParameters
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
+import kotlin.math.abs
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -87,6 +103,52 @@ object DesktopSelfTest {
                     check(actual == expected) { "OCR sample mismatch: expected '$expected', got '$actual'" }
                     "Models loaded; sample recognized as $expected"
                 } finally { engine.close(); bitmap.recycle() }
+            }
+            checkItem("battle-model") {
+                val location = resolveBattleBundleLocation("", directory)
+                if (location.source == BattleBundleSource.UNRESOLVED) {
+                    if (!System.getProperty("jpackage.app-path").isNullOrBlank()) {
+                        error("Bundled battle model missing at ${location.path}")
+                    }
+                    throw Skipped("No battle model bundle at ${location.path}")
+                }
+                BattleOnnxBundle.load(location.path).use { bundle ->
+                    val golden = Json.parseToJsonElement(Files.readString(location.path.resolve("golden_io.json"))).jsonObject
+                    val firstCase = golden.getValue("cases").jsonArray.first().jsonObject
+                    val sample = firstCase.getValue("sample").jsonObject
+                    val owned = sample.getValue("owned_unit_ids").jsonArray.map { id ->
+                        val unitId = id.jsonPrimitive.int
+                        val unit = bundle.features.catalog.units.getValue(unitId)
+                        BattleRosterUnit(
+                            unitId,
+                            LabyrinthRoleProfile(unitId.toString(), unitId.toString()),
+                            unit.role,
+                            unit.talent,
+                        )
+                    }
+                    val context = BattleValueContext(
+                        questId = sample.getValue("quest_id").jsonPrimitive.int,
+                        area = sample.getValue("area").jsonPrimitive.int,
+                        difficulty = sample.getValue("difficulty").jsonPrimitive.int,
+                        ownedUnits = owned,
+                        ruleContext = LabyrinthRoleDecisionContext(0),
+                        relicIds = sample.getValue("relic_ids").jsonArray.map { it.jsonPrimitive.int },
+                        markStacks = sample.getValue("mark_stacks").jsonArray.map { it.jsonPrimitive.int },
+                        alphaRupee = sample["alpha_rupee"]?.jsonPrimitive?.intOrNull,
+                        reviveAvailable = sample.getValue("revive_available").jsonPrimitive.boolean,
+                    )
+                    val team = sample.getValue("team_unit_ids").jsonArray.map { it.jsonPrimitive.int }
+                    val pred = bundle.predict(listOf(bundle.features.row(context, team))).single()
+                    val expectedWin = firstCase.getValue("tower_b").jsonObject.getValue("outputs").jsonObject
+                        .getValue("outcome_probs").jsonArray.first().jsonPrimitive.double
+                    val sum = pred.pWin + pred.pTimeout + pred.pWipe
+                    check(listOf(pred.pWin, pred.pTimeout, pred.pWipe, pred.damageMean, pred.damageLogStd, pred.winRemTime)
+                        .all(Double::isFinite)) { "Non-finite battle prediction" }
+                    check(abs(sum - 1.0) < 1e-4 && abs(pred.pWin - expectedWin) < 1e-3) {
+                        "Golden prediction mismatch: pWin=${pred.pWin}, expected=$expectedWin, sum=$sum"
+                    }
+                    "Loaded ${location.path.fileName} (${location.source.name}); pWin=${"%.4f".format(pred.pWin)}"
+                }
             }
             checkItem("sqlite-bundled") {
                 BundledSQLiteDriver().open(temporary.resolve("sqlite.db").toString()).use { connection ->
