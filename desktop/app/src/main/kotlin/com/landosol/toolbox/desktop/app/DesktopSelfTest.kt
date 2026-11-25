@@ -27,6 +27,8 @@ import kotlin.math.abs
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.int
@@ -139,8 +141,14 @@ object DesktopSelfTest {
                     )
                     val team = sample.getValue("team_unit_ids").jsonArray.map { it.jsonPrimitive.int }
                     val pred = bundle.predict(listOf(bundle.features.row(context, team))).single()
-                    val expectedWin = firstCase.getValue("tower_b").jsonObject.getValue("outputs").jsonObject
-                        .getValue("outcome_probs").jsonArray.first().jsonPrimitive.double
+                    fun firstNumber(element: JsonElement): Double = when (element) {
+                        is JsonArray -> firstNumber(element.first())
+                        else -> element.jsonPrimitive.double
+                    }
+                    val expectedWin = firstNumber(
+                        firstCase.getValue("tower_b").jsonObject.getValue("outputs").jsonObject
+                            .getValue("outcome_probs"),
+                    )
                     val sum = pred.pWin + pred.pTimeout + pred.pWipe
                     check(listOf(pred.pWin, pred.pTimeout, pred.pWipe, pred.damageMean, pred.damageLogStd, pred.winRemTime)
                         .all(Double::isFinite)) { "Non-finite battle prediction" }

@@ -12,38 +12,34 @@
 
 ## 2. 当前基线
 
-- **`LimingjieNN`（`main` @ `91286d1` 后继文档对齐）**：Round 1（S0–S5）已收官，发布 `models/s4_m2b_r1_seed43`（双塔 7.915 MiB、AUROC 0.9914、ECE 0.0085、CPU 512 候选 p95 53.54 ms、`max_abs_diff = 7.629e-6`，三档阈值 `≥0.70 / 0.50–0.70 / <0.50` 回退，遮蔽金币 Win Brier 仅 `+0.00003`；详见 `LimingjieNN/models/s4_m2b_r1_seed43/README.md`）。Python Path B（`route_dp` / `shop_dp` / `marginal_eval` / `run_env`）已成型，Phase 5 待实机 `replays.jsonl`；另保留 **20 CC** 算力储备。
-- **`LimingjieDesktop`（单一主干 `main`，`1.0.18+desktop.17`）**：已完成 M0 路线图统一与分支收口（历史分支已归档并清理冗余 worktree），集成 7 域事件内核、ADB 30s 恢复与 Raw 保留、编组确认防误点、失败重试卸载、上游 **PR #29**（3/4/5 区商店重构、三档前排生存模式、EX/遗物模板、事件复用、1088 恢复）、Level 1 双塔 ONNX 战斗引擎（Tower A 缓存、EX 映射、Boss 多队规划、状态 UI）及共享 `kernel/planning/` Path B 初步接线；`desktop.17` 便携包（`166,013,293` 字节，内置 JDK `21.0.12.1`、`msvcp140.dll 14.40.33810.0`）已通过 `--self-test --offline-startup` 10/10 项全绿自测。
+- **`LimingjieNN`（`main`）**：Round 1（S0–S5）已收官，发布 `models/s4_m2b_r1_seed43`（双塔 7.915 MiB、AUROC 0.9914、ECE 0.0085、CPU 512 候选 p95 53.54 ms、`max_abs_diff = 7.629e-6`，三档阈值 `≥0.70 / 0.50–0.70 / <0.50` 回退，遮蔽金币 Win Brier 仅 `+0.00003`；详见 `LimingjieNN/models/s4_m2b_r1_seed43/README.md`）。Python Path B（`route_dp` / `shop_dp` / `marginal_eval` / `run_env`）已成型并与 Kotlin 完成跨语言对齐；另保留 **20 CC** 算力储备。
+- **`LimingjieDesktop`（单一主干 `main`）**：已合入 M0 路线图统一与分支收口、M1 视觉多信号冗余与无损事故现场环形快照、M2 便携包内置 `s4_m2b_r1_seed43` + α 币收支账本 + 实机 `ShadowBattleSample` 落盘闭环、M3 Path B 跨语言黄金数值对齐与 `replays.jsonl` 导出器，以及上游 PR #29（3/4/5 区商店重构、三档前排生存模式、EX/遗物模板、事件复用、1088 恢复）与 7 域事件内核。
 
 ## 3. 统一里程碑（M0 → M4）
 
 ### M0 · 路线图统一与主干收口（已完成）
-- **M0-A（已完成）**：确立本文件为唯一权威源，同步对齐双仓工程文档。
-- **M0-B（已完成）**：将 `refactor/event-kernel`（NN 战斗引擎与 Path B 接线）合流至最新 `main`，完成与 PR #29 三档前排、3/4/5 区商店与失败重试的语义整合，通过 `check`、`-Pfull :shared:test`、`BattleOnnxGoldenTest`、`:app:packagePortableZip` 与 `--self-test --offline-startup` 验收，并清理历史工作树与分支为单一 `main`。
+- **M0-A / M0-B（已完成）**：确立本文件为唯一权威源，将 `refactor/event-kernel` 与 PR #29 语义整合至单一 `main`，并清理历史工作树与分支。
 
-### M1 · 视觉方案全面审查、DEBUG 与冗余增强（下一阶段核心专项）
+### M1 · 视觉方案全面审查、DEBUG 与冗余增强（离线改造已完成，待样本扩充与实机抽检）
 
-| 审查域 | 涉及范围 | 核心问题与冗余改造 |
+| 审查域 | 涉及范围 | 核心改动与当前状态 |
 | --- | --- | --- |
-| **页面分类与状态过渡** | [LabyrinthEntryClassifier.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthEntryClassifier.kt)、[LabyrinthEntryFrameProcessor.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthEntryFrameProcessor.kt) | 消除单按钮高阈值兜底与过场误判（`UNKNOWN`/`BATTLE_FAILED`）及缩放偏移；引入多锚点投票、辅助文本/色块佐证与邻近帧时序滞回滤波 |
-| **地图节点与拓扑闭环** | [LabyrinthNodeClassifier.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/node/LabyrinthNodeClassifier.kt)、[NodePositionMapper.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/node/NodePositionMapper.kt)、[NodeTopologyMapper.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/node/NodeTopologyMapper.kt)、[NodeClickAdmission.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/node/NodeClickAdmission.kt) | 根治 `FIX-06` 类低置信错绑与连点无效；建立「当前帧视觉 × 协议拓扑 × 视口微移重检 × 点击后推进回执」闭环，严格隔离冲突 |
-| **角色 / 编组 / 奖励双通道** | [LabyrinthCharacterIconMatcher.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthCharacterIconMatcher.kt)、[LabyrinthCharacterGridDetector.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthCharacterGridDetector.kt)、[LabyrinthBattleTeamRecognition.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthBattleTeamRecognition.kt)、[AndroidLabyrinthRoleRewardNameResolver.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthRoleRewardNameResolver.kt) | 解决缩放边框漂移、1088 特殊网格及 `FIX-08` 角色池误判；打通「头像匹配 + 名称 OCR + 属性角标 + 持有池先验」双通道印证与统一证据门槛 |
-| **OCR 稳定性与全链路状态** | [OnnxOcrEngine.kt](../desktop/ocr/src/main/kotlin/com/landosol/toolbox/desktop/ocr/OnnxOcrEngine.kt)、[evaluation/README.md](../desktop/ocr/evaluation/README.md)、[AndroidLabyrinthShopCoinResolver.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthShopCoinResolver.kt) | 补齐 `:ocr:evaluate` 样本（当前 15/80 → ≥80 条、每类 ≥8 条、总≥95%）；加固 64 条/64 MiB 队列边界与粘连数字；将金币观测从商店单点扩展到地图/事件/商店 + 局内收支账本，强化遗物/印记层数核验 |
-| **可观测性与离线 DEBUG** | 识别失败 / 冲突 / 连点无效 / 未知页超时 | 自动留存「原帧 + ROI 裁剪 + 锚点/OCR 原始得分快照」随诊断包导出，并建立一键沉淀为离线单测与回放用例的回归路径 |
+| **页面分类与状态过渡** | [LabyrinthEntryClassifier.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthEntryClassifier.kt)、[LabyrinthEntryFrameProcessor.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthEntryFrameProcessor.kt) | 已合入统一 `BATTLE_FAILED`/`BATTLE_RESULT` 仲裁、`GradientTemplateMatcher` 全黑护栏、作用域 `LINK_CHOICE` 加成、`ITEM_REWARD` 叠加优先与 `RUN_RESULT_LOGO` 关闭按钮护栏；`UNKNOWN` 帧不清空 `attemptsForState` |
+| **地图节点与拓扑闭环** | [LabyrinthNodeClassifier.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/node/LabyrinthNodeClassifier.kt)、[NodePositionMapper.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/node/NodePositionMapper.kt)、[NodeTopologyMapper.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/node/NodeTopologyMapper.kt)、[LabyrinthNodeActionPlanner.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/node/LabyrinthNodeActionPlanner.kt) | 已合入 `FULL_COLUMN` 冲突列护栏、`>= 0.45` 最小绑定分、空帧/无点击 `scanMemo` 2 帧上限、`currentColumnProtectedRects` ≥2 列校准与 `REACHABLE_SUBSET` Y 带校核；待实机抽检确认 `FIX-06` |
+| **角色 / 编组 / 奖励双通道** | [LabyrinthCharacterIconMatcher.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthCharacterIconMatcher.kt)、[LabyrinthCharacterGridDetector.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthCharacterGridDetector.kt)、[LabyrinthBattleTeamRecognition.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/LabyrinthBattleTeamRecognition.kt)、[AndroidLabyrinthRoleRewardNameResolver.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthRoleRewardNameResolver.kt) | 已修复同名换装截断、5s OCR 挂起恢复、355px 名牌锚框、Top-3 `iconCandidates` 与 1088 左/中槽位外推；保留属性角标 + 名称 OCR + 头像双通道互证 |
+| **OCR 稳定性与全链路状态** | [OnnxOcrEngine.kt](../desktop/ocr/src/main/kotlin/com/landosol/toolbox/desktop/ocr/OnnxOcrEngine.kt)、[evaluation/README.md](../desktop/ocr/evaluation/README.md)、[AndroidLabyrinthShopCoinResolver.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/vision/AndroidLabyrinthShopCoinResolver.kt)、[LabyrinthAlphaRupeeLedger.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthAlphaRupeeLedger.kt) | 已补充 `OcrEngineTelemetry`、瞬时异常存活与 FB-14 宽行裁剪回退，双尺度商店金币二次确认及未知状态保护，并通过局内 α 币账本串联商店/事件；`:ocr:evaluate` 当前固定样本 `15/15` 全绿，待实机扩充至 ≥80 条 |
+| **可观测性与离线 DEBUG** | [LabyrinthDebugDashboardServer.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/debug/LabyrinthDebugDashboardServer.kt)、[DesktopAppGraph.kt](../desktop/app/src/main/kotlin/com/landosol/toolbox/desktop/app/DesktopAppGraph.kt) | 已上线 10 槽 / 30 MiB 无损 PNG 事故现场环形缓冲区、`/logs.zip` `incidents/` 导出、`ocrHealth`、商店/队伍/节点绑定实时诊断 JSON 与停止前终端帧发布 |
 
-- **退出门禁**：`:ocr:evaluate` 达标；核心视觉链路具备多信号冗余或安全降级；`FIX-06` 及高频视觉根因均有离线回归与实机抽检。
+- **退出状态**：核心视觉链路冗余、无损事故现场导出与离线回归已合入并验证通过；待补充实机样本扩充 `:ocr:evaluate` 至 ≥80 条并完成实机抽检。
 
-### M2 · Level 1 战斗模型端到端交付与实机闭环
-- 对齐并实机验证 `ModelGuidedBattleTeamSearcher` 与 PR #29 三档前排生存策略。
-- **分发倾向**：桌面便携包（`:app:packagePortableZip`）倾向直接内置 `s4_m2b_r1_seed43` 开箱即用，同时保留 `-Dlimingjie.nn.bundle`、`LIMINGJIE_NN_BUNDLE` 与 `data/models/` 外部覆盖；严格校验文件 SHA-256 与 `catalog_sha256`，失败或关闭开关时回退规则引擎。
-- 接通 `ShadowBattleSample` 实战落盘通道，并在运行记录中区分选队来源（NN 稳妥 / NN 边缘 / 规则回退）。
-- 实机复测并关闭 `FIX-01`–`FIX-05`、`FIX-07`、`FIX-08`，并在真机核实 Path B 所需的 3 项游戏语义：`retire()` 扣票与结算时点、老虎机 `23161/33161` 后续阶段是否净扣本金、事件战与 `50002` 免死的结算计数口径。
-- **退出门禁**：`check -Pfull` + 便携包自检通过；实机多局稳定跑通；3 项游戏语义结论明确。
+### M2 · Level 1 战斗模型端到端交付与实机闭环（离线交付已完成，待实机闭环）
+- **内置模型分发**：`:app:packagePortableZip` 通过 `syncBundledBattleModel` 校核 SHA-256 并内置 `s4_m2b_r1_seed43` 到 `LimingjieAssistant/models/s4_m2b_r1_seed43`；保留 `-Dlimingjie.nn.bundle`、`LIMINGJIE_NN_BUNDLE` 与默认数据目录覆盖优先级及规则回退；`DesktopSelfTest` 新增 `battle-model` 启动推理自检项。
+- **实机采样与账本接线**：[LabyrinthAlphaRupeeLedger.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthAlphaRupeeLedger.kt) 与 [LabyrinthShadowBattleRecorder.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthShadowBattleRecorder.kt) 已接入 [LabyrinthEntryRecognitionSession.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt)，于 `START_BATTLE` 捕获完整战斗上下文与账本余额并在 `BATTLE_RESULT`/`BATTLE_FAILED`/等待超时单次去重写入 `BATTLE_SAMPLE_OBSERVED`。
+- **待实机核验项**：实机复测 `FIX-01`–`FIX-08`，并在真机核实 `retire()` 扣票与结算时点、老虎机 `23161/33161` 后续是否净扣本金、事件战与 `50002` 免死的结算计数口径。
 
-### M3 · Path B 全局高分规划深化与跨语言对齐
-- 共享 Kotlin `kernel/planning/`（`Scoring`、`RouteDp`、`ShopDp`、`MarginalEval`、`ModelBattlePassEstimator`）及显式开关初步接入已并入 `main`；本阶段完成与 Python 参考实现的黄金用例跨语言数值对齐。
-- 依托 M1 补齐的全链路金币观测与账本，完善 `t=0` 开局筛图、`T=0`/`T>0` 路线早停、商店 DP 及选角/遗物/事件边际估值的线上校验；Android 保持零 ONNX 依赖（规则估算器驱动同一 SPI）。
-- 导出真实开局 `replays.jsonl`，回填 `LimingjieNN` Phase 5（`env/run_env.py` 策略基准对照）。
+### M3 · Path B 全局高分规划深化与跨语言对齐（离线对齐与导出已完成，待实机回放验证）
+- **算法跨语言对齐**：[Scoring.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/kernel/planning/Scoring.kt)、[ShopDp.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/kernel/planning/ShopDp.kt)、[RouteDp.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/kernel/planning/RouteDp.kt)、[MarginalEval.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/kernel/planning/MarginalEval.kt)、[LabyrinthRunPlanningContext.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/kernel/planning/LabyrinthRunPlanningContext.kt) 与 [LabyrinthShopPolicy.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/LabyrinthShopPolicy.kt) 已完成与 `LimingjieNN` Python 参考实现的公式/策略对齐（支持折扣上限、`RELIC_4STAR`、`ShopPlanEvaluation`、`BattleExam.isEx/expectedTimeSec`、路线 `WalletModel`、`cursor` 列过滤），并由 [CrossLanguagePathBParityTest.kt](../android/app/src/test/java/com/landosol/toolbox/labyrinth/kernel/planning/CrossLanguagePathBParityTest.kt) 对照 Python 黄金向量以 `1e-9` 精度验证；Android 保持零 ONNX 依赖。
+- **匿名回放导出闭环**：[LabyrinthReplayExporter.kt](../android/app/src/main/java/com/landosol/toolbox/labyrinth/kernel/planning/LabyrinthReplayExporter.kt) 支持从路线与事件日志提取并原子导出匿名化 `replays.jsonl`，已通过 `LimingjieNN/src/labyrinth_nn/env/run_env.py`（`load_replays` + `compare_policies`）兼容验证，待实机跑局积累真实回放样本后闭环评测。
 
 ### M4 · 线上校准监控与 10 层演进
 - 基于实机 `ShadowBattleSample` 持续审计线上 `p_win` 校准与高置信失败难例。
