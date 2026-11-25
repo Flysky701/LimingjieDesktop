@@ -35,6 +35,6 @@ PR、`main`、桌面标签与手动触发默认运行快档；手动勾选 `full
 
 ## 维护入口
 
-- [上游同步与修改边界](UPSTREAM.md) · [架构与实现决策](DECISIONS.md) · [已知限制与待办](KNOWN_LIMITATIONS.md)
+- [统一路线图](ROADMAP.md) · [迷宫事件内核](KERNEL_REFACTOR.md) · [上游同步与修改边界](UPSTREAM.md) · [架构与实现决策](DECISIONS.md) · [已知限制与待办](KNOWN_LIMITATIONS.md)
 - [角色与配队工具](../tools/role-team-review/README-combat-model.md) · [事件](../tools/role-team-review/README-events.md) · [EX/Boss](../tools/role-team-review/README-ex-mechanics.md)
 - [Android 说明](../android/README.md) · [历史归档](archive/desktop/FINAL_REPORT.md)
