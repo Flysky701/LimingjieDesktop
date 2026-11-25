@@ -13,6 +13,8 @@ import kotlinx.serialization.json.*
 import kotlin.math.abs
 import kotlin.math.ln
 
+internal const val BATTLE_BUNDLE_FORMAT = "limingjie_twotower_onnx_v1"
+
 internal fun modelPath(key: String): String? =
     sequenceOf(System.getProperty(key), System.getenv(key), System.getenv(key.uppercase().replace('.', '_')))
         .firstOrNull { !it.isNullOrBlank() }
@@ -41,9 +43,11 @@ internal class BattleOnnxBundle private constructor(
                 ?: error("缺少 feature_pack.json 或 catalog.json，可设置 limingjie.nn.catalog")
         }
 
-        fun load(directory: Path, catalogPath: Path = catalogPath(directory)): BattleOnnxBundle {
-            val manifest = directory.resolve("manifest.json").readObject()
-            require(manifest.string("format") == "limingjie_twotower_onnx_v1") { "Unsupported battle bundle format" }
+        fun load(directory: Path, catalogPath: Path = catalogPath(directory)): BattleOnnxBundle =
+            load(directory, catalogPath, directory.resolve("manifest.json").readObject())
+
+        fun load(directory: Path, catalogPath: Path, manifest: JsonObject): BattleOnnxBundle {
+            require(manifest.string("format") == BATTLE_BUNDLE_FORMAT) { "Unsupported battle bundle format" }
             require(manifest.strings("outcome_names") == listOf("win", "timeout", "wipe")) { "Unexpected outcome classes" }
             val files = manifest.getValue("files").jsonObject
             fun verified(name: String): ByteArray = Files.readAllBytes(directory.resolve(name)).also {

@@ -14,8 +14,11 @@ import com.landosol.toolbox.desktop.app.adapters.captcha.*
 import com.landosol.toolbox.desktop.app.adapters.cndb.*
 import com.landosol.toolbox.desktop.app.adapters.device.*
 import com.landosol.toolbox.desktop.app.control.*
+import com.landosol.toolbox.desktop.app.strategy.BattleModelStatus
 import com.landosol.toolbox.desktop.app.strategy.DesktopBattleModel
-import com.landosol.toolbox.desktop.app.strategy.modelPath
+import com.landosol.toolbox.desktop.app.strategy.battleDecisionPrefix
+import com.landosol.toolbox.desktop.app.strategy.desktopDecisionText
+import com.landosol.toolbox.desktop.app.strategy.resolveBattleBundleLocation
 import com.landosol.toolbox.desktop.app.adapters.storage.RunHistoryStore
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
 import com.landosol.toolbox.security.CredentialStore
@@ -111,24 +114,26 @@ class DesktopAppGraph(
     private val suppliedGameGateway: ((GameServer) -> BilibiliGameGateway)? = null,
 ) : AutoCloseable {
     val log = UserLog()
-    private fun defaultBattleBundleDirectory(): Path {
-        val relative = Path.of("models", "s4_m2b_r1_seed43")
-        val candidates = listOfNotNull(
-            dataDirectory.resolve(relative),
-            runCatching { DataDirectories.resolve(emptyArray()) }.getOrNull()?.resolve(relative),
-            System.getProperty("jpackage.app-path")?.let { Path.of(it).toAbsolutePath().parent?.resolve(relative) },
-        ).distinct()
-        return candidates.firstOrNull { Files.isRegularFile(it.resolve("manifest.json")) }
-            ?: dataDirectory.resolve(relative)
-    }
     private val battleModel = DesktopBattleModel(
-        directory = {
-            modelPath("limingjie.nn.bundle")?.let(Path::of)
-                ?: settings.state.value.battleOnnxBundlePath.trim().takeIf { it.isNotEmpty() }?.let(Path::of)
-                ?: defaultBattleBundleDirectory()
+        locationResolver = { resolveBattleBundleLocation(settings.state.value.battleOnnxBundlePath, dataDirectory) },
+        log = {
+            Log.w("BattleModel", it)
+            log.add(it, kind = UserLogKind.WARNING)
         },
-        log = { log.add(it) },
+        onInfo = {
+            Log.i("BattleModel", it)
+            log.add(it, kind = UserLogKind.KEY)
+        },
     )
+    val battleModelStatus: StateFlow<BattleModelStatus> get() = battleModel.status
+
+    fun refreshBattleModelStatus(forceReload: Boolean = false): BattleModelStatus = synchronized(startLock) {
+        // Preserve the estimator already selected for the current recognition run.
+        if (closed || (!dataOnly && (taskStarting.value || labyrinthEntryRecognitionSession.state.value.running))) {
+            return@synchronized battleModelStatus.value
+        }
+        battleModel.inspect(settings.state.value.battleOnnxEnabled, forceReload, ephemeralCheck = dataOnly)
+    }
     val ux by lazy { com.landosol.toolbox.desktop.app.ui.DesktopUxController(this) }
     private val noticeState = MutableStateFlow<List<String>>(emptyList())
     val notices = noticeState.asStateFlow()
@@ -144,7 +149,7 @@ class DesktopAppGraph(
     private val cacheDir get() = context.cacheDir
     private val assets get() = context.assets
     val settings = DesktopSettingsStore(dataDirectory) { addNotice("桌面设置已从默认值恢复，原文件已备份：$it") }
-    private var inheritTaskDefaults = sharedData != null && !java.nio.file.Files.exists(dataDirectory.resolve("settings/ui.json"))
+    private var inheritTaskDefaults = sharedData != null && !Files.exists(dataDirectory.resolve("settings/ui.json"))
     fun markRuntimePreferencesEdited() { inheritTaskDefaults = false }
     private val network = NetworkProxyController().also { it.setMode(settings.state.value.networkMode) }
     private val power = PowerSaveController()
@@ -201,8 +206,14 @@ class DesktopAppGraph(
         sharedHistoryForwarder
     }
 
-    suspend fun refreshSharedSettings() {
-        sharedData?.settings()?.let { global -> settings.save(global.copy(lastDevice = settings.state.value.lastDevice)) }
+    suspend fun refreshSharedSettings() = withContext(Dispatchers.IO) {
+        sharedData?.settings()?.let { global ->
+            val current = settings.state.value
+            val next = global.copy(lastDevice = current.lastDevice)
+            if (next != current) settings.save(next)
+        }
+        refreshBattleModelStatus()
+        Unit
     }
 
     suspend fun flushSharedRecords() {
@@ -357,6 +368,35 @@ class DesktopAppGraph(
                     Log.w(DATABASE_UPDATE_LOG_TAG, result.reason)
             }
             ux.refreshDatabase()
+        }
+        refreshBattleModelStatus()
+        autoRunScope.launch {
+            val modelSettings = settings.state.map { it.battleOnnxEnabled to it.battleOnnxBundlePath }.distinctUntilChanged()
+            if (dataOnly) {
+                modelSettings.collect { refreshBattleModelStatus() }
+            } else {
+                val recognizing = labyrinthEntryRecognitionSession.state.map { it.running }.distinctUntilChanged()
+                combine(modelSettings, recognizing, taskStarting) { config, running, starting ->
+                    config.takeUnless { running || starting }
+                }.distinctUntilChanged().collect { pending ->
+                    if (pending != null) refreshBattleModelStatus()
+                }
+            }
+        }
+        if (!dataOnly) autoRunScope.launch {
+            labyrinthEntryRecognitionSession.state.distinctUntilChanged { previous, next ->
+                previous.running == next.running && previous.combatContext == next.combatContext &&
+                    previous.battleTeamRecommendation == next.battleTeamRecommendation &&
+                    previous.battleTeamRecommendationUnavailableReason == next.battleTeamRecommendationUnavailableReason
+            }.collect { state ->
+                if (!state.running) return@collect
+                state.battleTeamRecommendation?.let {
+                    log.add(it.desktopDecisionText(state.combatContext), kind = UserLogKind.KEY)
+                }
+                state.battleTeamRecommendationUnavailableReason?.let {
+                    log.add("${battleDecisionPrefix(state.combatContext)} 编组建议不可用：$it", kind = UserLogKind.WARNING)
+                }
+            }
         }
     }
 
@@ -946,9 +986,11 @@ class DesktopAppGraph(
                     }
                 }
 
-                override suspend fun startRun(accountId: Long, guildId: Int, runId: String): Boolean =
-                    labyrinthEntryRecognitionSession.startAutomation(accountId, runId) is
+                override suspend fun startRun(accountId: Long, guildId: Int, runId: String): Boolean {
+                    refreshSharedSettings()
+                    return labyrinthEntryRecognitionSession.startAutomation(accountId, runId) is
                         LabyrinthEntryRecognitionStartResult.Started
+                }
 
                 override suspend fun stopRun(reason: String) {
                     labyrinthEntryRecognitionSession.stop(reason, releaseCapture = false)
@@ -976,6 +1018,7 @@ class DesktopAppGraph(
     val labyrinthAutoRunWorkflow by lazy {
         LabyrinthAutoRunWorkflow(
             startRun = { accountId ->
+                refreshSharedSettings()
                 labyrinthEntryRecognitionSession.startAutomation(accountId) is
                     LabyrinthEntryRecognitionStartResult.Started
             },

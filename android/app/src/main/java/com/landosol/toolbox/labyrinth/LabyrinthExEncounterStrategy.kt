@@ -301,6 +301,30 @@ object LabyrinthExEncounterCatalog {
 
     val all: List<LabyrinthExEncounterStrategy> = singleTarget + multiTarget + specialDualTarget
 
+    private val questOrdinals = mapOf(
+        "ghost_lord" to (1 to 1..5),
+        "good_friend_x" to (2 to 1..5),
+        "island_whale" to (3 to 1..5),
+        "antimatter_beast" to (4 to 1..5),
+        "giant_tuna" to (5 to 1..5),
+        "lava_dragon" to (6 to 1..5),
+        "multi_explosion_relic" to (7 to 1..5),
+        "multi_destruction_relic" to (8 to 1..5),
+        "multi_kurumi_shadow" to (9 to 1..5),
+        "multi_ny_karyl_shadow" to (10 to 1..5),
+        "multi_mifuyu_work_shadow" to (11 to 1..5),
+        "multi_ruka_shadow" to (12 to 1..5),
+        "queen_bee" to (13 to 4..5),
+        "misora" to (14 to 4..5),
+    )
+
+    fun questIdFor(area: Int?, strategy: LabyrinthExEncounterStrategy?): Int? {
+        if (area == null || strategy == null) return null
+        val (ordinal, areas) = questOrdinals[strategy.id] ?: return null
+        if (area !in areas) return null
+        return 770_000_000 + area * 100_000 + 20_000 + ordinal * 100 + 1
+    }
+
     fun matchObservedName(text: String?): LabyrinthExEncounterStrategy? {
         val observedVariants = encounterObservedNameVariants(text ?: return null)
         if (observedVariants.isEmpty()) return null

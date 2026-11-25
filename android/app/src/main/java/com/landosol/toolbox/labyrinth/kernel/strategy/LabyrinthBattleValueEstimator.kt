@@ -69,6 +69,22 @@ enum class BattleConfidenceTier(val label: String) {
     }
 }
 
+enum class BattleModelDecisionStatus(val label: String) {
+    ADOPTED("NN选队"),
+    LOW_CONFIDENCE_FALLBACK("NN低胜率回退"),
+    NO_QUEST_ID("缺关卡ID"),
+    CONTEXT_UNAVAILABLE("上下文不完整"),
+    MODEL_DISABLED("模型未启用"),
+    LOAD_OR_INFERENCE_FAILED("模型异常回退"),
+    NO_ELIGIBLE_CANDIDATE("无合法候选"),
+}
+
+data class BattleModelTrace(
+    val status: BattleModelDecisionStatus,
+    val questId: Int? = null,
+    val detail: String? = null,
+)
+
 data class BattleModelAssessment(
     val tier: BattleConfidenceTier,
     val pWin: Double,
@@ -77,6 +93,8 @@ data class BattleModelAssessment(
     val evaluatedCandidates: Int,
     val adopted: Boolean,
     val jointWinProbability: Double? = null,
+    val plannedTeams: List<List<String>> = emptyList(),
+    val teamWinProbabilities: List<Double> = emptyList(),
 )
 
 data class BattleValueEstimate(

@@ -16,6 +16,7 @@ import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.automation.GameClientResolution
 import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.desktop.app.adapters.device.inProgress
+import com.landosol.toolbox.desktop.app.strategy.BattleModelHealth
 import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
 import com.landosol.toolbox.desktop.platform.*
@@ -160,6 +161,7 @@ import javax.swing.filechooser.FileNameExtensionFilter
     val saved by graph.settings.state.collectAsState()
     val device by graph.device.state.collectAsState()
     val ocr by graph.ocr.status.collectAsState()
+    val battleModel by graph.battleModel.collectAsState()
     val ready = (device as? DeviceConnectionState.Ready)?.device
     val actions = rememberActions(graph)
     var encryption by remember { mutableStateOf("尚未检查") }
@@ -185,8 +187,25 @@ import javax.swing.filechooser.FileNameExtensionFilter
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(saved.battleOnnxEnabled, { enabled ->
                     actions.run { graph.settings.update { it.copy(battleOnnxEnabled = enabled) } }
-                })
-                Text("使用本地 ONNX 模型（下局生效）")
+                }, enabled = !actions.working)
+                Text("使用本地 ONNX 战斗选队模型（EX / Boss 生效，下局生效）")
+            }
+            val modelState = when (battleModel.health) {
+                BattleModelHealth.DISABLED -> battleModel.health.label
+                BattleModelHealth.READY, BattleModelHealth.LOADED ->
+                    battleModel.health.label + battleModel.bundleId?.let { "（$it）" }.orEmpty()
+                BattleModelHealth.FAILED, BattleModelHealth.FALLBACK ->
+                    battleModel.health.label + battleModel.detail?.let { "：$it" }.orEmpty()
+            }
+            Detail("模型状态", modelState)
+            Detail("生效目录", "${battleModel.resolvedPath.ifBlank { "未解析" }}（${battleModel.source.label}）")
+            if (battleModel.health == BattleModelHealth.DISABLED) {
+                battleModel.detail?.let { Text(it, color = Muted, style = MaterialTheme.typography.bodySmall) }
+            }
+            if (battleModel.overriddenByEnv) {
+                Text("当前路径由环境变量或 JVM 参数覆盖，下方自定义目录暂不生效。",
+                    color = com.landosol.toolbox.desktop.app.ui.theme.LocalDesktopColors.current.warn,
+                    style = MaterialTheme.typography.bodySmall)
             }
             OutlinedTextField(
                 bundlePath, { bundlePath = it },
@@ -213,8 +232,9 @@ import javax.swing.filechooser.FileNameExtensionFilter
                     Text("恢复默认")
                 }
             }
-            Text("留空时优先读取 LIMINGJIE_NN_BUNDLE，其次自动查找数据目录 models/s4_m2b_r1_seed43。",
-                color = Muted, style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = {
+                actions.run { actions.message = graph.messageRequest(ControlOps.BATTLE_MODEL_CHECK) }
+            }, enabled = !actions.working) { Text("校验并重载") }
         }
         if(group=="运行环境"&&shared)Panel("运行环境"){
             Text("各设备的连接、画面尺寸、触控和游戏客户端信息统一在设备管理中查看。",color=Muted)

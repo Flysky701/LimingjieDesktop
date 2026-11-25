@@ -115,43 +115,60 @@ class BattleValueStrategyTest {
             if (tier == BattleConfidenceTier.UNSAFE) {
                 val reason = "NN模型未找到稳过队（最高预测胜率 49.0% < 50%），已回退规则推荐"
                 assertFalse(assessment.adopted)
-                assertEquals(rule.copy(reasons = listOf(reason) + rule.reasons, modelAssessment = assessment), recommendation)
+                assertEquals(rule.copy(
+                    reasons = listOf(reason) + rule.reasons, modelAssessment = assessment,
+                    modelTrace = BattleModelTrace(BattleModelDecisionStatus.LOW_CONFIDENCE_FALLBACK, 42, reason),
+                ), recommendation)
             } else {
+                val summary = "NN胜率 ${(probability * 100).toInt()}.0% · ${tier.label}"
                 assertTrue(assessment.adopted)
                 assertEquals(modelIds.toSet(), recommendation.members.map { it.characterId }.toSet())
+                assertEquals("按NN模型选队（$summary）", recommendation.reasons.first())
+                assertEquals(BattleModelTrace(BattleModelDecisionStatus.ADOPTED, 42, summary), recommendation.modelTrace)
                 assertEquals(scorer.evaluate(roster.filter { it.characterId in modelIds }, valueContext.ruleContext).score,
                     recommendation.score, 1e-12)
             }
         }
     }
 
-    @Test fun anyRuleBatchSilentlyDiscardsModelResults() {
+    @Test fun ruleBatchDiscardsModelResultsAndPreservesFailureReason() {
         val roster = modelRoster(10)
         val ids = roster.map { it.characterId }
         val valueContext = modelContext(roster)
         val planner = planner(roster)
-        val expected = planner.initialRecommendation(ids, valueContext.ruleContext)
-        val estimator = ModelEstimator(sourceForBatch = { if (it == 1) BattleValueSource.MODEL else BattleValueSource.RULE }) { 0.99 }
+        val expected = (planner.initialRecommendation(ids, valueContext.ruleContext)
+            as LabyrinthBattleTeamRecommendationResult.Ready).recommendation
+        val reason = "模型推理无法读取关卡"
+        val estimator = ModelEstimator(
+            sourceForBatch = { if (it == 1) BattleValueSource.MODEL else BattleValueSource.RULE },
+            fallbackReason = reason,
+        ) { 0.99 }
 
         val actual = planner.withBattleValueEstimator(estimator)
             .initialRecommendation(ids, valueContext.ruleContext, battleValueContext = valueContext)
+            as LabyrinthBattleTeamRecommendationResult.Ready
 
         assertEquals(2, estimator.batches.size)
-        assertEquals(expected, actual)
+        assertEquals(expected.copy(
+            modelTrace = BattleModelTrace(BattleModelDecisionStatus.LOAD_OR_INFERENCE_FAILED, 42, reason),
+        ), actual.recommendation)
+        assertTrue(actual.recommendation.logText().endsWith(" | 决策来源=模型异常回退 | questId=42 | 模型说明=$reason"))
     }
 
     @Test fun retryCandidatesExcludeFailedAndCommittedRolesAndCheckActualFront() {
-        val roster = modelRoster(8).mapIndexed { index, profile ->
+        val roster = modelRoster(9).mapIndexed { index, profile ->
             when (index) {
-                0 -> profile.copy(position = 100)
-                1 -> profile.copy(position = 100, roleClass = "掩护者", functions = LabyrinthRoleFunctions(selfSustain = 80.0))
+                0 -> profile.copy(roleClass = "掩护者", functions = LabyrinthRoleFunctions(selfSustain = 80.0))
+                1 -> profile.copy(position = 100)
+                2 -> profile.copy(position = null)
                 else -> profile
             }
         }
         val eligible = roster.dropLast(1)
         val ruleContext = LabyrinthRoleDecisionContext(0, currentArea = 3, frontlineSurvivalGateEnabled = true)
         val valueContext = modelContext(roster, ruleContext)
-        val failed = labyrinthBattleTeamSignature(eligible.drop(1).take(5).map { it.characterId })
+        val legal = eligible.filter { it.characterId !in setOf("1002", "1003") }
+        val failed = labyrinthBattleTeamSignature(legal.take(5).map { it.characterId })
         val byUnit = valueContext.ownedUnits.associateBy { it.unitId }
         val estimator = ModelEstimator { 0.75 }
         val result = planner(roster).withBattleValueEstimator(estimator).retryRecommendation(
@@ -159,19 +176,40 @@ class BattleValueStrategyTest {
             failedTeamSignatures = setOf(failed), battleValueContext = valueContext,
         ) as LabyrinthBattleTeamRecommendationResult.Ready
 
-        assertEquals(8, valueContext.ownedUnits.size)
+        assertEquals(9, valueContext.ownedUnits.size)
         val candidates = estimator.batches.flatten()
         assertTrue(candidates.isNotEmpty())
         for (candidate in candidates) {
             val characters = candidate.map { byUnit.getValue(it).profile.characterId }
             assertEquals(5, characters.size)
-            assertTrue("1002" in characters)
-            assertFalse("1001" in characters)
-            assertFalse("1008" in characters)
+            assertTrue("1001" in characters)
+            assertFalse("1002" in characters)
+            assertFalse("1003" in characters)
+            assertFalse("1009" in characters)
             assertNotEquals(failed, labyrinthBattleTeamSignature(characters))
         }
-        assertEquals("1002", result.recommendation.vanguard.characterId)
+        assertEquals("1001", result.recommendation.vanguard.characterId)
         assertEquals(true, result.recommendation.modelAssessment?.adopted)
+    }
+
+    @Test fun modelUsesConfiguredVanguardGateAndReportsWhenNoCandidatesPass() {
+        val roster = modelRoster(6).let {
+            listOf(it.first().copy(roleClass = "掩护者", functions = LabyrinthRoleFunctions(selfSustain = 80.0))) + it.drop(1)
+        }
+        val context = modelContext(roster, LabyrinthRoleDecisionContext(0, currentArea = 3, frontlineSurvivalGateEnabled = true))
+        val strictScorer = LabyrinthTeamScorer(scorer.config.copy(minimumReliableVanguard = 70.0))
+        val estimator = ModelEstimator { 0.95 }
+        val searcher = ModelGuidedBattleTeamSearcher(estimator, LabyrinthTeamOptimizer(strictScorer, searchThreads = 1))
+        assertTrue(roster.first().isEligibleBattleVanguard(context.ruleContext))
+        assertEquals(
+            ModelGuidedBattleTeamSearcher.Outcome.Fallback(
+                BattleModelDecisionStatus.NO_ELIGIBLE_CANDIDATE, "无满足前排与排除约束的合法候选队",
+            ),
+            searcher.searchOutcome(
+                context, roster, listOf(roster.take(5).map { it.characterId }), emptySet(), 1, supplementLead = false,
+            ),
+        )
+        assertTrue(estimator.batches.isEmpty())
     }
 
     @Test fun bossPackingMaximizesJointWinAcrossDisjointTeams() {
@@ -199,6 +237,8 @@ class BattleValueStrategyTest {
             val packed = result.teams.map { team -> team.map { byCharacter.getValue(it.characterId) }.sorted() }
             assertEquals(listOf(first, second, third).take(teamCount).toSet(), packed.toSet())
             assertEquals(teamCount * 5, packed.flatten().distinct().size)
+            assertEquals(result.teams.map { team -> team.map { it.characterId } }, result.assessment.plannedTeams)
+            assertEquals(listOf(0.40, 0.40, 0.25).take(teamCount), result.assessment.teamWinProbabilities)
             assertEquals(if (teamCount == 2) 0.64 else 0.73, requireNotNull(result.assessment.jointWinProbability), 1e-12)
             assertEquals(if (teamCount == 2) BattleConfidenceTier.MARGINAL else BattleConfidenceTier.SAFE, result.assessment.tier)
             assertTrue(result.assessment.adopted)
@@ -207,6 +247,64 @@ class BattleValueStrategyTest {
             assertEquals(candidates.distinct().size, result.assessment.evaluatedCandidates)
             assertTrue(candidates.size <= 256 && estimator.batches.all { it.size <= 64 })
         }
+    }
+
+    @Test fun bossRetainsSupplementAndReusesItsOwnWinProbabilityOnTheNextPage() {
+        val roster = modelRoster(10).let {
+            listOf(it.first().copy(roleClass = "掩护者", functions = LabyrinthRoleFunctions(selfSustain = 80.0))) + it.drop(1)
+        }
+        val context = modelContext(roster, LabyrinthRoleDecisionContext(
+            0, currentArea = 3, frontlineSurvivalGateEnabled = true, optimizeBossVanguardSynergy = true,
+        ))
+        val ids = roster.map { it.characterId }
+        val tankUnit = context.ownedUnits.first().unitId
+        val probability: (List<Int>) -> Double = { if (tankUnit in it) 0.60 else 0.75 }
+        val estimator = ModelEstimator(probability = probability)
+        val planner = planner(roster).withBattleValueEstimator(estimator)
+        val first = (planner.initialRecommendation(ids, context.ruleContext, requestedBossTeamCount = 2, battleValueContext = context)
+            as LabyrinthBattleTeamRecommendationResult.Ready).recommendation
+        val assessment = requireNotNull(first.modelAssessment)
+        val plannedTeams = assessment.plannedTeams
+        assertEquals(2, first.plannedBossTeamCount)
+        assertEquals(1, first.safeBossTeamCount)
+        assertEquals(2, plannedTeams.size)
+        assertEquals(ids.toSet(), plannedTeams.flatten().toSet())
+        assertEquals(first.members.map { it.characterId }, plannedTeams.first())
+        assertEquals(ids.first(), plannedTeams.first().first())
+        assertEquals(listOf(0.60, 0.75), assessment.teamWinProbabilities)
+        assertEquals(0.90, requireNotNull(assessment.jointWinProbability), 1e-12)
+        assertEquals("按NN模型多队编组（本队NN胜率 60.0% · 2队估算联合胜率 90.0% · 稳妥推荐）", first.reasons.first())
+
+        val supplementIds = plannedTeams[1]
+        val pageContext = context.ruleContext.copy(optimizeBossVanguardSynergy = false)
+        val batchCount = estimator.batches.size
+        fun reuse(eligible: List<String>, failed: Set<String> = emptySet()) =
+            planner.plannedBossRecommendation(plannedTeams, assessment, 2, context.questId, eligible, failed, pageContext)
+        val second = requireNotNull(reuse(supplementIds)).recommendation
+        assertEquals(supplementIds, second.members.map { it.characterId })
+        assertEquals(assessment.copy(pWin = 0.75), second.modelAssessment)
+        assertEquals(0, second.safeBossTeamCount)
+        assertEquals(scorer.evaluate(supplementIds.map(roster.associateBy { it.characterId }::getValue), pageContext).score,
+            second.score, 1e-12)
+        assertEquals(BattleModelTrace(BattleModelDecisionStatus.ADOPTED, 42, "沿用多队规划第2队"), second.modelTrace)
+        assertNull(reuse(supplementIds.drop(1)))
+        assertNull(reuse(supplementIds, setOf(labyrinthBattleTeamSignature(supplementIds))))
+        assertEquals(batchCount, estimator.batches.size)
+
+        val supplementBatch = estimator.batches.indexOfFirst { tankUnit !in it.first() } + 1
+        assertTrue(supplementBatch > 1)
+        val failing = ModelEstimator(
+            sourceForBatch = { if (it < supplementBatch) BattleValueSource.MODEL else BattleValueSource.RULE },
+            fallbackReason = "补刀队推理失败",
+            probability = probability,
+        )
+        val fallback = (planner.withBattleValueEstimator(failing)
+            .initialRecommendation(ids, context.ruleContext, requestedBossTeamCount = 2, battleValueContext = context)
+            as LabyrinthBattleTeamRecommendationResult.Ready).recommendation
+        assertEquals(supplementBatch, failing.batches.size)
+        assertNull(fallback.modelAssessment)
+        assertEquals(BattleModelTrace(BattleModelDecisionStatus.LOAD_OR_INFERENCE_FAILED, 42, "补刀队推理失败"),
+            fallback.modelTrace)
     }
 
     @Test fun activeBattleQuestUsesCurrentNodeOrPrecedingBossAfterAreaAdvance() {
@@ -218,11 +316,117 @@ class BattleValueStrategyTest {
             listOf(normal, ex, boss, start), currentBlockId = start.blockId)
 
         assertEquals(22, labyrinthActiveBattleQuestId(LabyrinthCombatKind.BOSS, route))
+        assertEquals(2, labyrinthBattleTeamArea(null, LabyrinthCombatKind.BOSS, route, progressArea = 3))
         assertEquals(22, labyrinthActiveBattleQuestId(LabyrinthCombatKind.BOSS, route.copy(currentBlockId = boss.blockId)))
         assertEquals(21, labyrinthActiveBattleQuestId(LabyrinthCombatKind.EX, route.copy(currentBlockId = ex.blockId)))
         assertEquals(20, labyrinthActiveBattleQuestId(LabyrinthCombatKind.NORMAL, route.copy(currentBlockId = normal.blockId)))
         assertNull(labyrinthActiveBattleQuestId(LabyrinthCombatKind.EX, route))
         assertNull(labyrinthActiveBattleQuestId(LabyrinthCombatKind.BOSS, null))
+    }
+
+    @Test fun exCatalogMapsAll64QuestsByStableStrategyIdAndArea() {
+        val expectedIds = listOf(
+            "ghost_lord", "good_friend_x", "island_whale", "antimatter_beast", "giant_tuna", "lava_dragon",
+            "multi_explosion_relic", "multi_destruction_relic", "multi_kurumi_shadow", "multi_ny_karyl_shadow",
+            "multi_mifuyu_work_shadow", "multi_ruka_shadow", "queen_bee", "misora",
+        )
+        val strategies = LabyrinthExEncounterCatalog.all.associateBy { it.id }
+        assertEquals(expectedIds.toSet(), strategies.keys)
+        val matched = mutableSetOf<Int>()
+        for (area in 0..6) {
+            for ((index, id) in expectedIds.withIndex()) {
+                val questId = LabyrinthExEncounterCatalog.questIdFor(area, strategies.getValue(id))
+                if (area !in 1..5 || (index >= 12 && area < 4)) {
+                    assertNull("$area/$id", questId)
+                } else {
+                    val expected = "770${area}2${(index + 1).toString().padStart(2, '0')}01".toInt()
+                    assertEquals("$area/$id", expected, questId)
+                    assertTrue(matched.add(requireNotNull(questId)))
+                }
+            }
+        }
+        assertEquals(64, matched.size)
+        assertNull(LabyrinthExEncounterCatalog.questIdFor(null, strategies.getValue("ghost_lord")))
+        assertNull(LabyrinthExEncounterCatalog.questIdFor(5, null))
+        assertNull(LabyrinthExEncounterCatalog.questIdFor(5, strategies.getValue("ghost_lord").copy(id = "unknown")))
+    }
+
+    @Test fun exNodeWithoutPersistedQuestUsesRecognizedEncounterForModelRecommendation() {
+        val ex = LabyrinthNodeJson(4, 2, 1, 40201, blockType = 3, questId = null, listOf(40301), false)
+        val route = LabyrinthRouteJson(1L, 1, 5, 1, false, false, "", emptyList(), emptyList(),
+            listOf(ex), currentBlockId = ex.blockId)
+        val strategy = LabyrinthExEncounterCatalog.all.single { it.id == "multi_destruction_relic" }
+        val area = labyrinthBattleTeamArea(null, LabyrinthCombatKind.EX, route, progressArea = 5)
+        val questId = labyrinthActiveBattleQuestId(LabyrinthCombatKind.EX, route, exEncounterStrategy = strategy)
+        assertEquals(770420801, questId)
+        assertEquals(770520801, labyrinthActiveBattleQuestId(LabyrinthCombatKind.EX, route, 5, strategy))
+        assertEquals(99, labyrinthActiveBattleQuestId(
+            LabyrinthCombatKind.EX, route.copy(nodes = listOf(ex.copy(questId = 99))), 5, strategy,
+        ))
+        assertNull(labyrinthActiveBattleQuestId(LabyrinthCombatKind.EX, route, area))
+        assertNull(labyrinthActiveBattleQuestId(LabyrinthCombatKind.NORMAL, route, area, strategy))
+
+        val estimator = ModelEstimator { 0.80 }
+        val inputs = BattleModelInputs(questId, route.difficulty, emptyList(), emptyMap(), false, estimator, strategy.id)
+        val roster = modelRoster(6)
+        val ids = roster.map { it.characterId }
+        val profiles = roster.associateBy { it.characterId }
+        val context = LabyrinthRoleDecisionContext(0, currentArea = area, encounterStrategy = strategy)
+        val valueContext = requireNotNull(inputs.valueContext(ids, profiles, context))
+        assertEquals(4, valueContext.area)
+        assertEquals(5, valueContext.difficulty)
+        assertNull(inputs.skipTrace(LabyrinthCombatKind.EX, area, ids, profiles, context))
+        val result = labyrinthBalancedBattleRecommendation(
+            planner(roster).withBattleValueEstimator(estimator), null, ids, context, emptySet(), null, 0, 1, false, 1,
+            battleValueContext = valueContext,
+        ).result as LabyrinthBattleTeamRecommendationResult.Ready
+        assertEquals(setOf(770420801), estimator.questIds.toSet())
+        assertEquals(BattleModelTrace(BattleModelDecisionStatus.ADOPTED, 770420801, "NN胜率 80.0% · 稳妥推荐"),
+            result.recommendation.modelTrace)
+    }
+
+    @Test fun missingModelInputsExplainWhyNormalBossAndExUseRules() {
+        val estimator = ModelEstimator { 0.80 }
+        val inputs = BattleModelInputs(null, 5, emptyList(), emptyMap(), false, estimator)
+        val roster = modelRoster(6)
+        val ids = roster.map { it.characterId }
+        val profiles = roster.associateBy { it.characterId }
+        val context = LabyrinthRoleDecisionContext(0, currentArea = 3)
+        val planner = planner(roster).withBattleValueEstimator(estimator)
+        val normalTrace = BattleModelTrace(BattleModelDecisionStatus.NO_QUEST_ID, detail = "普通战节点缺少 questId")
+        fun trace(kind: LabyrinthCombatKind, modelInputs: BattleModelInputs = inputs) =
+            modelInputs.skipTrace(kind, 3, ids, profiles, context)
+        assertNull(inputs.valueContext(ids, profiles, context))
+        assertEquals(normalTrace, trace(LabyrinthCombatKind.NORMAL))
+        assertEquals(BattleModelTrace(BattleModelDecisionStatus.NO_QUEST_ID, detail = "Boss 节点缺少 questId"),
+            trace(LabyrinthCombatKind.BOSS))
+        assertEquals(BattleModelTrace(BattleModelDecisionStatus.NO_QUEST_ID, detail = "EX 遭遇未识别，无法确定 questId"),
+            trace(LabyrinthCombatKind.EX))
+        assertEquals(BattleModelTrace(BattleModelDecisionStatus.NO_QUEST_ID, detail = "EX 遭遇 queen_bee 在第3层没有 questId 映射"),
+            trace(LabyrinthCombatKind.EX, inputs.copy(exEncounterId = "queen_bee")))
+        assertEquals(BattleModelTrace(BattleModelDecisionStatus.MODEL_DISABLED, 42),
+            trace(LabyrinthCombatKind.NORMAL, inputs.copy(questId = 42, estimator = RuleBattleValueEstimator(scorer))))
+        assertEquals(BattleModelTrace(BattleModelDecisionStatus.CONTEXT_UNAVAILABLE, 42, "缺少迷宫难度"),
+            trace(LabyrinthCombatKind.NORMAL, inputs.copy(questId = 42, difficulty = null)))
+        for (retry in 0..1) {
+            val result = labyrinthBalancedBattleRecommendation(
+                planner, null, ids, context, emptySet(), null, retry, 1, false, 1, modelFallbackTrace = normalTrace,
+            ).result as LabyrinthBattleTeamRecommendationResult.Ready
+            assertEquals(normalTrace, result.recommendation.modelTrace)
+        }
+
+        val healer = roster.last().copy(roleClass = "治疗者")
+        val exRoster = roster.dropLast(1) + healer
+        val exStrategy = LabyrinthExEncounterCatalog.all.first { it.id == "island_whale" }
+        val failed = labyrinthBattleTeamSignature(ids.dropLast(1))
+        val exTrace = trace(LabyrinthCombatKind.EX, inputs.copy(exEncounterId = exStrategy.id))
+        val exResult = labyrinthBalancedBattleRecommendation(
+            planner(exRoster).withBattleValueEstimator(estimator), null, ids, context.copy(encounterStrategy = exStrategy),
+            setOf(failed), failed, 2, 1, false, 1, modelFallbackTrace = exTrace,
+        ).result as LabyrinthBattleTeamRecommendationResult.Ready
+        assertTrue(exResult.recommendation.reasons.any { "EX第二次失败生存兜底" in it })
+        assertEquals(requireNotNull(exTrace), exResult.recommendation.modelTrace)
+        assertTrue(estimator.batches.isEmpty())
     }
 
     @Test fun journalContainsOnlyPythonSampleFieldsAndObservedLabels() {
@@ -287,20 +491,24 @@ class BattleValueStrategyTest {
 
     private class ModelEstimator(
         private val sourceForBatch: (Int) -> BattleValueSource = { BattleValueSource.MODEL },
+        private val fallbackReason: String? = null,
         private val probability: (List<Int>) -> Double,
     ) : ContextualBattleValueEstimator {
         val batches = mutableListOf<List<List<Int>>>()
+        val questIds = mutableListOf<Int>()
 
         override fun unitAffinities(context: BattleValueContext): Map<Int, Double> =
             context.ownedUnits.associate { it.unitId to -it.unitId.toDouble() }
 
         override fun estimateWithSource(context: BattleValueContext, candidates: List<List<Int>>): BattleValueEstimate {
             batches.add(candidates)
+            questIds.add(context.questId)
             val values = candidates.map { team ->
                 val win = probability(team)
                 BattleValue(win, 0.0, 1.0 - win, win, 0.0, win)
             }
-            return BattleValueEstimate(values, sourceForBatch(batches.size))
+            val source = sourceForBatch(batches.size)
+            return BattleValueEstimate(values, source, fallbackReason.takeIf { source == BattleValueSource.RULE })
         }
     }
 }

@@ -4,6 +4,7 @@ import com.landosol.toolbox.account.*
 import com.landosol.toolbox.desktop.app.DesktopAppGraph
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopGoal
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopPreferences
+import com.landosol.toolbox.desktop.app.strategy.BattleModelHealth
 import com.landosol.toolbox.desktop.app.ui.DesktopTask
 import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.platform.*
@@ -108,6 +109,7 @@ class GraphControlService(
             put("catalog", catalogJson.encode(graph.ux.catalog.value))
             put("resolution", cachedModel("resolution", graph.resolutionGuard.status.value))
             put("ocr", cachedModel("ocr", graph.ocr.status.value))
+            put("battleModel", cachedModel("battleModel", graph.battleModelStatus.value))
             put("credentials", cachedModel("credentials", graph.ux.credentials.value))
             put("identity", cachedModel("identity", graph.identityStore.current()))
             put("gameClient", cachedModel("gameClient", graph.gameClientResolution))
@@ -195,7 +197,26 @@ class GraphControlService(
                 if (args.keys.any { it in setOf("adbPath", "lastDevice", "touchMode") }) requireIdle()
                 check("adbPath" !in args && "lastDevice" !in args) { "请通过设备连接或 ADB 配置操作修改设备绑定" }
                 val value: DesktopSettings = decode(patch(model(graph.settings.state.value), args))
-                withContext(Dispatchers.IO) { graph.settings.save(value) }
+                withContext(Dispatchers.IO) {
+                    graph.settings.save(value)
+                    graph.refreshBattleModelStatus()
+                }
+            }
+            ControlOps.BATTLE_MODEL_CHECK -> {
+                if (!graph.dataOnly && graph.busy) {
+                    return message(if (graph.settings.state.value.battleOnnxEnabled) "请先停止当前任务后再重载模型"
+                        else "模型开关已关闭，下局使用规则编组")
+                }
+                val status = withContext(Dispatchers.IO) {
+                    if (graph.sharedData != null) graph.refreshSharedSettings()
+                    graph.refreshBattleModelStatus(forceReload = true)
+                }
+                return message(when (status.health) {
+                    BattleModelHealth.DISABLED, BattleModelHealth.FAILED, BattleModelHealth.FALLBACK ->
+                        status.detail ?: status.health.label
+                    BattleModelHealth.READY -> "战斗模型校验通过：${status.bundleId}"
+                    BattleModelHealth.LOADED -> "战斗模型已校验并重载：${status.bundleId}"
+                })
             }
             ControlOps.ACCOUNT_NEW -> { requireIdle(); graph.accounts.openNewAccount() }
             ControlOps.ACCOUNT_EDIT -> {
@@ -435,7 +456,10 @@ class GraphControlService(
                 graph.labyrinthController.start(confirmed, args["guildId"]?.jsonPrimitive?.intOrNull)
             }
             DesktopTask.READ -> graph.labyrinthController.checkStatus()
-            DesktopTask.RECOGNIZE -> graph.startRecognition(true)
+            DesktopTask.RECOGNIZE -> {
+                graph.refreshSharedSettings()
+                graph.startRecognition(true)
+            }
             DesktopTask.ENTRY -> graph.startRecognition(false)
         }
         yield()

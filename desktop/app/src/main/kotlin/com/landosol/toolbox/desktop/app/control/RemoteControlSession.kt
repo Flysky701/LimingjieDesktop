@@ -8,6 +8,7 @@ import com.landosol.toolbox.automation.GameClientResolution
 import com.landosol.toolbox.desktop.app.*
 import com.landosol.toolbox.desktop.app.adapters.device.VisualResolutionStatus
 import com.landosol.toolbox.desktop.app.adapters.storage.*
+import com.landosol.toolbox.desktop.app.strategy.BattleModelStatus
 import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
 import com.landosol.toolbox.desktop.platform.DesktopSettings
@@ -123,6 +124,7 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     init{previous?.let{accounts.copyDraftFrom(it.accounts)}}
     val log=LogView()
     val ocr=OcrView()
+    val battleModel: StateFlow<BattleModelStatus> = field("battleModel") { it.model("battleModel", BattleModelStatus()) }
     val automationOverlayCoordinator=OverlayView()
     val taskStopping=consoleField{it.stopping}
     val preview:StateFlow<ImageBitmap?> = port.previewFrames(::decodeControlPreview).stateIn(scope,SharingStarted.Eagerly,null)

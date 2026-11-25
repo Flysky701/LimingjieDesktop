@@ -13,6 +13,7 @@ import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopPreferences
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopSettingsStore
 import com.landosol.toolbox.desktop.app.control.*
+import com.landosol.toolbox.desktop.app.strategy.BATTLE_DEFAULT_DATA_DIR_ENV
 import com.landosol.toolbox.desktop.app.ui.*
 import com.landosol.toolbox.desktop.app.ui.theme.DesktopTheme
 import com.landosol.toolbox.desktop.app.ui.theme.NativeWindowTheme
@@ -45,7 +46,9 @@ fun main(args: Array<String>) {
         settings = DesktopSettingsStore(root)
         DesktopLog.initialize(root.resolve("logs"))
         val host = runBlocking { SharedDataHost.start(legacy, startupUpdates = "--offline-startup" !in args) }.also { shared = it }
-        SharedSupervisorModel(host.control, host.endpoint, WorkerLauncher(lifetime, WorkerProcessContainment::own), root, lifetime)
+        val launcher = WorkerLauncher(lifetime, WorkerProcessContainment::own,
+            extraEnvironment = mapOf(BATTLE_DEFAULT_DATA_DIR_ENV to legacy.toString()))
+        SharedSupervisorModel(host.control, host.endpoint, launcher, root, lifetime)
     } catch (failure: Exception) {
         runBlocking { shared?.shutdown() }
         lock?.close(); lifetime.cancel()

@@ -37,6 +37,7 @@ internal suspend fun runWorkerMain(args: Array<String>): Int {
         val graph = DesktopAppGraph(directory, startupUpdates = false, sharedData = shared)
         val service = GraphControlService(graph, id, label).also { domain = it }
         graph.settings.save(settings.copy(lastDevice = ""))
+        graph.refreshBattleModelStatus()
         Thread.setDefaultUncaughtExceptionHandler { _, failure ->
             DesktopLog.write('E', "Worker", "实例进程发生异常", failure)
             service.revokeActions("实例发生异常，任务已停止")

@@ -2,6 +2,9 @@ package com.landosol.toolbox.labyrinth
 
 import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.labyrinth.kernel.*
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelAssessment
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelDecisionStatus
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelTrace
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueContext
 import com.landosol.toolbox.labyrinth.kernel.strategy.ContextualBattleValueEstimator
 import com.landosol.toolbox.labyrinth.kernel.strategy.LabyrinthBattleValueEstimator
@@ -220,9 +223,14 @@ internal fun labyrinthPersistedBossNode(route: LabyrinthRouteJson?): LabyrinthNo
 internal fun labyrinthActiveBattleQuestId(
     combatKind: LabyrinthCombatKind?,
     route: LabyrinthRouteJson?,
+    area: Int? = null,
+    exEncounterStrategy: LabyrinthExEncounterStrategy? = null,
 ): Int? = when (combatKind) {
     LabyrinthCombatKind.BOSS -> labyrinthPersistedBossNode(route)?.questId
-    LabyrinthCombatKind.EX, LabyrinthCombatKind.NORMAL -> labyrinthPersistedCurrentNode(route)?.questId
+    LabyrinthCombatKind.NORMAL -> labyrinthPersistedCurrentNode(route)?.questId
+    LabyrinthCombatKind.EX -> labyrinthPersistedCurrentNode(route).let { node ->
+        node?.questId ?: LabyrinthExEncounterCatalog.questIdFor(area ?: node?.area, exEncounterStrategy)
+    }
     null -> null
 }
 
@@ -236,6 +244,66 @@ internal fun labyrinthBattleTeamArea(
     ?: (if (combatKind == LabyrinthCombatKind.BOSS) labyrinthPersistedBossNode(route)?.area else null)
     ?: labyrinthPersistedCurrentNode(route)?.area
     ?: progressArea
+
+internal data class BattleModelInputs(
+    val questId: Int?,
+    val difficulty: Int?,
+    val relicIds: List<Int>,
+    val markStacks: Map<LabyrinthRelicMark, Int>,
+    val reviveAvailable: Boolean,
+    val estimator: LabyrinthBattleValueEstimator?,
+    val exEncounterId: String? = null,
+) {
+    fun valueContext(
+        acquiredCharacterIds: List<String>,
+        profiles: Map<String, LabyrinthRoleProfile>,
+        ruleContext: LabyrinthRoleDecisionContext,
+    ): BattleValueContext? {
+        if (estimator !is ContextualBattleValueEstimator || acquiredCharacterIds.isEmpty()) return null
+        return buildBattleValueContext(
+            acquiredCharacterIds = acquiredCharacterIds,
+            profiles = profiles,
+            questId = questId ?: return null,
+            area = ruleContext.currentArea ?: return null,
+            difficulty = difficulty ?: return null,
+            ruleContext = ruleContext,
+            relicIds = relicIds,
+            markStacksByMark = markStacks,
+            alphaRupee = null,
+            reviveAvailable = reviveAvailable,
+        )
+    }
+
+    fun skipTrace(
+        combatKind: LabyrinthCombatKind?,
+        area: Int?,
+        acquiredCharacterIds: List<String>,
+        profiles: Map<String, LabyrinthRoleProfile>,
+        ruleContext: LabyrinthRoleDecisionContext,
+    ): BattleModelTrace? {
+        if (estimator !is ContextualBattleValueEstimator) {
+            return BattleModelTrace(BattleModelDecisionStatus.MODEL_DISABLED, questId)
+        }
+        if (questId == null) {
+            val detail = when (combatKind) {
+                LabyrinthCombatKind.NORMAL -> "普通战节点缺少 questId"
+                LabyrinthCombatKind.BOSS -> "Boss 节点缺少 questId"
+                LabyrinthCombatKind.EX -> if (exEncounterId == null) "EX 遭遇未识别，无法确定 questId"
+                else "EX 遭遇 $exEncounterId 在${area?.let { "第${it}层" } ?: "未知层数"}没有 questId 映射"
+                null -> return BattleModelTrace(BattleModelDecisionStatus.CONTEXT_UNAVAILABLE, detail = "未确认战斗类型")
+            }
+            return BattleModelTrace(BattleModelDecisionStatus.NO_QUEST_ID, detail = detail)
+        }
+        val detail = when {
+            area == null || ruleContext.currentArea == null -> "缺少战斗所在层数"
+            difficulty == null -> "缺少迷宫难度"
+            acquiredCharacterIds.isEmpty() -> "没有已获得的角色"
+            valueContext(acquiredCharacterIds, profiles, ruleContext) == null -> "已获得角色无法匹配模型角色 ID"
+            else -> return null
+        }
+        return BattleModelTrace(BattleModelDecisionStatus.CONTEXT_UNAVAILABLE, questId, detail)
+    }
+}
 
 internal fun labyrinthBossEncounterStrategy(route: LabyrinthRouteJson?): LabyrinthExEncounterStrategy? {
     val boss = labyrinthPersistedBossNode(route) ?: return null
@@ -1836,6 +1904,8 @@ class LabyrinthEntryRecognitionSession(
     private var preparedBossFirstTeamIds: List<String> = emptyList()
     /** Chosen safe team count for the current Boss multi-team attempt; 1/2 teams leave later tabs empty. */
     private var bossMultiTeamTargetCount: Int? = null
+    private var plannedBossModelTeams: List<List<String>> = emptyList()
+    private var plannedBossModelAssessment: BattleModelAssessment? = null
     private var configuredBossTeamMode: LabyrinthBossTeamMode = LabyrinthBossTeamMode.MULTI_TEAM
     /** User-configured opening picks per guild; empty means every guild keeps its shipped plan. */
     private var configuredOpeningRosters: Map<Int, List<List<String>>> = emptyMap()
@@ -3649,7 +3719,6 @@ class LabyrinthEntryRecognitionSession(
         existingRunResumeHandoffArmed = false
         activeNodeType = null
         activeNodeArea = null
-        activeNodeArea = null
         eventActionAttempts = 0
         awaitingRetryBattleAfterFailure = false
         combatContext = null
@@ -4450,6 +4519,7 @@ class LabyrinthEntryRecognitionSession(
         }
         pendingBossTeamAdvance = null
         bossEditorTeamIndex = index
+        activeNodeArea = activeNodeArea ?: labyrinthPersistedBossNode(validatedRoute)?.area
         combatContext = (combatContext ?: LabyrinthCombatContext(LabyrinthCombatKind.BOSS))
             .copy(kind = LabyrinthCombatKind.BOSS, teamIndex = index)
         lastBattleTeamRecommendationKey = null
@@ -4821,49 +4891,23 @@ class LabyrinthEntryRecognitionSession(
         }
     }
 
-    private data class BattleModelInputs(
-        val questId: Int?,
-        val difficulty: Int?,
-        val relicIds: List<Int>,
-        val markStacks: Map<LabyrinthRelicMark, Int>,
-        val reviveAvailable: Boolean,
-        val estimator: LabyrinthBattleValueEstimator?,
-    ) {
-        fun valueContext(
-            acquiredCharacterIds: List<String>,
-            profiles: Map<String, LabyrinthRoleProfile>,
-            ruleContext: LabyrinthRoleDecisionContext,
-        ): BattleValueContext? {
-            if (estimator !is ContextualBattleValueEstimator) return null
-            return buildBattleValueContext(
-                acquiredCharacterIds = acquiredCharacterIds,
-                profiles = profiles,
-                questId = questId ?: return null,
-                area = ruleContext.currentArea ?: return null,
-                difficulty = difficulty ?: return null,
-                ruleContext = ruleContext,
-                relicIds = relicIds,
-                markStacksByMark = markStacks,
-                alphaRupee = null,
-                reviveAvailable = reviveAvailable,
-            )
-        }
-    }
-
     private fun battleModelInputs(
         kind: LabyrinthCombatKind?,
+        area: Int?,
+        exEncounterStrategy: LabyrinthExEncounterStrategy?,
         observedRelics: List<LabyrinthObservedRelic>,
         markStacks: Map<LabyrinthRelicMark, Int>,
     ): BattleModelInputs {
         val route = validatedRoute
         val relicIds = observedRelics.map(LabyrinthObservedRelic::relicId)
         return BattleModelInputs(
-            questId = labyrinthActiveBattleQuestId(kind, route),
+            questId = labyrinthActiveBattleQuestId(kind, route, area, exEncounterStrategy),
             difficulty = route?.difficulty,
             relicIds = relicIds.mapNotNull(String::toIntOrNull).distinct().sorted(),
             markStacks = markStacks,
             reviveAvailable = "50002" in relicIds && !battleRelicReviveConsumed,
             estimator = battleValueEstimator,
+            exEncounterId = if (kind == LabyrinthCombatKind.EX) exEncounterStrategy?.id else null,
         )
     }
 
@@ -4959,7 +5003,9 @@ class LabyrinthEntryRecognitionSession(
             relicMarkStackCalibration,
         )
         val defenseStacks = markStacks.getValue(LabyrinthRelicMark.DEFENSE)
-        val modelInputs = battleModelInputs(currentCombatContext?.kind, current.observedRelics, markStacks)
+        val modelInputs = battleModelInputs(
+            currentCombatContext?.kind, battleArea, currentExEncounterStrategy, current.observedRelics, markStacks,
+        )
         val targetCount = encounterStrategy?.targetCount ?: currentCombatContext?.targetCount ?: 1
         val requestedBossTeamCount = if (
             currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
@@ -5051,18 +5097,32 @@ class LabyrinthEntryRecognitionSession(
         val unavailableReason = battleTeamRecommendationUnavailableReason
         val teamIndex = currentCombatContext?.teamIndex ?: 1
         val profiles = battleRoleProfiles
+        val savedBossAssessment = plannedBossModelAssessment.takeIf { allowSupplementLead && retryNumber == 0 }
+        val savedBossTeams = if (savedBossAssessment == null) emptyList() else plannedBossModelTeams
         val computeRecommendation = {
-            val battleValueContext = modelInputs.valueContext(acquiredCharacterIds, profiles, decisionContext)
-            labyrinthBalancedBattleRecommendation(planner, unavailableReason, eligibleCharacterIds,
-                decisionContext, failedSignatures, lastFailedSignature, retryNumber,
-                requestedBossTeamCount, allowSupplementLead, teamIndex, battleValueContext)
+            val plannedRecommendation = savedBossAssessment?.let {
+                planner?.plannedBossRecommendation(
+                    savedBossTeams, it, teamIndex, modelInputs.questId, eligibleCharacterIds, failedSignatures, decisionContext,
+                )
+            }
+            if (plannedRecommendation != null) {
+                LabyrinthBalancedBattlePlanningOutput(plannedRecommendation, true)
+            } else {
+                val battleValueContext = modelInputs.valueContext(acquiredCharacterIds, profiles, decisionContext)
+                val modelFallbackTrace = if (battleValueContext == null) {
+                    modelInputs.skipTrace(currentCombatContext?.kind, battleArea, acquiredCharacterIds, profiles, decisionContext)
+                } else null
+                labyrinthBalancedBattleRecommendation(planner, unavailableReason, eligibleCharacterIds,
+                    decisionContext, failedSignatures, lastFailedSignature, retryNumber,
+                    requestedBossTeamCount, allowSupplementLead, teamIndex, battleValueContext, modelFallbackTrace)
+            }
         }
         val output = if (balancedMode) {
             val key = listOf(sessionId, roleDecisionGeneration.get(), balancedSceneEpoch, planner,
                 acquiredCharacterIds.toList(), eligibleCharacterIds.toList(), decisionContext,
                 failedSignatures.toList(), lastFailedSignature, retryNumber, requestedBossTeamCount,
                 allowSupplementLead, bossTeamMode, bossMultiTeamTargetCount, currentCombatContext,
-                usedCharacterIds.toList(), modelInputs)
+                usedCharacterIds.toList(), modelInputs, savedBossAssessment)
             val ready = battlePlanning.request(key, computeRecommendation)
             if (ready == null || (balancedDetailCapturedAt ?: Long.MIN_VALUE) <= battlePlanning.readyAt) {
                 _state.value = current.copy(battleTeamRecommendation = null,
@@ -5085,10 +5145,16 @@ class LabyrinthEntryRecognitionSession(
                     currentCombatContext?.kind == LabyrinthCombatKind.BOSS &&
                     bossTeamMode == LabyrinthBossTeamMode.MULTI_TEAM
                 ) {
-                    val teamIndex = currentCombatContext.teamIndex.coerceIn(1, 3)
-                    val absoluteTarget = (teamIndex - 1 + recommendation.plannedBossTeamCount).coerceIn(teamIndex, 3)
+                    val bossTeamIndex = teamIndex.coerceIn(1, 3)
+                    val absoluteTarget = (bossTeamIndex - 1 + recommendation.plannedBossTeamCount).coerceIn(bossTeamIndex, 3)
                     if (bossMultiTeamTargetCount == null || teamIndex == 1) {
                         bossMultiTeamTargetCount = absoluteTarget
+                    }
+                    if (teamIndex == 1) {
+                        plannedBossModelAssessment = recommendation.modelAssessment?.takeIf {
+                            it.adopted && it.plannedTeams.size > 1
+                        }
+                        plannedBossModelTeams = plannedBossModelAssessment?.plannedTeams.orEmpty()
                     }
                 }
                 _state.value = current.copy(
@@ -5104,6 +5170,7 @@ class LabyrinthEntryRecognitionSession(
             }
 
             is LabyrinthBattleTeamRecommendationResult.Unavailable -> {
+                if (teamIndex == 1) clearPlannedBossModelTeams()
                 _state.value = current.copy(
                     battleTeamRecommendation = null,
                     battleTeamRecommendationUnavailableReason = recommendationResult.reason,
@@ -5471,7 +5538,8 @@ class LabyrinthEntryRecognitionSession(
             battleWait.reset()
             return false
         }
-        val restartSafeBossContext = combatContext ?: labyrinthPersistedBossNode(validatedRoute)?.let {
+        val persistedBossNode = if (combatContext == null) labyrinthPersistedBossNode(validatedRoute) else null
+        val restartSafeBossContext = combatContext ?: persistedBossNode?.let {
             LabyrinthCombatContext(LabyrinthCombatKind.BOSS)
         }
         val bossSettlementNextRect = labyrinthBossSettlementNextButtonRect(
@@ -5483,6 +5551,7 @@ class LabyrinthEntryRecognitionSession(
         if (bossSettlementNextRect != null) {
             if (combatContext?.kind != LabyrinthCombatKind.BOSS) {
                 activeNodeType = LabyrinthNodeTypes.BOSS
+                activeNodeArea = activeNodeArea ?: persistedBossNode?.area
                 combatContext = restartSafeBossContext
                 _state.value = _state.value.copy(combatContext = combatContext)
             }
@@ -5796,6 +5865,7 @@ class LabyrinthEntryRecognitionSession(
             combatContext?.kind != LabyrinthCombatKind.BOSS
         ) {
             activeNodeType = LabyrinthNodeTypes.BOSS
+            activeNodeArea = activeNodeArea ?: persistedBossNode?.area
             combatContext = LabyrinthCombatContext(
                 kind = LabyrinthCombatKind.BOSS,
                 teamIndex = 1,
@@ -7307,6 +7377,7 @@ class LabyrinthEntryRecognitionSession(
         if (observation.bossTeamIndex != null && combatContext?.kind == LabyrinthCombatKind.BOSS) {
             if (bossEditorPreparationStage == LabyrinthBossEditorPreparationStage.INACTIVE) {
                 // Also recovers a session that entered an already-open Boss editor directly.
+                clearPlannedBossModelTeams()
                 bossEditorPreparationStage = LabyrinthBossEditorPreparationStage.TEAM_1
                 bossEditorBlocked = false
                 pendingBossTeamAdvance = null
@@ -7318,6 +7389,7 @@ class LabyrinthEntryRecognitionSession(
                 )
                 bossEditorPreparationStage = preparation.stage
                 if (preparation.stage == LabyrinthBossEditorPreparationStage.COMPLETE) {
+                    clearPlannedBossModelTeams()
                     bossEditorTeamIndex = 1
                     bossEditorBlocked = false
                     pendingBossTeamAdvance = null
@@ -7352,6 +7424,7 @@ class LabyrinthEntryRecognitionSession(
             // but stopping here permanently makes the automation unrecoverable. Re-enter the
             // existing Boss editor preparation flow instead: it clears all three tabs and returns
             // to team 1 before any new recommendation is allowed to execute.
+            clearPlannedBossModelTeams()
             bossEditorPreparationStage = LabyrinthBossEditorPreparationStage.TEAM_1
             bossEditorTeamIndex = observation.bossTeamIndex
             bossEditorBlocked = false
@@ -8402,8 +8475,13 @@ class LabyrinthEntryRecognitionSession(
         } else {
             1
         }
-        val battleValueContext = battleModelInputs(context.kind, current.observedRelics, markStacks)
-            .valueContext(acquiredCharacterIds, battleRoleProfiles, decisionContext)
+        val modelInputs = battleModelInputs(
+            context.kind, battleArea, currentExEncounterStrategy, current.observedRelics, markStacks,
+        )
+        val battleValueContext = modelInputs.valueContext(acquiredCharacterIds, battleRoleProfiles, decisionContext)
+        val modelFallbackTrace = if (battleValueContext == null) {
+            modelInputs.skipTrace(context.kind, battleArea, acquiredCharacterIds, battleRoleProfiles, decisionContext)
+        } else null
         val nextResult = planner.retryRecommendation(
             acquiredCharacterIds = acquiredCharacterIds,
             context = decisionContext,
@@ -8413,11 +8491,18 @@ class LabyrinthEntryRecognitionSession(
             requestedBossTeamCount = requestedBossTeamCount,
             allowSupplementLead = false,
             battleValueContext = battleValueContext,
+            modelFallbackTrace = modelFallbackTrace,
         )
         return (nextResult as? LabyrinthBattleTeamRecommendationResult.Unavailable)?.reason
     }
 
+    private fun clearPlannedBossModelTeams() {
+        plannedBossModelTeams = emptyList()
+        plannedBossModelAssessment = null
+    }
+
     private fun resetBattleRetryTracking() {
+        clearPlannedBossModelTeams()
         battleRetryCount = 0
         awaitingRetryBattleAfterFailure = false
         synchronized(currentBattleTeamSignatures) { currentBattleTeamSignatures.clear() }
@@ -8785,6 +8870,7 @@ class LabyrinthEntryRecognitionSession(
                                 }
                             }
                             battleWait.reset()
+                            clearPlannedBossModelTeams()
                             bossEditorTeamIndex = null
                             pendingBossTeamAdvance = null
                             bossEditorBlocked = false
@@ -8998,6 +9084,7 @@ class LabyrinthEntryRecognitionSession(
         preparedBossFirstTeamIds = emptyList()
         bossMultiTeamTargetCount = null
         activeNodeType = null
+        activeNodeArea = null
         eventActionAttempts = 0
         _state.value = _state.value.copy(
             combatContext = null,

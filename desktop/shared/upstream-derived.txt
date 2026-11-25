@@ -2,3 +2,7 @@ com/landosol/toolbox/account/AccountViewModel.kt|override fun <T : ViewModel> cr
 com/landosol/toolbox/account/AccountViewModel.kt|modelClass.isAssignableFrom(|modelClass.java.isAssignableFrom(|1|D-23 JVM lifecycle
 com/landosol/toolbox/clanbattle/ClanBattleViewModel.kt|override fun <T : ViewModel> create(modelClass: Class<T>): T|override fun <T : ViewModel> create(modelClass: kotlin.reflect.KClass<T>, extras: androidx.lifecycle.viewmodel.CreationExtras): T|1|D-23 JVM lifecycle
 com/landosol/toolbox/clanbattle/ClanBattleViewModel.kt|modelClass.isAssignableFrom(|modelClass.java.isAssignableFrom(|1|D-23 JVM lifecycle
+com/landosol/toolbox/labyrinth/LabyrinthEntryRecognitionSession.kt|internal fun labyrinthActiveBattleQuestId(|fun labyrinthActiveBattleQuestId(|1|Expose shared quest lookup to Desktop model regression tests
+com/landosol/toolbox/labyrinth/LabyrinthBattleTeamRecommendation.kt|internal fun labyrinthBattleTeamSelectionMessage(|fun labyrinthBattleTeamSelectionMessage(|1|Expose the actual team selection message to Desktop model regression tests
+com/landosol/toolbox/labyrinth/LabyrinthBattleTeamRecommendation.kt|        waiting,|        waiting + recommendation?.modelTrace?.questId?.let { " · 关卡$it" }.orEmpty(),|1|Show the resolved quest in Desktop team selection messages
+com/landosol/toolbox/labyrinth/LabyrinthBattleTeamRecommendation.kt|private fun BattleModelAssessment.summary(|fun BattleModelAssessment.summary(|1|Reuse the shared model assessment format in Desktop logs and UI

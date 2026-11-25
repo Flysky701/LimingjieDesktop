@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth
 import com.landosol.toolbox.labyrinth.concurrent.LabyrinthFourThreadRuntime
 import com.landosol.toolbox.labyrinth.concurrent.WorkHandle
 import com.landosol.toolbox.labyrinth.concurrent.WorkKind
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelTrace
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -154,6 +155,7 @@ internal fun labyrinthBalancedBattleRecommendation(
     failedSignatures: Set<String>, lastFailedSignature: String?, retryNumber: Int,
     requestedBossTeamCount: Int, allowSupplementLead: Boolean, teamIndex: Int,
     battleValueContext: BattleValueContext? = null,
+    modelFallbackTrace: BattleModelTrace? = null,
 ): LabyrinthBalancedBattlePlanningOutput {
     if (planner == null) return LabyrinthBalancedBattlePlanningOutput(
         LabyrinthBattleTeamRecommendationResult.Unavailable(unavailableReason ?: "角色决策资料未加载"), false)
@@ -163,9 +165,10 @@ internal fun labyrinthBalancedBattleRecommendation(
             failedTeamSignatures = failedSignatures, retryNumber = retryNumber,
             lastFailedTeamSignature = lastFailedSignature, requestedBossTeamCount = requestedBossTeamCount,
             allowSupplementLead = allowSupplementLead, battleValueContext = battleValueContext,
+            modelFallbackTrace = modelFallbackTrace,
         ) else planner.initialRecommendation(acquiredCharacterIds = eligibleIds, context = context,
             requestedBossTeamCount = requestedBossTeamCount, allowSupplementLead = allowSupplementLead,
-            battleValueContext = battleValueContext)
+            battleValueContext = battleValueContext, modelFallbackTrace = modelFallbackTrace)
         LabyrinthBalancedBattlePlanningOutput(result, true)
     } catch (failure: Throwable) {
         // Runtime cancellation is not an unavailable recommendation or an automatic stop.
