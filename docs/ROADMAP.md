@@ -12,23 +12,16 @@
 
 ## 2. 当前基线
 
-- **`LimingjieNN`（`main` @ `91286d1`）**：Round 1（S0–S5）已收官，发布 `models/s4_m2b_r1_seed43`（双塔 7.915 MiB、AUROC 0.9914、ECE 0.0085、CPU 512 候选 p95 53.54 ms、`max_abs_diff = 7.629e-6`，三档阈值 `≥0.70 / 0.50–0.70 / <0.50` 回退，遮蔽金币 Win Brier 仅 `+0.00003`；详见 `LimingjieNN/models/s4_m2b_r1_seed43/README.md`）。Python Path B（`route_dp` / `shop_dp` / `marginal_eval` / `run_env`）已成型，Phase 5 待实机 `replays.jsonl`；另保留 **20 CC** 算力储备。
-- **`LimingjieDesktop` 代码线**（外部并行 worker 正在 `work/event-kernel` 推进 Path B 移植，完成前**暂不合流**）：
-
-| 分支 / 工作区 | 现状 | 与主干差距 / 重叠 |
-| --- | --- | --- |
-| **`main`** (`6b31f4e`) | 7 域事件内核、ADB 30s 恢复与 Raw 保留、编组确认防误点、失败重试卸载、**上游 PR #29**（3/4/5 区商店、三档前排生存模式、EX/遗物模板、1088 恢复） | 未合入 NN 战斗引擎与 Path B |
-| **`refactor/event-kernel`** (`cefa80f` + 在途改动) | 纯 Kotlin `Scoring`/`RouteDp`、`BattleOnnxBundle`、`ModelGuidedBattleTeamSearcher`（Tower A 缓存 + 三档回退）、EX 映射、Boss 多队、状态 UI；外部 worker 正在移植 `ShopDp`/`MarginalEval` 等 | 落后 `main` 7 个提交；重叠 4 个核心文件：`LabyrinthBattleTeamRecommendation.kt`、`LabyrinthEntryRecognitionSession.kt`、`BattleDomainModule.kt`、`DesktopAppGraph.kt` |
-| **`feat/nn-battle-engine`** (`5ead6e8`) | 早期半成品（仅含前 2 个 NN 提交） | 落后完整接线，待 M0-B 收口后归档 |
-| **`codex/fix-share-retry-ci` 等** | 历史分支与独立工作树 | 待外部并行任务结束后统一核对清理 |
+- **`LimingjieNN`（`main` @ `91286d1` 后继文档对齐）**：Round 1（S0–S5）已收官，发布 `models/s4_m2b_r1_seed43`（双塔 7.915 MiB、AUROC 0.9914、ECE 0.0085、CPU 512 候选 p95 53.54 ms、`max_abs_diff = 7.629e-6`，三档阈值 `≥0.70 / 0.50–0.70 / <0.50` 回退，遮蔽金币 Win Brier 仅 `+0.00003`；详见 `LimingjieNN/models/s4_m2b_r1_seed43/README.md`）。Python Path B（`route_dp` / `shop_dp` / `marginal_eval` / `run_env`）已成型，Phase 5 待实机 `replays.jsonl`；另保留 **20 CC** 算力储备。
+- **`LimingjieDesktop`（单一主干 `main`，`1.0.18+desktop.17`）**：已完成 M0 路线图统一与分支收口（历史分支已归档并清理冗余 worktree），集成 7 域事件内核、ADB 30s 恢复与 Raw 保留、编组确认防误点、失败重试卸载、上游 **PR #29**（3/4/5 区商店重构、三档前排生存模式、EX/遗物模板、事件复用、1088 恢复）、Level 1 双塔 ONNX 战斗引擎（Tower A 缓存、EX 映射、Boss 多队规划、状态 UI）及共享 `kernel/planning/` Path B 初步接线；`desktop.17` 便携包（`166,013,293` 字节，内置 JDK `21.0.12.1`、`msvcp140.dll 14.40.33810.0`）已通过 `--self-test --offline-startup` 10/10 项全绿自测。
 
 ## 3. 统一里程碑（M0 → M4）
 
-### M0 · 路线图统一与主干收口
+### M0 · 路线图统一与主干收口（已完成）
 - **M0-A（已完成）**：确立本文件为唯一权威源，同步对齐双仓工程文档。
-- **M0-B（待外部 worker 完成后执行）**：以最新 `main` 为基座整合 `refactor/event-kernel` 的完整 NN 与 Path B 改动，解决 4 个重叠文件并对齐 PR #29 三档前排模式，归档清理落后分支与遗留 worktree。门禁：`desktop` 快档 `check` + `*BattleOnnxGoldenTest`。
+- **M0-B（已完成）**：将 `refactor/event-kernel`（NN 战斗引擎与 Path B 接线）合流至最新 `main`，完成与 PR #29 三档前排、3/4/5 区商店与失败重试的语义整合，通过 `check`、`-Pfull :shared:test`、`BattleOnnxGoldenTest`、`:app:packagePortableZip` 与 `--self-test --offline-startup` 验收，并清理历史工作树与分支为单一 `main`。
 
-### M1 · 视觉方案全面审查、DEBUG 与冗余增强（前置核心专项）
+### M1 · 视觉方案全面审查、DEBUG 与冗余增强（下一阶段核心专项）
 
 | 审查域 | 涉及范围 | 核心问题与冗余改造 |
 | --- | --- | --- |
@@ -41,15 +34,15 @@
 - **退出门禁**：`:ocr:evaluate` 达标；核心视觉链路具备多信号冗余或安全降级；`FIX-06` 及高频视觉根因均有离线回归与实机抽检。
 
 ### M2 · Level 1 战斗模型端到端交付与实机闭环
-- 对齐 `ModelGuidedBattleTeamSearcher` 与 PR #29 三档前排生存策略。
+- 对齐并实机验证 `ModelGuidedBattleTeamSearcher` 与 PR #29 三档前排生存策略。
 - **分发倾向**：桌面便携包（`:app:packagePortableZip`）倾向直接内置 `s4_m2b_r1_seed43` 开箱即用，同时保留 `-Dlimingjie.nn.bundle`、`LIMINGJIE_NN_BUNDLE` 与 `data/models/` 外部覆盖；严格校验文件 SHA-256 与 `catalog_sha256`，失败或关闭开关时回退规则引擎。
 - 接通 `ShadowBattleSample` 实战落盘通道，并在运行记录中区分选队来源（NN 稳妥 / NN 边缘 / 规则回退）。
 - 实机复测并关闭 `FIX-01`–`FIX-05`、`FIX-07`、`FIX-08`，并在真机核实 Path B 所需的 3 项游戏语义：`retire()` 扣票与结算时点、老虎机 `23161/33161` 后续阶段是否净扣本金、事件战与 `50002` 免死的结算计数口径。
 - **退出门禁**：`check -Pfull` + 便携包自检通过；实机多局稳定跑通；3 项游戏语义结论明确。
 
-### M3 · Path B 全局高分规划运行时接入
-- 完成共享 Kotlin `kernel/planning/`（`Scoring`、`RouteDp`、`ShopDp`、`MarginalEval`、`ModelBattlePassEstimator`）与 Python 参考实现的黄金用例数值对齐。
-- 以显式开关接入 `t=0` 开局筛图、`T=0`/`T>0` 路线早停、商店 DP 及选角/遗物/事件边际估值，默认兼容原规则；Android 保持零 ONNX 依赖（规则估算器驱动同一 SPI）。
+### M3 · Path B 全局高分规划深化与跨语言对齐
+- 共享 Kotlin `kernel/planning/`（`Scoring`、`RouteDp`、`ShopDp`、`MarginalEval`、`ModelBattlePassEstimator`）及显式开关初步接入已并入 `main`；本阶段完成与 Python 参考实现的黄金用例跨语言数值对齐。
+- 依托 M1 补齐的全链路金币观测与账本，完善 `t=0` 开局筛图、`T=0`/`T>0` 路线早停、商店 DP 及选角/遗物/事件边际估值的线上校验；Android 保持零 ONNX 依赖（规则估算器驱动同一 SPI）。
 - 导出真实开局 `replays.jsonl`，回填 `LimingjieNN` Phase 5（`env/run_env.py` 策略基准对照）。
 
 ### M4 · 线上校准监控与 10 层演进
@@ -57,4 +50,4 @@
 - 按需启用 `LimingjieNN` 预留 **20 CC**，应对国服 DB 更新、分布偏移或 10 层多队版本重训；新包通过 S5 封存门禁与 `BattleOnnxGoldenTest` 后直接滚动替换。
 
 ## 4. 验证档位
-- 文档改动：核对链接与事实；M0-B / 共享改动：`check` + `*BattleOnnxGoldenTest`；M1 OCR/视觉：`+ :ocr:evaluate` 与离线回放；M2/M3 交付：`check -Pfull`、`:app:packagePortableZip`、`:app:packagedRuntimeTest` 及实机回归。
+- 文档改动：核对链接与事实；常规/共享改动：`check` + `*BattleOnnxGoldenTest`；M1 OCR/视觉：`+ :ocr:evaluate` 与离线回放；M2/M3 交付：`check -Pfull`、`:app:packagePortableZip`、`:app:packagedRuntimeTest`、`--self-test --offline-startup` 及实机回归。
