@@ -37,8 +37,8 @@ class DesktopGraphIntegrationTest {
     @Test fun realGraphRecognizesUpstreamFixturePausesStopsAndReleasesResources() = runBlocking {
         val existingThreads = ownedThreads().map { it.threadId() }.toSet()
         val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }
-            .first { Files.exists(it.resolve("android/app/src/test/resources/shop/shop.png")) }
-        val fixture = ImageIO.read(root.resolve("android/app/src/test/resources/shop/shop.png").toFile())
+            .first { Files.exists(it.resolve("desktop/core/src/test/resources/shop/shop.png")) }
+        val fixture = ImageIO.read(root.resolve("desktop/core/src/test/resources/shop/shop.png").toFile())
         // Same fixture and expectation as upstream LabyrinthEntryFrameProcessorTest.
         val fake = FixtureDevice(fixture.width, fixture.height, fixture.getRGB(0, 0, fixture.width, fixture.height, null, 0, fixture.width))
         val data = directory.root.toPath().resolve("graph")
@@ -180,8 +180,8 @@ class DesktopGraphIntegrationTest {
 
     @Test fun upstreamRerollPersistsAndActionReplayUsesRealGraph() = runBlocking {
         val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }
-            .first { Files.exists(it.resolve("android/app/src/test/resources/shop/exit_confirmation.png")) }
-        val original = ImageIO.read(root.resolve("android/app/src/test/resources/shop/exit_confirmation.png").toFile())
+            .first { Files.exists(it.resolve("desktop/core/src/test/resources/shop/exit_confirmation.png")) }
+        val original = ImageIO.read(root.resolve("desktop/core/src/test/resources/shop/exit_confirmation.png").toFile())
         val fixture = java.awt.image.BufferedImage(1280,720,java.awt.image.BufferedImage.TYPE_INT_RGB).apply {
             createGraphics().apply { drawImage(original,0,0,1280,720,null);dispose() }
         }

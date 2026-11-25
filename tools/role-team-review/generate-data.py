@@ -13,7 +13,7 @@ from combat_model import analyze_roster
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-ASSETS = ROOT / "android/app/src/main/assets/resource-packs/cn-bilibili"
+ASSETS = ROOT / "desktop/core/src/main/resources/assets/resource-packs/cn-bilibili"
 ANDROID_DECISION_PATH = ASSETS / "labyrinth-role-decision.json"
 CATALOG_PATH = ASSETS / "characters.landosolroster.json"
 ICONS_PATH = ASSETS / "icons.json"
@@ -547,7 +547,7 @@ def icon_map(icons: dict) -> dict[str, str]:
     result = {}
     for owner_id, values in grouped.items():
         icon = max(values, key=lambda item: priority(item.get("variant")))
-        result[owner_id] = "../../android/app/src/main/assets/resource-packs/cn-bilibili/" + str(icon["file"]).replace("\\", "/")
+        result[owner_id] = "../../desktop/core/src/main/resources/assets/resource-packs/cn-bilibili/" + str(icon["file"]).replace("\\", "/")
     return result
 
 

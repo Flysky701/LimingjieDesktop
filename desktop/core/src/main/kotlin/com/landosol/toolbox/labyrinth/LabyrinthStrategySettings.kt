@@ -1,0 +1,341 @@
+package com.landosol.toolbox.labyrinth
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
+/** 战斗编队三档；稳定是新配置与旧关闭配置的实际默认档。 */
+@Serializable
+enum class LabyrinthFrontlineSurvivalMode(
+    val requiresFrontlineSurvivalGate: Boolean,
+    val label: String,
+    val summary: String,
+    val description: String,
+) {
+    VERY_AGGRESSIVE(
+        requiresFrontlineSurvivalGate = false,
+        label = "非常激进",
+        summary = "排除掩护者，优先输出",
+        description = "配队不选择任何掩护者（坦克），优先输出；非掩护者不足 5 人时，本轮自动按「稳定」编队",
+    ),
+    STABLE(
+        requiresFrontlineSurvivalGate = false,
+        label = "稳定",
+        summary = "保留生存评分与开战安全，不强制前排",
+        description = "默认。保留生存评分与开战安全检查，不强制前排生存位，按综合评分编队。",
+    ),
+    CAUTIOUS(
+        requiresFrontlineSurvivalGate = true,
+        label = "贪生怕死",
+        summary = "前排生存门槛 55/40，保留原有兜底",
+        description = "沿用原前排生存门槛：一号位生存线为 55 分，单队 Boss 失败切多队时放宽到 40 分；保留原有无T兜底和补刀例外，不保证必胜。",
+    ),
+}
+
+@Serializable
+enum class LabyrinthBossTeamMode {
+    MULTI_TEAM,
+    SINGLE_TEAM,
+}
+
+@Serializable
+enum class LabyrinthBattleModelStyle(
+    val speedUtilityWeight: Double,
+    val reviveSpeedMultiplier: Double,
+    val bossSoloMinPWin: Double,
+    val label: String,
+    val summary: String,
+    val description: String,
+) {
+    CONSERVATIVE(
+        0.02, 1.25, 0.80, "稳健", "优先胜率，几乎不换速度",
+        "高胜率下仅微幅偏好快打；单队 Boss 低于 80% 时直接降级多队。",
+    ),
+    BALANCED(
+        0.08, 1.50, 0.70, "均衡", "兼顾稳过与速杀拿币（默认）",
+        "高胜率下适度以极小胜率余量换取更快击杀与更多金币；单队 Boss 低于 70% 时直接降级多队。",
+    ),
+    AGGRESSIVE(
+        0.15, 1.60, 0.60, "冲分", "更积极提速冲金币与高分上限",
+        "高胜率下更愿意优先快打以抬高商店购买力；单队 Boss 低于 60% 时才降级多队。",
+    ),
+    ;
+
+    companion object {
+        fun fromStoredName(name: String?): LabyrinthBattleModelStyle =
+            entries.firstOrNull { it.name == name } ?: BALANCED
+    }
+}
+
+/**
+ * 「特别装备」自动穿戴模式（语义见 `213bad3:android/docs/special-equipment.md`）。
+ *
+ * 只有 [AUTO_EQUIP] 才可能触发「队伍编组页 → 特别装备设定 → 自动特别装备设定」流程；[OFF] 是
+ * 默认值，自动执行对它产生 0 次额外点击。
+ */
+@Serializable
+enum class LabyrinthSpecialEquipmentMode {
+    /** 关闭（默认）：不自动穿戴特别装备。 */
+    OFF,
+
+    /** 自动穿戴：只有本次战斗的关卡类型在 [LabyrinthStrategySettings.specialEquipmentKinds] 内才执行。 */
+    AUTO_EQUIP,
+}
+
+/** User preferences only: game facts and recognition safety thresholds are not editable. */
+
+/**
+ * 采集侧固定每 300 ms 产出一帧（`MediaProjectionCaptureService.FRAME_INTERVAL_MILLIS`）。
+ *
+ * 识别节拍必须是它的整数倍，否则门槛会落空：例如设 400 或 500，第 300 ms 那一帧被丢弃、
+ * 只接受第 600 ms 那一帧，实际节拍都是 600 ms。这里把它写死成两档，让界面显示的毫秒数
+ * 等于真实节拍，而不是看起来可调、实际只有两个值。
+ */
+const val RESPONSE_INTERVAL_FAST = 300
+
+/** 标准档：每 2 帧处理 1 帧。这就是上游 1.0.18 之前 `FRAME_INTERVAL_MILLIS = 500` 的实际行为。 */
+const val RESPONSE_INTERVAL_STANDARD = 500
+
+/** 旧配置没有该字段时的取值：与当前项目行为（300 ms）一致。 */
+const val DEFAULT_RESPONSE_INTERVAL_MILLIS = RESPONSE_INTERVAL_FAST
+
+@Serializable
+data class LabyrinthStrategySettings(
+    val playerWeight: Int = 70,
+    val damageWeight: Int = 50,
+    val survivalWeight: Int = 23,
+    val functionWeight: Int = 13,
+    val formationWeight: Int = 4,
+    val cohesionWeight: Int = 10,
+    /** Apply the game's same-attribute damage tiers (2/3/4/5 = 8/16/25/75%). */
+    val attributePairingBonusEnabled: Boolean = true,
+    val duplicateRolePenalty: Int = 8,
+    /** EX/Boss team-level soft penalty applied after player/system blending. */
+    val mixedDamagePenalty: Int = 15,
+    /** Per-role Effective Effect bonus applied only to that role's system-side score. */
+    val effectiveCharacterSystemBonus: Int = 8,
+    val secondTeamWeight: Int = 35,
+    val thirdTeamWeight: Int = 20,
+    /** 旧 JSON 与 constructor/copy 源码兼容字段；新逻辑读取 effectiveFrontlineSurvivalMode。 */
+    val frontlineSurvivalGateEnabled: Boolean = false,
+    /** Opt-in reuse of a confirmed full team on the first attempt of a normal battle. */
+    val normalBattleSkipTeamSelectionEnabled: Boolean = false,
+    /** Boss battle composition mode. Multi-team is the product default. */
+    val bossTeamMode: LabyrinthBossTeamMode = LabyrinthBossTeamMode.MULTI_TEAM,
+    /** Boss-only soft preference: favor a coherent physical or magic damage system. */
+    val preferPureBossDamageSystem: Boolean = true,
+    /** Single-team Boss fallback: after the configured retries are exhausted, retry in multi-team mode. */
+    val singleBossFallbackToMultiAfterThreeFailures: Boolean = true,
+    /** Number of "重新挑战" taps allowed in single-team Boss mode before switching to multi-team. */
+    val singleBossRetryCountBeforeMulti: Int = 2,
+    /** After the third failed combat attempt, abandon the run and start rerolling via the API. */
+    val rerollAfterThreeBattleFailures: Boolean = true,
+    val baselineLastArea: Int = 3,
+    val baselineTarget: Int = 4,
+    val debuffPivotMinimum: Int = 12,
+    val debuffPivotTolerance: Int = 2,
+    val buyRelics: Boolean = true,
+    val refreshShop: Boolean = true,
+    val refreshFromArea: Int = 5,
+    val normalWinRate: Int = 95,
+    val extremeWinRate: Int = 70,
+    val personalRoleScores: Map<String, Int> = emptyMap(),
+    /** 事件自定义总开关；首次使用和旧配置缺字段时均关闭，关闭不会清除已保存分支。 */
+    val eventCustomizationEnabled: Boolean = false,
+    /**
+     * 已保存的事件自定义覆盖：运行事件名 -> 运行分支名，必须与 events.placeholder.json 逐字一致。
+     * 界面通过 configuredEventChoiceOverrides 合并默认分支，运行侧通过 effectiveEventChoiceOverrides
+     * 读取开关生效后的覆盖；选定按钮不可用时仍回退到既有的跨资源效用评分。
+     */
+    val eventChoiceOverrides: Map<String, String> = DEFAULT_EVENT_CHOICE_OVERRIDES,
+    /**
+     * Per-guild opening picks, replacing the shipped plan: guild id -> three slots, each an
+     * ordered candidate list. The first candidate a slot finds on screen wins, so the order is the
+     * user's preference order. Guilds left out here keep the shipped plan.
+     */
+    val openingRosters: Map<Int, List<List<String>>> = emptyMap(),
+    /**
+     * Preferred relic marks, strongest first. Empty keeps the built-in ordering.
+     *
+     * Only the choices the policy is otherwise indifferent about are affected; reaching a 15 tier
+     * immediately still wins regardless of order.
+     */
+    val relicMarkPriority: List<LabyrinthRelicMark> = emptyList(),
+    /** 特别装备模式；默认 [LabyrinthSpecialEquipmentMode.OFF]，旧配置缺字段时同样得到「关闭」。 */
+    val specialEquipmentMode: LabyrinthSpecialEquipmentMode = LabyrinthSpecialEquipmentMode.OFF,
+    /**
+     * 需要自动穿戴特别装备的关卡类型，取值就是既有的 [LabyrinthCombatKind]：普通 = NORMAL、
+     * EX = EX、BOSS = BOSS），不另造第二套枚举或字符串。
+     *
+     * 默认三类全选：一旦选中「自动穿戴」就必须有可执行的关卡类型，空集合是校验错误。
+     * 这个集合是**显式**的——空集合在执行侧一律解释为「不执行」，绝不等价于「全部关卡」。
+     */
+    val specialEquipmentKinds: Set<LabyrinthCombatKind> =
+        setOf(LabyrinthCombatKind.NORMAL, LabyrinthCombatKind.EX, LabyrinthCombatKind.BOSS),
+    /**
+     * 识别节拍：多久从采集流里取一帧做识别。
+     *
+     * 采集固定每 [CAPTURE_FRAME_INTERVAL_MILLIS] 毫秒产出一帧，所以任何 (300, 600] 之间的值都会
+     * 退化成 600 ms —— 帧只落在 0/300/600…，门槛 400 和 500 都会丢掉 300 那一帧、接受 600。
+     * 为了让每个档位都真实生效，这里只提供两档：[RESPONSE_INTERVAL_FAST]（每帧都处理）与
+     * [RESPONSE_INTERVAL_STANDARD]（每 2 帧处理 1 帧，即上游 1.0.18 之前 500 ms 的实际行为）。
+     *
+     * 旧配置缺这个字段时取 [DEFAULT_RESPONSE_INTERVAL_MILLIS]，与本项目当前行为一致。
+     */
+    val responseIntervalMillis: Int = DEFAULT_RESPONSE_INTERVAL_MILLIS,
+    /** 显式三档优先；null 保留旧布尔配置语义，追加于尾部以兼容旧位置参数。 */
+    val frontlineSurvivalMode: LabyrinthFrontlineSurvivalMode? = null,
+) {
+    val effectiveFrontlineSurvivalMode: LabyrinthFrontlineSurvivalMode
+        get() = frontlineSurvivalMode ?: if (frontlineSurvivalGateEnabled) {
+            LabyrinthFrontlineSurvivalMode.CAUTIOUS
+        } else {
+            LabyrinthFrontlineSurvivalMode.STABLE
+        }
+
+    /** 设置页选档同时同步兼容字段，避免旧读取方与新档位产生分歧。 */
+    fun withFrontlineSurvivalMode(mode: LabyrinthFrontlineSurvivalMode): LabyrinthStrategySettings =
+        copy(frontlineSurvivalMode = mode, frontlineSurvivalGateEnabled = mode.requiresFrontlineSurvivalGate)
+
+    /** 始终以默认分支补齐旧配置，再由用户保存的同名分支覆盖；供设置界面展示。 */
+    fun configuredEventChoiceOverrides(): Map<String, String> =
+        DEFAULT_EVENT_CHOICE_OVERRIDES + eventChoiceOverrides
+
+    /** 总开关仅控制目录内八事件的自定义分支；公会和石板固定规则由决策层独立处理。 */
+    fun effectiveEventChoiceOverrides(): Map<String, String> =
+        if (eventCustomizationEnabled) {
+            configuredEventChoiceOverrides().filterKeys { it in LabyrinthCustomEventCatalog.supportedNames }
+        } else emptyMap()
+
+    fun validationError(): String? = when {
+        specialEquipmentMode == LabyrinthSpecialEquipmentMode.AUTO_EQUIP && specialEquipmentKinds.isEmpty() ->
+            SPECIAL_EQUIPMENT_EMPTY_KINDS_ERROR
+        responseIntervalMillis != RESPONSE_INTERVAL_FAST &&
+            responseIntervalMillis != RESPONSE_INTERVAL_STANDARD ->
+            "响应速度只有 $RESPONSE_INTERVAL_FAST ms 和 $RESPONSE_INTERVAL_STANDARD ms 两档"
+        listOf(playerWeight, damageWeight, survivalWeight, functionWeight, formationWeight,
+            cohesionWeight, secondTeamWeight, thirdTeamWeight, normalWinRate, extremeWinRate)
+            .any { it !in 0..100 } -> "权重和胜率必须在 0–100 之间"
+        damageWeight + survivalWeight + functionWeight + formationWeight + cohesionWeight == 0 ->
+            "系统评分至少保留一项非零权重"
+        duplicateRolePenalty !in 0..30 -> "重复纯职能扣分必须在 0–30 之间"
+        mixedDamagePenalty !in 0..30 -> "物法混编扣分必须在 0–30 之间"
+        effectiveCharacterSystemBonus !in 0..30 -> "有效效果角色系统加分必须在 0–30 之间"
+        singleBossRetryCountBeforeMulti !in 0..10 -> "单队Boss重试次数必须在 0–10 之间"
+        baselineLastArea !in 0..5 -> "补基础层数的截止区域必须在 0–5 之间"
+        baselineTarget !in 1..4 -> "基础目标层数必须在 1–4 之间"
+        debuffPivotMinimum !in 5..15 -> "转追削弱的最低层数必须在 5–15 之间"
+        debuffPivotTolerance !in 0..5 -> "削弱落后容忍层数必须在 0–5 之间"
+        refreshFromArea !in 1..5 -> "商店刷新起始区域必须在 1–5 之间"
+        personalRoleScores.any { (id, score) -> !id.matches(Regex("[0-9]{4,6}")) || score !in 0..100 } ->
+            "个人角色评分必须使用有效角色 ID，分数在 0–100 之间"
+        openingRosterError() != null -> openingRosterError()
+        relicMarkPriority.distinct().size != relicMarkPriority.size -> "遗物优先级不能重复"
+        eventChoiceOverrides.any { (event, choice) -> event.isBlank() || choice.isBlank() } ->
+            "事件自定义的事件名和分支名不能为空"
+        else -> null
+    }
+
+    /** First problem across every configured guild, named so the settings screen can show it. */
+    fun openingRosterError(): String? = openingRosters.firstNotNullOfOrNull { (guildId, slots) ->
+        val guild = LabyrinthOpeningRosterCatalog.configs[guildId]
+            ?: return@firstNotNullOfOrNull "开局方案包含未知公会 $guildId"
+        openingRosterOverrideError(slots)?.let { "${guild.guildName}：$it" }
+    }
+
+    fun applyTo(document: LabyrinthRoleDecisionDocument): LabyrinthRoleDecisionDocument {
+        require(validationError() == null)
+        val total = (damageWeight + survivalWeight + functionWeight + formationWeight + cohesionWeight).toDouble()
+        return document.copy(
+            characters = if (personalRoleScores.isEmpty()) document.characters else document.characters.map { role ->
+                personalRoleScores[role.characterId]?.let { role.copy(personalScore = it.toDouble()) } ?: role
+            },
+            scoring = document.scoring.copy(
+                attributeDamageBonus = if (attributePairingBonusEnabled) {
+                    document.scoring.attributeDamageBonus
+                } else {
+                    document.scoring.attributeDamageBonus.keys.associateWith { 0.0 }
+                },
+                playerWeight = playerWeight / 100.0,
+                systemDamageWeight = damageWeight / total,
+                systemSurvivalWeight = survivalWeight / total,
+                systemFunctionWeight = functionWeight / total,
+                systemFormationWeight = formationWeight / total,
+                systemCohesionWeight = cohesionWeight / total,
+                duplicatePureRolePenalty = duplicateRolePenalty.toDouble(),
+                battleMixedDamagePenalty = mixedDamagePenalty.toDouble(),
+                encounterEffectiveCharacterBonus = effectiveCharacterSystemBonus.toDouble(),
+            ),
+            roleChoice = document.roleChoice.copy(
+                candidateTeamWeights = listOf(1.0, secondTeamWeight / 100.0, thirdTeamWeight / 100.0),
+            ),
+        )
+    }
+
+    fun relicPolicy() = LabyrinthRelicChoicePolicy(LabyrinthRelicChoicePolicyConfig(
+        baselineTarget = baselineTarget,
+        debuffPivotMinimum = debuffPivotMinimum,
+        debuffPivotTolerance = debuffPivotTolerance,
+        baselineLastArea = baselineLastArea,
+        markPriority = relicMarkPriority.distinct(),
+    ))
+
+    /**
+     * 单一判据：本次战斗的关卡类型是否需要自动穿戴特别装备。
+     *
+     * 设置页里三个多选项的勾选状态和自动执行的触发判定都必须调用本函数，不得各自复写一份规则。
+     * 空集合在这里返回 false —— 即「不执行」，而不是「全部关卡」。
+     */
+    fun autoEquipsSpecialEquipment(kind: LabyrinthCombatKind): Boolean =
+        specialEquipmentMode == LabyrinthSpecialEquipmentMode.AUTO_EQUIP && kind in specialEquipmentKinds
+
+    /**
+     * 设置页「保存配置」按钮的启用判据：草稿校验通过、与已保存配置不同、且不在保存中。
+     * 界面直接调用它，单测钉住同一份表达式，避免界面判定与写入判定分叉。
+     */
+    internal fun canSaveDraft(saved: LabyrinthStrategySettings, saving: Boolean): Boolean =
+        !saving && validationError() == null && this != saved
+
+    companion object {
+        /**
+         *勾选「自动穿戴」却一个关卡类型都没勾选时的中文错误文案。
+         * 设置页提示与单测引用同一常量，避免文案各自漂移。
+         */
+        const val SPECIAL_EQUIPMENT_EMPTY_KINDS_ERROR =
+            "已开启特别装备自动穿戴，请至少勾选一个关卡类型（普通/EX/BOSS）"
+
+        /**
+         * 共享目录的默认分支：斗技场极难、迷路右、箱子弟弟、会场交给我们，
+         * 两阶段料理均 ord 1、两阶段老虎机均 ord 2；公会和石板不属于自定义目录。
+         * 这些配置仅在 eventCustomizationEnabled 为 true 时参与运行选择。
+         */
+        val DEFAULT_EVENT_CHOICE_OVERRIDES: Map<String, String> =
+            LabyrinthCustomEventCatalog.defaultChoiceOverrides
+    }
+}
+
+/** Read one immutable snapshot at session start; saving never mutates a running planner. */
+data class LabyrinthStrategySnapshot(
+    val settings: LabyrinthStrategySettings,
+    val roleRuntime: LabyrinthRoleDecisionRuntime?,
+    val pathBPlanningEnabled: Boolean = false,
+    val battleModelStyle: LabyrinthBattleModelStyle = LabyrinthBattleModelStyle.BALANCED,
+)
+
+object LabyrinthStrategySettingsCodec {
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    fun decode(raw: String?): LabyrinthStrategySettings = runCatching {
+        raw?.let { json.decodeFromString<LabyrinthStrategySettings>(it) }
+            ?.takeIf { it.validationError() == null }
+    }.getOrNull() ?: LabyrinthStrategySettings()
+
+    fun encode(settings: LabyrinthStrategySettings): String {
+        require(settings.validationError() == null)
+        return encodeDraft(settings)
+    }
+
+    fun encodeDraft(settings: LabyrinthStrategySettings): String =
+        json.encodeToString(LabyrinthStrategySettings.serializer(), settings)
+
+    fun decodeDraft(raw: String): LabyrinthStrategySettings =
+        json.decodeFromString<LabyrinthStrategySettings>(raw)
+}

@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.desktop.app.adapters.storage.StrategyProfile
 import com.landosol.toolbox.desktop.app.control.*
 import com.landosol.toolbox.labyrinth.LabyrinthRoleRatingItem
-import com.landosol.toolbox.ui.labyrinth.LabyrinthPersonalScoreFilter
+import com.landosol.toolbox.labyrinth.LabyrinthPersonalScoreFilter
 import kotlin.math.roundToInt
 
 internal object ScoreEdits {

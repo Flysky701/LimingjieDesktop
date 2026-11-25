@@ -4,7 +4,7 @@ import com.landosol.toolbox.account.AccountEditorState
 import com.landosol.toolbox.account.AccountUiState
 import com.landosol.toolbox.automation.AutomationSessionId
 import com.landosol.toolbox.automation.GameClientResolution
-import com.landosol.toolbox.clanbattle.recognition.PixelImage
+import com.landosol.toolbox.vision.PixelImage
 import com.landosol.toolbox.desktop.app.DesktopAppGraph
 import com.landosol.toolbox.desktop.app.UserLogKind
 import com.landosol.toolbox.desktop.app.UserLogLine

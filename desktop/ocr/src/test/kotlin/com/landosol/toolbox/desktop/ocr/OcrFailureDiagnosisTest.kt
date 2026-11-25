@@ -88,7 +88,7 @@ class OcrFailureDiagnosisTest {
                 Triple("control-wall", "labyrinth/final-boss-active-20260909.jpg", intArrayOf(1110,765,48,48,4)),
             )
             for ((id, path, roi) in samples) {
-                val source = ImageIO.read(File(root, "android/app/src/test/resources/$path"))
+                val source = ImageIO.read(File(root, "desktop/core/src/test/resources/$path"))
                 val raw = source.getSubimage(roi[0],roi[1],roi[2],roi[3])
                 for ((name, interpolation) in listOf("nearest" to RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR, "bilinear" to RenderingHints.VALUE_INTERPOLATION_BILINEAR, "bicubic" to RenderingHints.VALUE_INTERPOLATION_BICUBIC)) {
                     if ((id.startsWith("control") || id.startsWith("map-boss")) && name != "nearest") continue

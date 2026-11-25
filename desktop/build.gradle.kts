@@ -13,7 +13,7 @@ subprojects {
         if (name == "test" && project.path in setOf(":app", ":ocr", ":platform")) {
             maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
         }
-        if (name == "test" && !providers.gradleProperty("full").isPresent) {
+        if (name == "test" && project.path != ":core" && !providers.gradleProperty("full").isPresent) {
             exclude("**/*IntegrationTest*", "**/*UiTest*",
                 "**/WorkerTransportTest*", "**/WorkerLifecycleTest*", "**/DesktopTrayTest*",
                 "**/InstanceInfrastructureTest*", "**/DeviceIdentityReaderTest*",

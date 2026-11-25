@@ -910,7 +910,7 @@ tools/role-team-review/inspect-role-db.py
 - `攻略/tierlist_91x91_output/summary.json`：日服参考档位摘要。
 - 可读国服 SQLite 数据库；默认 `tools/role-team-review/cache/master_cn.db` 和旧 `pick/.../202604021043.db` 当前也不存在。
 
-准备输入后，从仓库根目录运行。生成器使用 Python 标准库，`--update-db` 会访问网络。输出为 `tools/role-team-review/data.js` 和正式资源 `android/app/src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json`；缺少旧事件库时，事件目录输出为空。重新生成后检查这两个文件的差异。
+准备输入后，从仓库根目录运行。生成器使用 Python 标准库，`--update-db` 会访问网络。输出为 `tools/role-team-review/data.js` 和正式资源 `desktop/core/src/main/resources/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json`；缺少旧事件库时，事件目录输出为空。重新生成后检查这两个文件的差异。
 
 使用已经准备好的默认数据库：
 

@@ -8,7 +8,7 @@ const { chromium } = require('playwright');
 
 const root = path.resolve(__dirname, '..');
 const design = path.join(root, 'docs/archive/desktop/design');
-const assetRoot = path.join(root, 'android/app/src/main/assets/resource-packs/cn-bilibili');
+const assetRoot = path.join(root, 'desktop/core/src/main/resources/assets/resource-packs/cn-bilibili');
 const catalog = JSON.parse(fs.readFileSync(path.join(assetRoot, 'labyrinth-role-decision.json'), 'utf8'));
 const icons = JSON.parse(fs.readFileSync(path.join(assetRoot, 'icons.json'), 'utf8')).characterIcons;
 const attributes = { FIRE: '火', WATER: '水', WIND: '风', LIGHT: '光', DARK: '暗' };

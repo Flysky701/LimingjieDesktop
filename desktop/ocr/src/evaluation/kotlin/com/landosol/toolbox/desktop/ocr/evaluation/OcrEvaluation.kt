@@ -4,7 +4,7 @@ import com.landosol.toolbox.desktop.ocr.OnnxOcrEngine
 import com.landosol.toolbox.desktop.shared.OcrPort
 import com.landosol.toolbox.desktop.shared.readSeriesColumn
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
-import com.landosol.toolbox.clanbattle.recognition.PixelImage
+import com.landosol.toolbox.vision.PixelImage
 import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.labyrinth.LabyrinthExEncounterCatalog
 import com.landosol.toolbox.labyrinth.vision.*
@@ -27,14 +27,14 @@ import javax.imageio.ImageIO
 import kotlin.math.ceil
 import kotlin.math.min
 
-/** A separate source set keeps upstream matcher dependencies out of production :ocr. */
+/** The evaluation source set can use core matchers independently of the production OCR engine. */
 fun main(args: Array<String>) = runBlocking {
     val root = Path.of(args[0])
     val reports = Path.of(args[1]).also(Files::createDirectories)
     val manifest = JSONObject(Files.readString(root.resolve("desktop/ocr/evaluation/manifest.json")))
     val cases = manifest.getJSONArray("samples")
     val json = Json { ignoreUnknownKeys = true }
-    val events = json.parseToJsonElement(Files.readString(root.resolve("android/app/src/main/assets/resource-packs/cn-bilibili/events.placeholder.json")))
+    val events = json.parseToJsonElement(Files.readString(root.resolve("desktop/core/src/main/resources/assets/resource-packs/cn-bilibili/events.placeholder.json")))
         .jsonObject.getValue("events").jsonArray.map { json.decodeFromJsonElement<EventResource>(it) }
     val eventMatcher = LabyrinthEventTextRecognizer(events)
     val engine = OnnxOcrEngine()
@@ -127,7 +127,7 @@ private suspend fun recognize(engine: OnnxOcrEngine, image: BufferedImage, serie
     return text to (System.nanoTime() - start) / 1_000_000.0
 }
 
-/** Reflection reaches internal upstream helpers without copying or widening production APIs. */
+/** Evaluation also exercises the internal core matchers used for live observations. */
 private fun internalDetail(name: String, text: String): Any {
     val type = Class.forName("com.landosol.toolbox.labyrinth.vision.LabyrinthRelicDetailText")
     return type.getMethod(name, String::class.java).invoke(type.getField("INSTANCE").get(null), text)

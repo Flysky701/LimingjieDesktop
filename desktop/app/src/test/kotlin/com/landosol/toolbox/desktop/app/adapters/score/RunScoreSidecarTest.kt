@@ -21,7 +21,7 @@ import javax.imageio.ImageIO
 
 class RunScoreSidecarTest {
     private fun fixture(name: String): Bitmap {
-        val image = ImageIO.read(File("../../android/app/src/test/resources/labyrinth/$name"))
+        val image = ImageIO.read(File("../core/src/test/resources/labyrinth/$name"))
         return Bitmap.createBitmap(image.getRGB(0, 0, image.width, image.height, null, 0, image.width), image.width, image.height, Bitmap.Config.ARGB_8888)
     }
 

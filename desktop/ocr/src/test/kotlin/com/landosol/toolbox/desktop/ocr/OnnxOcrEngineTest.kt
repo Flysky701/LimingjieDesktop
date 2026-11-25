@@ -34,7 +34,7 @@ class OnnxOcrEngineTest {
     }
 
     @Test fun `reads total score from recorded result page`() {
-        val screenshot=ImageIO.read(File("../../android/app/src/test/resources/labyrinth/run-clear-20260917/t0.5.jpg"))
+        val screenshot=ImageIO.read(File("../core/src/test/resources/labyrinth/run-clear-20260917/t0.5.jpg"))
         val crop=screenshot.getSubimage(730,195,460,105)
         OnnxOcrEngine().use { engine ->
             val answer=CompletableFuture<String?>()
@@ -153,7 +153,7 @@ class OnnxOcrEngineTest {
     }
 
     @Test fun `real 1920 pixel map counters survive compact ROI detection misses`() {
-        val screenshot = ImageIO.read(File("../../android/app/src/test/resources/labyrinth/final-boss-active-20260909.jpg"))
+        val screenshot = ImageIO.read(File("../core/src/test/resources/labyrinth/final-boss-active-20260909.jpg"))
         OnnxOcrEngine().use { engine ->
             listOf("5", "4", "2", "1").forEachIndexed { index, expected ->
                 // Current upstream AndroidLabyrinthNodeRelicStackResolver OCR_DIGIT_RECTS, OCR_SCALE.
@@ -172,7 +172,7 @@ class OnnxOcrEngineTest {
     }
 
     @Test fun `low resolution counter gains a final border attempt without reading real nontext controls`() {
-        val resources = File("../../android/app/src/test/resources/labyrinth")
+        val resources = File("../core/src/test/resources/labyrinth")
         val lowResolution = ImageIO.read(File(resources, "node-link-20260914.png"))
         val fullResolution = ImageIO.read(File(resources, "final-boss-active-20260909.jpg"))
         val samples = listOf(

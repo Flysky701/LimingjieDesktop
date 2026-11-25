@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
-const assets = path.join(root, "android", "app", "src", "main", "assets", "resource-packs", "cn-bilibili");
+const assets = path.join(root, "desktop", "core", "src", "main", "resources", "assets", "resource-packs", "cn-bilibili");
 const catalog = JSON.parse(fs.readFileSync(path.join(assets, "characters.landosolroster.json"), "utf8"));
 const icons = JSON.parse(fs.readFileSync(path.join(assets, "icons.json"), "utf8"));
 const tierSummary = JSON.parse(
@@ -59,7 +59,7 @@ const characters = catalog.characters.map((character) => {
     aliases: character.aliases ?? [],
     available: character.available !== false,
     icon: icon
-      ? `../../android/app/src/main/assets/resource-packs/cn-bilibili/${icon.file.replaceAll("\\", "/")}`
+      ? `../../desktop/core/src/main/resources/assets/resource-packs/cn-bilibili/${icon.file.replaceAll("\\", "/")}`
       : null,
     referenceScore: matched || 1,
     scoreSource: matched ? "tierlist-highest" : "default-D",

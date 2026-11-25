@@ -1,7 +1,0 @@
-allprojects {
-    afterEvaluate { p ->
-        p.tasks.matching { it.name == "testDebugUnitTest" }.configureEach { task ->
-            task.jvmArgs("-Dsun.jnu.encoding=UTF-8", "-Dfile.encoding=UTF-8")
-        }
-    }
-}

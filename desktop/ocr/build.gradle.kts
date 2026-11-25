@@ -27,7 +27,10 @@ if (providers.gradleProperty("includeOcrEval").isPresent) tasks.named("check") {
 
 // Explicit diagnostics preserve transformed observations without counting them as test cases
 // or adding repeated variants to the accuracy manifest.
-tasks.test { exclude("**/OcrFailureDiagnosisTest*") }
+tasks.test {
+    inputs.dir(project(":core").layout.projectDirectory.dir("src/test/resources"))
+    exclude("**/OcrFailureDiagnosisTest*")
+}
 tasks.register<Test>("diagnosePreprocessing") {
     description = "Inspect fixed-model responses to real failed ROI preprocessing variants"
     group = "verification"

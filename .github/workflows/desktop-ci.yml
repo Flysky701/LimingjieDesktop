@@ -12,10 +12,9 @@ on:
       - 'desktop/device/licenses/**'
       - 'desktop/ocr/licenses/**'
       - 'desktop/ocr/MODELS.md'
-      - 'android/app/src/**'
-      - '!android/app/src/**/*.md'
-      - 'android/app/schemas/**'
-      - 'android/app/build.gradle.kts'
+      - 'docs/USER-GUIDE.md'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
       - '.gitattributes'
       - '.github/workflows/desktop-ci.yml'
       - '.github/scripts/ci-summary.py'
@@ -24,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       full_checks:
-        description: 'Include upstream, UI, subprocess, packaged runtime and OCR checks'
+        description: 'Include UI, integration and OCR checks, plus runtime tests when packaging'
         type: boolean
         default: false
       package_candidate:
@@ -79,14 +78,31 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: Fetch the battle model bundle for packaging
+        id: model
+        if: inputs.package_candidate == true || startsWith(github.ref, 'refs/tags/desktop-v')
+        env:
+          MODEL_URL: ${{ vars.LIMINGJIE_NN_BUNDLE_URL }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:MODEL_URL) { throw 'Set LIMINGJIE_NN_BUNDLE_URL to the battle model ZIP URL' }
+          $archive = Join-Path $env:RUNNER_TEMP 'battle-model.zip'
+          $bundle = Join-Path $env:RUNNER_TEMP 'battle-model'
+          Invoke-WebRequest -Uri $env:MODEL_URL -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $bundle
+          "bundle=$bundle" >> $env:GITHUB_OUTPUT
       - name: Run selected checks and build requested ZIP
         env:
           FULL_CHECKS: ${{ inputs.full_checks }}
           BUILD_PACKAGE: ${{ inputs.package_candidate == true || startsWith(github.ref, 'refs/tags/desktop-v') }}
+          MODEL_BUNDLE: ${{ steps.model.outputs.bundle }}
         run: |
           $tasks = @('check')
-          if ($env:FULL_CHECKS -eq 'true') { $tasks += '-Pfull' }
-          if ($env:BUILD_PACKAGE -eq 'true') { $tasks += ':app:packagePortableZip' }
+          if ($env:FULL_CHECKS -eq 'true') { $tasks += @('-Pfull', '-PincludeOcrEval') }
+          if ($env:BUILD_PACKAGE -eq 'true') {
+            $tasks += @(':app:packagePortableZip', "-PlimingjieNnBundleDir=$env:MODEL_BUNDLE")
+            if ($env:FULL_CHECKS -eq 'true') { $tasks += '-PincludePackagedRuntime' }
+          }
           & desktop/gradlew.bat -p desktop @tasks --build-cache --no-daemon --max-workers=2 --stacktrace --console=plain
           if ($LASTEXITCODE -ne 0) { throw 'Desktop checks or packaging failed; see the step log and summary' }
       - name: Portable runtime self-test on request
@@ -108,12 +124,6 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Portable self-test failed: $($process.ExitCode)" }
           $result = Get-Content -LiteralPath $report -Raw -Encoding UTF8 | ConvertFrom-Json
           if (-not $result.passed -or $result.version -ne $env:DESKTOP_VERSION) { throw 'Portable self-test failed or desktop version differs' }
-      - name: Confirm upstream source and fixtures remain unchanged
-        if: ${{ !cancelled() }}
-        run: |
-          $changes = git status --porcelain --untracked-files=all -- android/
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect upstream working tree' }
-          if ($changes) { Write-Output $changes; throw 'Desktop checks modified upstream source or fixtures' }
       - name: Summarize desktop results
         if: ${{ !cancelled() }}
         env:

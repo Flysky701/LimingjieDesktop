@@ -62,7 +62,6 @@ import com.landosol.toolbox.automation.session.SessionExpiryFrameTracker
 import com.landosol.toolbox.automation.session.SessionExpiryTerminator
 import com.landosol.toolbox.automation.session.toSessionBlockScores
 import com.landosol.toolbox.automation.capture.CaptureState
-import com.landosol.toolbox.clanbattle.ClanBattleRecognitionSession
 import com.landosol.toolbox.automation.overlay.AutomationOverlayCoordinator
 import com.landosol.toolbox.data.local.AppDatabase
 import com.landosol.toolbox.labyrinth.LabyrinthEntryActionPlanner
@@ -557,9 +556,6 @@ class DesktopAppGraph(
     }
     val automationActionExecutor by lazy {
         SessionBoundActionExecutor(automationSessionManager, accessibilityActionBackend)
-    }
-    val clanBattleRecognitionSession by lazy {
-        ClanBattleRecognitionSession(automationSessionManager, overlayCoordinator = automationOverlayCoordinator)
     }
     private val labyrinthRoleDecisionData by lazy {
         AndroidLabyrinthRoleDecisionDataLoader(context).load()

@@ -15,7 +15,7 @@ plugins {
 val desktopPackageVersion = project.version.toString().substringBefore('+')
 kotlin { jvmToolchain(21) }
 dependencies {
-    implementation(project(":shared")); implementation(project(":device")); implementation(project(":ocr")); implementation(project(":platform"))
+    implementation(project(":core")); implementation(project(":device")); implementation(project(":ocr")); implementation(project(":platform"))
     implementation(compose.desktop.currentOs); implementation(compose.material3)
     implementation(kotlin("reflect"))
     implementation(libs.onnx)
@@ -27,6 +27,7 @@ tasks.withType<Test>().configureEach {
     systemProperty("limingjie.test.classpath", sourceSets["test"].runtimeClasspath.asPath)
 }
 tasks.test {
+    inputs.dir(project(":core").layout.projectDirectory.dir("src/test/resources"))
     // Full UI tests open native Compose dialogs that share the Windows desktop focus.
     if (providers.gradleProperty("full").isPresent) maxParallelForks = 1
     exclude("**/*PackagedRuntimeTest*")

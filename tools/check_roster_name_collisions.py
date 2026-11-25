@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ROSTER = ROOT / "android/app/src/main/assets/resource-packs/cn-bilibili/characters.landosolroster.json"
+ROSTER = ROOT / "desktop/core/src/main/resources/assets/resource-packs/cn-bilibili/characters.landosolroster.json"
 ALLOWED_COLLISIONS = {
     # Two separate roster/database entities genuinely share this display name.
     "涅比亚": {"1186", "1909"},

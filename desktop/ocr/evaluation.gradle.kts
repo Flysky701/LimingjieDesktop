@@ -7,11 +7,11 @@ val evaluation = sets.create("evaluation") {
     runtimeClasspath += mainOutput
 }
 configurations.getByName(evaluation.implementationConfigurationName).extendsFrom(configurations.getByName("implementation"))
-dependencies.add(evaluation.implementationConfigurationName, project(":shared"))
+dependencies.add(evaluation.implementationConfigurationName, project(":core"))
 
 tasks.register<JavaExec>("evaluate") {
     group = "verification"
-    description = "Evaluate real OCR crops through unchanged upstream matchers and report coverage gaps"
+    description = "Evaluate real OCR crops with the core matchers and report coverage gaps"
     dependsOn(evaluation.classesTaskName)
     classpath = evaluation.runtimeClasspath
     mainClass.set("com.landosol.toolbox.desktop.ocr.evaluation.OcrEvaluationKt")

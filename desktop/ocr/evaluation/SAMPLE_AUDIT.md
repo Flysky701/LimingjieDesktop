@@ -4,14 +4,14 @@
 
 ## 已纳入的扩展样本
 
-- `android/app/src/test/resources/labyrinth/node-target-missed-20260916.jpg`：取地图左下绿色 HP 标记旁计数 **1**，使用 `AndroidLabyrinthNodeRelicStackResolver.kt` 的首个 `OCR_DIGIT_RECTS` `(360,970,48,48)` 与 `OCR_SCALE=4`，对应 `node-stack` 匹配器。
+- `desktop/core/src/test/resources/labyrinth/node-target-missed-20260916.jpg`：取地图左下绿色 HP 标记旁计数 **1**，使用 `AndroidLabyrinthNodeRelicStackResolver.kt` 的首个 `OCR_DIGIT_RECTS` `(360,970,48,48)` 与 `OCR_SCALE=4`，对应 `node-stack` 匹配器。
 - 纳入后合计 **15 条**（商店 3、详情 2、堆叠 7、角色奖励 0、事件 2、EX 1）。
 
 ## 未计入实体准确率清单的现有素材
 
 ### 1. 普通遗物商店标题（6 条）
 
-| 原图（相对 `android/app/src/test/resources/`） | 顶部三项标题 | 说明 |
+| 原图（相对 `desktop/core/src/test/resources/`） | 顶部三项标题 | 说明 |
 | --- | --- | --- |
 | `shop/live_shop_20260909.jpg` | 强化宝石；魔护灵装；回生杖 | 实体 ID（14001/25004/15001）由图标模板识别决定 |
 | `shop/shop.png` | 贵族之刀；进化之耳环；再生之手镯 | 仅归类为 `SHOP` 页面，未绑定遗物 ID 真值 |

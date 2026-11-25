@@ -6,4 +6,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "LimingjieDesktop"
-include(":shared", ":device", ":ocr", ":platform", ":app")
+include(":core", ":device", ":ocr", ":platform", ":app")

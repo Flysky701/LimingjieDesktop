@@ -1,7 +1,7 @@
 package com.landosol.toolbox.desktop.app.adapters
 
 import android.graphics.Bitmap
-import com.landosol.toolbox.clanbattle.recognition.PixelImage
+import com.landosol.toolbox.vision.PixelImage
 import com.landosol.toolbox.desktop.ocr.OnnxOcrEngine
 import com.landosol.toolbox.desktop.shared.*
 import com.landosol.toolbox.labyrinth.LabyrinthRelicMark.*
@@ -19,7 +19,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class SeriesColumnOcrTest {
-    private val fixture = File("../../android/app/src/test/resources/labyrinth/series-effect-panel-20261012.jpg")
+    private val fixture = File("../core/src/test/resources/labyrinth/series-effect-panel-20261012.jpg")
 
     @Test fun confirmedPanelReadsOnlyCompleteUnambiguousRowsThroughDesktopBindings() = runBlocking {
         val engine = OnnxOcrEngine()

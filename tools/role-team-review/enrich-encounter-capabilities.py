@@ -7,7 +7,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 REVIEW_DATA = HERE / "data.js"
-ANDROID_DATA = ROOT / "android/app/src/main/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json"
+ANDROID_DATA = ROOT / "desktop/core/src/main/resources/assets/resource-packs/cn-bilibili/labyrinth-role-decision.json"
 READABLE_SKILL_DB = ROOT / "pick/autopcr-android/app/src/main/python/cache/db/202604021043.db"
 
 DOT_APPLICATION_RE = re.compile(

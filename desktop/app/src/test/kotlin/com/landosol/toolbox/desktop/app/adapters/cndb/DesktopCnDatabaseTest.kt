@@ -96,7 +96,7 @@ class DesktopCnDatabaseTest {
         assertFalse(restarted.hasPendingInstall())
         assertEquals(hash(replacement), restarted.currentMetadata()!!.fileSha256)
         assertArrayEquals(replacement, restarted.currentDatabaseFile()!!.readBytes())
-        assertArrayEquals(original, File(restarted.currentDatabaseFile()!!.parentFile, DesktopLabyrinthCnDatabaseRepository.BACKUP_FILE_NAME).readBytes())
+        assertArrayEquals(original, File(context.filesDir, "labyrinth/master-cn/master_cn.previous.db").readBytes())
         assertEquals(2, notices.size)
     }
 
@@ -112,22 +112,16 @@ class DesktopCnDatabaseTest {
         val context = DesktopContext(Files.createTempDirectory("cn-http-fixture").toFile())
         val repository = DesktopLabyrinthCnDatabaseRepository(context, client)
         assertTrue(repository.updateIfNeeded() is LabyrinthCnDatabaseUpdateResult.Updated)
-        assertEquals(listOf(DesktopLabyrinthCnDatabaseRepository.MANIFEST_URL,
-            DesktopLabyrinthCnDatabaseRepository.DATABASE_URL_TEMPLATE.replace("{version}", "202610250001")), calls)
+        assertEquals(listOf(
+            "https://github.com/wbero/autopcr-db-builder/releases/latest/download/manifest.json",
+            "https://github.com/wbero/autopcr-db-builder/releases/download/db-v202610250001/202610250001.db",
+        ), calls)
+        assertEquals(File(context.filesDir, "labyrinth/master-cn/master_cn.db"), repository.currentDatabaseFile())
+        assertTrue(File(context.filesDir, "labyrinth/master-cn/master_cn.metadata.json").isFile)
         val small = OkHttpClient.Builder().addInterceptor { chain -> Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
-            .code(200).message("fixture").body("tiny".toResponseBody()).build() }.build()
+            .code(200).message("fixture").body(ByteArray(999_999).toResponseBody()).build() }.build()
         assertThrows(IllegalStateException::class.java) {
             DesktopLabyrinthCnDatabaseRepository.OkHttpSource(small).downloadDatabase(LabyrinthCnDatabaseVersion("202610250001", hash(bytes)), Files.createTempFile("small", ".db").toFile())
         }
-    }
-
-    @Test fun downloadConstantsMatchUpstream() {
-        val source = File("../../android/app/src/main/java/com/landosol/toolbox/labyrinth/AndroidLabyrinthCnDatabaseRepository.kt").readText()
-        listOf(DesktopLabyrinthCnDatabaseRepository.MANIFEST_URL, DesktopLabyrinthCnDatabaseRepository.DATABASE_URL_TEMPLATE,
-            DesktopLabyrinthCnDatabaseRepository.DATABASE_DIRECTORY, DesktopLabyrinthCnDatabaseRepository.DATABASE_FILE_NAME,
-            DesktopLabyrinthCnDatabaseRepository.BACKUP_FILE_NAME, DesktopLabyrinthCnDatabaseRepository.METADATA_FILE_NAME).forEach {
-            assertTrue("Upstream constant drift: $it", source.contains("\"$it\""))
-        }
-        assertTrue(source.contains("MINIMUM_DATABASE_BYTES = 1_000_000L"))
     }
 }
