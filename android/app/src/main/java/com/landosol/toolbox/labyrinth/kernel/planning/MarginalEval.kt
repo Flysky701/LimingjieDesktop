@@ -10,6 +10,8 @@ data class BattleExam(
     val isBoss: Boolean,
     val weight: Double = 1.0,
     val maxTeams: Int = 3,
+    val isEx: Boolean = false,
+    val expectedTimeSec: Double = 0.0,
 )
 
 data class PlanningState(
@@ -43,6 +45,7 @@ data class BattlePassProfile(
     val conditionalPassProbs: List<Double>,
     val pPass: Double,
     val expectedTeams: Double,
+    val expectedTimeSec: Double = 0.0,
 )
 
 /** The revive charge survives a win and can retry one non-boss exam across the whole sequence. */
@@ -54,6 +57,7 @@ fun passProfile(
     var withCharge = if (state.reviveAvailable) 1.0 else 0.0
     var withoutCharge = 1.0 - withCharge
     var expectedTeams = 0.0
+    var expectedTimeSec = 0.0
     val conditional = exams.map { exam ->
         val estimate = estimator?.estimate(state, exam) ?: return null
         val p = estimate.pPass
@@ -61,11 +65,12 @@ fun passProfile(
         val alive = withCharge + withoutCharge
         val retry = if (exam.isBoss) 0.0 else withCharge * (1.0 - p)
         expectedTeams += (alive + retry) * estimate.expectedTeams
+        expectedTimeSec += (alive + retry) * exam.expectedTimeSec
         withCharge *= p
         withoutCharge = (withoutCharge + retry) * p
         if (alive > 0.0) (withCharge + withoutCharge) / alive else 0.0
     }
-    return BattlePassProfile(conditional, withCharge + withoutCharge, expectedTeams)
+    return BattlePassProfile(conditional, withCharge + withoutCharge, expectedTeams, expectedTimeSec)
 }
 
 fun battleValue(
@@ -82,7 +87,11 @@ private fun battlePoints(
     difficulty: Int,
 ): Double = exams.indices.sumOf { index ->
     val exam = exams[index]
-    val pts = if (exam.isBoss) bossWinDeltaPts(settings, difficulty) else normalWinDeltaPts(settings, difficulty)
+    val pts = when {
+        exam.isBoss -> bossWinDeltaPts(settings, difficulty)
+        exam.isEx -> exWinDeltaPts(settings, difficulty)
+        else -> normalWinDeltaPts(settings, difficulty)
+    }
     exam.weight * pts * profile.conditionalPassProbs[index]
 }
 
@@ -319,7 +328,7 @@ fun evaluateEventOptions(
             val profile = if (after == state) initialProfile else passProfile(after, exams, estimator)
             direct += prob * (after.confirmedPts - state.confirmedPts)
             shop += prob * (balance - initialShop)
-            time += prob * elapsed
+            time += prob * (elapsed + (profile?.expectedTimeSec ?: 0.0))
             if (initialProfile != null && profile != null) battle += prob * (points(profile) - initialBattle)
             usedModel = usedModel && profile != null
             if (targetScore > 0 && profile != null) {

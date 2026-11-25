@@ -16,6 +16,7 @@ data class NodeOutcomeSpec(
     val failTimeSec: Double? = null,
     val isBoss: Boolean? = null,
     val isNonBossBattle: Boolean? = null,
+    val goldDelta: Int = 0,
 ) {
     constructor(
         directPts: Long,
@@ -24,11 +25,27 @@ data class NodeOutcomeSpec(
         failTimeSec: Double? = null,
         isBoss: Boolean? = null,
         isNonBossBattle: Boolean? = null,
-    ) : this(mapOf(directPts to 1.0), winProb, expectedTimeSec, failTimeSec, isBoss, isNonBossBattle)
+        goldDelta: Int = 0,
+    ) : this(mapOf(directPts to 1.0), winProb, expectedTimeSec, failTimeSec, isBoss, isNonBossBattle, goldDelta)
 }
 
+/** Joint incremental collection and wallet after a shop/event, conditional on node success. */
+data class WalletOutcome(
+    val extraBasePts: Long,
+    val goldAfter: Int,
+    val probability: Double,
+    val elapsedSec: Double = 0.0,
+)
+
+typealias WalletModel = (LabyrinthMapNode, Long, Int, Boolean, Int) -> List<WalletOutcome>
+
 /** The state after a node's successful reward, before choosing a successor. */
-data class RoutePolicyKey(val blockId: Long, val scoreBucket: Long, val reviveAvailable: Boolean)
+data class RoutePolicyKey(
+    val blockId: Long,
+    val scoreBucket: Long,
+    val reviveAvailable: Boolean,
+    val gold: Int = 0,
+)
 
 data class RouteDpResult(
     val bestRoute: List<LabyrinthMapNode>,
@@ -43,12 +60,18 @@ data class RouteDpResult(
     val policy: Map<RoutePolicyKey, Long>,
 )
 
-private data class BucketState(val bucket: Long, val reviveAvailable: Boolean) {
-    fun after(step: RewardStep) = BucketState(Math.addExact(bucket, step.bucketDelta), step.reviveAvailable)
-    fun policyKey(blockId: Long) = RoutePolicyKey(blockId, bucket, reviveAvailable)
+private data class BucketState(val bucket: Long, val reviveAvailable: Boolean, val gold: Int = 0) {
+    fun after(step: RewardStep) = BucketState(Math.addExact(bucket, step.bucketDelta), step.reviveAvailable, step.goldAfter)
+    fun policyKey(blockId: Long, carryGold: Boolean = false) =
+        RoutePolicyKey(blockId, bucket, reviveAvailable, if (carryGold) gold else 0)
 }
 
-private data class RewardStep(val bucketDelta: Long, val reviveAvailable: Boolean, val probability: Double)
+private data class RewardStep(
+    val bucketDelta: Long,
+    val reviveAvailable: Boolean,
+    val probability: Double,
+    val goldAfter: Int = 0,
+)
 private data class BattleSteps(val successes: List<RewardStep>, val wipeProb: Double, val time: Double)
 private data class Battle(
     val spec: NodeOutcomeSpec,
@@ -153,6 +176,8 @@ fun solveRouteDp(
     confirmedPts: Long = 0,
     scoreRemainder: Int = 0,
     startNodeIds: List<Long> = graph.starts,
+    walletModel: WalletModel? = null,
+    initialGold: Int = 0,
 ): RouteDpResult {
     require(lambdaRate.isFinite() && lambdaRate >= 0 && scoreRemainder in 0..99) {
         "Invalid time price or partial score remainder"
@@ -167,19 +192,59 @@ fun solveRouteDp(
         prepareBattle(node, id in graph.areaEnds, settings, rate, outcomeSpecs[id])
     }
     var ticks = maxOf(1L, scoreGcd(settings, difficulty)) * 100
+    if (walletModel != null) {
+        ticks = gcd(ticks, Math.multiplyExact(settings.unitPts.toLong(), rate))
+        ticks = gcd(ticks, Math.multiplyExact(settings.relicPts.toLong(), rate))
+    }
     for (battle in battles.values) {
         for ((reward, _) in battle.rewards) ticks = gcd(ticks, reward)
     }
     val initialTicks = Math.addExact(Math.multiplyExact(confirmedPts, 100L), scoreRemainder.toLong())
-    val initial = BucketState(Math.floorDiv(initialTicks, ticks), reviveAvailable)
+    val initial = BucketState(Math.floorDiv(initialTicks, ticks), reviveAvailable, initialGold)
     val offset = Math.floorMod(initialTicks, ticks)
 
     fun points(bucket: Long): Long =
         Math.floorDiv(Math.addExact(Math.multiplyExact(bucket, ticks), offset), 100L)
 
+    val carryGold = walletModel != null
     val battleSteps = mutableMapOf<Pair<Long, Boolean>, BattleSteps>()
     fun stepsFor(id: Long, state: BucketState): BattleSteps =
         battleSteps.getOrPut(id to state.reviveAvailable) { battles.getValue(id).steps(ticks, state.reviveAvailable) }
+
+    val extendedSteps = mutableMapOf<Pair<Long, BucketState>, BattleSteps>()
+    fun transitions(id: Long, state: BucketState): BattleSteps {
+        val raw = stepsFor(id, state)
+        if (walletModel == null) return raw
+        return extendedSteps.getOrPut(id to state) {
+            val node = graph.nodes.getValue(id)
+            val walletBefore = state.gold + (outcomeSpecs[id]?.goldDelta ?: 0)
+            var totalTime = raw.time
+            val out = mutableListOf<RewardStep>()
+            for (step in raw.successes) {
+                val nextBucket = Math.addExact(state.bucket, step.bucketDelta)
+                val stepTicks = Math.addExact(Math.multiplyExact(nextBucket, ticks), offset)
+                val pts = Math.floorDiv(stepTicks, 100L)
+                val rem = Math.floorMod(stepTicks, 100L).toInt()
+                val outcomes = walletModel(node, pts, rem, step.reviveAvailable, walletBefore)
+                val totalProb = outcomes.fold(BigDecimal.ZERO) { acc, o -> acc + BigDecimal(o.probability) }.toDouble()
+                require(abs(totalProb - 1.0) <= 1e-12) { "Wallet rewards must have unit probability mass" }
+                for (o in outcomes) {
+                    val extraTicks = Math.multiplyExact(o.extraBasePts, rate)
+                    val extraBuckets = Math.floorDiv(extraTicks, ticks)
+                    val residue = Math.floorMod(extraTicks, ticks)
+                    require(residue == 0L && o.goldAfter >= 0 && o.elapsedSec.isFinite() && o.elapsedSec >= 0.0 && o.probability in 0.0..1.0) {
+                        "Invalid conditional wallet reward"
+                    }
+                    if (o.probability != 0.0) {
+                        val mass = step.probability * o.probability
+                        out += RewardStep(Math.addExact(step.bucketDelta, extraBuckets), step.reviveAvailable, mass, o.goldAfter)
+                        totalTime += mass * o.elapsedSec
+                    }
+                }
+            }
+            BattleSteps(out, raw.wipeProb, totalTime)
+        }
+    }
 
     fun prefers(candidate: Metrics, incumbent: Metrics): Boolean {
         if (targetScore > 0) {
@@ -198,7 +263,7 @@ fun solveRouteDp(
         val states = entriesAt[id] ?: continue
         val exits = mutableSetOf<BucketState>()
         for (state in states) {
-            stepsFor(id, state).successes.mapTo(exits, state::after)
+            transitions(id, state).successes.mapTo(exits, state::after)
         }
         for (child in graph.children.getValue(id)) {
             entriesAt.getOrPut(child) { mutableSetOf() }.addAll(exits)
@@ -208,7 +273,7 @@ fun solveRouteDp(
     val values = mutableMapOf<Long, Map<BucketState, Metrics>>()
     val continuations = mutableMapOf<RoutePolicyKey, Metrics>()
     val policy = mutableMapOf<RoutePolicyKey, Long>()
-    fun afterNode(id: Long, state: BucketState): Metrics = continuations.getOrPut(state.policyKey(id)) {
+    fun afterNode(id: Long, state: BucketState): Metrics = continuations.getOrPut(state.policyKey(id, carryGold)) {
         val children = graph.children.getValue(id)
         if (children.isEmpty()) {
             if (id in graph.clearEnds) {
@@ -231,7 +296,7 @@ fun solveRouteDp(
                 // Alternatives are mutually exclusive. The bound is the best single continuation.
                 upper = maxOf(upper, candidate.upper)
             }
-            policy[state.policyKey(id)] = selected
+            policy[state.policyKey(id, carryGold)] = selected
             best.copy(upper = upper)
         }
     }
@@ -239,7 +304,7 @@ fun solveRouteDp(
     for (id in graph.order.asReversed()) {
         val states = entriesAt.remove(id) ?: continue
         values[id] = states.associateWith { state ->
-            val steps = stepsFor(id, state)
+            val steps = transitions(id, state)
             var score = 0.0
             var clear = 0.0
             var hit = 0.0
@@ -274,12 +339,12 @@ fun solveRouteDp(
     val distribution = mutableMapOf<Long, Double>()
     for (id in graph.order) {
         for ((state, incoming) in mass.remove(id).orEmpty()) {
-            val steps = stepsFor(id, state)
+            val steps = transitions(id, state)
             if (steps.wipeProb != 0.0) distribution[0L] = (distribution[0L] ?: 0.0) + incoming * steps.wipeProb
             for (step in steps.successes) {
                 val after = state.after(step)
                 val probability = incoming * step.probability
-                val child = policy[after.policyKey(id)]
+                val child = policy[after.policyKey(id, carryGold)]
                 if (child != null) {
                     val childMass = mass.getOrPut(child) { mutableMapOf() }
                     childMass[after] = (childMass[after] ?: 0.0) + probability
@@ -297,11 +362,11 @@ fun solveRouteDp(
     while (next != null) {
         val id = next
         route.add(graph.nodes.getValue(id))
-        val step = stepsFor(id, state).successes.maxByOrNull {
+        val step = transitions(id, state).successes.maxByOrNull {
             it.probability * afterNode(id, state.after(it)).clear
         } ?: break
         state = state.after(step)
-        next = policy[state.policyKey(id)]
+        next = policy[state.policyKey(id, carryGold)]
     }
     return RouteDpResult(
         route, distribution.toSortedMap(), metrics.score, metrics.clear, metrics.hit, metrics.time,

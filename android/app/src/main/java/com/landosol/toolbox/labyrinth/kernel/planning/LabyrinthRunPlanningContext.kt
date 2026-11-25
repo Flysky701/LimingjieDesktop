@@ -35,9 +35,13 @@ data class LabyrinthRunPlanningContext(
         ): LabyrinthRunPlanningContext {
             val nodes = allNodes.ifEmpty { route?.toLabyrinthRoute()?.nodes.orEmpty() }
             val cursor = route?.currentBlockId
-            val effectiveArea = currentArea ?: nodes.firstOrNull { it.blockId == cursor }?.area
+            val cursorNode = cursor?.let { id -> nodes.firstOrNull { it.blockId == id } }
+            val effectiveArea = currentArea ?: cursorNode?.area
                 ?: route?.nodes?.firstOrNull { it.blockId == cursor }?.area ?: 1
-            val upcoming = nodes.filter { it.area >= effectiveArea }
+            val cursorColumnInArea = cursorNode?.takeIf { it.area == effectiveArea }?.column
+            val upcoming = nodes.filter {
+                it.area > effectiveArea || (it.area == effectiveArea && (cursorColumnInArea == null || it.column >= cursorColumnInArea))
+            }
             val exams = upcoming.asSequence()
                 .filter { it.blockType == Node.BOSS && (it.area == 3 || it.area == 5) }
                 .mapNotNull { node -> node.questId?.let { BattleExam(it, node.area, isBoss = true) } }

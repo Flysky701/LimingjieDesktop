@@ -5,14 +5,19 @@ import kotlin.math.abs
 data class ShopDiscountModel(
     val enhanceNode21: Boolean = false,
     val relic40003: Boolean = false,
+    val extraDiscountPct: Int = 0,
 ) {
-    private val pct: Int = (if (enhanceNode21) 25 else 0) + (if (relic40003) 10 else 0)
+    init {
+        require(extraDiscountPct >= 0)
+    }
+
+    private val pct: Int = minOf(90, (if (enhanceNode21) 25 else 0) + (if (relic40003) 10 else 0) + extraDiscountPct)
     val rate: Double get() = pct / 100.0
 
     fun price(basePrice: Int): Int = Math.floorDiv(basePrice.toLong() * (100 - pct), 100L).toInt()
 }
 
-enum class ShopItemKind { RELIC_1STAR, RELIC_2STAR, RELIC_3STAR, ROLE_IMPRINT, ROLE_CHOICE_IMPRINT }
+enum class ShopItemKind { RELIC_1STAR, RELIC_2STAR, RELIC_3STAR, RELIC_4STAR, ROLE_IMPRINT, ROLE_CHOICE_IMPRINT }
 
 data class ShopItem(
     val itemId: String,
@@ -66,6 +71,12 @@ data class ShopPlanResult(
     val expectedPts: Double,
     val spentGold: Int,
     val remainingGold: Int,
+)
+
+data class ShopPlanEvaluation(
+    val plan: ShopPlanResult,
+    val refreshCost: Int,
+    val expectedValue: Double,
 )
 
 private val defaultShelves = ShopShelfModel()
@@ -209,9 +220,10 @@ private class ShopDp(
         if (shops == 0) mapOf(0L to 1.0) else mix(future(wallet, shops))
     }
 
-    fun plan(initial: VisibleShop): ShopPlanResult {
+    fun plan(initial: VisibleShop): ShopPlanEvaluation {
         var state = initial
-        var action = decision(state).action
+        val initialDecision = decision(state)
+        var action = initialDecision.action
         val indices = mutableListOf<Int>()
         while (action >= 0) {
             indices += action
@@ -223,9 +235,15 @@ private class ShopDp(
             val pts = (if (item.isRelic) relicTicks else unitTicks) / 100.0
             efficiency(discount.price(item.basePrice), item.collectionCount * pts + item.extraBattlePts)
         }
-        return ShopPlanResult(
-            buyIndices, action == REFRESH, visibleDistribution(initial).mean(),
+        val shouldRefresh = action == REFRESH
+        val planResult = ShopPlanResult(
+            buyIndices, shouldRefresh, visibleDistribution(initial).mean(),
             initial.wallet.gold - state.wallet.gold, state.wallet.gold,
+        )
+        return ShopPlanEvaluation(
+            plan = planResult,
+            refreshCost = if (shouldRefresh) fees[initial.refreshCount] else 0,
+            expectedValue = initialDecision.value,
         )
     }
 
@@ -236,6 +254,37 @@ private class ShopDp(
 }
 
 private fun Map<Long, Double>.mean(): Double = entries.sumOf { (pts, p) -> pts * p }
+
+fun evaluateShopVisit(
+    items: Iterable<ShopItem>,
+    gold: Int,
+    settings: ScoreSettings = ScoreSettings.currentOfficial(),
+    difficulty: Int = 5,
+    discountModel: ShopDiscountModel = ShopDiscountModel(),
+    shelfModel: ShopShelfModel = defaultShelves,
+    refreshCount: Int = 0,
+    maxRefreshes: Int = settings.shopRefreshCosts.size,
+    refreshAvailable: Boolean = true,
+    isFinalArea: Boolean = false,
+    remainingShops: Int = 1,
+    boughtMask: Int = 0,
+    coinRetentionValueFn: ((Int) -> Double)? = null,
+    ownedCharacterIds: Set<String> = emptySet(),
+    scoreRemainder: Int = 0,
+    futureRefreshAvailable: List<Boolean> = emptyList(),
+): ShopPlanEvaluation {
+    val shelf = items.toList()
+    require(gold >= 0 && remainingShops >= 1 && refreshCount >= 0 && scoreRemainder in 0..99)
+    require(boughtMask >= 0 && Int.SIZE_BITS - boughtMask.countLeadingZeroBits() <= shelf.size)
+    val bought = shelf.indices.take(Int.SIZE_BITS - 1).filter { boughtMask and (1 shl it) != 0 }.toSet()
+    val owned = ownedCharacterIds + bought.mapNotNull { index ->
+        shelf[index].takeUnless(ShopItem::isRelic)?.characterId
+    }
+    val flags = if (isFinalArea) List(remainingShops - 1) { false } else futureRefreshAvailable
+    val dp = ShopDp(settings, difficulty, discountModel, shelfModel, maxRefreshes, coinRetentionValueFn, flags)
+    return dp.plan(VisibleShop(shelf, ShopWallet(gold, owned, scoreRemainder), remainingShops, refreshCount,
+        bought, refreshAvailable && !isFinalArea))
+}
 
 fun planShopVisit(
     items: Iterable<ShopItem>,
@@ -254,19 +303,11 @@ fun planShopVisit(
     ownedCharacterIds: Set<String> = emptySet(),
     scoreRemainder: Int = 0,
     futureRefreshAvailable: List<Boolean> = emptyList(),
-): ShopPlanResult {
-    val shelf = items.toList()
-    require(gold >= 0 && remainingShops >= 1 && refreshCount >= 0 && scoreRemainder in 0..99)
-    require(boughtMask >= 0 && Int.SIZE_BITS - boughtMask.countLeadingZeroBits() <= shelf.size)
-    val bought = shelf.indices.take(Int.SIZE_BITS - 1).filter { boughtMask and (1 shl it) != 0 }.toSet()
-    val owned = ownedCharacterIds + bought.mapNotNull { index ->
-        shelf[index].takeUnless(ShopItem::isRelic)?.characterId
-    }
-    val flags = if (isFinalArea) List(remainingShops - 1) { false } else futureRefreshAvailable
-    val dp = ShopDp(settings, difficulty, discountModel, shelfModel, maxRefreshes, coinRetentionValueFn, flags)
-    return dp.plan(VisibleShop(shelf, ShopWallet(gold, owned, scoreRemainder), remainingShops, refreshCount,
-        bought, refreshAvailable && !isFinalArea))
-}
+): ShopPlanResult = evaluateShopVisit(
+    items, gold, settings, difficulty, discountModel, shelfModel, refreshCount, maxRefreshes,
+    refreshAvailable, isFinalArea, remainingShops, boughtMask, coinRetentionValueFn,
+    ownedCharacterIds, scoreRemainder, futureRefreshAvailable,
+).plan
 
 fun shopScoreDistribution(
     gold: Int,

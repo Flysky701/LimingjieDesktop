@@ -196,6 +196,8 @@ class LabyrinthShopPolicy(
                 when (relic.rarity) {
                     1 -> ShopItem(item.slotId, ShopItemKind.RELIC_1STAR, 1800, relicId = id)
                     2 -> ShopItem(item.slotId, ShopItemKind.RELIC_2STAR, 2800, relicId = id)
+                    3 -> ShopItem(item.slotId, ShopItemKind.RELIC_3STAR, 3800, relicId = id)
+                    4 -> ShopItem(item.slotId, ShopItemKind.RELIC_4STAR, 9999, relicId = id)
                     else -> null
                 }
             } + listOfNotNull(imprint?.let {
