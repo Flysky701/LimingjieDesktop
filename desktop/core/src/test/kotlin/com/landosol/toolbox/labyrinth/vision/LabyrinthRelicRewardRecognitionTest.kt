@@ -86,7 +86,7 @@ class LabyrinthRelicRewardRecognitionTest {
     }
 
     @Test fun `reward popup reason is neutral about content and completion`() {
-        val resolver = AndroidLabyrinthRelicRewardResolver(recognizer, submitTextRead = { _, _ -> })
+        val resolver = LabyrinthRelicRewardResolver(recognizer, submitTextRead = { _, _ -> })
         val hold = resolver.javaClass.getDeclaredMethod("hold", LabyrinthEntryFrameResult::class.java,
             LabyrinthRelicRewardObservation::class.java).apply { isAccessible = true }
         val pending = hold.invoke(resolver, result(), LabyrinthRelicRewardObservation()) as LabyrinthEntryFrameResult

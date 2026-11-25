@@ -1,7 +1,9 @@
 package com.landosol.toolbox.automation.capture
 
-import android.graphics.Bitmap
+import com.landosol.toolbox.vision.NativeBitmap
 import java.util.concurrent.atomic.AtomicLong
+
+internal const val DEFAULT_DISPLAY_ID = 0
 
 sealed interface CaptureState {
     data object Idle : CaptureState
@@ -13,14 +15,10 @@ sealed interface CaptureState {
         val gestureDisplayId: Int = DEFAULT_DISPLAY_ID,
     ) : CaptureState
     data class Stopped(val reason: String) : CaptureState
-
-    private companion object {
-        const val DEFAULT_DISPLAY_ID = 0
-    }
 }
 
 data class CapturedFrame(
-    val bitmap: Bitmap,
+    val bitmap: NativeBitmap,
     val timestampMillis: Long,
     /** Diagnostics only. Null means this producer does not publish monotonic metadata. */
     val frameSequence: Long = 0L,

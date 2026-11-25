@@ -1,15 +1,15 @@
 package com.landosol.toolbox.gamedata
 
-import android.content.Context
+import com.landosol.toolbox.core.AppContext
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
 class ResourcePackActivator(
-    context: Context,
+    context: AppContext,
     private val validator: ResourcePackValidator = ResourcePackValidator(),
 ) {
-    private val root = File(context.applicationContext.filesDir, "game-data")
+    private val root = File(context.filesDir, "game-data")
 
     fun activeManifest(): File = File(root, "active.json")
 

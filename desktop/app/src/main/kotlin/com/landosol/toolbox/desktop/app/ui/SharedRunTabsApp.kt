@@ -1,6 +1,5 @@
 package com.landosol.toolbox.desktop.app.ui
 
-import android.content.res.Configuration
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -12,8 +11,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -212,16 +209,9 @@ fun SharedRunTabsApp(
                             )
                         }
                     }
-                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-                        val configuration = Configuration(
-                            maxWidth.value.toInt(),
-                            maxHeight.value.toInt(),
-                            androidx.compose.ui.platform.LocalDensity.current.fontScale,
-                        )
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
                         CompositionLocalProvider(
-                            LocalContext provides global.context,
                             LocalDesktopWindow provides hostWindow,
-                            LocalConfiguration provides configuration,
                         ) {
                             Column(retainedViewport(page == Page.Run)) {
                                 Row(

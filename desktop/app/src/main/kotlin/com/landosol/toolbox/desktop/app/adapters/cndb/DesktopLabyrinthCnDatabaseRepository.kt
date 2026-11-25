@@ -1,6 +1,6 @@
 package com.landosol.toolbox.desktop.app.adapters.cndb
 
-import android.content.Context
+import com.landosol.toolbox.core.AppContext
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.sqlite.driver.bundled.SQLITE_OPEN_READONLY
@@ -19,7 +19,7 @@ import java.security.MessageDigest
 
 /** Uses the upstream update pipeline; only filesystem and SQLite platform access are replaced. */
 class DesktopLabyrinthCnDatabaseRepository(
-    context: Context,
+    context: AppContext,
     client: OkHttpClient = OkHttpClient(),
     private val onNotice: (String) -> Unit = {},
     source: LabyrinthCnDatabaseSource? = null,

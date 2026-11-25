@@ -1,9 +1,9 @@
 package com.landosol.toolbox.labyrinth.replay
 
 import com.landosol.toolbox.vision.PixelImage
-import com.landosol.toolbox.labyrinth.node.AndroidLabyrinthNodeTemplateLoader
+import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTemplateLoader
 import com.landosol.toolbox.labyrinth.node.NodeTemplateSet
-import com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthEntryTemplateLoader
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryTemplateLoader
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameProcessor
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
@@ -144,10 +144,10 @@ class LabyrinthReplayHarness(
          * Optional templates that are absent on disk are skipped exactly like the Android loader.
          */
         fun entryTemplateSet(assetRoot: File, readImage: (File) -> PixelImage): LabyrinthEntryTemplateSet {
-            fun file(path: String) = File(assetRoot, path.removePrefix(AndroidLabyrinthEntryTemplateLoader.ROOT + "/"))
-            val required = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS
+            fun file(path: String) = File(assetRoot, path.removePrefix(LabyrinthEntryTemplateLoader.ROOT + "/"))
+            val required = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS
                 .mapValues { (_, path) -> readImage(file(path)) }
-            val optional = AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+            val optional = LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
                 .mapNotNull { (id, path) -> file(path).takeIf(File::isFile)?.let { id to readImage(it) } }
                 .toMap()
             return LabyrinthEntryTemplateSet(required + optional)
@@ -155,8 +155,8 @@ class LabyrinthReplayHarness(
 
         fun nodeTemplateSet(assetRoot: File, readImage: (File) -> PixelImage): NodeTemplateSet =
             NodeTemplateSet(
-                AndroidLabyrinthNodeTemplateLoader.TEMPLATE_PATHS.mapValues { (_, path) ->
-                    readImage(File(assetRoot, path.removePrefix(AndroidLabyrinthNodeTemplateLoader.ROOT + "/")))
+                LabyrinthNodeTemplateLoader.TEMPLATE_PATHS.mapValues { (_, path) ->
+                    readImage(File(assetRoot, path.removePrefix(LabyrinthNodeTemplateLoader.ROOT + "/")))
                 },
             )
 

@@ -1,6 +1,6 @@
 package com.landosol.toolbox.protocol.bilibili
 
-import android.content.Context
+import com.landosol.toolbox.core.AppContext
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -33,7 +33,7 @@ object BilibiliGameGatewayFactory {
     }
 
     fun create(
-        context: Context,
+        context: AppContext,
         gamePackageName: String,
         endpoint: ChannelEndpoint,
     ): BilibiliGameGateway {
@@ -47,8 +47,8 @@ object BilibiliGameGatewayFactory {
         return BilibiliGameProtocolGateway(
             client = client,
             bootstrapEndpoint = endpoint.bootstrap.toHttpUrl(),
-            profile = AndroidGameProtocolProfileFactory(
-                context.applicationContext,
+            profile = DesktopGameProtocolProfileFactory(
+                context,
                 gamePackageName,
                 endpoint.resKey,
                 endpoint.platformId,

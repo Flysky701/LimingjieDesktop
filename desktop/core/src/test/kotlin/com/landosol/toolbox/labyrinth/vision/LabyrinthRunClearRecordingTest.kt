@@ -83,7 +83,7 @@ class LabyrinthRunClearRecordingTest {
     }
 
     private fun loadShippedTemplates(): LabyrinthEntryTemplateSet {
-        val all = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS + AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+        val all = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS + LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
         val prefix = "resource-packs/cn-bilibili/vision/"
         val values = all.mapNotNull { (id, path) ->
             val file = File(assetRoot, path.removePrefix(prefix))

@@ -1,6 +1,6 @@
 package com.landosol.toolbox.desktop.shared
 
-import android.graphics.Bitmap
+import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.gamedata.*
 import com.landosol.toolbox.labyrinth.kernel.event.UnknownGameEventPolicy
 import com.landosol.toolbox.labyrinth.vision.*
@@ -26,13 +26,13 @@ class EventDomainUnknownSlotOcrTest {
         paint(bounds[0], 0xff222222.toInt())
         paint(bounds[1], 0xffeeeeee.toInt())
         mapper.buttonRects(2, width, height).forEach { paint(it, 0xff63a6f7.toInt()) }
-        val bitmap = Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+        val bitmap = NativeBitmap.create(pixels, width, height)
         val page = LabyrinthEntryPageState.EVENT_CHOICE
         val frame = LabyrinthEntryFrameResult(LabyrinthEntryPageObservation(page, 1.0, mapOf(page to 1.0),
             LabyrinthAnchorScores(emptyMap())), emptyList(), 0, frameWidth = width, frameHeight = height)
         var requests = 0
         var readSlots = false
-        val resolver = AndroidLabyrinthEventChoiceResolver(AndroidLabyrinthEventRecognitionData(listOf(
+        val resolver = LabyrinthEventChoiceResolver(LabyrinthEventRecognitionData(listOf(
             EventResource(id = "other", name = "完全不同的故事", choices = listOf(EventChoiceResource("other-choice", "钓鱼吧", 1)))), ocr),
             submitTextRead = { crop, done ->
                 requests++

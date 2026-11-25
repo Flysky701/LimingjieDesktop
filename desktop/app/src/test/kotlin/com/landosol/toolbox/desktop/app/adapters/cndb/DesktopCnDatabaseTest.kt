@@ -1,7 +1,7 @@
 package com.landosol.toolbox.desktop.app.adapters.cndb
 
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
-import com.landosol.toolbox.desktop.shared.DesktopContext
+import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.labyrinth.*
 import okhttp3.*
 import okhttp3.ResponseBody.Companion.toResponseBody
@@ -68,7 +68,7 @@ class DesktopCnDatabaseTest {
 
     @Test fun failedHashAndSchemaPreserveExistingDatabase() {
         val root = Files.createTempDirectory("cn-preserve")
-        val context = DesktopContext(root.toFile())
+        val context = AppContext(root.toFile())
         val bytes = database().readBytes()
         val good = DesktopLabyrinthCnDatabaseRepository(context, source = source(bytes))
         assertTrue(good.updateIfNeeded() is LabyrinthCnDatabaseUpdateResult.Updated)
@@ -81,7 +81,7 @@ class DesktopCnDatabaseTest {
     }
 
     @Test fun lockedInstallIsPendingUntilNextStartupAndKeepsMetadataHonest() {
-        val context = DesktopContext(Files.createTempDirectory("cn-deferred").toFile())
+        val context = AppContext(Files.createTempDirectory("cn-deferred").toFile())
         val original = database().readBytes(); val replacement = database(true).readBytes()
         val first = DesktopLabyrinthCnDatabaseRepository(context, source = source(original))
         assertTrue(first.updateIfNeeded() is LabyrinthCnDatabaseUpdateResult.Updated)
@@ -109,7 +109,7 @@ class DesktopCnDatabaseTest {
             else bytes.toResponseBody()
             Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("fixture").body(body).build()
         }.build()
-        val context = DesktopContext(Files.createTempDirectory("cn-http-fixture").toFile())
+        val context = AppContext(Files.createTempDirectory("cn-http-fixture").toFile())
         val repository = DesktopLabyrinthCnDatabaseRepository(context, client)
         assertTrue(repository.updateIfNeeded() is LabyrinthCnDatabaseUpdateResult.Updated)
         assertEquals(listOf(

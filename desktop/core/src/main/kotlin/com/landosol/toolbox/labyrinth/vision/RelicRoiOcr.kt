@@ -1,0 +1,65 @@
+package com.landosol.toolbox.labyrinth.vision
+
+import com.landosol.toolbox.core.MonotonicClock
+import com.landosol.toolbox.vision.NativeBitmap
+
+/** Owns only one crop; the OCR callback, not a timer, releases it. */
+internal class RelicRoiOcr(
+    private val submit: (NativeBitmap, (String?) -> Unit) -> Unit,
+    maximumAttempts: Int = 2,
+    private val clock: () -> Long = MonotonicClock::elapsedRealtime,
+) {
+    private val scheduler = RelicOcrScheduler(clock, maximumAttempts = maximumAttempts)
+    fun clear() = scheduler.clear()
+
+    /** See [RelicOcrScheduler.lastCompletionAt]. */
+    fun lastCompletionAt(): Long = scheduler.lastCompletionAt()
+
+    fun isExhaustedWithoutRead(slot: String, fingerprint: Long): Boolean = scheduler.isExhaustedWithoutRead(slot, fingerprint)
+
+    fun read(
+        bitmap: NativeBitmap,
+        slot: String,
+        rect: EntryPixelRect,
+        scale: Int = 1,
+        capturedAtMillis: Long = Long.MIN_VALUE,
+        fingerprint: Long = relicRoiFingerprint(bitmap, rect),
+        readText: (NativeBitmap, (String?) -> Unit) -> Unit = submit,
+    ): RelicOcrScheduler.Read? {
+        val cached = scheduler.cached(slot, fingerprint)
+        val ticket = scheduler.request(slot, fingerprint, capturedAtMillis) ?: return cached
+        val diagnosticId = RelicRoiOcrTelemetry.requested(slot, capturedAtMillis, MonotonicClock.elapsedRealtime())
+        var input: NativeBitmap? = null
+        try {
+            val crop = NativeBitmap.create(bitmap, rect.left, rect.top, rect.width, rect.height)
+            input = crop
+            if (scale > 1) {
+                input = NativeBitmap.createScaled(crop, crop.width * scale, crop.height * scale, false)
+                if (input !== crop) crop.recycle()
+            }
+            val owned = requireNotNull(input)
+            readText(owned) { text ->
+                try {
+                    scheduler.complete(ticket, text)
+                } finally {
+                    RelicRoiOcrTelemetry.completed(diagnosticId, MonotonicClock.elapsedRealtime(), text?.length)
+                    if (!owned.isRecycled) owned.recycle()
+                }
+            }
+        } catch (failure: Exception) {
+            scheduler.complete(ticket, null)
+            RelicRoiOcrTelemetry.completed(diagnosticId, MonotonicClock.elapsedRealtime(), null)
+            input?.let { if (!it.isRecycled) it.recycle() }
+        }
+        return cached
+    }
+}
+
+/** Exact pixels of the small ROI; sparse dHash can miss a changed digit. */
+internal fun relicRoiFingerprint(bitmap: NativeBitmap, rect: EntryPixelRect): Long {
+    var hash = 1125899906842597L + rect.width * 31L + rect.height
+    for (y in rect.top until rect.top + rect.height) {
+        for (x in rect.left until rect.left + rect.width) hash = hash * 31 + bitmap.getPixel(x, y)
+    }
+    return hash
+}

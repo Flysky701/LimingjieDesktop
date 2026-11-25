@@ -1,8 +1,8 @@
 package com.landosol.toolbox.desktop.shared
 
-import android.content.Context
+import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.labyrinth.LabyrinthCharacterAttribute
-import com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthBattleTeamTemplateLoader
+import com.landosol.toolbox.labyrinth.vision.LabyrinthBattleTeamTemplateLoader
 import com.landosol.toolbox.labyrinth.vision.IconSampleGrid
 import com.landosol.toolbox.labyrinth.vision.IconSampleShape
 import com.landosol.toolbox.labyrinth.vision.LABYRINTH_CHARACTER_ICON_SAFE_CONFIDENCE
@@ -23,8 +23,8 @@ internal object DesktopCharacterIconPack {
     private const val SIGNATURE = 0x49434f31 // ICO1
     private const val MAX_ALIASES = 256
 
-    fun compile(context: Context, output: OutputStream) =
-        write(AndroidLabyrinthBattleTeamTemplateLoader(context).sampleImages(emptyMap()), output)
+    fun compile(context: AppContext, output: OutputStream) =
+        write(LabyrinthBattleTeamTemplateLoader(context).sampleImages(emptyMap()), output)
 
     fun write(matcher: LabyrinthCharacterIconMatcher, output: OutputStream) {
         DataOutputStream(GZIPOutputStream(output).buffered()).use { data ->

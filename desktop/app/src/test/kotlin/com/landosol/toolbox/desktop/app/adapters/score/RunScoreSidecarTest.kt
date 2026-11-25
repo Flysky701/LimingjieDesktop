@@ -1,6 +1,6 @@
 package com.landosol.toolbox.desktop.app.adapters.score
 
-import android.graphics.Bitmap
+import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.desktop.ocr.OcrEngine
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
@@ -20,12 +20,12 @@ import java.util.concurrent.atomic.AtomicInteger
 import javax.imageio.ImageIO
 
 class RunScoreSidecarTest {
-    private fun fixture(name: String): Bitmap {
+    private fun fixture(name: String): NativeBitmap {
         val image = ImageIO.read(File("../core/src/test/resources/labyrinth/$name"))
-        return Bitmap.createBitmap(image.getRGB(0, 0, image.width, image.height, null, 0, image.width), image.width, image.height, Bitmap.Config.ARGB_8888)
+        return NativeBitmap.create(image.getRGB(0, 0, image.width, image.height, null, 0, image.width), image.width, image.height)
     }
 
-    private fun capture(sidecar: RunScoreSidecar, id: String, bitmap: Bitmap, time: Long = 1) {
+    private fun capture(sidecar: RunScoreSidecar, id: String, bitmap: NativeBitmap, time: Long = 1) {
         sidecar.observe(id, LabyrinthEntryPageState.RUN_CLEAR_RESULT, bitmap, time)
         sidecar.observe(id, LabyrinthEntryPageState.RUN_CLEAR_RESULT, bitmap, time + 1)
         sidecar.observe(id, LabyrinthEntryPageState.UNKNOWN, bitmap, time + 2)
@@ -58,7 +58,7 @@ class RunScoreSidecarTest {
             }
         }
         val sidecar = RunScoreSidecar({ id, score -> result.complete(id to score) }, {}, { engine })
-        val bitmap = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888)
+        val bitmap = NativeBitmap.create(1920, 1080)
         try {
             capture(sidecar, "run:old", bitmap)
             assertTrue(requested.await(3, TimeUnit.SECONDS))
@@ -81,7 +81,7 @@ class RunScoreSidecarTest {
             }
         }
         val sidecar = RunScoreSidecar({ id, _ -> if (id == "broken") error("storage unavailable") else saved += id }, notices::add, { engine })
-        val bitmap = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888)
+        val bitmap = NativeBitmap.create(1920, 1080)
         try {
             capture(sidecar, "counting", bitmap)
             sidecar.observe("duplicate", LabyrinthEntryPageState.RUN_CLEAR_RESULT, bitmap, 1)
@@ -114,7 +114,7 @@ class RunScoreSidecarTest {
                 }
             }
         }, modelIdleMillis = 50)
-        val image = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888)
+        val image = NativeBitmap.create(1920, 1080)
         try {
             capture(sidecar, "first", image)
             val resume = withTimeout(3_000) { firstRead.await() }
@@ -154,7 +154,7 @@ class RunScoreSidecarTest {
                 override fun close() { released.complete(Unit) }
             }
         }, modelIdleMillis = 40, readTimeoutMillis = 60)
-        val image = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888)
+        val image = NativeBitmap.create(1920, 1080)
         try {
             capture(sidecar, "timed-out", image)
             val late = withTimeout(3_000) { callback.await() }

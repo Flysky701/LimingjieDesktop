@@ -1,6 +1,6 @@
 package com.landosol.toolbox.data.local
 
-import android.content.Context
+import com.landosol.toolbox.core.AppContext
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Query
@@ -8,7 +8,8 @@ import androidx.room.Transaction
 import androidx.room.migration.Migration
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import androidx.room.withTransaction
+import androidx.room.immediateTransaction
+import androidx.room.useWriterConnection
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
@@ -59,7 +60,10 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun labyrinthRunStateDao(): LabyrinthRunStateDao
     abstract fun migrationCheckpointDao(): MigrationCheckpointDao
 
-    suspend fun seedRelatedRecordsForTest(accountId: Long) = withTransaction {
+    suspend fun <R> writeTransaction(block: suspend () -> R): R =
+        useWriterConnection { connection -> connection.immediateTransaction { block() } }
+
+    suspend fun seedRelatedRecordsForTest(accountId: Long) = writeTransaction {
         val now = 1L
         featureProfileDao().insert(
             FeatureProfileEntity(
@@ -229,8 +233,8 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        fun create(context: Context): AppDatabase = Room.databaseBuilder<AppDatabase>(
-            name = java.io.File(context.filesDir.parentFile, "databases/$FILE_NAME").apply { parentFile.mkdirs() }.path,
+        fun create(context: AppContext): AppDatabase = Room.databaseBuilder<AppDatabase>(
+            name = java.io.File(context.dataDir, "databases/$FILE_NAME").apply { parentFile.mkdirs() }.path,
         )
             .setDriver(BundledSQLiteDriver())
             .setQueryCoroutineContext(Dispatchers.IO)

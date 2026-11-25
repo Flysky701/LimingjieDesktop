@@ -1,5 +1,6 @@
 package com.landosol.toolbox.desktop.app.adapters.storage
 
+import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.desktop.platform.*
 import com.landosol.toolbox.desktop.shared.*
 import com.landosol.toolbox.data.local.AppDatabase
@@ -38,7 +39,7 @@ class DesktopStorageTest {
 
     @Test fun corruptRoomDatabaseIsBackedUpBeforeRecreation() = runBlocking {
         val root = Files.createTempDirectory("corrupt-room")
-        val context = DesktopContext(root.toFile())
+        val context = AppContext(root.toFile())
         val directory = Files.createDirectories(root.resolve("databases"))
         val corrupt = ByteArray(4096) { 0x41 }
         Files.write(directory.resolve(AppDatabase.FILE_NAME), corrupt)

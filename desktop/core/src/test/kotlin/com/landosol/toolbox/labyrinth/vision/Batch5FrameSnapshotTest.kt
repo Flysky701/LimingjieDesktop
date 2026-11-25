@@ -75,10 +75,10 @@ class Batch5FrameSnapshotTest {
     }
 
     @Test fun frameObserversRespectSnapshotAndRecyclingBoundaries() {
-        val boundary = Batch5FrameFixtures.source("labyrinth/vision/AndroidLabyrinthFastFrameObserver.kt")
+        val boundary = Batch5FrameFixtures.source("labyrinth/vision/DesktopLabyrinthFastFrameObserver.kt")
         assertTrue(boundary.contains("require(!bitmap.isRecycled)"))
         assertTrue(boundary.contains("labyrinthFramePixelImage(bitmap.width, bitmap.height, frame.argbPixels)"))
-        val full = Batch5FrameFixtures.source("labyrinth/vision/AndroidLabyrinthEntryFrameProcessor.kt")
+        val full = Batch5FrameFixtures.source("labyrinth/vision/DesktopLabyrinthEntryFrameProcessor.kt")
         assertTrue(full.contains("val pixels = capturePixels ?: capturedFramePixelImage(frame)"))
         assertTrue(full.contains("exEncounterResolver.resolve(frame.bitmap, result)"))
         assertTrue(full.contains("relicDetailResolver.resolve(frame.bitmap, nodeResolved"))

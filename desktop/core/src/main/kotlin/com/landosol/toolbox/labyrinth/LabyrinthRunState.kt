@@ -1,6 +1,5 @@
 package com.landosol.toolbox.labyrinth
 
-import androidx.room.withTransaction
 import com.landosol.toolbox.data.local.AppDatabase
 import com.landosol.toolbox.data.local.LabyrinthRunCharacterEntity
 import com.landosol.toolbox.data.local.LabyrinthRunRelicEntity
@@ -150,7 +149,7 @@ object LabyrinthRelicMerger {
 class RoomLabyrinthRunStateStore(
     private val database: AppDatabase,
 ) : LabyrinthRunStateStore {
-    override suspend fun begin(accountId: Long?, nowMillis: Long): LabyrinthRunSnapshot = database.withTransaction {
+    override suspend fun begin(accountId: Long?, nowMillis: Long): LabyrinthRunSnapshot = database.writeTransaction {
         val key = runKey(accountId)
         val dao = database.labyrinthRunStateDao()
         val current = dao.getState(key)
@@ -168,7 +167,7 @@ class RoomLabyrinthRunStateStore(
         snapshot(key)
     }
 
-    override suspend fun startNew(accountId: Long?, nowMillis: Long): LabyrinthRunSnapshot = database.withTransaction {
+    override suspend fun startNew(accountId: Long?, nowMillis: Long): LabyrinthRunSnapshot = database.writeTransaction {
         val key = runKey(accountId)
         val dao = database.labyrinthRunStateDao()
         val previous = dao.getState(key)
@@ -201,7 +200,7 @@ class RoomLabyrinthRunStateStore(
         expectedStartedAt: Long?,
         relicStacks: Map<LabyrinthRelicMark, LabyrinthRelicStackRecord>?,
         openingRelicReceipt: LabyrinthOpeningRelicReceipt?,
-    ): LabyrinthRunSnapshot = database.withTransaction {
+    ): LabyrinthRunSnapshot = database.writeTransaction {
         val key = runKey(accountId)
         val dao = database.labyrinthRunStateDao()
         val savedState = dao.getState(key)
@@ -264,7 +263,7 @@ class RoomLabyrinthRunStateStore(
         snapshot(key)
     }
 
-    override suspend fun load(accountId: Long?): LabyrinthRunSnapshot? = database.withTransaction {
+    override suspend fun load(accountId: Long?): LabyrinthRunSnapshot? = database.writeTransaction {
         val key = runKey(accountId)
         if (database.labyrinthRunStateDao().getState(key) == null) null else snapshot(key)
     }

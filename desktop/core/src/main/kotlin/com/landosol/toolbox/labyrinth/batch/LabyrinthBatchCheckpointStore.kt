@@ -1,6 +1,6 @@
 package com.landosol.toolbox.labyrinth.batch
 
-import android.content.Context
+import com.landosol.toolbox.core.AppContext
 import kotlinx.serialization.json.Json
 
 /** Persisted batch checkpoint, one per account. */
@@ -34,9 +34,9 @@ internal class JsonLabyrinthBatchCheckpointStore(
     private fun key(accountId: Long) = "account.$accountId"
 }
 
-class AndroidLabyrinthBatchCheckpointStore(context: Context) : LabyrinthBatchCheckpointStore {
+class DesktopLabyrinthBatchCheckpointStore(context: AppContext) : LabyrinthBatchCheckpointStore {
     private val preferences =
-        context.applicationContext.getSharedPreferences("labyrinth-batch-checkpoints", Context.MODE_PRIVATE)
+        context.preferences("labyrinth-batch-checkpoints")
     private val storage = JsonLabyrinthBatchCheckpointStore(
         read = { key -> preferences.getString(key, null) },
         write = { key, value ->

@@ -1111,9 +1111,9 @@ class LabyrinthEntryFrameProcessorTest {
      */
     private fun loadShippedTemplates(): LabyrinthEntryTemplateSet {
         val assetsRoot = File(projectRoot, "desktop/core/src/main/resources/assets")
-        val required = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS
+        val required = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS
             .mapValues { (_, path) -> readImage(File(assetsRoot, path)) }
-        val optional = AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+        val optional = LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
             .filterValues { path -> File(assetsRoot, path).isFile }
             .mapValues { (_, path) -> readImage(File(assetsRoot, path)) }
         return LabyrinthEntryTemplateSet(required + optional)

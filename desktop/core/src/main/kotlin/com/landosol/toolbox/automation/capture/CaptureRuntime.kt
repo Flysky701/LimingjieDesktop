@@ -1,6 +1,5 @@
 package com.landosol.toolbox.automation.capture
 
-import android.view.Display
 import java.nio.ByteBuffer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -198,7 +197,7 @@ internal fun rgba8888ToArgbPixels(
  * A 1920x1080 frame needs an 8.3 MB int[] and a ~7.7 KB row buffer, and a fresh pair per frame is
  * what exhausted the heap in the 2026-09-20 report ("Failed to allocate a 8294416 byte
  * allocation"). Both buffers are write-before-read for every pixel of every frame and the int[] is
- * copied by Bitmap.createBitmap before the next frame is converted, so neither survives the call
+ * copied by NativeBitmap.create before the next frame is converted, so neither survives the call
  * as live data and both can be pooled. Reuse is confined to one capture callback at a time by the
  * caller's lock; a size change simply reallocates.
  */
@@ -232,7 +231,7 @@ object CaptureStateRegistry {
     fun lastStopReason(): String? = lastStopReason
 
     fun gestureDisplayId(): Int =
-        (state.value as? CaptureState.Running)?.gestureDisplayId ?: Display.DEFAULT_DISPLAY
+        (state.value as? CaptureState.Running)?.gestureDisplayId ?: DEFAULT_DISPLAY_ID
 
     internal fun update(value: CaptureState) {
         when (value) {

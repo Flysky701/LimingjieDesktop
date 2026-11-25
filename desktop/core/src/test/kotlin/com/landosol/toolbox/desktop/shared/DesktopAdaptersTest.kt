@@ -1,10 +1,11 @@
 package com.landosol.toolbox.desktop.shared
 
-import android.graphics.Bitmap
+import com.landosol.toolbox.core.AppContext
+import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.automation.capture.*
 import com.landosol.toolbox.labyrinth.debug.LabyrinthDebugDashboardServer
 import com.landosol.toolbox.labyrinth.debug.LabyrinthRuntimeDiagnostics
-import com.landosol.toolbox.labyrinth.vision.AndroidChineseRoleNameOcr
+import com.landosol.toolbox.labyrinth.vision.DesktopChineseRoleNameOcr
 import com.landosol.toolbox.protocol.bilibili.CaptchaChallenge
 import java.net.ServerSocket
 import java.net.URI
@@ -121,8 +122,8 @@ class DesktopAdaptersTest {
         )
         DesktopBindings.install(services)
         try {
-            val image = Bitmap.createBitmap(intArrayOf(0xff123456.toInt(), 0xffabcdef.toInt()), 2, 1, Bitmap.Config.ARGB_8888)
-            AndroidChineseRoleNameOcr.readAsync(image) { result.complete(it to SwingUtilities.isEventDispatchThread()) }
+            val image = NativeBitmap.create(intArrayOf(0xff123456.toInt(), 0xffabcdef.toInt()), 2, 1)
+            DesktopChineseRoleNameOcr.readAsync(image) { result.complete(it to SwingUtilities.isEventDispatchThread()) }
             image.recycle()
             withContext(Dispatchers.Default) { submitted.await().invoke() }
             assertEquals("名称" to true, withTimeout(3000) { result.await() })
@@ -134,7 +135,7 @@ class DesktopAdaptersTest {
         DesktopLog.initialize(directory.resolve("logs"))
         DesktopLog.write('I', "Fixture", "password=fixture-password access_key=\"fixture-key\" loginId=fixture-login token=fixture-token")
         val socket = ServerSocket()
-        val diagnostics = LabyrinthRuntimeDiagnostics(DesktopContext(directory.toFile()))
+        val diagnostics = LabyrinthRuntimeDiagnostics(AppContext(directory.toFile()))
         val server = LabyrinthDebugDashboardServer(port = 0, runtimeDiagnostics = diagnostics,
             processLogSource = DesktopLog::snapshot, serverSocketFactory = { socket }, allowAddressReuse = false)
         try {

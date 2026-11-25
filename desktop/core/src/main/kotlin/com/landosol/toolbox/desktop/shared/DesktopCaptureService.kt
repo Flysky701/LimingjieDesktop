@@ -1,8 +1,9 @@
 package com.landosol.toolbox.desktop.shared
 
-import android.graphics.Bitmap
+import com.landosol.toolbox.core.MonotonicClock
+import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.automation.capture.*
-import com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthEntryFrameProcessor
+import com.landosol.toolbox.labyrinth.vision.DesktopLabyrinthEntryFrameProcessor
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import java.util.concurrent.Executors
 import kotlinx.coroutines.*
@@ -24,16 +25,16 @@ data class CapturePixels(
         this.ownsPixels = ownsPixels
     }
 
-    internal fun recognitionBitmap(): Bitmap =
-        if (ownsPixels) Bitmap.fromOwnedPixels(pixels, width, height)
-        else Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)
+    internal fun recognitionBitmap(): NativeBitmap =
+        if (ownsPixels) NativeBitmap.fromOwnedPixels(pixels, width, height)
+        else NativeBitmap.create(pixels, width, height)
 }
 
 /** Desktop capture owns its bitmap; keep its storage inside the concrete page reader. */
-fun AndroidLabyrinthEntryFrameProcessor.processDesktopFrame(frame: CapturedFrame): LabyrinthEntryFrameResult =
-    Bitmap.recognizeLabyrinthFrame(this, frame)
+fun DesktopLabyrinthEntryFrameProcessor.processDesktopFrame(frame: CapturedFrame): LabyrinthEntryFrameResult =
+    NativeBitmap.recognizeLabyrinthFrame(this, frame)
 
-/** Owns the capture thread; upstream owns each Bitmap after bus dispatch. */
+/** Owns the capture thread; upstream owns each NativeBitmap after bus dispatch. */
 class DesktopCaptureService(
     private val source: suspend () -> CapturePixels,
     private val preview: (CapturePixels) -> Unit = {},
@@ -70,7 +71,7 @@ class DesktopCaptureService(
                         continue
                     }
                     val started = System.nanoTime()
-                    val capturedAt = android.os.SystemClock.elapsedRealtime()
+                    val capturedAt = MonotonicClock.elapsedRealtime()
                     CaptureTelemetry.callback()
                     val frame = try { source().also { failures = 0; CaptureTelemetry.acquired() } }
                     catch (cancelled: CancellationException) { throw cancelled }
@@ -91,7 +92,7 @@ class DesktopCaptureService(
                     val initial = captureSize
                     if (initial != null) {
                         val decision = rotation.observe(initial.width, initial.height, frame.width, frame.height,
-                            android.os.SystemClock.elapsedRealtime(), CaptureRotationPolicy.toleratesTransientRotation())
+                            MonotonicClock.elapsedRealtime(), CaptureRotationPolicy.toleratesTransientRotation())
                         if (decision is CaptureRotationDecision.Stop) throw IllegalStateException(decision.reason)
                         if (decision.deliversFrame) {
                             if (previewEnabled() && (lastPreview == Long.MIN_VALUE || frame.timestampMillis - lastPreview >= 500)) {

@@ -1,6 +1,6 @@
 package com.landosol.toolbox.desktop.app.adapters.score
 
-import android.graphics.Bitmap
+import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.desktop.ocr.OcrEngine
 import com.landosol.toolbox.desktop.ocr.OnnxOcrEngine
 import com.landosol.toolbox.labyrinth.vision.EntryReferenceRect
@@ -69,7 +69,7 @@ internal class RunScoreSidecar(
     }
 
     /** Called before the borrowed bitmap is recycled. Only two small pixel copies happen here. */
-    @Synchronized fun observe(recordId: String?, page: LabyrinthEntryPageState, bitmap: Bitmap, timestamp: Long) {
+    @Synchronized fun observe(recordId: String?, page: LabyrinthEntryPageState, bitmap: NativeBitmap, timestamp: Long) {
         if (closed) return
         try {
             if (pending?.recordId != recordId || page != LabyrinthEntryPageState.RUN_CLEAR_RESULT) seal()
@@ -87,7 +87,7 @@ internal class RunScoreSidecar(
         }
     }
 
-    private fun crop(bitmap: Bitmap, reference: EntryReferenceRect): Crop? {
+    private fun crop(bitmap: NativeBitmap, reference: EntryReferenceRect): Crop? {
         val rect = ReferenceFitMapper.map(bitmap.width, bitmap.height, EntryReferenceSize(1920, 1080), reference) ?: return null
         val pixels = IntArray(rect.width * rect.height)
         bitmap.getPixels(pixels, 0, rect.width, rect.left, rect.top, rect.width, rect.height)

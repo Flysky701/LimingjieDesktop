@@ -14,7 +14,7 @@
 | 仅 OCR 评估 | `desktop\gradlew.bat -p desktop :ocr:evaluate` |
 | 只打便携包 | `desktop\gradlew.bat -p desktop :app:packagePortableZip` |
 
-`check` 运行各模块的常规检查，包括 `:core` 测试和 OCR 模型完整性检查。`-Pfull` 解除其他模块常规测试对集成、Compose UI、子进程及部分设备用例的过滤。`-PincludePackagedRuntime` 和 `-PincludeOcrEval` 分别把 `:app:packagedRuntimeTest` 和 `:ocr:evaluate` 加入 `check`，可与 `-Pfull` 组合。验证范围按影响选择，见 [项目执行约定](../AGENTS.md#精简约束)。
+`check` 运行各模块的常规检查，包括 `:core` 的业务逻辑测试和 OCR 模型完整性检查。`-Pfull` 运行全部 `:core:test`，用例涵盖截图、回放和资源审计，同时恢复其他模块的集成、Compose UI、子进程及设备用例。`-PincludePackagedRuntime` 和 `-PincludeOcrEval` 分别把 `:app:packagedRuntimeTest` 和 `:ocr:evaluate` 加入 `check`，可与 `-Pfull` 组合。验证范围按影响选择，见 [项目执行约定](../AGENTS.md#精简约束)。
 
 普通 `:app:test` 不生成应用镜像。`:app:packagedRuntimeTest` 默认构建含战斗模型的发布镜像，传入 `-PpackagedWorkerExecutable=<exe 绝对路径>` 可复用已有的可执行文件。
 

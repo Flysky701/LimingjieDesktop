@@ -1,6 +1,6 @@
 package com.landosol.toolbox.desktop.app.ui
 
-import android.graphics.BitmapFactory
+import com.landosol.toolbox.vision.NativeBitmapCodec
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -268,8 +268,8 @@ internal fun Portrait(
         }
         value = withContext(Dispatchers.IO) {
             runCatching {
-                graph.context.assets.open(asset).use { stream ->
-                    BitmapFactory.decodeStream(stream)?.let { decoded ->
+                graph.assets.open(asset).use { stream ->
+                    NativeBitmapCodec.decodeStream(stream)?.let { decoded ->
                         try {
                             decoded.toBufferedImage().toComposeImageBitmap().also {
                                 PortraitBitmapCache.put(cacheKey, it)

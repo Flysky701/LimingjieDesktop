@@ -1,6 +1,6 @@
 package com.landosol.toolbox.desktop.shared
 
-import androidx.room.withTransaction
+import com.landosol.toolbox.core.AppContext
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.sqlite.execSQL
 import com.landosol.toolbox.data.local.AccountEntity
@@ -17,16 +17,16 @@ import java.nio.file.Files
 class RoomCompatibilityTest {
     private fun account(alias: String) = AccountEntity(alias = alias, serverId = "bilibili", gameUid = null, credentialKey = "test-$alias", isSelected = false, createdAt = 1, updatedAt = 1)
     @Test fun transactionsRollbackFlowAndForeignKeys() = runBlocking {
-        val context = DesktopContext(Files.createTempDirectory("desktop room 中文").toFile())
+        val context = AppContext(Files.createTempDirectory("desktop room 中文").toFile())
         val db = AppDatabase.create(context)
         try {
-            val id = db.withTransaction {
+            val id = db.writeTransaction {
                 val id = db.accountDao().insert(account("保留"))
                 assertNotNull(db.accountDao().getById(id))
                 id
             }
             try {
-                db.withTransaction { db.accountDao().insert(account("回滚")); throw IllegalStateException("rollback fixture") }
+                db.writeTransaction { db.accountDao().insert(account("回滚")); throw IllegalStateException("rollback fixture") }
                 fail("Expected transaction failure")
             } catch (expected: IllegalStateException) { assertEquals("rollback fixture", expected.message) }
             assertEquals(1, db.accountDao().count())
@@ -39,7 +39,7 @@ class RoomCompatibilityTest {
         } finally { db.close() }
     }
     @Test fun failedSharedProjectionLeavesAliasesSelectionAndRecordsIntact() = runBlocking {
-        val context = DesktopContext(Files.createTempDirectory("shared-projection-rollback").toFile())
+        val context = AppContext(Files.createTempDirectory("shared-projection-rollback").toFile())
         val db = AppDatabase.create(context)
         try {
             val dao = db.accountDao()
@@ -63,7 +63,7 @@ class RoomCompatibilityTest {
         val expectedIdentity = JSONObject(File(schemas, "5.json").readText()).getJSONObject("database").getString("identityHash")
         assertEquals("043adf7c9b50c40e8e038c2650f440dd", expectedIdentity)
         for (version in 1..5) {
-            val context = DesktopContext(Files.createTempDirectory("migration-$version").toFile())
+            val context = AppContext(Files.createTempDirectory("migration-$version").toFile())
             val path = File(context.dataDir, "databases/${AppDatabase.FILE_NAME}").apply { parentFile.mkdirs() }
             val schema = JSONObject(File(schemas, "$version.json").readText()).getJSONObject("database")
             if (version == 4) assertEquals("bfde7e38b202249fe444412498f13b28", schema.getString("identityHash"))

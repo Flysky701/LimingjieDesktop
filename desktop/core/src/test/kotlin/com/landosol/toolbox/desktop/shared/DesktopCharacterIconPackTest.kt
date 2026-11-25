@@ -1,7 +1,8 @@
 package com.landosol.toolbox.desktop.shared
 
+import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.labyrinth.LabyrinthCharacterAttribute
-import com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthBattleTeamTemplateLoader
+import com.landosol.toolbox.labyrinth.vision.LabyrinthBattleTeamTemplateLoader
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -44,7 +45,7 @@ class DesktopCharacterIconPackTest {
     }
 
     @Test fun `compiled pack preserves every ordered icon and binds current attributes`() {
-        val loader = AndroidLabyrinthBattleTeamTemplateLoader(DesktopContext(temp.root))
+        val loader = LabyrinthBattleTeamTemplateLoader(AppContext(temp.root))
         val attributes = mapOf("1001" to LabyrinthCharacterAttribute.FIRE, "1002" to LabyrinthCharacterAttribute.WIND)
         val reference = loader.sampleImages(attributes)
         val compiled = loader.loadMatcher(attributes)

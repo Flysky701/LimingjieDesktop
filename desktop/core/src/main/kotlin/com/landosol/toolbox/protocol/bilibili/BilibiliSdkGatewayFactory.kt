@@ -1,13 +1,13 @@
 package com.landosol.toolbox.protocol.bilibili
 
-import android.content.Context
+import com.landosol.toolbox.core.AppContext
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 
 object BilibiliSdkGatewayFactory {
-    fun create(context: Context): BilibiliSdkGateway {
+    fun create(context: AppContext): BilibiliSdkGateway {
         val client = OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
@@ -18,7 +18,7 @@ object BilibiliSdkGatewayFactory {
         return BilibiliSdkHttpGateway(
             client = client,
             endpoint = SDK_ENDPOINT.toHttpUrl(),
-            requestProfile = AndroidBilibiliSdkRequestProfileFactory(context.applicationContext).create(),
+            requestProfile = DesktopBilibiliSdkRequestProfileFactory(context).create(),
             signer = BilibiliSdkSigner(SDK_SIGN_SECRET),
             json = Json {
                 ignoreUnknownKeys = true

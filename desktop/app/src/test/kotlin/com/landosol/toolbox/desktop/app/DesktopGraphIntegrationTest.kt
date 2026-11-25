@@ -271,7 +271,7 @@ class DesktopGraphIntegrationTest {
             try {
                 val accountId=graph.database.accountDao().insert(AccountEntity(alias="offline-preflight",serverId=GameServer.CN_BILIBILI.storageId,
                     gameUid=null,credentialKey="synthetic-preflight",isSelected=true,createdAt=1,updatedAt=1))
-                com.landosol.toolbox.security.AndroidKeystoreCredentialStore(graph.context).save("synthetic-preflight",
+                com.landosol.toolbox.security.EncryptedCredentialStore(graph.context).save("synthetic-preflight",
                     com.landosol.toolbox.security.AccountCredentials("synthetic","synthetic"))
                 graph.connectDevice("fixture-only")
                 withTimeout(60_000) { graph.ocr.status.first { it is OcrEngineStatus.Ready } }
@@ -325,7 +325,7 @@ class DesktopGraphIntegrationTest {
         try {
             val accountId=graph.database.accountDao().insert(AccountEntity(alias="new-xiaomi-account",serverId=GameServer.CN_XIAOMI.storageId,
                 gameUid=null,credentialKey="synthetic-lag",isSelected=true,createdAt=1,updatedAt=1))
-            com.landosol.toolbox.security.AndroidKeystoreCredentialStore(graph.context).save("synthetic-lag",
+            com.landosol.toolbox.security.EncryptedCredentialStore(graph.context).save("synthetic-lag",
                 com.landosol.toolbox.security.AccountCredentials("synthetic","synthetic"))
             graph.connectDevice("fixture-only")
             withTimeout(60_000) { graph.ocr.status.first { it is OcrEngineStatus.Ready } }

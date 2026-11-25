@@ -5,7 +5,7 @@ import com.landosol.toolbox.desktop.app.adapters.storage.DatabaseRecovery
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
 import com.landosol.toolbox.desktop.platform.InstanceLock
 import com.landosol.toolbox.desktop.platform.UserRuntimeDirectory
-import com.landosol.toolbox.desktop.shared.DesktopContext
+import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.desktop.shared.DesktopLog
 import com.landosol.toolbox.desktop.shared.AtomicFiles
 import com.landosol.toolbox.labyrinth.LabyrinthRerollSettings
@@ -192,7 +192,7 @@ class SharedDataHost private constructor(
             var graph: DesktopAppGraph? = null
             try {
                 val notices = mutableListOf<String>()
-                val database = DatabaseRecovery.open(DesktopContext(directory.toFile())) { notices += it }
+                val database = DatabaseRecovery.open(AppContext(directory.toFile())) { notices += it }
                 graph = DesktopAppGraph(directory, database, startupUpdates = startupUpdates, dataOnly = true)
                 notices.forEach(graph::addNotice)
                 val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)

@@ -159,7 +159,7 @@ internal class LabyrinthShopVisibleLayout(
         fun clip(frame: PixelImage): EntryPixelRect? =
             ReferenceFitMapper.map(frame.width, frame.height, REFERENCE, LIST_CLIP)
 
-        // Same original title rectangles as AndroidLabyrinthShopItemResolver's legacy fallback.
+        // Same original title rectangles as LabyrinthShopItemResolver's legacy fallback.
         // Kept pure here so Y localization can be tested without loading Android OCR classes.
         val TITLE_RECTS = mapOf(
             "shop_item_1" to EntryReferenceRect(125, 230, 390, 55),

@@ -1,7 +1,7 @@
 package com.landosol.toolbox.labyrinth.vision
 
 import com.landosol.toolbox.vision.PixelImage
-import com.landosol.toolbox.labyrinth.node.AndroidLabyrinthNodeTemplateLoader
+import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTemplateLoader
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeActionPlanner
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeClassifier
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
@@ -269,18 +269,18 @@ class NodeClickFrameProcessorEvidenceTest {
         }
         val assetsRoot: File by lazy { File(projectRoot, "desktop/core/src/main/resources/assets") }
         val shippedEntryTemplates: LabyrinthEntryTemplateSet by lazy {
-            val required = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS
+            val required = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS
                 .mapValues { (_, path) -> readRequiredImage(File(assetsRoot, path)) }
-            val optional = AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+            val optional = LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
                 .filterValues { File(assetsRoot, it).isFile }
                 .mapValues { (_, path) -> readRequiredImage(File(assetsRoot, path)) }
             for (id in listOf(EntryAnchorId.RELIC_EFFECT_RESULT_TITLE, EntryAnchorId.RELIC_EFFECT_RESULT_CLOSE)) {
-                check(id in optional) { "Required popup template missing: ${AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS[id]}" }
+                check(id in optional) { "Required popup template missing: ${LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS[id]}" }
             }
             LabyrinthEntryTemplateSet(required + optional)
         }
         val shippedNodeTemplates: NodeTemplateSet by lazy {
-            NodeTemplateSet(AndroidLabyrinthNodeTemplateLoader.TEMPLATE_PATHS
+            NodeTemplateSet(LabyrinthNodeTemplateLoader.TEMPLATE_PATHS
                 .mapValues { (_, path) -> readRequiredImage(File(assetsRoot, path)) })
         }
         // Restrict this producer fixture to the real LINK asset family, not fabricated pixels or

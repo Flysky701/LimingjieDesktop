@@ -14,7 +14,7 @@ internal object Batch5FrameFixtures {
 
     fun templates(): LabyrinthEntryTemplateSet {
         // Read the Android loader's declarative path table, but do not instantiate Android classes.
-        val text = source("labyrinth/vision/AndroidLabyrinthEntryFrameProcessor.kt")
+        val text = source("labyrinth/vision/DesktopLabyrinthEntryFrameProcessor.kt")
         val pattern = Regex("EntryAnchorId\\.([A-Z_]+)\\s+to\\s+\"([^\"]+)\"")
         val values = pattern.findAll(text).mapNotNull { match ->
             val id = EntryAnchorId::class.java.getField(match.groupValues[1]).get(null) as String

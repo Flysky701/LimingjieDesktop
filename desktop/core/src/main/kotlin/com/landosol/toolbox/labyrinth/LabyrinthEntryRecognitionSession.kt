@@ -49,9 +49,9 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.coroutineContext
-import android.util.Log
+import com.landosol.toolbox.core.logging.AppLogger
 import java.util.concurrent.atomic.AtomicLong
-import android.os.SystemClock
+import com.landosol.toolbox.core.MonotonicClock
 import com.landosol.toolbox.automation.capture.FrameQueueMetrics
 import com.landosol.toolbox.automation.AutomationMode
 import com.landosol.toolbox.automation.AutomationActionResult
@@ -1324,7 +1324,7 @@ class LabyrinthEntryRecognitionSession(
     private val nodeSessionFactory: () -> LabyrinthNodeSession = {
         LabyrinthNodeSession(
             debugLogger = NodeDebugLogger { message ->
-                Log.d(NODE_LOG_TAG, "node-mapping $message")
+                AppLogger.d(NODE_LOG_TAG, "node-mapping $message")
             },
         )
     },
@@ -2896,7 +2896,7 @@ class LabyrinthEntryRecognitionSession(
         failure = { error -> handleFrameFailure(sessionId, error) },
         changed = ::publishBalancedDiagnostics,
         intervalMillis = { responseIntervalMillis }, recycle = ::recycle,
-        timestampMillis = { frame -> frame.timestampMillis }, workerClock = SystemClock::elapsedRealtime,
+        timestampMillis = { frame -> frame.timestampMillis }, workerClock = MonotonicClock::elapsedRealtime,
         foregroundReady = { _state.value.dryRun || actionTargetReady() },
         onNotForeground = { publishWaitingForGameForeground(sessionId) },
     )
@@ -2997,7 +2997,7 @@ class LabyrinthEntryRecognitionSession(
         lastProcessedAt = frame.timestampMillis
 
         frameQueueMetrics.accepted()
-        val queued = frame.copy(enqueuedAtElapsedRealtimeMillis = SystemClock.elapsedRealtime())
+        val queued = frame.copy(enqueuedAtElapsedRealtimeMillis = MonotonicClock.elapsedRealtime())
         val replaced = queuedFrame.getAndSet(QueuedFrame(sessionId, processor, queued))
         replaced?.let { frameQueueMetrics.replaced(); recycle(it.frame) }
         ensureFrameWorker()
@@ -3050,7 +3050,7 @@ class LabyrinthEntryRecognitionSession(
         val frameWidth = frame.bitmap.width
         val frameHeight = frame.bitmap.height
         _state.update { it.copy(receivedFrameCount = it.receivedFrameCount + 1) }
-        val workerStarted = SystemClock.elapsedRealtime()
+        val workerStarted = MonotonicClock.elapsedRealtime()
         val frameGeneration = roleDecisionGeneration.get()
         val frameShopVersion = shopEvidenceVersion
         runCatching {
@@ -4075,7 +4075,7 @@ class LabyrinthEntryRecognitionSession(
             planner.decide(candidates = result.characterMatches, acquiredCharacterIds = acquiredIds,
                 context = LabyrinthRoleDecisionContext(defenseMarkStacks = defenseStacks),
                 frameWidth = frameWidth, frameHeight = frameHeight, planningContext = planningContext).also {
-                runCatching { Log.d("LabyrinthEntry", "roleRewardDecisionMillis=${(System.nanoTime() - started) / 1_000_000}") }
+                runCatching { AppLogger.d("LabyrinthEntry", "roleRewardDecisionMillis=${(System.nanoTime() - started) / 1_000_000}") }
             }
         }
         val message = when (decision) {
@@ -5440,7 +5440,7 @@ class LabyrinthEntryRecognitionSession(
                 val log = recommendation.logText()
                 if (lastBattleTeamRecommendationLog != log) {
                     lastBattleTeamRecommendationLog = log
-                    runCatching { Log.i(TEAM_RECOMMENDATION_LOG_TAG, log) }
+                    runCatching { AppLogger.i(TEAM_RECOMMENDATION_LOG_TAG, log) }
                 }
             }
 
@@ -5472,7 +5472,7 @@ class LabyrinthEntryRecognitionSession(
                 val log = "第一队建议不可用：${recommendationResult.reason}"
                 if (lastBattleTeamRecommendationLog != log) {
                     lastBattleTeamRecommendationLog = log
-                    runCatching { Log.w(TEAM_RECOMMENDATION_LOG_TAG, log) }
+                    runCatching { AppLogger.w(TEAM_RECOMMENDATION_LOG_TAG, log) }
                 }
             }
         }
@@ -5511,7 +5511,7 @@ class LabyrinthEntryRecognitionSession(
         val key = plan.logKey()
         if (lastBattleTeamSelectionPlanLog == key) return
         lastBattleTeamSelectionPlanLog = key
-        runCatching { Log.i(TEAM_SELECTION_PLAN_LOG_TAG, plan.logText()) }
+        runCatching { AppLogger.i(TEAM_SELECTION_PLAN_LOG_TAG, plan.logText()) }
     }
 
     private fun refreshBattleTeamSelectionPlan(
@@ -6469,7 +6469,7 @@ class LabyrinthEntryRecognitionSession(
             exSlot3ProbePending = false
             exSlot3ProbeAttempts = 0
             exEncounterProbeStartedAt = timestampMillis
-            Log.d("LabyrinthNode", "ex-identity-probe-restarted page=$page")
+            AppLogger.d("LabyrinthNode", "ex-identity-probe-restarted page=$page")
         }
 
         // Restarting/reinstalling the app clears the in-memory activeNodeType/combatContext while
@@ -9715,7 +9715,7 @@ class LabyrinthEntryRecognitionSession(
                                     )
                                 }.onFailure {
                                     if (it is kotlinx.coroutines.CancellationException) throw it
-                                    runCatching { Log.e("LabyrinthEntry", "Selected role persistence failed; retain joined recognition", it) }
+                                    runCatching { AppLogger.e("LabyrinthEntry", "Selected role persistence failed; retain joined recognition", it) }
                                 }
                                 synchronized(roleDecisionPublishLock) {
                                     if (activeSessionId == sessionId && activeRunStartedAt == selectedRewardStartedAt &&
@@ -12480,7 +12480,7 @@ class LabyrinthEntryRecognitionSession(
 
     private fun nodeLog(message: String, warning: Boolean = false) {
         runCatching {
-            if (warning) Log.w(NODE_LOG_TAG, message) else Log.d(NODE_LOG_TAG, message)
+            if (warning) AppLogger.w(NODE_LOG_TAG, message) else AppLogger.d(NODE_LOG_TAG, message)
         }
     }
 

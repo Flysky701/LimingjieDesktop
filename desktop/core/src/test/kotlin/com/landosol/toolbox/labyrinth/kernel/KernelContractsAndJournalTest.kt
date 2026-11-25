@@ -1,7 +1,7 @@
 package com.landosol.toolbox.labyrinth.kernel
 
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSession
-import com.landosol.toolbox.labyrinth.vision.AndroidLabyrinthEventChoiceResolver
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEventChoiceResolver
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState.*
@@ -46,7 +46,7 @@ class KernelContractsAndJournalTest {
         val session = LabyrinthEntryRecognitionSession::class.java
         assertEquals(constant(session, "NODE_CLICK_STABLE_FRAMES"), PageStabilityRegistry.specFor(NODE_SELECTION).requiredFrames)
         assertEquals(constant(session, "POST_ENTRY_STABLE_FRAMES"), PageStabilityRegistry.specFor(SHOP).requiredFrames)
-        assertEquals(constant(AndroidLabyrinthEventChoiceResolver::class.java, "REQUIRED_STABLE_FRAMES"),
+        assertEquals(constant(LabyrinthEventChoiceResolver::class.java, "REQUIRED_STABLE_FRAMES"),
             PageStabilityRegistry.specFor(EVENT_CHOICE).requiredFrames)
         for (page in LabyrinthEntryPageState.entries) {
             val spec = PageStabilityRegistry.specFor(page)

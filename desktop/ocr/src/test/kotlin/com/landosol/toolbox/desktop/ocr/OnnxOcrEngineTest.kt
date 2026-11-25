@@ -156,7 +156,7 @@ class OnnxOcrEngineTest {
         val screenshot = ImageIO.read(File("../core/src/test/resources/labyrinth/final-boss-active-20260909.jpg"))
         OnnxOcrEngine().use { engine ->
             listOf("5", "4", "2", "1").forEachIndexed { index, expected ->
-                // Current upstream AndroidLabyrinthNodeRelicStackResolver OCR_DIGIT_RECTS, OCR_SCALE.
+                // Current upstream LabyrinthNodeRelicStackResolver OCR_DIGIT_RECTS, OCR_SCALE.
                 val crop = screenshot.getSubimage(360 + index * 88, 970, 48, 48)
                 val scaled = BufferedImage(192, 192, BufferedImage.TYPE_INT_RGB)
                 scaled.createGraphics().apply {

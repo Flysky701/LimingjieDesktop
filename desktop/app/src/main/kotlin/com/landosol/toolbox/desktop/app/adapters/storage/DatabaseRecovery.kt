@@ -1,6 +1,6 @@
 package com.landosol.toolbox.desktop.app.adapters.storage
 
-import android.content.Context
+import com.landosol.toolbox.core.AppContext
 import androidx.sqlite.SQLiteException
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.sqlite.driver.bundled.SQLITE_OPEN_READONLY
@@ -12,7 +12,7 @@ import java.nio.file.Path
 
 object DatabaseRecovery {
     /** Opens once, preserving db/wal/shm only on SQLite's actual corruption/not-a-database errors. */
-    suspend fun open(context: Context, onRecovered: (String) -> Unit = {}): AppDatabase = withContext(Dispatchers.IO) {
+    suspend fun open(context: AppContext, onRecovered: (String) -> Unit = {}): AppDatabase = withContext(Dispatchers.IO) {
         val directory = context.filesDir.parentFile.toPath().resolve("databases")
         val databaseFile = directory.resolve(AppDatabase.FILE_NAME)
         // Room's failed first-open can retain its native connection on Windows. Inspect through an

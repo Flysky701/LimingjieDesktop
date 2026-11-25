@@ -1,6 +1,5 @@
 package com.landosol.toolbox.labyrinth
 
-import androidx.room.withTransaction
 import com.landosol.toolbox.data.local.AppDatabase
 import com.landosol.toolbox.data.local.LabyrinthRerollCheckpointEntity
 import com.landosol.toolbox.data.local.LabyrinthRouteEntity
@@ -324,7 +323,7 @@ class RoomLabyrinthRouteStore(
             openingRelics = route.openingRelics,
             targetScore = config.routePolicy.targetScore,
         )
-        val saved = database.withTransaction {
+        val saved = database.writeTransaction {
             val merged = routeJson.withOpeningRelicsFrom(loadLatest(config.accountId))
             database.labyrinthRouteDao().insert(
                 LabyrinthRouteEntity(
@@ -353,14 +352,14 @@ class RoomLabyrinthRouteStore(
 
     /** Refresh only the unadvanced opening whose identity was just verified by top and resume. */
     suspend fun updateOpeningRelics(accountId: Long, enterId: Long, state: LabyrinthOpeningRelicState): Boolean =
-        database.withTransaction {
+        database.writeTransaction {
             val dao = database.labyrinthRouteDao()
-            val entity = dao.getLatestByAccount(accountId) ?: return@withTransaction false
-            if (entity.enterId != enterId) return@withTransaction false
+            val entity = dao.getLatestByAccount(accountId) ?: return@writeTransaction false
+            if (entity.enterId != enterId) return@writeTransaction false
             val saved = runCatching {
                 Json.decodeFromString(LabyrinthRouteJson.serializer(), entity.routeJson)
-            }.getOrNull() ?: return@withTransaction false
-            if (saved.enterId != enterId || saved.guildId != state.guildId || saved.currentBlockId != null) return@withTransaction false
+            }.getOrNull() ?: return@writeTransaction false
+            if (saved.enterId != enterId || saved.guildId != state.guildId || saved.currentBlockId != null) return@writeTransaction false
             val refreshed = saved.copy(openingRelics = state).withOpeningRelicsFrom(saved)
             val updated = dao.updateRouteJson(entity.id, Json.encodeToString(LabyrinthRouteJson.serializer(), refreshed)) == 1
             if (updated) LabyrinthRoutePreviewCache.publish(refreshed)
@@ -371,18 +370,18 @@ class RoomLabyrinthRouteStore(
         accountId: Long,
         enterId: Long,
         currentBlockId: Long,
-    ): Boolean = database.withTransaction {
+    ): Boolean = database.writeTransaction {
         val dao = database.labyrinthRouteDao()
-        val entity = dao.getLatestByAccount(accountId) ?: return@withTransaction false
-        if (entity.enterId != enterId) return@withTransaction false
+        val entity = dao.getLatestByAccount(accountId) ?: return@writeTransaction false
+        if (entity.enterId != enterId) return@writeTransaction false
         val saved = runCatching {
             Json.decodeFromString(LabyrinthRouteJson.serializer(), entity.routeJson)
-        }.getOrNull() ?: return@withTransaction false
-        if (saved.enterId != enterId) return@withTransaction false
-        val advanced = saved.withAdvancedCurrentBlock(currentBlockId) ?: return@withTransaction false
+        }.getOrNull() ?: return@writeTransaction false
+        if (saved.enterId != enterId) return@writeTransaction false
+        val advanced = saved.withAdvancedCurrentBlock(currentBlockId) ?: return@writeTransaction false
         if (advanced == saved) {
             LabyrinthRoutePreviewCache.publish(saved)
-            return@withTransaction true
+            return@writeTransaction true
         }
         val updated = dao.updateRouteJson(
             id = entity.id,

@@ -1,6 +1,6 @@
 package com.landosol.toolbox.desktop.app.adapters
 
-import android.graphics.Bitmap
+import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.vision.PixelImage
 import com.landosol.toolbox.desktop.ocr.OnnxOcrEngine
 import com.landosol.toolbox.desktop.shared.*
@@ -75,9 +75,9 @@ class SeriesColumnOcrTest {
     }
 
     private suspend fun read(image: BufferedImage): LabyrinthRelicDetailObservation {
-        val bitmap = Bitmap.createBitmap(image.getRGB(0, 0, image.width, image.height, null, 0, image.width),
-            image.width, image.height, Bitmap.Config.ARGB_8888)
-        val resolver = AndroidLabyrinthRelicDetailResolver()
+        val bitmap = NativeBitmap.create(image.getRGB(0, 0, image.width, image.height, null, 0, image.width),
+            image.width, image.height)
+        val resolver = LabyrinthRelicDetailResolver()
         val frame = LabyrinthEntryFrameResult(
             LabyrinthEntryPageObservation(LabyrinthEntryPageState.UNKNOWN, 0.0, emptyMap(), LabyrinthAnchorScores(emptyMap())),
             emptyList(), 0,

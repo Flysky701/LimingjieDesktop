@@ -14,7 +14,7 @@ data class NodeSessionState(
 )
 
 /**
- * 节点调试日志回调。默认 no-op，后续接入 android.util.Log。
+ * 节点调试日志回调，默认不记录。
  */
 fun interface NodeDebugLogger {
     fun log(message: String)

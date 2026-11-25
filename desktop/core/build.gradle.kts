@@ -86,6 +86,13 @@ tasks.matching { it.name == "kspKotlin" }.configureEach {
     }
 }
 tasks.test {
+    if (!providers.gradleProperty("full").isPresent) {
+        exclude(
+            "**/*Replay*Test*", "**/*FixtureTest*", "**/*EvidenceTest*",
+            "**/*TwoRoundHandoffTest*", "**/*LayoutAuditTest*", "**/*RecordingTest*",
+            "**/*Screenshot*Test*", "**/ResourcePackValidatorTest*", "**/LabyrinthCharacterIconGoldenTest*",
+        )
+    }
     maxHeapSize = "2g"
     // Planning latency and frame handoff regressions share the host CPU.
     maxParallelForks = 1

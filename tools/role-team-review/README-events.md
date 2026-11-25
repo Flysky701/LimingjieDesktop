@@ -268,7 +268,7 @@ condition_value = 2000 / 4000
 当前调用路径：
 
 ```text
-AndroidLabyrinthEventChoiceResolver
+LabyrinthEventChoiceResolver
   -> 事件与选项观测
   -> LabyrinthEventChoicePlanner
   -> Select(actionSafe=true) 或 Wait

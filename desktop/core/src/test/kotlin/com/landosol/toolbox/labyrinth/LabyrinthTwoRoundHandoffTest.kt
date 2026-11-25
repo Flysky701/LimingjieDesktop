@@ -1,6 +1,6 @@
 package com.landosol.toolbox.labyrinth
 
-import android.graphics.Bitmap
+import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.automation.*
 import com.landosol.toolbox.automation.capture.CapturedFrame
 import com.landosol.toolbox.automation.capture.CaptureFrameBus
@@ -132,7 +132,7 @@ class LabyrinthTwoRoundHandoffTest {
                 val replay = scope.launch {
                     while (reset.state.value.running) {
                         CaptureFrameBus.dispatch(CapturedFrame(
-                            Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888), System.currentTimeMillis()))
+                            NativeBitmap.create(1920, 1080), System.currentTimeMillis()))
                         delay(250)
                     }
                 }
@@ -156,7 +156,7 @@ class LabyrinthTwoRoundHandoffTest {
         val batch = LabyrinthBatchController(ports, clock = now::get)
         suspend fun feed(result: LabyrinthEntryFrameResult, time: Long) {
             now.set(time); visible.set(result)
-            CaptureFrameBus.dispatch(CapturedFrame(Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888), time))
+            CaptureFrameBus.dispatch(CapturedFrame(NativeBitmap.create(1920, 1080), time))
             delay(30)
         }
         try {
@@ -232,7 +232,7 @@ class LabyrinthTwoRoundHandoffTest {
         private val root = generateSequence(File(".").canonicalFile, File::getParentFile)
             .first { File(it, "desktop/core/build.gradle.kts").isFile }
         private val templates by lazy {
-            val paths = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS + AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+            val paths = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS + LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
             LabyrinthEntryTemplateSet(paths.mapNotNull { (id, path) ->
                 File(root, "desktop/core/src/main/resources/assets/$path").takeIf { it.isFile }?.let { id to read(it) }
             }.toMap())

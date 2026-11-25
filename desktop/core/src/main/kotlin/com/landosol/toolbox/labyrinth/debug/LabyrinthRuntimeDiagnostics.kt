@@ -1,12 +1,12 @@
 package com.landosol.toolbox.labyrinth.debug
-import android.content.Context
+import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.AppVersion
 import java.lang.management.ManagementFactory
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 
-class LabyrinthRuntimeDiagnostics(context: Context) : AutoCloseable {
+class LabyrinthRuntimeDiagnostics(context: AppContext) : AutoCloseable {
     @Volatile var environmentDetails: () -> JSONObject = { JSONObject() }
     private val samples = ArrayDeque<String>()
     private var executor: java.util.concurrent.ScheduledExecutorService? = null

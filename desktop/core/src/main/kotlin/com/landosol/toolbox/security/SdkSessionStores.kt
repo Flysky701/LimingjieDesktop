@@ -1,6 +1,6 @@
 package com.landosol.toolbox.security
 
-import android.content.Context
+import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.protocol.bilibili.SdkSession
 import com.landosol.toolbox.protocol.bilibili.SdkSessionStore
 import java.io.ByteArrayInputStream
@@ -24,11 +24,11 @@ class InMemorySdkSessionStore : SdkSessionStore {
     }
 }
 
-class AndroidKeystoreSdkSessionStore(
-    context: Context,
+class EncryptedSdkSessionStore(
+    context: AppContext,
     storageName: String = "sdk-sessions",
 ) : SdkSessionStore {
-    private val encryptedStore = AndroidKeystoreEncryptedStore(context, storageName)
+    private val encryptedStore = DpapiEncryptedStore(context, storageName)
 
     override suspend fun save(key: String, session: SdkSession) {
         encryptedStore.save(key, encode(session))

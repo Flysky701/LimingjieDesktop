@@ -1,6 +1,7 @@
 package com.landosol.toolbox.desktop.app
 
-import android.graphics.BitmapFactory
+import com.landosol.toolbox.core.AppAssets
+import com.landosol.toolbox.vision.NativeBitmapCodec
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.sqlite.execSQL
 import com.landosol.toolbox.AppVersion
@@ -11,7 +12,7 @@ import com.landosol.toolbox.desktop.app.strategy.BattleOnnxBundle
 import com.landosol.toolbox.desktop.app.strategy.resolveBattleBundleLocation
 import com.landosol.toolbox.desktop.ocr.*
 import com.landosol.toolbox.desktop.platform.*
-import com.landosol.toolbox.desktop.shared.DesktopContext
+import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.labyrinth.LabyrinthRoleDecisionContext
 import com.landosol.toolbox.labyrinth.LabyrinthRoleProfile
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleRosterUnit
@@ -70,7 +71,7 @@ object DesktopSelfTest {
                 "CJK characters available in $font"
             }
             checkItem("resources") {
-                val names = resource("desktop/assets-manifest.txt").toString(Charsets.UTF_8).lineSequence().filter { it.isNotBlank() }.toList()
+                val names = AppAssets().paths().map { "assets/$it" }
                 require(names.isNotEmpty()) { "Empty asset manifest" }
                 names.forEach { name -> require(javaClass.classLoader.getResource(name) != null) { "Missing asset: $name" } }
                 val first = checkNotNull(javaClass.classLoader.getResource(names.first()))
@@ -85,12 +86,12 @@ object DesktopSelfTest {
                 check(packagedCount == names.size) { "Asset count mismatch: $packagedCount versus ${names.size}" }
                 val sample = java.util.Properties().apply { resource("desktop/sample.properties").inputStream().reader(Charsets.UTF_8).use { load(it) } }
                 val png = sample.getProperty("path")
-                val decoded = BitmapFactory.decodeStream(resource(png).inputStream()) ?: error("Cannot decode packaged PNG")
+                val decoded = NativeBitmapCodec.decodeStream(resource(png).inputStream()) ?: error("Cannot decode packaged PNG")
                 try { require(decoded.width == sample.getProperty("width").toInt() && decoded.height == sample.getProperty("height").toInt()); "${names.size} assets; $png ${decoded.width}x${decoded.height}" }
                 finally { decoded.recycle() }
             }
             checkItem("ocr") {
-                val bitmap = BitmapFactory.decodeStream(resource("ocr/self-test.png").inputStream()) ?: error("Cannot decode OCR sample")
+                val bitmap = NativeBitmapCodec.decodeStream(resource("ocr/self-test.png").inputStream()) ?: error("Cannot decode OCR sample")
                 val expected = resource("ocr/self-test.txt").toString(Charsets.UTF_8).trim()
                 val pixels = IntArray(bitmap.width * bitmap.height)
                 bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
@@ -164,7 +165,7 @@ object DesktopSelfTest {
                 }
             }
             checkItem("room") {
-                val context = DesktopContext(temporary.resolve("room").toFile())
+                val context = AppContext(temporary.resolve("room").toFile())
                 val databaseFile = context.dataDir.toPath().resolve("databases/${AppDatabase.FILE_NAME}")
                 Files.createDirectories(databaseFile.parent)
                 val schema = JSONObject(resource("desktop/schema-v1.json").toString(Charsets.UTF_8)).getJSONObject("database")

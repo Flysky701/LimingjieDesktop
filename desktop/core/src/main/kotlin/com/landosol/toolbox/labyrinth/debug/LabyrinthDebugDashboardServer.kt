@@ -1,7 +1,8 @@
 package com.landosol.toolbox.labyrinth.debug
 
-import android.graphics.Bitmap
-import android.util.Log
+import com.landosol.toolbox.core.MonotonicClock
+import com.landosol.toolbox.vision.NativeBitmap
+import com.landosol.toolbox.core.logging.AppLogger
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.automation.overlay.AutomationOverlayPresentation
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSessionState
@@ -138,11 +139,11 @@ class LabyrinthDebugDashboardServer(
         }.getOrElse { failure ->
             runCatching { candidate?.close() }
             running.set(false)
-            Log.e(LOG_TAG, "debug dashboard failed to bind $IPV4_LOOPBACK:$port", failure)
+            AppLogger.e(LOG_TAG, "debug dashboard failed to bind $IPV4_LOOPBACK:$port", failure)
             return
         }
         boundSocket = server
-        runCatching { Log.i(LOG_TAG, "debug dashboard listening on http://$IPV4_LOOPBACK:${server.localPort}/") }
+        runCatching { AppLogger.i(LOG_TAG, "debug dashboard listening on http://$IPV4_LOOPBACK:${server.localPort}/") }
         runtimeDiagnostics?.start()
         Thread({ runServer(server) }, "labyrinth-debug-dashboard").apply {
             isDaemon = true
@@ -157,7 +158,7 @@ class LabyrinthDebugDashboardServer(
     }
 
     fun publish(
-        bitmap: Bitmap,
+        bitmap: NativeBitmap,
         state: LabyrinthEntryRecognitionSessionState,
         result: LabyrinthEntryFrameResult,
         presentation: AutomationOverlayPresentation,
@@ -169,7 +170,7 @@ class LabyrinthDebugDashboardServer(
             nowMillis - lastJpegAt >= JPEG_REFRESH_INTERVAL_MILLIS
         val jpeg = if (shouldRefreshJpeg) {
             ByteArrayOutputStream().use { output ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)
+                bitmap.compress(NativeBitmap.CompressFormat.JPEG, JPEG_QUALITY, output)
                 output.toByteArray()
             }.also { lastJpegAt = nowMillis }
         } else {
@@ -207,7 +208,7 @@ class LabyrinthDebugDashboardServer(
 
     fun recordIncident(
         reason: String,
-        bitmap: Bitmap,
+        bitmap: NativeBitmap,
         state: LabyrinthEntryRecognitionSessionState,
         result: LabyrinthEntryFrameResult,
         presentation: AutomationOverlayPresentation,
@@ -228,13 +229,13 @@ class LabyrinthDebugDashboardServer(
 
     private fun storeIncident(
         reason: String,
-        bitmap: Bitmap,
+        bitmap: NativeBitmap,
         baseJson: JSONObject,
         nowMillis: Long,
     ) {
         runCatching {
             val png = ByteArrayOutputStream().use { output ->
-                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                bitmap.compress(NativeBitmap.CompressFormat.PNG, 100, output)
                 output.toByteArray()
             }
             val meta = JSONObject(baseJson.toString()).apply {
@@ -259,7 +260,7 @@ class LabyrinthDebugDashboardServer(
                 }
             }
         }.onFailure { failure ->
-            Log.w(LOG_TAG, "lossless incident capture failed", failure)
+            AppLogger.w(LOG_TAG, "lossless incident capture failed", failure)
         }
     }
 
@@ -291,14 +292,14 @@ class LabyrinthDebugDashboardServer(
      * is bounded to the same depth as the state history so the diagnostic zip stays around a few
      * tens of megabytes. Returns the archive file name recorded in the history entry, or null.
      */
-    private fun archiveFrame(bitmap: Bitmap, frameCount: Long): String? {
+    private fun archiveFrame(bitmap: NativeBitmap, frameCount: Long): String? {
         if (!frameArchiveEnabled.get()) return null
         val directory = frameArchiveDirectory ?: return null
         return runCatching {
             if (!directory.isDirectory && !directory.mkdirs()) return null
             val scale = FRAME_ARCHIVE_WIDTH.toFloat() / bitmap.width
             val scaled = if (bitmap.width > FRAME_ARCHIVE_WIDTH) {
-                Bitmap.createScaledBitmap(
+                NativeBitmap.createScaled(
                     bitmap,
                     FRAME_ARCHIVE_WIDTH,
                     (bitmap.height * scale).toInt().coerceAtLeast(1),
@@ -319,12 +320,12 @@ class LabyrinthDebugDashboardServer(
                 }
             }
             file.outputStream().use { output ->
-                scaled.compress(Bitmap.CompressFormat.JPEG, FRAME_ARCHIVE_JPEG_QUALITY, output)
+                scaled.compress(NativeBitmap.CompressFormat.JPEG, FRAME_ARCHIVE_JPEG_QUALITY, output)
             }
             if (scaled !== bitmap) scaled.recycle()
             name
         }.getOrElse { failure ->
-            Log.w(LOG_TAG, "frame archive write failed", failure)
+            AppLogger.w(LOG_TAG, "frame archive write failed", failure)
             null
         }
     }
@@ -356,7 +357,7 @@ class LabyrinthDebugDashboardServer(
                 }
             }
         }.onFailure { failure ->
-            if (running.get() && boundSocket === server) Log.e(LOG_TAG, "debug dashboard stopped unexpectedly on $IPV4_LOOPBACK:${server.localPort}", failure)
+            if (running.get() && boundSocket === server) AppLogger.e(LOG_TAG, "debug dashboard stopped unexpectedly on $IPV4_LOOPBACK:${server.localPort}", failure)
         }
         synchronized(this) { if (boundSocket === server) { running.set(false); boundSocket = null } }
     }
@@ -566,7 +567,7 @@ class LabyrinthDebugDashboardServer(
         put("appVersion", AppVersion.name)
         put("appVersionCode", AppVersion.code)
         put("timestamp", nowMillis)
-        put("elapsedRealtimeMillis", android.os.SystemClock.elapsedRealtime())
+        put("elapsedRealtimeMillis", MonotonicClock.elapsedRealtime())
         put("frameVersion", frameVersion)
         put("historyLimit", LABYRINTH_DEBUG_HISTORY_LIMIT)
         val capture = CaptureTelemetry.snapshot()
@@ -1151,7 +1152,7 @@ class LabyrinthDebugDashboardServer(
                 "-d",
                 "-v",
                 "threadtime",
-                "--pid=${android.os.Process.myPid()}",
+                "--pid=${ProcessHandle.current().pid()}",
                 "-t",
                 LOGCAT_LINE_LIMIT.toString(),
             ).redirectErrorStream(true).start()

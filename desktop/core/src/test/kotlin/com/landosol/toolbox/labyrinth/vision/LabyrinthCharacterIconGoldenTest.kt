@@ -47,7 +47,7 @@ class LabyrinthCharacterIconGoldenTest {
         assumeTrue("icon pack index is empty", entries.size > MIN_TEMPLATES)
 
         // Order matters: the matcher sorts with a stable sort, so ties keep the template order the
-        // loader produced. Same order as AndroidLabyrinthBattleTeamTemplateLoader.
+        // loader produced. Same order as LabyrinthBattleTeamTemplateLoader.
         //
         // Six of the 801 indexed icons are .webp, which the JDK's ImageIO cannot decode (Android's
         // BitmapFactory can, which is why production loads all 801). They are skipped rather than

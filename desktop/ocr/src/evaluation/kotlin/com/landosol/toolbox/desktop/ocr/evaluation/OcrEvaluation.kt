@@ -64,7 +64,7 @@ fun main(args: Array<String>) = runBlocking {
                 "series-title" -> internalDetail("isSeriesTitle", text).toString()
                 "series-visible" -> (internalDetail("parseVisibleSeries", text) as Map<*, *>).entries.map { "${it.key}:${it.value}" }.sorted().joinToString(";")
                 "node-stack" -> {
-                    val resolver = AndroidLabyrinthNodeRelicStackResolver(submitTextRead = { _, callback -> callback(null) })
+                    val resolver = LabyrinthNodeRelicStackResolver(submitTextRead = { _, callback -> callback(null) })
                     resolver.javaClass.methods.single { it.name.startsWith("parseStacks") }.invoke(resolver, text)?.toString()
                 }
                 "event" -> eventMatcher.recognize(text).let { if (it.trusted) it.event?.id else null }

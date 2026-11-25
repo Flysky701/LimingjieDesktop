@@ -20,7 +20,7 @@ class LabyrinthEventFlowRegressionTest {
     private val json = Json { ignoreUnknownKeys = true }
 
     @Test fun `shop imprint joined screenshot belongs to rewards without opening invitation`() {
-        val paths = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS + AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+        val paths = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS + LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
         val templates = paths.mapNotNull { (id, path) ->
             File(root, "desktop/core/src/main/resources/assets/$path").takeIf { it.isFile }?.let { id to readImage(it) }
         }.toMap()
@@ -72,8 +72,8 @@ class LabyrinthEventFlowRegressionTest {
 
     @Test
     fun `movement modal remains compatible with map ownership with bundled templates`() {
-        val paths = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS +
-            AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+        val paths = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS +
+            LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
         val templates = paths.mapNotNull { (id, path) ->
             val file = File(root, "desktop/core/src/main/resources/assets/$path")
             if (file.isFile) id to readImage(file) else null

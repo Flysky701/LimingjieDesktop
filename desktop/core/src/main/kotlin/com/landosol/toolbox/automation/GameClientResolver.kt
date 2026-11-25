@@ -1,6 +1,5 @@
 package com.landosol.toolbox.automation
 
-import android.content.pm.PackageManager
 import com.landosol.toolbox.account.SelectedAccountServer
 import com.landosol.toolbox.protocol.bilibili.GameServer
 
@@ -40,17 +39,5 @@ object GameClientResolver {
             1 -> GameClientResolution.Available(installed.single())
             else -> GameClientResolution.Ambiguous(installed)
         }
-    }
-
-    fun installedPackageNames(packageManager: PackageManager): Set<String> = GameServer.entries
-        .map(GameServer::packageName)
-        .filter { packageName -> isInstalled(packageManager, packageName) }
-        .toSet()
-
-    private fun isInstalled(packageManager: PackageManager, packageName: String): Boolean = try {
-        packageManager.getApplicationInfo(packageName, 0)
-        true
-    } catch (_: PackageManager.NameNotFoundException) {
-        false
     }
 }

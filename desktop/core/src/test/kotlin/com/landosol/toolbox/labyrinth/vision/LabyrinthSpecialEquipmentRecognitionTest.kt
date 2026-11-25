@@ -396,8 +396,8 @@ class LabyrinthSpecialEquipmentRecognitionTest {
 
     private fun loadShippedTemplates(): LabyrinthEntryTemplateSet? {
         val root = assetRoot ?: return null
-        val all = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS +
-            AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+        val all = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS +
+            LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
         val prefix = "resource-packs/cn-bilibili/vision/"
         return LabyrinthEntryTemplateSet(
             all.mapNotNull { (id, path) ->

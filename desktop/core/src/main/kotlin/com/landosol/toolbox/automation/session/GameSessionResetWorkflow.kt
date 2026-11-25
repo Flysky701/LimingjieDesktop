@@ -30,7 +30,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import android.util.Log
+import com.landosol.toolbox.core.logging.AppLogger
 
 enum class GameSessionResetStatus { IDLE, RUNNING, STOPPED, ERROR }
 
@@ -146,7 +146,7 @@ class GameSessionResetWorkflow(
     private val channelPrompts: ChannelLoginPromptAssistant? = null,
     private val actionScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val configurationGate: com.landosol.toolbox.automation.TaskConfigurationGate = com.landosol.toolbox.automation.TaskConfigurationGate(),
-    private val debugLog: (String) -> Unit = { Log.d(LOG_TAG, it) },
+    private val debugLog: (String) -> Unit = { AppLogger.d(LOG_TAG, it) },
 ) {
     private val mutex = Mutex()
     private val frameProcessorMutex = Mutex()

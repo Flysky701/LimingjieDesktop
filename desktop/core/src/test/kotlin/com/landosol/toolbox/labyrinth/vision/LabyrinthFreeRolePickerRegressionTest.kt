@@ -44,7 +44,7 @@ class LabyrinthFreeRolePickerRegressionTest {
             pixels(requireNotNull(Class.forName("javax.imageio.ImageIO").getMethod("read", java.io.InputStream::class.java).invoke(null, it)))
         } }
         val assetRoot = File(root, "desktop/core/src/main/resources/assets")
-        val paths = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS + AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+        val paths = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS + LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
         val templates = LabyrinthEntryTemplateSet(paths.mapNotNull { (id, path) ->
             File(assetRoot, path).takeIf(File::isFile)?.let { id to readImage(it) }
         }.toMap())
@@ -104,7 +104,7 @@ class LabyrinthFreeRolePickerRegressionTest {
         }
 
         val assetRoot = File(root, "desktop/core/src/main/resources/assets")
-        val paths = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS + AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+        val paths = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS + LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
         val entryTemplates = LabyrinthEntryTemplateSet(paths.mapNotNull { (id, path) ->
             File(assetRoot, path).takeIf(File::isFile)?.let { id to readImage(it) }
         }.toMap())

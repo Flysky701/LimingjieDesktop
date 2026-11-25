@@ -770,10 +770,10 @@ class LabyrinthBattleFailureLayoutAuditTest {
     }
 
     private fun loadShippedTemplates(): LabyrinthEntryTemplateSet {
-        val root = File(requireNotNull(assetRoot), AndroidLabyrinthEntryTemplateLoader.ROOT)
-        val paths = AndroidLabyrinthEntryTemplateLoader.TEMPLATE_PATHS +
-            AndroidLabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
-        val prefix = "${AndroidLabyrinthEntryTemplateLoader.ROOT}/"
+        val root = File(requireNotNull(assetRoot), LabyrinthEntryTemplateLoader.ROOT)
+        val paths = LabyrinthEntryTemplateLoader.TEMPLATE_PATHS +
+            LabyrinthEntryTemplateLoader.OPTIONAL_TEMPLATE_PATHS
+        val prefix = "${LabyrinthEntryTemplateLoader.ROOT}/"
         return LabyrinthEntryTemplateSet(
             paths.mapNotNull { (id, path) ->
                 val file = File(root, path.removePrefix(prefix))

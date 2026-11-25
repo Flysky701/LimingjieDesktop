@@ -1,6 +1,5 @@
 package com.landosol.toolbox.desktop.app.ui
 
-import android.content.res.Configuration
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -12,8 +11,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -341,17 +338,11 @@ internal fun DesktopApp(
                             Message(visibleTransportError, onDismiss = { dismissedTransportError = visibleTransportError }, tone = StatusTone.ERROR)
                         }
                     }
-                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
                         CompositionLocalProvider(
-                            LocalContext provides graph.context,
                             LocalTaskBusy provides (graph.busy || actions.working),
                             LocalDesktopWindow provides hostWindow,
                             LocalNavigationGuard provides navigation,
-                            LocalConfiguration provides Configuration(
-                                maxWidth.value.toInt(),
-                                maxHeight.value.toInt(),
-                                androidx.compose.ui.platform.LocalDensity.current.fontScale,
-                            ),
                         ) {
                             when (if (runOnly) Page.Run else page) {
                                 Page.Run -> RunConsole(

@@ -1,8 +1,6 @@
 package com.landosol.toolbox.desktop.app.control
 
-import android.content.Context
-import android.content.SharedPreferences
-import android.content.res.AssetManager
+import com.landosol.toolbox.core.AppAssets
 import com.landosol.toolbox.account.*
 import com.landosol.toolbox.automation.GameClientResolution
 import com.landosol.toolbox.desktop.app.*
@@ -20,7 +18,6 @@ import com.landosol.toolbox.labyrinth.batch.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
-import java.io.File
 import java.nio.file.Path
 import java.util.Base64
 import androidx.compose.ui.graphics.ImageBitmap
@@ -127,13 +124,7 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     }
     private fun <T> consoleField(read:(RunConsoleState)->T):StateFlow<T> = consoleState
         .map(read).distinctUntilChanged().stateIn(scope,SharingStarted.Eagerly,read(consoleState.value))
-    val context=object:Context() {
-        override val assets=AssetManager()
-        override val applicationContext:Context get()=this
-        override val filesDir:File get()=error("UI does not own worker files")
-        override val cacheDir:File get()=error("UI does not own worker cache")
-        override fun getSharedPreferences(name:String,mode:Int):SharedPreferences=error("UI preferences must use the control port")
-    }
+    val assets = AppAssets()
     val dataDirectory get()=Path.of(models.value.text("dataDirectory") ?: ".")
     val debugUrl get()=models.value.text("debugUrl")
     val incidentCount: StateFlow<Int> = field("incidentCount") { it.document["incidentCount"]?.jsonPrimitive?.intOrNull ?: 0 }

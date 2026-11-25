@@ -1,6 +1,5 @@
 package com.landosol.toolbox.account
 
-import androidx.room.withTransaction
 import com.landosol.toolbox.data.local.AccountEntity
 import com.landosol.toolbox.data.local.AppDatabase
 import com.landosol.toolbox.security.AccountCredentials
@@ -114,7 +113,7 @@ class AccountRepository(
         val credentialKey = UUID.randomUUID().toString()
         credentialStore.save(credentialKey, AccountCredentials(input.loginId, input.password))
         return try {
-            database.withTransaction {
+            database.writeTransaction {
                 val now = clock()
                 database.accountDao().insert(
                     AccountEntity(
@@ -196,7 +195,7 @@ class AccountRepository(
             credentialStore.delete(account.credentialKey)
             sessionStore.delete(account.credentialKey)
             gameSessionRegistry.delete(account.id)
-            database.withTransaction {
+            database.writeTransaction {
                 check(database.accountDao().deleteById(id) == 1) { "账号删除失败" }
                 if (account.isSelected) {
                     database.accountDao().getFirst()?.let { replacement ->

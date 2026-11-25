@@ -41,15 +41,15 @@ class Batch5FastFrameObserverTest {
 
     @Test fun fastProducesNoDetailedPayloadAndNeverConstructsOrInvokesHeavyRecognition() {
         val text = Batch5FrameFixtures.source("labyrinth/vision/LabyrinthFastFrameObserver.kt")
-        val androidText = Batch5FrameFixtures.source("labyrinth/vision/AndroidLabyrinthFastFrameObserver.kt")
+        val desktopText = Batch5FrameFixtures.source("labyrinth/vision/DesktopLabyrinthFastFrameObserver.kt")
         val forbidden = listOf("LabyrinthEntryFrameProcessor", "LabyrinthNodeClassifier",
             "FinalBossPlatformLocator", "LabyrinthCharacterRecognizer", "LabyrinthBattleTeamRecognizer",
             "LabyrinthLinkChoiceRecognizer", "LabyrinthRelicRecognizer", "LabyrinthShopRecognizer")
         forbidden.forEach { name ->
-            assertFalse("T2 must not construct $name", Regex("$name\\s*\\(").containsMatchIn(text + androidText))
+            assertFalse("T2 must not construct $name", Regex("$name\\s*\\(").containsMatchIn(text + desktopText))
         }
-        assertFalse(androidText.contains("Resolver("))
-        assertFalse(androidText.contains(".resolve("))
+        assertFalse(desktopText.contains("Resolver("))
+        assertFalse(desktopText.contains(".resolve("))
         val fields = LabyrinthFastFrameObservation::class.java.declaredFields.map { it.name }
         listOf("nodeClassifications", "characterMatches", "openingCharacterMatches", "battleTeamSelection",
             "linkChoiceSelection", "relicChoiceSelection", "shopObservation", "eventOcrDiagnostics",

@@ -1,6 +1,6 @@
 package com.landosol.toolbox.labyrinth.vision
 
-import android.graphics.Bitmap
+import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.automation.AutomationSessionId
 import com.landosol.toolbox.automation.overlay.AutomationOverlayPresentation
 import com.landosol.toolbox.vision.PixelImage
@@ -235,9 +235,9 @@ class VisionRedundancyHardeningTest {
 
     @Test
     fun `shop resolvers handle transient null OCR without EXHAUSTED and require dual-variant coin agreement`() {
-        val shopFrame = Bitmap.createBitmap(1920, 1080, Bitmap.Config.ARGB_8888)
+        val shopFrame = NativeBitmap.create(1920, 1080)
         // Transient null OCR must keep shop item in READING (never EXHAUSTED).
-        val itemResolver = AndroidLabyrinthShopItemResolver { _, cb -> cb(null) }
+        val itemResolver = LabyrinthShopItemResolver { _, cb -> cb(null) }
         val baseShop = LabyrinthShopObservation(
             items = listOf(
                 LabyrinthShopItemMatch(
@@ -269,7 +269,7 @@ class VisionRedundancyHardeningTest {
         var now = 1_000L
         val scalesSeen = mutableListOf<Int>()
         val responses = ArrayDeque(listOf("1234", "5678", "5678"))
-        val coinResolver = AndroidLabyrinthShopCoinResolver(
+        val coinResolver = LabyrinthShopCoinResolver(
             submitTextRead = { bmp, cb ->
                 scalesSeen += bmp.width
                 cb(responses.removeFirst())
@@ -293,7 +293,7 @@ class VisionRedundancyHardeningTest {
 
     @Test
     fun `shop title null retries exhaust all variants without submitting the sold out crop`() {
-        val shopFrame = Bitmap.createBitmap(64, 48, Bitmap.Config.ARGB_8888)
+        val shopFrame = NativeBitmap.create(64, 48)
         val available = LabyrinthShopItemMatch(
             slotId = "shop_item_2",
             screenRect = EntryPixelRect(8, 8, 24, 24),
@@ -319,7 +319,7 @@ class VisionRedundancyHardeningTest {
         val startedAt = 1_000L
         var now = startedAt
         val cropSizes = mutableListOf<Pair<Int, Int>>()
-        val resolver = AndroidLabyrinthShopItemResolver(
+        val resolver = LabyrinthShopItemResolver(
             submitTextRead = { crop, callback ->
                 cropSizes += crop.width to crop.height
                 callback(null)
@@ -350,7 +350,7 @@ class VisionRedundancyHardeningTest {
         server.start()
         try {
             val port = requireNotNull(server.boundPort)
-            val bitmap = Bitmap.createBitmap(64, 36, Bitmap.Config.ARGB_8888)
+            val bitmap = NativeBitmap.create(64, 36)
             val state = LabyrinthEntryRecognitionSessionState(
                 status = LabyrinthEntryRecognitionStatus.ERROR,
                 message = "动作超时",
