@@ -190,7 +190,15 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                                 Text(connectionLabel,Modifier.weight(1f),maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)
                                 Text("绑定账号：${state.task.selectedAccount?.alias ?: "未绑定"}",style=MaterialTheme.typography.bodySmall)
                                 TextButton(onClick={navigate(Page.Devices)}){Text("设备管理")}
-                                StatusBadge(if(state.stopping)"停止中" else if(state.overlay?.paused==true)"已暂停" else if(state.busy)"运行中" else "空闲")
+                                StatusBadge(when {
+                                    connection == WorkerConnectionStatus.STARTING -> "连接中"
+                                    connection == WorkerConnectionStatus.LOST -> "控制失联"
+                                    connection == WorkerConnectionStatus.CLOSED -> "已关闭"
+                                    state.stopping -> "停止中"
+                                    state.overlay?.paused == true -> "已暂停"
+                                    state.busy -> "运行中"
+                                    else -> "空闲"
+                                })
                             } else {
                             Box { OutlinedButton(shape=MaterialTheme.shapes.small,onClick={deviceMenu=true},contentPadding=PaddingValues(horizontal=10.dp,vertical=6.dp)) {
                                 Symbol("smartphone",tint=if(state.device is DeviceConnectionState.Ready) LocalDesktopColors.current.ok else Muted)
@@ -208,7 +216,16 @@ internal enum class Page(val label:String,val icon:String) { Run("运行","play_
                                 DropdownMenuItem(text={Text("管理账号")},onClick={accountMenu=false;navigate(Page.Accounts)})
                             } }
                             if(state.busy) Text("运行中不可切换账号",color=Muted,style=MaterialTheme.typography.bodySmall)
-                            Spacer(Modifier.weight(1f));StatusBadge(if(state.stopping) "停止中" else if(state.task.captcha!=null) "等待验证码" else if(state.overlay?.paused==true) "已暂停" else if(state.busy) "运行中" else "空闲")
+                            Spacer(Modifier.weight(1f));StatusBadge(when {
+                                connection == WorkerConnectionStatus.STARTING -> "连接中"
+                                connection == WorkerConnectionStatus.LOST -> "控制失联"
+                                connection == WorkerConnectionStatus.CLOSED -> "已关闭"
+                                state.stopping -> "停止中"
+                                state.task.captcha != null -> "等待验证码"
+                                state.overlay?.paused == true -> "已暂停"
+                                state.busy -> "运行中"
+                                else -> "空闲"
+                            })
                             IconButton(onClick={actions.run { withContext(Dispatchers.IO){graph.ux.preferences.update { it.copy(theme=if(isDark) DesktopThemeMode.LIGHT else DesktopThemeMode.DARK) }} }}) { Symbol(if(isDark) "light_mode" else "dark_mode","切换主题") }
                             }
                         }

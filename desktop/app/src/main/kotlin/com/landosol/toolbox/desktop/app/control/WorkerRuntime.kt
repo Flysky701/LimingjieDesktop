@@ -1,5 +1,6 @@
 package com.landosol.toolbox.desktop.app.control
 
+import com.landosol.toolbox.desktop.shared.DesktopLog
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -86,7 +87,10 @@ internal suspend fun runWorkerTransport(
                         }
                     }
                 }
-            } catch (_: Exception) { stop("总控连接已断开，任务已停止") }
+            } catch (failure: Exception) {
+                if (!closing.get()) DesktopLog.write('E', "Worker", "总控读取循环异常", failure)
+                stop("总控连接已断开，任务已停止")
+            }
         }
         work.launch {
             var lastState: JsonObject? = null
@@ -107,7 +111,10 @@ internal suspend fun runWorkerTransport(
                         lastSentAt = now
                     }
                 } catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { stop("状态连接已失效，任务已停止") }
+                catch (failure: Exception) {
+                    if (!closing.get()) DesktopLog.write('E', "Worker", "状态快照或发送失败，停止实例", failure)
+                    stop("状态连接已失效，任务已停止")
+                }
                 delay(500)
             }
         }

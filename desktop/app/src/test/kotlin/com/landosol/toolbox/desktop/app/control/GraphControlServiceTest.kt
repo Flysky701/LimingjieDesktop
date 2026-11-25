@@ -3,16 +3,31 @@ package com.landosol.toolbox.desktop.app.control
 import com.landosol.toolbox.account.AccountEditorState
 import com.landosol.toolbox.account.AccountUiState
 import com.landosol.toolbox.automation.AutomationSessionId
+import com.landosol.toolbox.automation.GameClientResolution
 import com.landosol.toolbox.clanbattle.recognition.PixelImage
 import com.landosol.toolbox.desktop.app.DesktopAppGraph
+import com.landosol.toolbox.desktop.app.UserLogLine
+import com.landosol.toolbox.desktop.app.adapters.device.VisualResolutionStatus
 import com.landosol.toolbox.desktop.app.adapters.storage.DesktopGoal
+import com.landosol.toolbox.desktop.app.adapters.storage.DesktopPreferences
+import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
+import com.landosol.toolbox.desktop.app.adapters.storage.StrategyLibrary
 import com.landosol.toolbox.desktop.app.ui.RunConsoleState
 import com.landosol.toolbox.desktop.device.*
+import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
+import com.landosol.toolbox.desktop.platform.DesktopSettings
 import com.landosol.toolbox.desktop.platform.UserResourceLeases
+import com.landosol.toolbox.desktop.shared.DeviceIdentitySnapshot
+import com.landosol.toolbox.gamedata.EventChoiceResource
+import com.landosol.toolbox.gamedata.EventResource
 import com.landosol.toolbox.labyrinth.*
+import com.landosol.toolbox.labyrinth.kernel.event.GameEventCatalogRegistry
 import com.landosol.toolbox.labyrinth.node.NodeClassification
 import com.landosol.toolbox.labyrinth.node.NodeViewportPixels
 import com.landosol.toolbox.labyrinth.vision.*
+import kotlin.reflect.KClass
+import kotlin.reflect.KType
+import kotlin.reflect.full.primaryConstructor
 import com.landosol.toolbox.protocol.bilibili.GameServer
 import com.landosol.toolbox.protocol.bilibili.BilibiliGameSession
 import com.landosol.toolbox.protocol.bilibili.GameAccountProfile
@@ -239,6 +254,20 @@ class GraphControlServiceTest {
     private suspend fun verifyNonEmptyRecognitionSnapshot(service: GraphControlService, graph: DesktopAppGraph) {
         val pixels = NodeViewportPixels.sample(PixelImage(1920, 1080, IntArray(1920 * 1080)))
         val rect = EntryPixelRect(100, 200, 120, 80)
+        val choice = EventChoiceResource(id = "choice-1", name = "示例选项", slot = 1, description = "获得金币")
+        val event = EventResource(id = "event-1", name = "示例事件", area = 3, choices = listOf(choice))
+        val catalog = GameEventCatalogRegistry(listOf(event))
+        val eventObservation = LabyrinthEventChoiceObservation(
+            event = event,
+            choices = listOf(LabyrinthEventChoiceVisual(choice, rect, 0.95, 0.92)),
+            rawText = "事件标题",
+            confidence = 0.96,
+            rivalMargin = 0.25,
+            stableFrames = 2,
+            trusted = true,
+            catalogMatched = true,
+            sourceCatalog = catalog,
+        )
         val result = LabyrinthEntryFrameResult(
             observation = LabyrinthEntryPageObservation(LabyrinthEntryPageState.NODE_MAP_VIEW, .98,
                 mapOf(LabyrinthEntryPageState.NODE_MAP_VIEW to .98, LabyrinthEntryPageState.SHOP to .12),
@@ -247,6 +276,7 @@ class GraphControlServiceTest {
             anchorMatches = mapOf("synthetic" to EntryAnchorMatch(.97, rect)),
             nodeClassifications = listOf(NodeClassification(2, 1, 1, .97, true, rect)),
             characterMatches = listOf(LabyrinthCharacterMatch("joined-1", "100101", "示例角色", .99, rect)),
+            eventChoiceSelection = eventObservation,
             relicChoiceSelection = LabyrinthRelicChoiceObservation(listOf(
                 LabyrinthRelicMatch("choice-1", "1", "示例遗物", "火", "+1", "示例效果", .95, rect, iconRect = rect))),
             frameWidth = 1920, frameHeight = 1080, stageMillis = mapOf("nodes" to 7L),
@@ -271,12 +301,101 @@ class GraphControlServiceTest {
             mutable.value = state
             val document = service.snapshot(false)
             val restored = ControlModelCodec.decode<RunConsoleState>(document.getValue("console"))
-            assertEquals(state.copy(lastResult = result.copy(nodeViewportPixels = null)), restored.entry)
+            assertEquals(state.copy(lastResult = result.copy(
+                nodeViewportPixels = null,
+                eventChoiceSelection = eventObservation.copy(sourceCatalog = null),
+            )), restored.entry)
             assertTrue(restored.busy)
             assertNull(restored.entry.lastResult?.nodeViewportPixels)
+            assertNull(restored.entry.lastResult?.eventChoiceSelection?.sourceCatalog)
             assertSame(pixels, mutable.value.lastResult?.nodeViewportPixels)
+            assertSame(catalog, mutable.value.lastResult?.eventChoiceSelection?.sourceCatalog)
             assertTrue("snapshot must not contain raw viewport buffers", document.toString().length < 500_000)
         } finally { mutable.value = original }
+    }
+
+    @Test fun snapshotModelsContainOnlyCodecSupportedTypes() {
+        val strippedProperties = setOf(
+            LabyrinthEntryFrameResult::class to "nodeViewportPixels",
+            LabyrinthEventChoiceObservation::class to "sourceCatalog",
+        )
+        val primitivesAndJson = setOf<KClass<*>>(
+            String::class, Char::class, Boolean::class, Int::class, Long::class,
+            Float::class, Double::class, Short::class, Byte::class,
+            IntArray::class, LongArray::class, FloatArray::class, DoubleArray::class, ByteArray::class,
+            JsonElement::class, JsonObject::class, JsonArray::class, JsonPrimitive::class,
+        )
+        val collections = setOf<KClass<*>>(
+            List::class, Set::class, Collection::class, Iterable::class, Map::class, Array::class,
+        )
+        val visited = mutableSetOf<KClass<*>>()
+        val unsupported = mutableListOf<String>()
+
+        val auditor = object {
+            fun auditClass(type: KClass<*>, path: String) {
+                if (type in primitivesAndJson || type.java.isEnum) return
+                if (type in collections) return
+                if (!visited.add(type)) return
+                if (type.isSealed) {
+                    val children = type.sealedSubclasses
+                    if (children.isEmpty()) unsupported += "$path: sealed ${type.qualifiedName} has no subclasses"
+                    children.forEach { auditClass(it, "$path->${it.simpleName}") }
+                    return
+                }
+                if (type.objectInstance != null) return
+                val qualified = type.qualifiedName.orEmpty()
+                if (!qualified.startsWith("com.landosol.toolbox.") || !(type.isData || type.isValue)) {
+                    unsupported += "$path: $qualified"
+                    return
+                }
+                val constructor = type.primaryConstructor
+                if (constructor == null) {
+                    unsupported += "$path: missing primaryConstructor on $qualified"
+                    return
+                }
+                constructor.parameters.forEach { param ->
+                    val name = param.name ?: "<unnamed>"
+                    if ((type to name) in strippedProperties) return@forEach
+                    auditType(param.type, "$path.$name")
+                }
+            }
+
+            fun auditType(type: KType, path: String) {
+                val klass = type.classifier as? KClass<*> ?: run {
+                    unsupported += "$path: non-KClass type $type"
+                    return
+                }
+                if (klass in collections) {
+                    type.arguments.forEachIndexed { idx, proj ->
+                        val argType = proj.type ?: run {
+                            unsupported += "$path[$idx]: star projection on $type"
+                            return@forEachIndexed
+                        }
+                        auditType(argType, "$path[$idx]")
+                    }
+                    return
+                }
+                auditClass(klass, path)
+            }
+        }
+
+        val roots = listOf(
+            RunConsoleState::class,
+            DesktopSettings::class,
+            DesktopPreferences::class,
+            AccountUiState::class,
+            LabyrinthStrategySettings::class,
+            StrategyLibrary::class,
+            VisualResolutionStatus::class,
+            OcrEngineStatus::class,
+            DeviceIdentitySnapshot::class,
+            GameClientResolution::class,
+            DeviceDescriptor::class,
+            DesktopRunRecord::class,
+            UserLogLine::class,
+        )
+        roots.forEach { root -> auditor.auditClass(root, root.simpleName ?: root.toString()) }
+        assertTrue("Unsupported control model types reachable from snapshot: $unsupported", unsupported.isEmpty())
     }
 
     private class NoIoDevice : DeviceService {

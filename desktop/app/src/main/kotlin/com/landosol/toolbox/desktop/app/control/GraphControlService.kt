@@ -85,8 +85,14 @@ class GraphControlService(
         refreshCaptcha()
         val accounts = graph.accounts.uiState.value
         val entry = graph.labyrinthEntryRecognitionSession.state.value
+        val sanitizedLastResult = entry.lastResult?.let { last ->
+            last.copy(
+                nodeViewportPixels = null,
+                eventChoiceSelection = last.eventChoiceSelection?.copy(sourceCatalog = null),
+            )
+        }
         val console = graph.ux.console.value.copy(task = graph.labyrinthController.uiState.value,
-            entry = entry.copy(lastResult = entry.lastResult?.copy(nodeViewportPixels = null)), batch = graph.labyrinthBatchController.state.value,
+            entry = entry.copy(lastResult = sanitizedLastResult), batch = graph.labyrinthBatchController.state.value,
             halt = graph.labyrinthBatchController.haltReason.value, overlay = graph.automationOverlayCoordinator.state.value,
             device = graph.device.state.value, busy = graph.busy || stopping.get(),
             starting = graph.taskStarting.value, stopping = graph.taskStopping.value || stopping.get())
