@@ -1,5 +1,12 @@
 package com.landosol.toolbox.desktop.app.control
 
+import com.landosol.toolbox.core.logging.AppLogger
+import com.landosol.toolbox.core.logging.RunTelemetryBus
+import com.landosol.toolbox.core.logging.TelemetryEvent
+import com.landosol.toolbox.core.logging.TelemetryLevel
+import com.landosol.toolbox.desktop.app.UserLog
+import com.landosol.toolbox.desktop.app.UserLogKind
+import com.landosol.toolbox.desktop.app.UserLogLine
 import com.landosol.toolbox.desktop.app.ui.RunConsoleState
 import com.landosol.toolbox.desktop.device.DeviceConnectionState
 import com.landosol.toolbox.labyrinth.LabyrinthUiState
@@ -10,6 +17,31 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ControlSessionConsoleTest {
+    @Test fun consolesFoldLocallyAndPublishRedactedEventsWithTheirOwnTrace() {
+        val first = UserLog { "first-console-trace" }
+        val second = UserLog { "second-console-trace" }
+        val events = mutableListOf<TelemetryEvent>()
+        RunTelemetryBus.subscribe(events::add).use {
+            first.add("first console token=first-fixture", kind = UserLogKind.WARNING)
+            first.add("first console token=rotated-fixture", kind = UserLogKind.WARNING)
+            second.add("second console secret=second-fixture", error = true)
+        }
+
+        val firstLine = first.lines.value.single()
+        val secondLine = second.lines.value.single()
+        assertEquals("first console token=<redacted>", firstLine.text)
+        assertEquals(2, firstLine.repeats)
+        assertEquals("second console secret=<redacted>", secondLine.text)
+        val lines = listOf(firstLine, secondLine)
+        assertEquals(lines, ControlModelCodec.decode<List<UserLogLine>>(ControlModelCodec.encode(lines)))
+        assertEquals(listOf(firstLine.text, firstLine.text, secondLine.text), events.map { it.message })
+        assertEquals(listOf(TelemetryLevel.WARNING, TelemetryLevel.WARNING, TelemetryLevel.ERROR), events.map { it.level })
+        assertEquals(listOf("first-console-trace", "first-console-trace", "second-console-trace"), events.map { it.traceId })
+        val mirrored = AppLogger.snapshot().decodeToString().lines().filter { "UserLog: " in it }
+        assertEquals(2, mirrored.count { it.endsWith("W [trace=first-console-trace] UserLog: ${firstLine.text}") })
+        assertEquals(1, mirrored.count { it.endsWith("E [trace=second-console-trace] UserLog: ${secondLine.text}") })
+    }
+
     @Test fun viewsReuseDecodedConsoleAndKeepSessionChangesIsolated() = runBlocking<Unit> {
         val firstPort = ConsolePort("first")
         val secondPort = ConsolePort("second")

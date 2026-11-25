@@ -1,4 +1,9 @@
 package com.landosol.toolbox.desktop.app
+
+import com.landosol.toolbox.core.logging.AppLogger
+import com.landosol.toolbox.core.logging.LogRedactor
+import com.landosol.toolbox.core.logging.RunTelemetryBus
+import com.landosol.toolbox.core.logging.TelemetryLevel
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -8,13 +13,31 @@ private const val MAX_NORMAL_ENTRIES = 2000
 
 enum class UserLogKind(val label: String) { KEY("关键"), NORMAL("普通"), WARNING("警告"), ERROR("错误") }
 data class UserLogLine(val time: String, val text: String, val error: Boolean, val kind: UserLogKind = if(error) UserLogKind.ERROR else UserLogKind.NORMAL, val repeats: Int = 1)
-class UserLog {
+class UserLog(private val traceId: () -> String? = AppLogger::currentTraceId) {
     private val entries = MutableStateFlow<List<UserLogLine>>(emptyList())
     private var normalEntries = 0
     val lines = entries.asStateFlow()
-    @Synchronized fun add(text: String, error: Boolean = false, kind: UserLogKind = if(error) UserLogKind.ERROR else UserLogKind.NORMAL) {
+    fun add(
+        text: String,
+        error: Boolean = false,
+        kind: UserLogKind = if (error) UserLogKind.ERROR else UserLogKind.NORMAL,
+        domain: String = "UserLog",
+    ) {
         if (text.isBlank()) return
-        val safe = com.landosol.toolbox.desktop.shared.DesktopLog.redact(text)
+        val safe = LogRedactor.redact(text)
+        val activeTrace = traceId()
+        val level = when {
+            error || kind == UserLogKind.ERROR -> TelemetryLevel.ERROR
+            kind == UserLogKind.WARNING -> TelemetryLevel.WARNING
+            kind == UserLogKind.KEY -> TelemetryLevel.KEY
+            else -> TelemetryLevel.NORMAL
+        }
+        append(safe, error, kind)
+        RunTelemetryBus.publish(domain, level, safe, activeTrace)
+    }
+
+    @Synchronized
+    private fun append(safe: String, error: Boolean, kind: UserLogKind) {
         val current = entries.value
         val previous = current.lastOrNull()
         if (previous?.text == safe && previous.kind == kind) {

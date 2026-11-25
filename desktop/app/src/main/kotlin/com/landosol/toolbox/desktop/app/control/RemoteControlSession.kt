@@ -1,6 +1,7 @@
 package com.landosol.toolbox.desktop.app.control
 
 import com.landosol.toolbox.core.AppAssets
+import com.landosol.toolbox.core.logging.AppLogger
 import com.landosol.toolbox.account.*
 import com.landosol.toolbox.automation.GameClientResolution
 import com.landosol.toolbox.desktop.app.*
@@ -57,7 +58,7 @@ private suspend fun decodeControlPreview(image: JsonObject): ImageBitmap? = try 
 } catch (cancelled: CancellationException) {
     throw cancelled
 } catch (_: Exception) {
-    System.err.println("Control preview decode failed")
+    AppLogger.w("ControlUI", "Control preview decode failed")
     null
 }
 
@@ -372,8 +373,7 @@ class ControlUiSnapshot(val document:JsonObject) {
         private val failedSections=java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         fun reportDecodeFailure(name:String, failure:Throwable? = null) {
             if(failedSections.add(name)) {
-                System.err.println("Control snapshot decode failed for section: $name (${failure?.message ?: "unknown"})")
-                runCatching { DesktopLog.write('E', "ControlUI", "Control snapshot decode failed for section: $name", failure) }
+                AppLogger.e("ControlUI", "Control snapshot decode failed for section: $name", failure)
             }
         }
     }

@@ -12,7 +12,7 @@ import androidx.compose.ui.window.MenuScope
 import androidx.compose.ui.window.Notification
 import androidx.compose.ui.window.TrayState
 import androidx.compose.ui.window.setContent
-import com.landosol.toolbox.desktop.shared.DesktopLog
+import com.landosol.toolbox.core.logging.AppLogger
 import java.awt.Dimension
 import java.awt.BorderLayout
 import java.awt.Font
@@ -315,7 +315,7 @@ internal fun DesktopTray(
                 // Windows may adjust the tiny owner's position; use its actual origin.
                 val ownerOrigin = popupOwner.contentPane.locationOnScreen
                 popup.show(popupOwner.contentPane, location.x - ownerOrigin.x, location.y - ownerOrigin.y)
-                DesktopLog.write('I', "DesktopTray", "event=$physical scale=${scale.scaleX},${scale.scaleY} " +
+                AppLogger.i("DesktopTray", "event=$physical scale=${scale.scaleX},${scale.scaleY} " +
                     "anchor=$anchor requested=$location actual=${popup.locationOnScreen} size=${popup.size} " +
                     "background=${Integer.toHexString(popup.background.rgb)} foreground=${Integer.toHexString(currentAppearance.foreground.rgb)} " +
                     "glass=${popup.getClientProperty(TRAY_GLASS_AVAILABLE)}")

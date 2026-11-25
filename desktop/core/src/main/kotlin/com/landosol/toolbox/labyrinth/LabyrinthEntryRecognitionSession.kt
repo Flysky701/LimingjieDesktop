@@ -1343,6 +1343,7 @@ class LabyrinthEntryRecognitionSession(
     private val targetScoreProvider: ((Long?) -> Long)? = null,
     private val scoreRetireRerollRequester: (suspend (Long, String) -> Boolean)? = null,
     private val externalRunScoreProvider: ((runId: String?, sessionId: AutomationSessionId) -> Long?)? = null,
+    private val onKernelTraceStopped: ((String) -> Unit)? = null,
 ) {
     @Volatile var battleValueEstimator: LabyrinthBattleValueEstimator? = null
         private set
@@ -1418,10 +1419,14 @@ class LabyrinthEntryRecognitionSession(
                 eventDomain.stopped(reason, cause)
             }
         } finally {
-            journalSink?.let { sink ->
-                kernelRuntime.removeSink(sink)
-                journalSink = null
-                sink.close()
+            try {
+                journalSink?.let { sink ->
+                    kernelRuntime.removeSink(sink)
+                    journalSink = null
+                    sink.close()
+                }
+            } finally {
+                onKernelTraceStopped?.invoke(kernelRuntime.traceId)
             }
         }
     }

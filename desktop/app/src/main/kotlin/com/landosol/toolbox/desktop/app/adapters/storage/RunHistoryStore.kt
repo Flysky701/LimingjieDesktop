@@ -1,7 +1,7 @@
 package com.landosol.toolbox.desktop.app.adapters.storage
 
 import com.landosol.toolbox.desktop.shared.AtomicFiles
-import com.landosol.toolbox.desktop.shared.DesktopLog
+import com.landosol.toolbox.core.logging.LogRedactor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
@@ -40,7 +40,7 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
     private val pendingScores = linkedMapOf<String, Long>()
     private fun encode(r: DesktopRunRecord) = JSONObject().put("id",r.id).put("startedAt",r.startedAt).put("alias",r.alias)
         .put("type",r.type).put("goal",r.goal).put("endedAt",r.endedAt ?: JSONObject.NULL).put("result",r.result)
-        .put("reason",DesktopLog.redact(r.reason)).put("cleared",r.cleared).put("singleRun",r.singleRun)
+        .put("reason",LogRedactor.redact(r.reason)).put("cleared",r.cleared).put("singleRun",r.singleRun)
         .put("deviceId",r.deviceId ?: JSONObject.NULL).put("deviceName",r.deviceName ?: JSONObject.NULL)
         .put("accountId",r.accountId ?: JSONObject.NULL).put("score",r.score ?: JSONObject.NULL)
         .put("strategy",r.strategy?.let { JSONObject().put("id",it.id).put("name",it.name).put("revision",it.revision) } ?: JSONObject.NULL).toString()
@@ -72,7 +72,7 @@ class RunHistoryStore(directory: Path, private val notice: (String) -> Unit, pri
         val pendingScore = pendingScores.remove(value.id)
         val score = if (value.singleRun) value.score ?: mutable.value.firstOrNull { it.id == value.id }?.score ?: pendingScore else value.score
         val reason = if (value.singleRun) syncScoreInReason(value.reason, score) else value.reason
-        val safe = value.copy(alias=DesktopLog.redact(value.alias),goal=DesktopLog.redact(value.goal),reason=DesktopLog.redact(reason),score=score)
+        val safe = value.copy(alias=LogRedactor.redact(value.alias),goal=LogRedactor.redact(value.goal),reason=LogRedactor.redact(reason),score=score)
         Files.createDirectories(file.parent)
         // Repair a crash-truncated final line before appending, leaving it as an independently skipped line.
         FileChannel.open(file, CREATE, READ, WRITE).use { channel ->

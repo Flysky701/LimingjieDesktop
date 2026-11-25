@@ -1,6 +1,6 @@
 package com.landosol.toolbox.desktop.app.control
 
-import com.landosol.toolbox.desktop.shared.DesktopLog
+import com.landosol.toolbox.core.logging.AppLogger
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -91,7 +91,7 @@ internal suspend fun runWorkerTransport(
                     }
                 }
             } catch (failure: Exception) {
-                if (!closing.get()) DesktopLog.write('E', "Worker", "总控读取循环异常", failure)
+                if (!closing.get()) AppLogger.e("Worker", "总控读取循环异常", failure)
                 stop("总控连接已断开，任务已停止")
             }
         }
@@ -116,7 +116,7 @@ internal suspend fun runWorkerTransport(
                     }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (failure: Exception) {
-                    if (!closing.get()) DesktopLog.write('E', "Worker", "状态快照或发送失败，停止实例", failure)
+                    if (!closing.get()) AppLogger.e("Worker", "状态快照或发送失败，停止实例", failure)
                     stop("状态连接已失效，任务已停止")
                 }
                 delay(snapshotIntervalMillis)

@@ -3,13 +3,15 @@ package com.landosol.toolbox.desktop.app.control
 import com.landosol.toolbox.desktop.app.DesktopAppGraph
 import com.landosol.toolbox.desktop.platform.DataDirectories
 import com.landosol.toolbox.desktop.platform.InstanceLock
-import com.landosol.toolbox.desktop.shared.DesktopLog
+import com.landosol.toolbox.core.logging.AppLogger
+import com.landosol.toolbox.core.logging.LogRedactor
 import kotlinx.coroutines.*
 
 /** Headless entrypoint. No Compose Window, tray, or native dialog can be opened by this process. */
-internal suspend fun runWorkerMain(args: Array<String>): Int {
+internal suspend fun runWorkerMain(args: Array<String>, onStartupError: (String) -> Unit): Int {
     var lock: InstanceLock? = null
     var domain: GraphControlService? = null
+    var loggerInitialized = false
     return try {
         fun argument(key: String): String {
             val index = args.indexOf(key)
@@ -26,7 +28,8 @@ internal suspend fun runWorkerMain(args: Array<String>): Int {
         DataDirectories.ensureWritable(directory)
         lock = InstanceLock.acquire(directory)
         DataDirectories.cleanTemporaryFiles(directory)
-        DesktopLog.initialize(directory.resolve("logs"))
+        AppLogger.initialize(directory.resolve("logs"))
+        loggerInitialized = true
         val shared = SharedDataClient(SharedDataEndpoint.fromEnvironment())
         val settings = shared.settings()
         if ("--device-boot-id" in args) {
@@ -39,14 +42,17 @@ internal suspend fun runWorkerMain(args: Array<String>): Int {
         graph.settings.save(settings.copy(lastDevice = ""))
         graph.refreshBattleModelStatus()
         Thread.setDefaultUncaughtExceptionHandler { _, failure ->
-            DesktopLog.write('E', "Worker", "实例进程发生异常", failure)
+            AppLogger.e("Worker", "实例进程发生异常", failure)
             service.revokeActions("实例发生异常，任务已停止")
         }
         runWorkerTransport(port, token, id, runId, service)
         0
+    } catch (cancelled: CancellationException) {
+        throw cancelled
     } catch (failure: Exception) {
-        // No command payloads or authentication tokens are included in launcher logs.
-        System.err.println("实例启动或运行失败：${DesktopLog.redact(failure.message ?: failure.javaClass.simpleName)}")
+        val message = "实例启动或运行失败：${failure.message ?: failure.javaClass.simpleName}"
+        if (loggerInitialized) AppLogger.e("Worker", message)
+        else onStartupError(LogRedactor.redact(message))
         1
     } finally {
         withContext(NonCancellable) { withTimeoutOrNull(8_000) { domain?.shutdown() } }

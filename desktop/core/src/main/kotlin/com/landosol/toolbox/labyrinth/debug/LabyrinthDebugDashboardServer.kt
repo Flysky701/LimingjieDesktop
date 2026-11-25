@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth.debug
 import com.landosol.toolbox.core.MonotonicClock
 import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.core.logging.AppLogger
+import com.landosol.toolbox.core.logging.LogRedactor
 import com.landosol.toolbox.AppVersion
 import com.landosol.toolbox.automation.overlay.AutomationOverlayPresentation
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSessionState
@@ -27,18 +28,17 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import com.landosol.toolbox.labyrinth.kernel.KernelEvent
 import com.landosol.toolbox.labyrinth.kernel.KernelEventLog
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.encodeToJsonElement
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * Tiny loopback-only HTTP dashboard for live labyrinth debugging.
  *
- * It intentionally has no third-party server dependency. A browser inside the emulator can open
- * http://127.0.0.1:8765/ directly. For a browser on the host PC, expose it with
- * `adb forward tcp:8765 tcp:8765` first.
+ * The desktop browser connects directly to the loopback address.
  */
 internal const val LABYRINTH_DEBUG_HISTORY_LIMIT = 600
 
@@ -47,9 +47,11 @@ class LabyrinthDebugDashboardServer(
     /** Directory for the optional per-frame archive; null disables the feature entirely. */
     private val frameArchiveDirectory: File? = null,
     private val runtimeDiagnostics: LabyrinthRuntimeDiagnostics? = null,
-    private val processLogSource: () -> ByteArray = { collectOwnProcessLogcat() },
+    private val processLogSource: () -> ByteArray = AppLogger::snapshot,
     private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
     private val allowAddressReuse: Boolean = true,
+    private val userLogSource: (() -> ByteArray?)? = null,
+    private val traceIdProvider: (() -> String?)? = AppLogger::currentTraceId,
 ) : AutoCloseable {
     @Volatile private var kernelSource: KernelEventLog? = null
     private val ocrHealthSource = AtomicReference<(() -> Map<String, Any?>)?>(null)
@@ -234,15 +236,18 @@ class LabyrinthDebugDashboardServer(
         nowMillis: Long,
     ) {
         runCatching {
+            val traceId = traceIdProvider?.invoke()?.let(LogRedactor::redact)
+            val safeReason = LogRedactor.redact(reason)
             val png = ByteArrayOutputStream().use { output ->
                 bitmap.compress(NativeBitmap.CompressFormat.PNG, 100, output)
                 output.toByteArray()
             }
             val meta = JSONObject(baseJson.toString()).apply {
-                put("incidentReason", reason)
+                put("incidentReason", safeReason)
                 put("incidentCapturedAtMillis", nowMillis)
+                put("traceId", traceId ?: JSONObject.NULL)
             }.toString().toByteArray(Charsets.UTF_8)
-            val slug = reason.lowercase(Locale.US)
+            val slug = safeReason.lowercase(Locale.US)
                 .replace(Regex("[^a-z0-9_-]+"), "_")
                 .trim('_')
                 .ifEmpty { "incident" }
@@ -384,10 +389,11 @@ class LabyrinthDebugDashboardServer(
                     if (!requestLine.startsWith("GET ")) {
                         respond(output, "text/plain", "GET only", status = "405 Method Not Allowed")
                     } else if ("format=ndjson" in target.substringAfter('?', "").split('&')) {
-                        respond(output, "application/x-ndjson; charset=utf-8", source?.toNdjson().orEmpty())
+                        respond(output, "application/x-ndjson; charset=utf-8", source?.let(::redactedKernelNdjson).orEmpty())
                     } else {
                         respond(output, "application/json; charset=utf-8",
-                            source?.snapshot()?.let { Json.encodeToString(it) } ?: """{"summary":null,"events":[]}""")
+                            source?.snapshot()?.let { LogRedactor.redactJson(Json.encodeToJsonElement(it)).toString() }
+                                ?: """{"summary":null,"events":[]}""")
                     }
                 }
                 "/api/route-preview" -> respond(
@@ -408,7 +414,7 @@ class LabyrinthDebugDashboardServer(
                     val snapshot = latest.get()
                     val history = synchronized(historyLock) { recentStates.toList() }
                     val incidents = synchronized(incidentLock) { recentIncidents.toList() }
-                    val zip = buildDiagnosticZip(snapshot, history, processLogSource(), archivedFramesSnapshot(), incidents)
+                    val zip = buildDiagnosticZip(snapshot, history, archivedFramesSnapshot(), incidents)
                     val filename = "limingjie-debug-${timestampForFilename()}.zip"
                     respond(
                         output = output,
@@ -475,13 +481,20 @@ class LabyrinthDebugDashboardServer(
         put("frames", archivedFramesSnapshot().size)
     }.toString()
 
+    private fun redactedKernelNdjson(source: KernelEventLog): String = source.recent().joinToString("\n") {
+        LogRedactor.redactJson(Json.encodeToJsonElement<KernelEvent>(it)).toString()
+    }
+
     private fun buildDiagnosticZip(
         snapshot: Snapshot,
         history: List<ByteArray>,
-        logcat: ByteArray,
-        archivedFrames: List<File> = emptyList(),
-        incidents: List<IncidentEntry> = emptyList(),
+        archivedFrames: List<File>,
+        incidents: List<IncidentEntry>,
     ): ByteArray = ByteArrayOutputStream().use { bytes ->
+        val traceId = traceIdProvider?.invoke()?.let(LogRedactor::redact)
+        val processLog = LogRedactor.redact(processLogSource().decodeToString()).encodeToByteArray()
+        val userLog = userLogSource?.invoke()?.takeIf { it.isNotEmpty() }
+            ?.let { LogRedactor.redact(it.decodeToString()).encodeToByteArray() }
         ZipOutputStream(bytes).use { zip ->
             fun entry(name: String, content: ByteArray) {
                 zip.putNextEntry(ZipEntry(name))
@@ -510,10 +523,14 @@ class LabyrinthDebugDashboardServer(
                     appendLine("frames/: 逐帧缩放截图（仅在面板开启逐帧归档后存在，${archivedFrames.size} 张）")
                     appendLine("incidents/: 异常事件无损 PNG 原图与结构化快照（${incidents.size} 条）")
                     appendLine("state/history.ndjson 每条的 archivedFrame 字段指向 frames/ 中的文件名")
-                    appendLine("logs/logcat.txt: 当前 App 进程最近日志")
+                    appendLine("summary.txt 与 manifest.json: 导出时的运行 traceId")
+                    appendLine("process.log: 当前 App 进程最近日志（logs/logcat.txt 为兼容入口）")
+                    if (userLog != null) appendLine("user-console.log: 用户控制台日志")
                 }.toByteArray(Charsets.UTF_8),
             )
-            kernelSource?.let { entry("kernel/events.ndjson", it.toNdjson().toByteArray(Charsets.UTF_8)) }
+            entry("summary.txt", "traceId=${traceId.orEmpty()}\n".encodeToByteArray())
+            entry("manifest.json", JSONObject().put("traceId", traceId ?: JSONObject.NULL).toString().encodeToByteArray())
+            kernelSource?.let { entry("kernel/events.ndjson", redactedKernelNdjson(it).encodeToByteArray()) }
             entry("state/latest.json", snapshot.json)
             entry("fast/latest.json", latestFast.get())
             val fastHistory = synchronized(fastHistoryLock) { recentFastStates.toList() }
@@ -542,11 +559,11 @@ class LabyrinthDebugDashboardServer(
                 entry("$prefix.png", incident.png)
                 entry("$prefix.json", incident.json)
             }
-            // The captured window holds only the most recent lines, so a long run can scroll the
-            // startup banner out of it. Restate the build here rather than hope it survived.
+            entry("process.log", processLog)
+            userLog?.let { entry("user-console.log", it) }
             entry(
                 "logs/logcat.txt",
-                "# 黎明界助手 ${AppVersion.label}\n".toByteArray(Charsets.UTF_8) + logcat,
+                "# 黎明界助手 ${AppVersion.label}\n".encodeToByteArray() + processLog,
             )
         }
         bytes.toByteArray()
@@ -1146,35 +1163,6 @@ class LabyrinthDebugDashboardServer(
     }
 
     private companion object {
-        private fun collectOwnProcessLogcat(): ByteArray = runCatching {
-            val process = ProcessBuilder(
-                "logcat",
-                "-d",
-                "-v",
-                "threadtime",
-                "--pid=${ProcessHandle.current().pid()}",
-                "-t",
-                LOGCAT_LINE_LIMIT.toString(),
-            ).redirectErrorStream(true).start()
-            process.inputStream.use { input ->
-                ByteArrayOutputStream().use { output ->
-                    val buffer = ByteArray(8 * 1024)
-                    var total = 0
-                    while (total < MAX_LOGCAT_BYTES) {
-                        val read = input.read(buffer, 0, minOf(buffer.size, MAX_LOGCAT_BYTES - total))
-                        if (read <= 0) break
-                        output.write(buffer, 0, read)
-                        total += read
-                    }
-                    output.toByteArray()
-                }
-            }.also { process.destroy() }
-        }.getOrElse { failure ->
-            "logcat unavailable: ${failure.message ?: failure::class.java.simpleName}\n"
-                .toByteArray(Charsets.UTF_8)
-        }
-    
-    
         const val LOG_TAG = "LabyrinthDebugHttp"
         const val IPV4_LOOPBACK = "127.0.0.1"
         const val DEFAULT_PORT = 8765
@@ -1188,8 +1176,6 @@ class LabyrinthDebugDashboardServer(
         const val MAX_INCIDENT_COUNT = 10
         const val MAX_INCIDENT_BYTES = 30L * 1024 * 1024
         const val INCIDENT_COOLDOWN_MILLIS = 5_000L
-        const val LOGCAT_LINE_LIMIT = 2_000
-        const val MAX_LOGCAT_BYTES = 2 * 1024 * 1024
 
         val DASHBOARD_HTML = """
             <!doctype html>

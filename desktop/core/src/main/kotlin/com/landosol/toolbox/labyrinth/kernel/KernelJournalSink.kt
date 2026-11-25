@@ -1,5 +1,6 @@
 package com.landosol.toolbox.labyrinth.kernel
 
+import com.landosol.toolbox.core.logging.LogRedactor
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.AtomicMoveNotSupportedException
@@ -10,6 +11,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Required
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.encodeToJsonElement
 
 @Serializable
 data class KernelJournalSnapshot(
@@ -26,19 +28,25 @@ data class LoadedKernelJournal(val snapshot: KernelJournalSnapshot, val events: 
 private val journalJson = Json { encodeDefaults = true }
 
 class KernelJournalSink(private val journalDir: File) : KernelEventSink, AutoCloseable {
-    private class Session(val directory: File, val output: FileOutputStream, var snapshot: KernelJournalSnapshot)
+    private class Session(
+        val traceId: String,
+        val directory: File,
+        val output: FileOutputStream,
+        var snapshot: KernelJournalSnapshot,
+    )
 
     private var session: Session? = null
     private var closed = false
 
     @Synchronized override fun append(event: KernelEvent) {
         check(!closed) { "Journal is closed" }
-        val current = session?.takeIf { it.snapshot.traceId == event.traceId } ?: openSession(event.traceId)
+        val current = session?.takeIf { it.traceId == event.traceId } ?: openSession(event.traceId)
         val previous = current.snapshot
         require(event.eventSeq > previous.lastEventSeq) { "Journal eventSeq must increase" }
         val next = previous.copy(revision = previous.revision + 1, eventCount = previous.eventCount + 1,
             lastEventSeq = event.eventSeq, updatedAtMillis = event.timestampMillis)
-        val line = (journalJson.encodeToString<KernelEvent>(event) + "\n").toByteArray(Charsets.UTF_8)
+        val line = (LogRedactor.redactJson(journalJson.encodeToJsonElement<KernelEvent>(event)).toString() + "\n")
+            .toByteArray(Charsets.UTF_8)
         val offset = current.output.channel.size()
         try {
             current.output.write(line)
@@ -60,15 +68,16 @@ class KernelJournalSink(private val journalDir: File) : KernelEventSink, AutoClo
         Files.createDirectories(dir.toPath())
         val eventsFile = dir.resolve("events.ndjson")
         val snapshotFile = dir.resolve("snapshot.json")
+        val safeTrace = LogRedactor.redact(traceId)
         require(!Files.isSymbolicLink(eventsFile.toPath()) && !Files.isSymbolicLink(snapshotFile.toPath())) {
             "Unexpected journal file link"
         }
         val snapshot = if (eventsFile.exists() || snapshotFile.exists()) {
             KernelJournalReader.verifyAndLoad(dir).snapshot.also {
-                require(it.traceId == traceId) { "Journal traceId mismatch" }
+                require(it.traceId == safeTrace) { "Journal traceId mismatch" }
             }
-        } else KernelJournalSnapshot(traceId = traceId, revision = 0, eventCount = 0, lastEventSeq = 0, updatedAtMillis = 0)
-        return Session(dir, FileOutputStream(eventsFile, true), snapshot).also { session = it }
+        } else KernelJournalSnapshot(traceId = safeTrace, revision = 0, eventCount = 0, lastEventSeq = 0, updatedAtMillis = 0)
+        return Session(traceId, dir, FileOutputStream(eventsFile, true), snapshot).also { session = it }
     }
 
     private fun writeSnapshot(dir: File, snapshot: KernelJournalSnapshot) {
@@ -97,7 +106,7 @@ class KernelJournalSink(private val journalDir: File) : KernelEventSink, AutoClo
 
         fun safeTraceId(traceId: String): String {
             require(traceId.isNotBlank()) { "Blank journal traceId" }
-            val stem = traceId.replace(Regex("[^A-Za-z0-9._-]"), "_").trim('.').take(80)
+            val stem = LogRedactor.redact(traceId).replace(Regex("[^A-Za-z0-9._-]"), "_").trim('.').take(80)
             // Reserve '~' for digest suffixes, including names which only differ in case on disk.
             if (stem == traceId && stem == stem.lowercase() && !reserved.matches(stem)) return stem
             val digest = MessageDigest.getInstance("SHA-256").digest(traceId.toByteArray(Charsets.UTF_8))

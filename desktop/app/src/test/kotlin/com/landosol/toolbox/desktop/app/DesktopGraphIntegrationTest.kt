@@ -3,6 +3,7 @@ package com.landosol.toolbox.desktop.app
 import com.landosol.toolbox.automation.*
 import com.landosol.toolbox.automation.capture.CaptureFrameBus
 import com.landosol.toolbox.automation.capture.CaptureStateRegistry
+import com.landosol.toolbox.core.logging.AppLogger
 import com.landosol.toolbox.data.local.AccountEntity
 import com.landosol.toolbox.data.local.AppDatabase
 import com.landosol.toolbox.desktop.device.*
@@ -17,6 +18,7 @@ import com.landosol.toolbox.protocol.bilibili.GameServer
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -28,6 +30,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.zip.ZipInputStream
 import javax.imageio.ImageIO
 
 /** Only device I/O is substituted. OCR, classifiers, templates, Room and application wiring are real. */
@@ -61,6 +64,9 @@ class DesktopGraphIntegrationTest {
 
             withTimeout(30_000) { graph.startRecognition(dryRun = true).join() }
             assertTrue(graph.log.text() + "\n" + graph.labyrinthEntryRecognitionSession.state.value, graph.labyrinthEntryRecognitionSession.state.value.running)
+            val traceId = graph.labyrinthEntryRecognitionSession.kernelRuntime.traceId
+            assertEquals(traceId, AppLogger.currentTraceId())
+            graph.log.add("integration diagnostics token=graph-fixture", kind = UserLogKind.KEY)
             val recognized = withTimeout(30_000) { graph.labyrinthEntryRecognitionSession.state.first { it.frameCount > 0 } }
             assertTrue(recognized.running); assertTrue(recognized.dryRun)
             assertEquals(LabyrinthEntryPageState.SHOP, recognized.lastResult?.observation?.state)
@@ -96,6 +102,24 @@ class DesktopGraphIntegrationTest {
             withTimeout(3000) { while (fake.captures.get() == pausedCaptures) delay(20) }
             withTimeout(5000) { graph.stopAll("integration stop").join() }
             assertFalse(graph.labyrinthEntryRecognitionSession.state.value.running)
+            assertNull(AppLogger.currentTraceId())
+            val connection = URI("http://127.0.0.1:${checkNotNull(debugPort)}/logs.zip").toURL().openConnection().apply {
+                connectTimeout = 3000
+                readTimeout = 3000
+            }
+            val entries = ZipInputStream(connection.getInputStream()).use { zip ->
+                buildMap {
+                    while (true) {
+                        val entry = zip.nextEntry ?: break
+                        put(entry.name, zip.readBytes())
+                    }
+                }
+            }
+            assertEquals(traceId, JSONObject(entries.getValue("manifest.json").decodeToString()).getString("traceId"))
+            val diagnosticLine = "integration diagnostics token=<redacted>"
+            assertTrue(entries.getValue("user-console.log").decodeToString().contains(diagnosticLine))
+            assertTrue(entries.getValue("process.log").decodeToString().contains("[trace=$traceId] UserLog: $diagnosticLine"))
+            assertTrue(entries.getValue("kernel/events.ndjson").decodeToString().contains(traceId))
             assertNull(CaptureFrameBus.currentOwner()); assertFalse(CaptureStateRegistry.isActive())
             assertEquals(AutomationActionResult.StaleSession, graph.automationActionExecutor.execute(sessionId, AutomationAction.Back))
             withTimeout(3000) {

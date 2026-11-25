@@ -1,7 +1,7 @@
 package com.landosol.toolbox.desktop.app.strategy
 
 import com.landosol.toolbox.desktop.platform.DataDirectories
-import com.landosol.toolbox.desktop.shared.DesktopLog
+import com.landosol.toolbox.core.logging.LogRedactor
 import com.landosol.toolbox.labyrinth.kernel.strategy.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -172,7 +172,7 @@ internal class DesktopBattleModel(
             onFailure = { failure ->
                 releaseBundle()
                 if (enabled) failed(next, BattleModelHealth.FAILED, "加载", failure)
-                else next.copy(detail = DesktopLog.redact("无法解析模型目录：${failure.message.orEmpty()}"))
+                else next.copy(detail = LogRedactor.redact("无法解析模型目录：${failure.message.orEmpty()}"))
             },
         ) {
             val location = locationResolver()
@@ -228,7 +228,7 @@ internal class DesktopBattleModel(
     }
 
     private fun failed(before: BattleModelStatus, health: BattleModelHealth, stage: String, failure: Throwable): BattleModelStatus {
-        val reason = DesktopLog.redact("战斗模型${stage}失败，使用规则评分（${failure.javaClass.simpleName}）：${failure.message.orEmpty()}")
+        val reason = LogRedactor.redact("战斗模型${stage}失败，使用规则评分（${failure.javaClass.simpleName}）：${failure.message.orEmpty()}")
         if (reason != lastWarning) log(reason)
         lastWarning = reason
         return before.copy(health = health, detail = reason)

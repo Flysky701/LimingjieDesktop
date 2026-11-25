@@ -92,6 +92,7 @@ import com.landosol.toolbox.security.EncryptedCredentialStore
 import com.landosol.toolbox.security.EncryptedSdkSessionStore
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSession
 import com.landosol.toolbox.labyrinth.debug.LabyrinthDebugDashboardServer
+import com.landosol.toolbox.labyrinth.kernel.KernelRuntime
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionStartResult
 import com.landosol.toolbox.labyrinth.LabyrinthAutoRunConfig
 import com.landosol.toolbox.labyrinth.LabyrinthAutoRunWorkflow
@@ -117,17 +118,19 @@ class DesktopAppGraph(
     val dataOnly: Boolean = false,
     private val suppliedGameGateway: ((GameServer) -> BilibiliGameGateway)? = null,
 ) : AutoCloseable {
-    val log = UserLog()
+    @Volatile private var activeTraceId: String? = null
+    @Volatile private var latestTraceId: String? = null
+    val log = UserLog { activeTraceId }
+
+    private fun clearRunTrace(traceId: String) {
+        if (activeTraceId == traceId) activeTraceId = null
+        AppLogger.clearTrace(traceId)
+    }
+
     private val battleModel = DesktopBattleModel(
         locationResolver = { resolveBattleBundleLocation(settings.state.value.battleOnnxBundlePath, dataDirectory) },
-        log = {
-            AppLogger.w("BattleModel", it)
-            log.add(it, kind = UserLogKind.WARNING)
-        },
-        onInfo = {
-            AppLogger.i("BattleModel", it)
-            log.add(it, kind = UserLogKind.KEY)
-        },
+        log = { log.add(it, kind = UserLogKind.WARNING, domain = "BattleModel") },
+        onInfo = { log.add(it, kind = UserLogKind.KEY, domain = "BattleModel") },
     )
     val battleModelStatus: StateFlow<BattleModelStatus> get() = battleModel.status
 
@@ -170,7 +173,7 @@ class DesktopAppGraph(
     )
     val captchaHost = LoopbackCaptchaHost()
     val device: DeviceService = (suppliedDevice ?: ManagedDeviceService(dataDirectory, { settings.state.value.adbPath },
-        onEvent = { message -> log.add(message); AppLogger.i("Device", message) },
+        onEvent = { log.add(it, domain = "Device") },
         onLost = { reason -> AppLogger.w("Device", reason); stopAll(reason) }))
         .let { if (dataOnly) DiscoveryOnlyDevice(it) else it }
     private val sharedIdentity = MutableStateFlow<Pair<String, String>?>(null)
@@ -385,9 +388,9 @@ class DesktopAppGraph(
     private var rerollHostJob: Job? = null
     @Volatile private var closed = false
     private val shutdownLock = Mutex()
-    private val installedServices = DesktopServices(OcrPort(ocr::submit), WindowsSecretProtector(), identityStore, captchaHost, DesktopLog::snapshot)
+    private val installedServices = DesktopServices(OcrPort(ocr::submit), WindowsSecretProtector(), identityStore, captchaHost, AppLogger::snapshot)
     init {
-        DesktopLog.initialize(dataDirectory.resolve("logs"))
+        AppLogger.initialize(dataDirectory.resolve("logs"))
         DesktopBindings.install(installedServices)
     }
 
@@ -484,8 +487,7 @@ class DesktopAppGraph(
                     if (summary == null || !logged.add(summary)) return
                     val source = if (summary.source == "PathB-NN") "PathB(NN)" else "PathB(官方分)"
                     val message = "$source ${summary.title}：${summary.target}；${summary.detail}"
-                    log.add(message, kind = UserLogKind.KEY)
-                    DesktopLog.write('I', APP_LOG_TAG, message)
+                    log.add(message, kind = UserLogKind.KEY, domain = APP_LOG_TAG)
                 }
                 (state.roleRewardChoiceDecision as? LabyrinthRoleRewardChoiceDecision.Select)?.let { decision ->
                     decision.planningSource?.takeIf { it.startsWith("PathB") }?.let { source ->
@@ -594,7 +596,9 @@ class DesktopAppGraph(
     }
     private val labyrinthDebugDashboard by lazy {
         LabyrinthDebugDashboardServer(
-            port = 0, processLogSource = DesktopLog::snapshot,
+            port = 0, processLogSource = AppLogger::snapshot,
+            userLogSource = { log.text().toByteArray(Charsets.UTF_8) },
+            traceIdProvider = { latestTraceId },
             allowAddressReuse = false,
             frameArchiveDirectory = java.io.File(cacheDir, "labyrinth-frame-archive"),
             runtimeDiagnostics = diagnostics,
@@ -623,6 +627,12 @@ class DesktopAppGraph(
             ?.mapValues { (_, profile) -> profile.attribute }
             .orEmpty()
         LabyrinthEntryRecognitionSession(
+            kernelRuntime = KernelRuntime(onTraceChanged = { traceId ->
+                activeTraceId = traceId
+                latestTraceId = traceId
+                AppLogger.bindTrace(traceId)
+            }),
+            onKernelTraceStopped = ::clearRunTrace,
             eventPackProvider = {
                 com.landosol.toolbox.labyrinth.kernel.event.EventPackRepository(dataDirectory.resolve("event-packs").toFile()) {
                     com.landosol.toolbox.labyrinth.vision.LabyrinthEventRecognitionDataLoader(context).load().events
@@ -1428,6 +1438,7 @@ class DesktopAppGraph(
             if (stopped != true) AppLogger.w(APP_LOG_TAG, "等待任务停止超过 10 秒，继续释放桌面资源")
         } finally {
             withContext(NonCancellable) {
+                activeTraceId?.let(::clearRunTrace)
                 deviceConnection.closeAndJoin()
                 ux.closeAndJoin()
                 scoreSidecar?.closeAndJoin()

@@ -6,7 +6,7 @@ import com.landosol.toolbox.desktop.app.adapters.storage.DesktopRunRecord
 import com.landosol.toolbox.desktop.platform.InstanceLock
 import com.landosol.toolbox.desktop.platform.UserRuntimeDirectory
 import com.landosol.toolbox.core.AppContext
-import com.landosol.toolbox.desktop.shared.DesktopLog
+import com.landosol.toolbox.core.logging.LogRedactor
 import com.landosol.toolbox.desktop.shared.AtomicFiles
 import com.landosol.toolbox.labyrinth.LabyrinthRerollSettings
 import com.landosol.toolbox.protocol.bilibili.GameServer
@@ -90,7 +90,7 @@ class SharedDataHost private constructor(
                     val result = runBlocking { writes.withLock { rpc(request["op"]?.jsonPrimitive?.content.orEmpty(), request["args"]?.jsonObject ?: JsonObject(emptyMap())) } }
                     buildJsonObject { put("result", result) }
                 } catch (failure: Exception) {
-                    buildJsonObject { put("error", DesktopLog.redact(failure.message ?: "共享数据操作失败")) }
+                    buildJsonObject { put("error", LogRedactor.redact(failure.message ?: "共享数据操作失败")) }
                 }.toString().toByteArray(Charsets.UTF_8)
                 exchange.responseHeaders.set("Content-Type", "application/json; charset=utf-8")
                 exchange.responseHeaders.set("Cache-Control", "no-store")

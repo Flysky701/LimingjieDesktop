@@ -18,7 +18,7 @@ import com.landosol.toolbox.desktop.app.ui.*
 import com.landosol.toolbox.desktop.app.ui.theme.DesktopTheme
 import com.landosol.toolbox.desktop.app.ui.theme.NativeWindowTheme
 import com.landosol.toolbox.desktop.platform.*
-import com.landosol.toolbox.desktop.shared.DesktopLog
+import com.landosol.toolbox.core.logging.AppLogger
 import java.awt.Dimension
 import java.awt.GraphicsEnvironment
 import javax.swing.JOptionPane
@@ -31,7 +31,7 @@ import kotlin.system.exitProcess
 @OptIn(FlowPreview::class)
 fun main(args: Array<String>) {
     System.setProperty("java.net.useSystemProxies", "true")
-    if ("--worker" in args) exitProcess(runBlocking { runWorkerMain(args) })
+    if ("--worker" in args) exitProcess(runBlocking { runWorkerMain(args) { System.err.println(it) } })
     if ("--self-test" in args) exitProcess(DesktopSelfTest.run(args))
     val lifetime = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var lock: InstanceLock? = null
@@ -44,7 +44,7 @@ fun main(args: Array<String>) {
         DataDirectories.ensureWritable(root)
         lock = InstanceLock.acquire(root)
         settings = DesktopSettingsStore(root)
-        DesktopLog.initialize(root.resolve("logs"))
+        AppLogger.initialize(root.resolve("logs"))
         val host = runBlocking { SharedDataHost.start(legacy, startupUpdates = "--offline-startup" !in args) }.also { shared = it }
         val launcher = WorkerLauncher(lifetime, WorkerProcessContainment::own,
             extraEnvironment = mapOf(BATTLE_DEFAULT_DATA_DIR_ENV to legacy.toString()))
@@ -62,7 +62,7 @@ fun main(args: Array<String>) {
         instanceLock.close()
     }, "control-shutdown"))
     Thread.setDefaultUncaughtExceptionHandler { thread, failure ->
-        DesktopLog.write('E', "Supervisor", "线程 ${thread.name} 未处理异常", failure)
+        AppLogger.e("Supervisor", "线程 ${thread.name} 未处理异常", failure)
         lifetime.launch { model.stopAll(); model.reportError("界面发生异常，已请求停止全部设备任务。请查看日志。") }
     }
     lifetime.launch { runCatching { model.restore() }.onFailure { model.reportError(it.message ?: "设备列表恢复失败") } }
