@@ -69,10 +69,13 @@ class LabyrinthFastFrameObserver(
             val measurements = measureLabyrinthEntryAnchors(frame, templates, matcher, preScaledTemplates)
             val scores = LabyrinthAnchorScores(measurements.mapValues { (_, match) -> match?.score ?: 0.0 })
             val classified = classifier.classify(scores)
-            val failure = battleFailureDetector.detect(frame)
-            val endConfirmation = if (failure != null || classified.state == LabyrinthEntryPageState.UNKNOWN) {
-                battleEndConfirmationDetector.detect(frame)
-            } else null
+            val (failure, endConfirmation) = resolveLabyrinthBattleFailureAndEndConfirmation(
+                frame = frame,
+                classified = classified,
+                anchorScores = scores,
+                battleFailureDetector = battleFailureDetector,
+                battleEndConfirmationDetector = battleEndConfirmationDetector,
+            )
             // Exactly the full core's failure override; no alternative classifier thresholds.
             val observation = failure?.let {
                 classified.copy(

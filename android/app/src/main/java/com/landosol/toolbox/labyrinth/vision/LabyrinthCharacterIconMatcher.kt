@@ -268,23 +268,29 @@ class LabyrinthCharacterIconMatcher internal constructor(
         if (initial.trusted && !force) return initial
         val radius = (iconRect.width / 90.0).roundToInt().coerceIn(1, 3)
         val deltas = listOf(-radius, -1, 1, radius).distinct()
+        fun clampedRect(left: Int, top: Int, width: Int, height: Int): EntryPixelRect? {
+            if (frame.width < 4 || frame.height < 4) return null
+            val safeLeft = left.coerceIn(0, frame.width - 4)
+            val safeTop = top.coerceIn(0, frame.height - 4)
+            val safeRight = (left + width).coerceIn(safeLeft + 4, frame.width)
+            val safeBottom = (top + height).coerceIn(safeTop + 4, frame.height)
+            return EntryPixelRect(safeLeft, safeTop, safeRight - safeLeft, safeBottom - safeTop)
+        }
         val candidateRects = buildList {
             // Border thickness / size calibration.
             deltas.forEach { inset ->
-                add(
-                    iconRect.copy(
-                        left = iconRect.left + inset,
-                        top = iconRect.top + inset,
-                        width = iconRect.width - inset * 2,
-                        height = iconRect.height - inset * 2,
-                    ),
-                )
+                clampedRect(
+                    left = iconRect.left + inset,
+                    top = iconRect.top + inset,
+                    width = iconRect.width - inset * 2,
+                    height = iconRect.height - inset * 2,
+                )?.let(::add)
             }
             // Pure translation calibration.  These four directions cover the common measured
             // border error without turning recovery into an unbounded local image search.
             deltas.forEach { delta ->
-                add(iconRect.copy(left = iconRect.left + delta))
-                add(iconRect.copy(top = iconRect.top + delta))
+                clampedRect(iconRect.left + delta, iconRect.top, iconRect.width, iconRect.height)?.let(::add)
+                clampedRect(iconRect.left, iconRect.top + delta, iconRect.width, iconRect.height)?.let(::add)
             }
         }.distinct()
         val alternatives = candidateRects.map { rect ->

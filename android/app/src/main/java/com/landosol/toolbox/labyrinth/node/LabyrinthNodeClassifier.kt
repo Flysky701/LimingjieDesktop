@@ -385,37 +385,35 @@ class LabyrinthNodeClassifier(
             if (activeTypeEvidence != null && activeTypeTemplates.isNotEmpty()) {
                 val bestTemplate = activeTypeTemplates.keys.maxByOrNull { templateId ->
                     scores[templateId] ?: 0.0
-                } ?: return null
-                val ownScore = scores[bestTemplate] ?: 0.0
-                val ownColorScore = stableNodeColorRoiScore(
-                    frame, iconRect, requireNotNull(templates.templates[bestTemplate]),
-                ) ?: 0.0
-                // A colour override must have structural support from its own class. A road
-                // beside a shop cannot borrow a battle template's score to become a LINK.
-                if (ownScore < 0.28 || ownColorScore < MIN_ACTIVE_COLOR_ROI_SCORE) return null
-                return NodeClassification(
-                    column = 0,
-                    row = 0,
-                    blockType = activeTypeEvidence.blockType,
-                    // Geometry stays ranked by the proven structural match. Color evidence may
-                    // correct semantics but must never let a glow-leaking neighbor win NMS.
-                    confidence = strongestStructuralActive.value,
-                    typeConfidence = minOf(ownScore, ownColorScore, activeTypeEvidence.confidence),
-                    isClickable = true,
-                    screenRect = iconRect,
-                    templateId = bestTemplate,
-                    cyanGlowScore = cyanGlowScore,
-                    cyanGlowRowCoverage = cyanGlowEvidence.rowCoverage,
-                    purpleGlowScore = purpleGlowScore,
-                    purpleGlowRowCoverage = purpleGlowEvidence.rowCoverage,
-                    purpleGlowSideScore = purpleGlowEvidence.sideScore,
-                    purpleGlowLowerScore = purpleGlowEvidence.lowerScore,
-                    colorRoiScore = stableNodeColorRoiScore(
-                        frame = frame,
-                        rect = iconRect,
-                        template = requireNotNull(templates.templates[bestTemplate]),
-                    ) ?: 0.0,
-                )
+                }
+                val ownScore = bestTemplate?.let { scores[it] } ?: 0.0
+                val ownColorScore = bestTemplate?.let {
+                    stableNodeColorRoiScore(frame, iconRect, requireNotNull(templates.templates[it]))
+                } ?: 0.0
+                // A colour override must have structural support from its own class. When that
+                // support is absent, fall through to strongestStructuralActive rather than dropping
+                // the valid detection entirely.
+                if (bestTemplate != null && ownScore >= 0.28 && ownColorScore >= MIN_ACTIVE_COLOR_ROI_SCORE) {
+                    return NodeClassification(
+                        column = 0,
+                        row = 0,
+                        blockType = activeTypeEvidence.blockType,
+                        // Geometry stays ranked by the proven structural match. Color evidence may
+                        // correct semantics but must never let a glow-leaking neighbor win NMS.
+                        confidence = strongestStructuralActive.value,
+                        typeConfidence = minOf(ownScore, ownColorScore, activeTypeEvidence.confidence),
+                        isClickable = true,
+                        screenRect = iconRect,
+                        templateId = bestTemplate,
+                        cyanGlowScore = cyanGlowScore,
+                        cyanGlowRowCoverage = cyanGlowEvidence.rowCoverage,
+                        purpleGlowScore = purpleGlowScore,
+                        purpleGlowRowCoverage = purpleGlowEvidence.rowCoverage,
+                        purpleGlowSideScore = purpleGlowEvidence.sideScore,
+                        purpleGlowLowerScore = purpleGlowEvidence.lowerScore,
+                        colorRoiScore = ownColorScore,
+                    )
+                }
             }
         }
         // Stacked reachable battles partially cover each other, so their 280x350 templates can
@@ -492,6 +490,7 @@ class LabyrinthNodeClassifier(
                                 0.0
                             }
                         ).coerceAtLeast(MIN_CONFIDENCE),
+                    typeConfidence = minOf(fallback.gradientScore, fallback.colorScore).coerceIn(0.0, 1.0),
                     isClickable = true,
                     screenRect = iconRect,
                     templateId = fallback.templateId,
@@ -647,10 +646,16 @@ class LabyrinthNodeClassifier(
             trackedNodesStillCoverHint &&
             trackedFrames < 5 && isStableViewport(previous, frame)
         ) {
-            val refreshed = previousNodes.mapNotNull { node ->
-                val rect = node.screenRect ?: return@mapNotNull null
-                lastRevalidationCount++
-                classifyNode(frame, rect, templates)?.copy(column = node.column, row = node.row)
+            val borrowedForTrack = sharedFrameFeatures?.takeIf { it.hasPreparedFrame(frame) }
+            val refreshed = try {
+                if (borrowedForTrack != null) matcher.sharePreparedFrame(borrowedForTrack) else matcher.prepareFrame(frame)
+                previousNodes.mapNotNull { node ->
+                    val rect = node.screenRect ?: return@mapNotNull null
+                    lastRevalidationCount++
+                    classifyNode(frame, rect, templates)?.copy(column = node.column, row = node.row)
+                }
+            } finally {
+                matcher.clearPreparedFrame()
             }
             lastSearchWindowCount = refreshed.size
             if (refreshed.size == previousNodes.size && refreshed.zip(previousNodes).all { (now, old) ->
@@ -668,12 +673,14 @@ class LabyrinthNodeClassifier(
         // three independent stable observations. Reclassify its crops against THIS frame before
         // returning actionable evidence, without repeating the full candidate search.
         val memo = scanMemo
+        val maxMemoFrames = if (memo != null && memo.result.any { it.isClickable }) MAX_SCAN_MEMO_FRAMES
+        else MAX_EMPTY_SCAN_MEMO_FRAMES
         if (
             memo != null &&
             memo.mode == searchMode &&
             memo.hint == searchHint &&
             memo.templates === templates &&
-            scanMemoFrames < MAX_SCAN_MEMO_FRAMES &&
+            scanMemoFrames < maxMemoFrames &&
             isStableViewport(memo.signature, frame)
         ) {
             val refreshed = revalidateMemoCrops(frame, memo.result, templates)
@@ -1161,6 +1168,7 @@ class LabyrinthNodeClassifier(
          * about nine seconds.
          */
         private const val MAX_SCAN_MEMO_FRAMES = 12
+        private const val MAX_EMPTY_SCAN_MEMO_FRAMES = 2
         /**
          * Windows whose centre is farther than this many column pitches from the tracker
          * prediction are dropped. Half a pitch keeps the predicted column plus the inner edge of

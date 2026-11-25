@@ -151,6 +151,12 @@ class AndroidLabyrinthRoleRewardNameResolver(
                 return cached.text
             }
         }
+        val now = clock()
+        // Auto-evict timed-out pending OCR requests so lost callbacks never block a slot forever.
+        val pendingSince = startedAt[slotId]
+        if (pending.containsKey(slotId) && pendingSince != null && now - pendingSince >= PENDING_TIMEOUT_MILLIS) {
+            pending.remove(slotId)
+        }
         // OCR is asynchronous so the MediaProjection/ImageReader callback is never blocked by ML
         // Kit model work. A later 500 ms frame consumes the cached result once it is ready.
         if (pending.containsKey(slotId)) return null
@@ -159,20 +165,22 @@ class AndroidLabyrinthRoleRewardNameResolver(
         val crop = Bitmap.createBitmap(bitmap, rect.left, rect.top, rect.width, rect.height)
         val requestGeneration = generation
         pending[slotId] = fingerprint
-        startedAt[slotId] = clock()
+        startedAt[slotId] = now
         runCatching {
             submitTextRead(crop) { text ->
                 synchronized(this) {
                     if (requestGeneration == generation && pending[slotId] == fingerprint) {
                         pending.remove(slotId)
-                        cache[slotId] = CachedOcr(fingerprint, text.orEmpty().trim())
+                        // Never permanently cache transient null errors as "".
+                        if (text != null) {
+                            cache[slotId] = CachedOcr(fingerprint, text.trim())
+                        }
                     }
                 }
                 if (!crop.isRecycled) crop.recycle()
             }
         }.onFailure {
             pending.remove(slotId)
-            cache[slotId] = CachedOcr(fingerprint, "")
             if (!crop.isRecycled) crop.recycle()
         }
         return null
@@ -213,9 +221,10 @@ class AndroidLabyrinthRoleRewardNameResolver(
         val NAME_RECTS = mapOf(
             // Include the complete name now that OCR is the primary source of identity.
             "role_reward_left" to EntryReferenceRect(260, 650, 355, 135),
-            "role_reward_center" to EntryReferenceRect(820, 650, 300, 135),
-            "role_reward_right" to EntryReferenceRect(1370, 650, 300, 135),
+            "role_reward_center" to EntryReferenceRect(792, 650, 355, 135),
+            "role_reward_right" to EntryReferenceRect(1342, 650, 355, 135),
         )
+        const val PENDING_TIMEOUT_MILLIS = 5_000L
         const val MAX_ICON_GAP_FOR_NAME_ASSIST = 0.08
         const val MAX_CACHE_HASH_DISTANCE = 6
         const val MAX_NEW_OCR_RUNS_PER_FRAME = 3

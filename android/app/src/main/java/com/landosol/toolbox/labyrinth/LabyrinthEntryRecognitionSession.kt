@@ -1058,8 +1058,10 @@ internal fun labyrinthNodeClickRectsAreStable(
 internal fun labyrinthNodeMappingHasStrongOrderedTopology(
     mapping: NodePositionMapping,
     minimumConfidence: Double = 0.90,
+    columnNodeCount: Int? = null,
 ): Boolean = !mapping.routeSemanticRepair &&
     mapping.topologyBindingKind == NodeTopologyBindingKind.FULL_COLUMN &&
+    (columnNodeCount == null || columnNodeCount >= 2) &&
     (mapping.topologyConfidence ?: 0.0) >= minimumConfidence
 
 /**
@@ -1253,6 +1255,7 @@ data class LabyrinthEntryRecognitionSessionState(
     val initial1088Recovery: LabyrinthInitial1088RecoveryDiagnostic? = null,
     val balancedDiagnostics: LabyrinthBalancedDiagnostics? = null,
     val pathBDecisionSummary: LabyrinthPathBDecisionSummary? = null,
+    val nodeBindings: com.landosol.toolbox.labyrinth.node.NodeMatchResult? = null,
 ) {
     val running: Boolean get() = status == LabyrinthEntryRecognitionStatus.RUNNING
 }
@@ -2768,8 +2771,10 @@ class LabyrinthEntryRecognitionSession(
                 lastNodeScanHoldReason = null
                 lastNodeScanQueryTimestampMillis = if (completed.queryUsed) frame.timestampMillis else null
                 processFrameResult(sessionId, enrichedResult, balancedDetailWidth, balancedDetailHeight, frame.timestampMillis)
-                if (activeSessionId == sessionId && !_state.value.paused && !manualPauseRequested.get() &&
-                    request.lifecycleEpoch == lifecycleEpoch.get() && request.shopEvidenceVersion == shopEvidenceVersion) {
+                if ((activeSessionId == sessionId || stopRequested.get()) && !_state.value.paused &&
+                    !manualPauseRequested.get() && request.lifecycleEpoch == lifecycleEpoch.get() &&
+                    request.shopEvidenceVersion == shopEvidenceVersion
+                ) {
                     _state.value = _state.value.copy(frameTiming = LabyrinthFrameTiming(
                         frameSequence = frame.frameSequence, captureConvertMillis = frame.captureConvertMillis,
                         captureToWorkerMillis = frame.capturedAtElapsedRealtimeMillis?.let { (completed.workerStartedMillis - it).coerceAtLeast(0) },
@@ -2788,9 +2793,13 @@ class LabyrinthEntryRecognitionSession(
                         // All presentation/state is built on T2; worker reads only captured values.
                         val stateSnapshot = _state.value
                         val presentation = buildOverlayPresentation(sessionId)
-                        val diagnosticLease = frameLease.retain()
-                        diagnosticLane.offer(close = { diagnosticLease.close() }) {
-                            publisher(diagnosticLease.value, stateSnapshot, enrichedResult, presentation)
+                        if (stopRequested.get()) {
+                            publisher(frame, stateSnapshot, enrichedResult, presentation)
+                        } else {
+                            val diagnosticLease = frameLease.retain()
+                            diagnosticLane.offer(close = { diagnosticLease.close() }) {
+                                publisher(diagnosticLease.value, stateSnapshot, enrichedResult, presentation)
+                            }
                         }
                     }
                 }
@@ -2982,29 +2991,32 @@ class LabyrinthEntryRecognitionSession(
                 frameHeight = frameHeight,
                 timestampMillis = frame.timestampMillis,
             )
-            if (activeSessionId != sessionId || _state.value.paused || roleDecisionGeneration.get() != frameGeneration ||
-                frameShopVersion != shopEvidenceVersion || frame.timestampMillis <= shopRequiredCapturedAfter) return@runCatching
-            _state.value = _state.value.copy(frameTiming = LabyrinthFrameTiming(
-                frameSequence = frame.frameSequence,
-                captureConvertMillis = frame.captureConvertMillis,
-                captureToWorkerMillis = frame.capturedAtElapsedRealtimeMillis?.let { (workerStarted - it).coerceAtLeast(0L) },
-                queueWaitMillis = frame.enqueuedAtElapsedRealtimeMillis?.let { (workerStarted - it).coerceAtLeast(0L) },
-                visionMillis = measuredVisionMillis,
-                sessionHandlingMillis = (System.nanoTime() - handlingStarted) / 1_000_000,
-                responseIntervalMillis = responseIntervalMillis,
-                queue = frameQueueMetrics.snapshot(),
-                nodeScanHoldReason = lastNodeScanHoldReason,
-                nodeScanQueryTimestampMillis = lastNodeScanQueryTimestampMillis,
-                roleRound = roleRewardRound.snapshot(),
-                bossTabAction = pendingBattleTeamAction?.switchReceipt?.snapshot() ?: lastBossTabDiagnostic,
-                discardedRoleDecisionResults = discardedRoleDecisions.get(),
-            ))
-            debugFramePublisher?.invoke(
-                frame,
-                _state.value,
-                result,
-                buildOverlayPresentation(sessionId),
-            )
+            if ((activeSessionId == sessionId || stopRequested.get()) && !_state.value.paused &&
+                !manualPauseRequested.get() && roleDecisionGeneration.get() == frameGeneration &&
+                frameShopVersion == shopEvidenceVersion && frame.timestampMillis > shopRequiredCapturedAfter
+            ) {
+                _state.value = _state.value.copy(frameTiming = LabyrinthFrameTiming(
+                    frameSequence = frame.frameSequence,
+                    captureConvertMillis = frame.captureConvertMillis,
+                    captureToWorkerMillis = frame.capturedAtElapsedRealtimeMillis?.let { (workerStarted - it).coerceAtLeast(0L) },
+                    queueWaitMillis = frame.enqueuedAtElapsedRealtimeMillis?.let { (workerStarted - it).coerceAtLeast(0L) },
+                    visionMillis = measuredVisionMillis,
+                    sessionHandlingMillis = (System.nanoTime() - handlingStarted) / 1_000_000,
+                    responseIntervalMillis = responseIntervalMillis,
+                    queue = frameQueueMetrics.snapshot(),
+                    nodeScanHoldReason = lastNodeScanHoldReason,
+                    nodeScanQueryTimestampMillis = lastNodeScanQueryTimestampMillis,
+                    roleRound = roleRewardRound.snapshot(),
+                    bossTabAction = pendingBattleTeamAction?.switchReceipt?.snapshot() ?: lastBossTabDiagnostic,
+                    discardedRoleDecisionResults = discardedRoleDecisions.get(),
+                ))
+                debugFramePublisher?.invoke(
+                    frame,
+                    _state.value,
+                    result,
+                    buildOverlayPresentation(sessionId),
+                )
+            }
         }.onFailure { error ->
             handleFrameFailure(sessionId, error)
         }
@@ -9641,6 +9653,7 @@ class LabyrinthEntryRecognitionSession(
                     nodeTrackerWorldLeft = snapshot?.viewportWorldLeft,
                     nodeTargetExpectedX = target?.let { nodeViewportScanner.expectedScreenCenterX(it.column) },
                 ),
+                nodeBindings = match,
             )
         }
 
@@ -9885,10 +9898,16 @@ class LabyrinthEntryRecognitionSession(
             traceReject("node-current-frame-unverified")
             return
         }
-        val targetMapping = session.getLastMatchResult()?.visibleNodes
+        val lastMatchResult = session.getLastMatchResult()
+        val targetMapping = lastMatchResult?.visibleNodes
             ?.filter { it.blockId == action.blockId && it.screenRect == rect }
             ?.maxByOrNull { it.topologyConfidence ?: 0.0 }
-        val strongOrdered = targetMapping?.let(::labyrinthNodeMappingHasStrongOrderedTopology) == true
+        val targetColumnCount = targetMapping?.let { mapping ->
+            lastMatchResult.columnNodeCounts[com.landosol.toolbox.labyrinth.node.NodeColumnKey(area = (mapping.blockId / 10_000).toInt(), column = mapping.column)]
+        }
+        val strongOrdered = targetMapping?.let {
+            labyrinthNodeMappingHasStrongOrderedTopology(it, columnNodeCount = targetColumnCount)
+        } == true
         if (strongRouteTargetBindingBlockId != action.blockId) {
             resetStrongRouteTargetBinding()
         }

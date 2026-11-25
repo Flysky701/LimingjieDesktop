@@ -3,8 +3,12 @@ package com.landosol.toolbox.labyrinth.vision
 import android.graphics.Bitmap
 
 /** Owns only one crop; the OCR callback, not a timer, releases it. */
-internal class AndroidRelicRoiOcr(private val submit: (Bitmap, (String?) -> Unit) -> Unit, maximumAttempts: Int = 2) {
-    private val scheduler = RelicOcrScheduler({ android.os.SystemClock.elapsedRealtime() }, maximumAttempts = maximumAttempts)
+internal class AndroidRelicRoiOcr(
+    private val submit: (Bitmap, (String?) -> Unit) -> Unit,
+    maximumAttempts: Int = 2,
+    private val clock: () -> Long = android.os.SystemClock::elapsedRealtime,
+) {
+    private val scheduler = RelicOcrScheduler(clock, maximumAttempts = maximumAttempts)
     fun clear() = scheduler.clear()
 
     /** See [RelicOcrScheduler.lastCompletionAt]. */

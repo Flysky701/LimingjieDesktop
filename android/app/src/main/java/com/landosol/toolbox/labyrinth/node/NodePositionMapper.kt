@@ -212,6 +212,20 @@ class NodePositionMapper {
         // type, a unique active crop can repair the binding only when the protocol says exactly
         // one reachable node has that type. This handles a partially detected three-node column
         // without allowing an ambiguous EVENT/NORMAL crop to guess between siblings.
+        // When 2+ columns are aligned in the same frame, protect already-visited currentColumn
+        // rects from being hijacked by semantic repair or legacy fallback for future nodes.
+        val hasMultiColumnAlignment = topologyResult.observedColumns.count { it.mappedLogicalColumn != null } >= 2
+        val currentColumnProtectedRects = if (hasMultiColumnAlignment) {
+            topologyResult.mappings.filter { topology ->
+                topology.topologyConfidence >= SEMANTIC_REPAIR_RECT_OWNER_MIN_CONFIDENCE &&
+                    areaNodes.firstOrNull { it.blockId == topology.blockId }?.column == currentColumn
+            }
+        } else {
+            emptyList()
+        }
+        val topologyProtectedRects = actionableTopology.filter {
+            it.topologyConfidence >= SEMANTIC_REPAIR_RECT_OWNER_MIN_CONFIDENCE
+        } + currentColumnProtectedRects
         val preferredTargetSemanticRepair = preferredFutureNodeId?.let { targetId ->
             val target = areaNodes.firstOrNull { it.blockId == targetId }
                 ?.takeIf { targetId in reachableNodeIds }
@@ -230,19 +244,10 @@ class NodePositionMapper {
             // the classifier and require an independent visual floor for semantic-only repair.
             if (!NodeClickAdmission.hasSemanticEvidence(uniqueVisual)) return@let null
             // One crop is one node. If topology has already bound this very crop to a different
-            // block, adopting it here would put two block ids on one rect, and the only thing
-            // saying it belongs to the target is the crop's own type read — which is precisely
-            // what topology is disputing. Believing it because it matches what the route wants is
-            // circular.
-            //
-            // 2026-09-20 bundle 020234: the crop at (820,220) was bound to event#30403 by a
-            // PARTIAL_COLUMN binding at 0.810 and logged as a TYPE_CONFLICT (expected 事件,
-            // detected 连结 at 0.664). The route wanted link#30402, the repair adopted that crop,
-            // and the tap entered the event. Topology's own rows said as much: it had 30403 at
-            // visual row 1 and 30401 at row 3, so 30402 could only be the undetected middle cell.
-            val rectClaimedByAnotherBlock = actionableTopology.any { topology ->
+            // block (including a visited/currentColumn node), adopting it here would put two block
+            // ids on one rect or hijack an already-visited node.
+            val rectClaimedByAnotherBlock = topologyProtectedRects.any { topology ->
                 topology.blockId != targetId &&
-                    topology.topologyConfidence >= SEMANTIC_REPAIR_RECT_OWNER_MIN_CONFIDENCE &&
                     labyrinthNodeRectsOverlapSameCrop(topology.screenRect, uniqueVisual.screenRect)
             }
             if (rectClaimedByAnotherBlock) return@let null
@@ -637,7 +642,10 @@ class NodePositionMapper {
         // 2026-09-20 bundle 020234: topology bound (820,220) to event#30403. The fallback then
         // type-matched the same crop to link#30402, which is what the route wanted. The session
         // adopted the fallback mapping, tapped row 1, and entered the event instead of the link.
-        val topologyClaimedRects = topologyMappings.mapNotNullTo(hashSetOf(), NodePositionMapping::screenRect)
+        val topologyClaimedRects = (
+            topologyMappings.mapNotNull(NodePositionMapping::screenRect) +
+                currentColumnProtectedRects.map(NodeTopologyMapping::screenRect)
+            ).toHashSet()
         val resolvedActionableBlockIds = topologyResolvedBlockIds + semanticallyRepairedBlockIds
         val mergedMappings = topologyMappings + listOfNotNull(preferredTargetSemanticRepair) +
             bestMappingsByBlockId.values.filterNot { legacy ->

@@ -553,14 +553,15 @@ class LabyrinthEntryFrameProcessor(
             }.toMap()
             val anchorScores = LabyrinthAnchorScores(scores)
             val classified = classifier.classify(anchorScores)
-            battleFailure = battleFailureDetector.detect(frame)
-            // The dialog dims the page behind it; only probe when the page still looks like a
-            // failure page (or classified as nothing), never over a recognised unrelated page.
-            battleEndConfirmation = if (battleFailure != null || classified.state == LabyrinthEntryPageState.UNKNOWN) {
-                battleEndConfirmationDetector.detect(frame)
-            } else {
-                null
-            }
+            val resolvedFailure = resolveLabyrinthBattleFailureAndEndConfirmation(
+                frame = frame,
+                classified = classified,
+                anchorScores = anchorScores,
+                battleFailureDetector = battleFailureDetector,
+                battleEndConfirmationDetector = battleEndConfirmationDetector,
+            )
+            battleFailure = resolvedFailure.first
+            battleEndConfirmation = resolvedFailure.second
             observation = battleFailure?.let { failure ->
                 classified.copy(
                     state = LabyrinthEntryPageState.BATTLE_FAILED,
@@ -1268,9 +1269,15 @@ class GradientTemplateMatcher(
             val variance = squares - sum * sum / count
             return if (variance <= 0.0 || denominator <= 0.0) 0.0 else product / sqrt(variance * denominator)
         }
+        val gradientVariance = observedSquares - observedSum * observedSum / count
         val gradientScore = normalized(gradientProduct, observedSum, observedSquares, stats.denominator)
         val luminanceScore = normalized(luminanceProduct, luminanceSum, luminanceSquares, stats.luminanceDenominator)
         if (minOf(gradientScore, luminanceScore) < minimumChannelScore) return 0.0
+        // An edge-rich template matched against a flat/dimmed black crop (zero gradient variance)
+        // must not claim >0.80 solely from residual smooth luminance shading.
+        if (gradientVariance <= 1e-6 && stats.denominator > 10.0 * count) {
+            return minOf(gradientScore, luminanceScore).coerceIn(0.0, 1.0)
+        }
         return maxOf(gradientScore, luminanceScore).coerceIn(0.0, 1.0)
     }
 
@@ -1356,4 +1363,54 @@ class GradientTemplateMatcher(
     private companion object {
         const val MASK_ALPHA = 128
     }
+}
+
+private const val BATTLE_FAILURE_OVERRIDE_MAX_PAGE_CONFIDENCE = 0.75
+private const val BATTLE_RESULT_PROTECT_SCORE = 0.75
+private const val BATTLE_FAILURE_TWO_BUTTON_REJECT_ANCHOR_SCORE = 0.70
+private const val NON_RETREAT_DIALOG_REJECT_SCORE = 0.55
+
+/** Shared by full processor and fast observer so failure/modal redundancy stays bit-identical. */
+internal fun resolveLabyrinthBattleFailureAndEndConfirmation(
+    frame: PixelImage,
+    classified: LabyrinthEntryPageObservation,
+    anchorScores: LabyrinthAnchorScores,
+    battleFailureDetector: LabyrinthBattleFailureDetector,
+    battleEndConfirmationDetector: LabyrinthBattleEndConfirmationDetector,
+): Pair<LabyrinthBattleFailureObservation?, LabyrinthBattleEndConfirmationObservation?> {
+    val detectedFailure = battleFailureDetector.detect(frame)
+    val failureCanOwnFrame = detectedFailure != null && (
+        classified.state == LabyrinthEntryPageState.UNKNOWN ||
+            classified.state == LabyrinthEntryPageState.BATTLE_FAILED ||
+            classified.state == LabyrinthEntryPageState.BATTLE_IN_PROGRESS ||
+            classified.confidence < BATTLE_FAILURE_OVERRIDE_MAX_PAGE_CONFIDENCE
+        ) && !(
+        classified.state == LabyrinthEntryPageState.BATTLE_RESULT &&
+            anchorScores[EntryAnchorId.BATTLE_RESULT_NEXT_BUTTON] >= BATTLE_RESULT_PROTECT_SCORE
+        ) && !(
+        detectedFailure.layout == LabyrinthBattleFailureLayout.TWO_BUTTON &&
+            maxOf(
+                anchorScores[EntryAnchorId.BATTLE_RESULT_NEXT_BUTTON],
+                anchorScores[EntryAnchorId.RUN_CLEAR_CHARACTER_SUMMARY_TITLE],
+                anchorScores[EntryAnchorId.SESSION_ERROR_TITLE],
+                anchorScores[EntryAnchorId.SESSION_DATE_CHANGE_TITLE],
+                anchorScores[EntryAnchorId.SHOP_EXIT_CONFIRMATION_TITLE],
+            ) >= BATTLE_FAILURE_TWO_BUTTON_REJECT_ANCHOR_SCORE
+        )
+    val battleFailure = if (failureCanOwnFrame) detectedFailure else null
+    val nonRetreatDialogScore = maxOf(
+        anchorScores[EntryAnchorId.SESSION_ERROR_TITLE],
+        anchorScores[EntryAnchorId.SESSION_DATE_CHANGE_TITLE],
+        anchorScores[EntryAnchorId.SHOP_EXIT_CONFIRMATION_TITLE],
+        anchorScores[EntryAnchorId.SHOP_PURCHASE_CONFIRMATION_TITLE],
+    )
+    val battleEndConfirmation = if (
+        (battleFailure != null || classified.state == LabyrinthEntryPageState.UNKNOWN) &&
+        nonRetreatDialogScore < NON_RETREAT_DIALOG_REJECT_SCORE
+    ) {
+        battleEndConfirmationDetector.detect(frame)
+    } else {
+        null
+    }
+    return battleFailure to battleEndConfirmation
 }

@@ -294,13 +294,19 @@ class LabyrinthEntryPageClassifier(
         // The link and relic pages share the title and remaining-count anchors. Their
         // instruction lines also differ by only a few glyphs after a resize. A clean
         // crop of the fixed pink link statue is therefore used only as a ranking
-        // discriminator. It is deliberately not added to stateScores/confidence, so
-        // the displayed confidence remains the score of the textual page anchors.
+        // discriminator against RELIC_CHOICE (never inflating LINK_CHOICE over unrelated pages).
+        val baseRanked = stateScores.entries.sortedByDescending { it.value }
+        val linkRelicContested = baseRanked.firstOrNull()?.key in setOf(
+            LabyrinthEntryPageState.LINK_CHOICE,
+            LabyrinthEntryPageState.RELIC_CHOICE,
+        )
         val rankingScores = stateScores.mapValues { (state, score) ->
             when (state) {
                 LabyrinthEntryPageState.LINK_CHOICE -> {
                     val cardSignature = anchorScores[EntryAnchorId.LINK_CHOICE_CARD_SIGNATURE]
-                    if (cardSignature < minScore) 0.0 else score + cardSignature * 0.20
+                    if (cardSignature < minScore) 0.0
+                    else if (linkRelicContested) score + cardSignature * 0.20
+                    else score
                 }
                 else -> score
             }
@@ -316,26 +322,10 @@ class LabyrinthEntryPageClassifier(
             anchorScores[EntryAnchorId.EVENT_SINGLE_CHOICE_TRIGGER_TITLE],
             anchorScores[EntryAnchorId.EVENT_SINGLE_CHOICE_SELECT_BUTTON],
         )
-        // 获得道具 is a centred modal drawn over the map; the map's header and side controls stay
-        // visible and score almost as high as the modal's own anchors (2026-09-17 recording:
-        // ITEM_REWARD 0.88 vs NODE_SELECTION 0.82, inside the ambiguity margin, so the final
-        // reward popup read as UNKNOWN and the run never closed it). When every modal anchor is
-        // strong, the modal owns the frame regardless of what is underneath.
         val itemRewardModalScore = stateScores.getValue(LabyrinthEntryPageState.ITEM_REWARD)
-        // The RESULT banner is a large, full-colour, one-of-a-kind crop: nothing else in the game
-        // scores near 1.0 against it. The run-result page it announces is a modal over the map, so
-        // the map's header and side controls stay visible underneath and score highly, exactly as
-        // for 获得道具 above.
-        //
-        // The page score cannot express that on its own because it is min(logo, close button), and
-        // the button is not always 关闭 — the 加入的角色 summary carries 下一步 in the same pill, so
-        // the button anchor reads ~0.60 and drags the whole page down with it.
-        //
-        // 2026-09-20 bundle 110329: logo 0.995, close button 0.602, so RUN_CLEAR_RESULT scored
-        // 0.602 against NODE_MAP_VIEW's 0.529 — a margin of 0.073 against the required 0.080. The
-        // frame read as UNKNOWN, actions were disabled, and the run sat on the final screen for
-        // the whole recording without pressing 下一步.
         val runResultLogoScore = anchorScores[EntryAnchorId.RUN_RESULT_LOGO]
+        val runResultCloseScore = anchorScores[EntryAnchorId.RUN_RESULT_CLOSE_BUTTON]
+        val runClearSummaryScore = stateScores.getValue(LabyrinthEntryPageState.RUN_CLEAR_CHARACTER_SUMMARY)
         val state = when {
             eventOverlayScore >= maxOf(minScore, EVENT_OVERLAY_MIN_SCORE) && best.key in setOf(
                 LabyrinthEntryPageState.NODE_SELECTION,
@@ -345,9 +335,14 @@ class LabyrinthEntryPageClassifier(
             itemRewardModalScore >= maxOf(minScore, MODAL_OVERLAY_MIN_SCORE) && best.key in setOf(
                 LabyrinthEntryPageState.NODE_SELECTION,
                 LabyrinthEntryPageState.NODE_MAP_VIEW,
+                LabyrinthEntryPageState.BATTLE_RESULT,
+                LabyrinthEntryPageState.SHOP,
                 LabyrinthEntryPageState.ITEM_REWARD,
             ) -> LabyrinthEntryPageState.ITEM_REWARD
-            runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE && best.key in setOf(
+            runResultLogoScore >= RUN_RESULT_LOGO_DECISIVE_SCORE &&
+                runResultCloseScore >= minScore &&
+                runClearSummaryScore < minScore &&
+                best.key in setOf(
                 LabyrinthEntryPageState.NODE_SELECTION,
                 LabyrinthEntryPageState.NODE_MAP_VIEW,
                 LabyrinthEntryPageState.RUN_CLEAR_RESULT,

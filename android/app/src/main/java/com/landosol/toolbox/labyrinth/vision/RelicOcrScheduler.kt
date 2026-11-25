@@ -2,8 +2,12 @@ package com.landosol.toolbox.labyrinth.vision
 
 /** Two independent reads per unchanged slot, then reuse. Invalidating a page does not release
  * the physical request: a slow engine must not accumulate abandoned crops across transitions. */
-internal class RelicOcrScheduler(private val clock: () -> Long, private val spacingMillis: Long = 350,
-    private val maximumAttempts: Int = 2) {
+internal class RelicOcrScheduler(
+    private val clock: () -> Long,
+    private val spacingMillis: Long = 350,
+    private val maximumAttempts: Int = 2,
+    private val pendingTimeoutMillis: Long = DEFAULT_PENDING_TIMEOUT_MILLIS,
+) {
     /**
      * @param confirmations how many completed reads of these exact pixels produced this text.
      *
@@ -13,7 +17,13 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
      * tell that apart from a first look.
      */
     data class Read(val text: String?, val id: Long, val confirmations: Int = 1, val capturedAtMillis: Long = Long.MIN_VALUE)
-    data class Ticket(val slot: String, val fingerprint: Long, val epoch: Long, val id: Long, val capturedAtMillis: Long = Long.MIN_VALUE)
+    data class Ticket(
+        val slot: String,
+        val fingerprint: Long,
+        val epoch: Long,
+        val id: Long,
+        val capturedAtMillis: Long = Long.MIN_VALUE,
+    )
     private data class Slot(
         val fingerprint: Long,
         var attempts: Int = 0,
@@ -25,6 +35,7 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
     private var epoch = 0L
     private var sequence = 0L
     private var pending: Ticket? = null
+    private var pendingIssuedAt = Long.MIN_VALUE
     private var nextStart = Long.MIN_VALUE
     private var lastCompletionAt = Long.MIN_VALUE
 
@@ -37,7 +48,10 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
      */
     @Synchronized fun lastCompletionAt(): Long = lastCompletionAt
 
-    @Synchronized fun clear() { slots.clear(); epoch++ }
+    @Synchronized fun clear() {
+        slots.clear()
+        epoch++
+    }
 
     @Synchronized fun cached(slot: String, fingerprint: Long): Read? {
         val state = slots[slot]
@@ -52,7 +66,12 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
     @Synchronized fun request(slot: String, fingerprint: Long, capturedAtMillis: Long = Long.MIN_VALUE): Ticket? {
         cached(slot, fingerprint)
         val state = slots.getValue(slot)
-        if (pending != null || state.attempts >= maximumAttempts || clock() < nextStart) return null
+        val now = clock()
+        if (pending != null && pendingIssuedAt != Long.MIN_VALUE && now - pendingIssuedAt >= pendingTimeoutMillis) {
+            pending = null
+            pendingIssuedAt = Long.MIN_VALUE
+        }
+        if (pending != null || state.attempts >= maximumAttempts || now < nextStart) return null
         // A slot that has never been read goes first, so one crop cannot verify itself twice while
         // another waits for its only look. That priority lasts only while the other slot is still
         // being asked for. A caller that stops asking used to hold it forever: the EX challenge
@@ -61,7 +80,6 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
         // monster-detail slot then read the name once, could never obtain the second independent
         // read it needs to be trusted, and the run reported a known encounter as having no
         // strategy on file (2026-09-19: 流夏的暗影 read correctly, reported as unmatched).
-        val now = clock()
         if (
             state.attempts > 0 &&
             slots.any { (name, other) ->
@@ -70,7 +88,10 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
         ) return null
         state.attempts++
         nextStart = now + spacingMillis
-        return Ticket(slot, fingerprint, epoch, ++sequence, capturedAtMillis).also { pending = it }
+        return Ticket(slot, fingerprint, epoch, ++sequence, capturedAtMillis).also {
+            pending = it
+            pendingIssuedAt = now
+        }
     }
 
     @Synchronized fun complete(ticket: Ticket, text: String?) {
@@ -79,9 +100,11 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
         lastCompletionAt = clock()
         if (pending != ticket) return
         pending = null
+        pendingIssuedAt = Long.MIN_VALUE
         if (ticket.epoch != epoch) return
         val state = slots[ticket.slot]?.takeIf { it.fingerprint == ticket.fingerprint } ?: return
-        val trimmed = text?.trim()
+        // Transient OCR errors / dropped requests must never poison the cache with Read(null).
+        val trimmed = text?.trim() ?: return
         val previous = state.read
         if (previous != null && previous.text == trimmed) {
             state.read = Read(trimmed, ticket.id, previous.confirmations + 1, ticket.capturedAtMillis)
@@ -105,5 +128,6 @@ internal class RelicOcrScheduler(private val clock: () -> Long, private val spac
          * slot whose page has moved on stops blocking every other slot.
          */
         const val ABANDONED_SLOT_MILLIS = 1_500L
+        const val DEFAULT_PENDING_TIMEOUT_MILLIS = 60_000L
     }
 }

@@ -551,7 +551,19 @@ class DesktopAppGraph(
             allowAddressReuse = false,
             frameArchiveDirectory = java.io.File(cacheDir, "labyrinth-frame-archive"),
             runtimeDiagnostics = diagnostics,
-        ).also { it.start() }.takeIf { it.boundPort != null }
+        ).also { dashboard ->
+            dashboard.attachOcrHealthSource {
+                val t = ocr.telemetry()
+                mapOf(
+                    "status" to ocr.status.value.javaClass.simpleName,
+                    "submitted" to t.submitted,
+                    "queueDrops" to t.queueDrops,
+                    "nullFailures" to t.nullFailures,
+                    "consecutiveFailures" to t.consecutiveFailures,
+                )
+            }
+            dashboard.start()
+        }.takeIf { it.boundPort != null }
     }
     val labyrinthEntryRecognitionSession: LabyrinthEntryRecognitionSession by lazy {
         // Start the debug endpoint with its initial waiting snapshot instead of waiting for the

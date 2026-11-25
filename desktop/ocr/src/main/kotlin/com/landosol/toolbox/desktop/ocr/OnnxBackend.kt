@@ -66,13 +66,17 @@ internal class OnnxBackend : OcrBackend {
 
     override fun recognize(image: OcrImage): String {
         val recognized = recognizeBoxes(image)
-        // FB-14: isolated, outlined counters can produce an all-zero detector map.
-        // A compact OCR crop gets one recognizer attempt with the unchanged 0.5 threshold.
-        // Larger/name/multiline crops stay on the detection path; solid images remain empty.
-        if (recognized.isEmpty() && image.width in 32..256 && image.height in 32..256 &&
-            image.width * 2 >= image.height && image.height * 2 >= image.width &&
+        // FB-14: isolated, outlined counters and single-line banners can produce an all-zero
+        // detector map. Allow direct recognizer + border-padded detection fallback on compact crops
+        // and wide single-line crops (coin balances, role names, shop/refresh labels), while keeping
+        // large multi-line crops on detection only and solid images empty.
+        val compactCrop = image.width in 32..256 && image.height in 32..256 &&
+            image.width * 2 >= image.height && image.height * 2 >= image.width
+        val singleLineWideCrop = image.height in 32..256 && image.width in 32..960 &&
+            image.width * 2 >= image.height && image.height * 8 >= image.width
+        if (recognized.isEmpty() && (compactCrop || singleLineWideCrop) &&
             image.pixels.any { (it and 0xffffff) != (image.pixels[0] and 0xffffff) }) {
-            Logger.getLogger(OnnxOcrEngine::class.java.name).fine("OCR 紧凑区域整图识别：${image.width}×${image.height}")
+            Logger.getLogger(OnnxOcrEngine::class.java.name).fine("OCR 单行区域整图识别：${image.width}×${image.height}")
             val direct = recognizeLine(image).first
             if (direct.isNotBlank()) return direct
             // FB-14: contextual pixels at an ROI edge can suppress the detector. Only after
@@ -85,7 +89,7 @@ internal class OnnxBackend : OcrBackend {
             repeat(image.height) { y ->
                 image.pixels.copyInto(pixels, (y + margin) * width + margin, y * image.width, (y + 1) * image.width)
             }
-            Logger.getLogger(OnnxOcrEngine::class.java.name).fine("OCR 紧凑区域补边检测：${image.width}×${image.height}，边距 $margin")
+            Logger.getLogger(OnnxOcrEngine::class.java.name).fine("OCR 单行区域补边检测：${image.width}×${image.height}，边距 $margin")
             return OcrPostprocessing.join(recognizeBoxes(OcrImage(width, height, pixels)))
         }
         return OcrPostprocessing.join(recognized)

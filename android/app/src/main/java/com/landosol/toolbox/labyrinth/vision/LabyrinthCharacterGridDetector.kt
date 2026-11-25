@@ -347,6 +347,15 @@ internal class LabyrinthCharacterGridDetector {
         val pitch = pitchSamples.medianOrNull() ?: expectedPitch
         val firstCenter = usable.first().center
         val centers = buildList {
+            // Extrapolate leftward first when an edge/dimmed column 1 band was missed,
+            // bounded by maximumCount, before extrapolating rightward.
+            val leftCenters = mutableListOf<Int>()
+            var left = firstCenter - pitch
+            while (leftCenters.size < maximumCount - usable.size && left - expectedSize / 2 >= lowerBound) {
+                leftCenters.add(left)
+                left -= pitch
+            }
+            leftCenters.asReversed().forEach(::add)
             var center = firstCenter
             while (size < maximumCount && center - expectedSize / 2 < upperBoundExclusive) {
                 if (center + expectedSize / 2 > lowerBound) add(center)

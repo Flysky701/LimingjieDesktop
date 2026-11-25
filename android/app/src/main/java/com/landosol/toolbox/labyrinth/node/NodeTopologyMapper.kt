@@ -423,6 +423,18 @@ class NodeTopologyMapper {
         val reachableNodes = orderedProtocolNodes.filter { it.blockId in reachableNodeIds }
         val clickableVisual = orderedVisual.filter { it.source.isClickable }
         if (reachableNodes.isNotEmpty() && clickableVisual.size == reachableNodes.size) {
+            if (orderedProtocolNodes.size == 3 && reachableNodes.size == 1 && clickableVisual.size == 1) {
+                val detection = clickableVisual.single()
+                val targetIndex = resolveVisualIndexFromTop(reachableNodes.single().blockId.toInt(), 3)
+                val heightUnits = detection.rect.height.coerceAtLeast(1).toDouble()
+                val centerInHeights = detection.centerY / heightUnits
+                val roughBand = when {
+                    centerInHeights < 0.85 -> 0
+                    centerInHeights > 2.15 -> 2
+                    else -> 1
+                }
+                if (abs(roughBand - targetIndex) > 1) return emptyList()
+            }
             return clickableVisual.zip(reachableNodes).mapIndexed { index, (visual, node) ->
                 visual.toTopologyMapping(
                     node = node,

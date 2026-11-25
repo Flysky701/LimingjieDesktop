@@ -51,7 +51,9 @@ class LabyrinthDebugDashboardServer(
     private val allowAddressReuse: Boolean = true,
 ) : AutoCloseable {
     @Volatile private var kernelSource: KernelEventLog? = null
+    private val ocrHealthSource = AtomicReference<(() -> Map<String, Any?>)?>(null)
     fun attachKernelEventSource(source: KernelEventLog?) { kernelSource = source }
+    fun attachOcrHealthSource(source: (() -> Map<String, Any?>)?) { ocrHealthSource.set(source) }
 
     private data class Snapshot(
         val json: ByteArray,
@@ -60,6 +62,16 @@ class LabyrinthDebugDashboardServer(
         /** Capture time of [jpeg], which is not always the time of [json] — see [publish]. */
         val jpegMillis: Long = Long.MIN_VALUE,
     )
+
+    private data class IncidentEntry(
+        val sequence: Long,
+        val slug: String,
+        val png: ByteArray,
+        val json: ByteArray,
+        val timestampMillis: Long,
+    ) {
+        val totalBytes: Long get() = png.size.toLong() + json.size.toLong()
+    }
 
     private val running = AtomicBoolean(false)
     @Volatile private var boundSocket: ServerSocket? = null
@@ -86,6 +98,12 @@ class LabyrinthDebugDashboardServer(
     private val fastHistoryLock = Any()
     private val recentFastStates = ArrayDeque<ByteArray>()
     private val latestFast = AtomicReference("{\"available\":false}".toByteArray(Charsets.UTF_8))
+    private val incidentLock = Any()
+    private var incidentSequence = 0L
+    private var incidentTotalBytes = 0L
+    private var lastAutoIncidentKey: String? = null
+    private var lastAutoIncidentAt = Long.MIN_VALUE
+    private val recentIncidents = ArrayDeque<IncidentEntry>()
 
     fun publishFast(
         observation: com.landosol.toolbox.labyrinth.vision.LabyrinthFastFrameObservation,
@@ -160,13 +178,110 @@ class LabyrinthDebugDashboardServer(
         val jpegMillis = if (shouldRefreshJpeg) nowMillis else previous.jpegMillis
         latestJpegMillis = jpegMillis
         val archivedFrame = archiveFrame(bitmap, state.frameCount)
-        val json = buildJson(state, result, presentation, version, nowMillis, archivedFrame, jpegMillis)
-            .toString()
-            .toByteArray(Charsets.UTF_8)
+        val jsonObject = buildJson(state, result, presentation, version, nowMillis, archivedFrame, jpegMillis)
+        detectAutoIncidentReason(state, result)?.let { (reasonKey, reasonLabel) ->
+            val shouldCapture = synchronized(incidentLock) {
+                if (lastAutoIncidentKey == reasonKey && lastAutoIncidentAt != Long.MIN_VALUE &&
+                    nowMillis - lastAutoIncidentAt < INCIDENT_COOLDOWN_MILLIS
+                ) {
+                    false
+                } else {
+                    lastAutoIncidentKey = reasonKey
+                    lastAutoIncidentAt = nowMillis
+                    true
+                }
+            }
+            if (shouldCapture) {
+                storeIncident(reasonLabel, bitmap, jsonObject, nowMillis)
+                jsonObject.put("incidentCount", synchronized(incidentLock) { recentIncidents.size })
+            }
+        }
+        val json = jsonObject.toString().toByteArray(Charsets.UTF_8)
         latest.set(Snapshot(json = json, jpeg = jpeg, frameVersion = version, jpegMillis = jpegMillis))
         synchronized(historyLock) {
             recentStates.addLast(json)
             while (recentStates.size > MAX_STATE_HISTORY_ENTRIES) recentStates.removeFirst()
+        }
+    }
+
+    fun recordIncident(
+        reason: String,
+        bitmap: Bitmap,
+        state: LabyrinthEntryRecognitionSessionState,
+        result: LabyrinthEntryFrameResult,
+        presentation: AutomationOverlayPresentation,
+        nowMillis: Long = System.currentTimeMillis(),
+    ) {
+        val previous = latest.get()
+        val jsonObject = buildJson(
+            state = state,
+            result = result,
+            presentation = presentation,
+            frameVersion = previous.frameVersion,
+            nowMillis = nowMillis,
+            archivedFrame = null,
+            jpegMillis = nowMillis,
+        )
+        storeIncident(reason, bitmap, jsonObject, nowMillis)
+    }
+
+    private fun storeIncident(
+        reason: String,
+        bitmap: Bitmap,
+        baseJson: JSONObject,
+        nowMillis: Long,
+    ) {
+        runCatching {
+            val png = ByteArrayOutputStream().use { output ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                output.toByteArray()
+            }
+            val meta = JSONObject(baseJson.toString()).apply {
+                put("incidentReason", reason)
+                put("incidentCapturedAtMillis", nowMillis)
+            }.toString().toByteArray(Charsets.UTF_8)
+            val slug = reason.lowercase(Locale.US)
+                .replace(Regex("[^a-z0-9_-]+"), "_")
+                .trim('_')
+                .ifEmpty { "incident" }
+                .take(40)
+            synchronized(incidentLock) {
+                val entry = IncidentEntry(++incidentSequence, slug, png, meta, nowMillis)
+                recentIncidents.addLast(entry)
+                incidentTotalBytes += entry.totalBytes
+                while (
+                    recentIncidents.size > MAX_INCIDENT_COUNT ||
+                    (recentIncidents.size > 1 && incidentTotalBytes > MAX_INCIDENT_BYTES)
+                ) {
+                    val evicted = recentIncidents.removeFirst()
+                    incidentTotalBytes -= evicted.totalBytes
+                }
+            }
+        }.onFailure { failure ->
+            Log.w(LOG_TAG, "lossless incident capture failed", failure)
+        }
+    }
+
+    private fun detectAutoIncidentReason(
+        state: LabyrinthEntryRecognitionSessionState,
+        result: LabyrinthEntryFrameResult,
+    ): Pair<String, String>? {
+        val page = result.observation.state.name
+        val reject = state.frameTrace.actionRejectReason
+        return when {
+            state.status == com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionStatus.ERROR ->
+                "error:$page:${state.message.orEmpty()}" to "session_error"
+            state.nodeBindings?.conflicts?.isNotEmpty() == true || reject?.contains("conflict") == true ->
+                "conflict:${state.nodeBindings?.nextNode?.blockId}:${reject.orEmpty()}" to "node_conflict"
+            reject?.contains("timeout") == true || state.message?.contains("超时") == true ->
+                "timeout:$page:${reject.orEmpty()}" to "action_timeout"
+            result.battleFailure != null ->
+                "battle_failed:${result.battleFailure.layout.name}" to "battle_failed"
+            result.shopObservation?.items?.any {
+                it.categoryState == com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryState.EXHAUSTED
+            } == true ->
+                "shop_exhausted:${result.shopObservation.items.count { it.categoryState == com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryState.EXHAUSTED }}" to "shop_ocr_exhausted"
+            else -> null
         }
     }
 
@@ -290,7 +405,8 @@ class LabyrinthDebugDashboardServer(
                 "/logs.zip", "/download/logs.zip" -> {
                     val snapshot = latest.get()
                     val history = synchronized(historyLock) { recentStates.toList() }
-                    val zip = buildDiagnosticZip(snapshot, history, processLogSource(), archivedFramesSnapshot())
+                    val incidents = synchronized(incidentLock) { recentIncidents.toList() }
+                    val zip = buildDiagnosticZip(snapshot, history, processLogSource(), archivedFramesSnapshot(), incidents)
                     val filename = "limingjie-debug-${timestampForFilename()}.zip"
                     respond(
                         output = output,
@@ -362,6 +478,7 @@ class LabyrinthDebugDashboardServer(
         history: List<ByteArray>,
         logcat: ByteArray,
         archivedFrames: List<File> = emptyList(),
+        incidents: List<IncidentEntry> = emptyList(),
     ): ByteArray = ByteArrayOutputStream().use { bytes ->
         ZipOutputStream(bytes).use { zip ->
             fun entry(name: String, content: ByteArray) {
@@ -389,6 +506,7 @@ class LabyrinthDebugDashboardServer(
                             "state/latest.json：先比对两者的 frameVersion 再下结论",
                     )
                     appendLine("frames/: 逐帧缩放截图（仅在面板开启逐帧归档后存在，${archivedFrames.size} 张）")
+                    appendLine("incidents/: 异常事件无损 PNG 原图与结构化快照（${incidents.size} 条）")
                     appendLine("state/history.ndjson 每条的 archivedFrame 字段指向 frames/ 中的文件名")
                     appendLine("logs/logcat.txt: 当前 App 进程最近日志")
                 }.toByteArray(Charsets.UTF_8),
@@ -416,6 +534,11 @@ class LabyrinthDebugDashboardServer(
             snapshot.jpeg?.let { entry("frame/latest.jpg", it) }
             archivedFrames.forEach { file ->
                 runCatching { entry("frames/${file.name}", file.readBytes()) }
+            }
+            incidents.forEach { incident ->
+                val prefix = "incidents/%03d_%s".format(Locale.US, incident.sequence, incident.slug)
+                entry("$prefix.png", incident.png)
+                entry("$prefix.json", incident.json)
             }
             // The captured window holds only the most recent lines, so a long run can scroll the
             // startup banner out of it. Restate the build here rather than hope it survived.
@@ -772,10 +895,21 @@ class LabyrinthDebugDashboardServer(
             result.shopObservation?.let { shop ->
                 JSONObject().apply {
                     put("dialogState", shop.dialogState.name)
+                    put("coinBalance", shop.coinBalance ?: JSONObject.NULL)
+                    put("coinBalanceConfirmed", shop.coinBalanceConfirmed)
                     put("availableItemCount", shop.availableItemCount)
                     put("recognizedButtonCount", shop.recognizedButtonCount)
                     put("refreshButtonEnabled", shop.refreshButtonEnabled)
                     put("refreshButtonEnabledEvidence", shop.refreshButtonEnabledEvidence)
+                    put("refreshDialog", result.shopRefreshDialog?.let { dlg ->
+                        JSONObject().apply {
+                            put("kind", dlg.kind.name)
+                            put("fee", dlg.fee ?: JSONObject.NULL)
+                            put("confirmed", dlg.confirmed)
+                            put("text", dlg.text ?: JSONObject.NULL)
+                            put("evidenceId", dlg.evidenceId ?: JSONObject.NULL)
+                        }
+                    } ?: JSONObject.NULL)
                     put(
                         "items",
                         JSONArray().apply {
@@ -819,12 +953,25 @@ class LabyrinthDebugDashboardServer(
                 }
             } ?: JSONObject.NULL,
         )
+        fun iconCandidatesJson(candidates: List<com.landosol.toolbox.labyrinth.vision.LabyrinthCharacterIconCandidate>) =
+            JSONArray().apply {
+                candidates.take(3).forEach { c ->
+                    put(JSONObject().apply {
+                        put("id", c.characterId)
+                        put("name", c.displayName)
+                        put("variant", c.iconVariant)
+                        put("confidence", c.confidence)
+                    })
+                }
+            }
         put(
             "characters",
             JSONArray().apply {
                 result.characterMatches.forEach { character ->
                     put(
                         JSONObject().apply {
+                            put("slotId", character.slotId)
+                            put("rect", rectJson(character.screenRect))
                             put("name", character.displayName ?: character.suspectedDisplayName ?: JSONObject.NULL)
                             put("id", character.characterId ?: character.suspectedCharacterId ?: JSONObject.NULL)
                             put("confidence", character.confidence)
@@ -834,11 +981,147 @@ class LabyrinthDebugDashboardServer(
                             put("nameEvidenceScore", character.nameEvidenceScore)
                             put("nameEvidenceMargin", character.nameEvidenceMargin)
                             put("nameAssisted", character.nameAssisted)
+                            put("iconCandidates", iconCandidatesJson(character.iconCandidates))
                         },
                     )
                 }
             },
         )
+        put(
+            "battleTeam",
+            result.battleTeamSelection?.let { team ->
+                fun battleMemberJson(m: com.landosol.toolbox.labyrinth.vision.LabyrinthBattleCharacterMatch) =
+                    JSONObject().apply {
+                        put("slotId", m.slotId)
+                        put("rect", rectJson(m.screenRect))
+                        put("id", m.characterId ?: m.suspectedCharacterId ?: JSONObject.NULL)
+                        put("name", m.displayName ?: m.suspectedDisplayName ?: JSONObject.NULL)
+                        put("confidence", m.confidence)
+                        put("margin", m.rivalMargin)
+                        put("trusted", m.trusted)
+                        put("selected", m.selected)
+                        put("iconCandidates", iconCandidatesJson(m.iconCandidates))
+                    }
+                JSONObject().apply {
+                    put("recognitionState", team.recognitionState.name)
+                    put("viewportRevision", team.viewportRevision)
+                    put("currentFilter", team.currentFilter.label)
+                    put("bossTeamIndex", team.bossTeamIndex ?: JSONObject.NULL)
+                    put("scrollbarPosition", team.scrollbar.position)
+                    put("scrollbarVisible", team.scrollbar.visible)
+                    put("visibleCharacters", JSONArray().apply {
+                        team.visibleCharacters.forEach { put(battleMemberJson(it)) }
+                    })
+                    put("selectedCharacters", JSONArray().apply {
+                        team.selectedCharacters.forEach { put(battleMemberJson(it)) }
+                    })
+                }
+            } ?: JSONObject.NULL,
+        )
+        put(
+            "exEncounter",
+            result.exEncounter?.let { ex ->
+                JSONObject().apply {
+                    put("challengeTitleText", ex.challengeTitleText ?: JSONObject.NULL)
+                    put("challengeDifficultyResolved", ex.challengeDifficultyResolved)
+                    put("extremeChallenge", ex.extremeChallenge)
+                    put("multiMonsterLikely", ex.multiMonsterLikely)
+                    put("specialDualLikely", ex.specialDualLikely)
+                    put("monsterDetailOpen", ex.monsterDetailOpen)
+                    put("encounterId", ex.encounterId ?: JSONObject.NULL)
+                    put("encounterName", ex.encounterName ?: JSONObject.NULL)
+                    put("trusted", ex.trusted)
+                }
+            } ?: JSONObject.NULL,
+        )
+        put(
+            "modals",
+            JSONObject().apply {
+                put("battleFailure", result.battleFailure?.let { f ->
+                    JSONObject().apply {
+                        put("confidence", f.confidence)
+                        put("layout", f.layout.name)
+                    }
+                } ?: JSONObject.NULL)
+                put("battleEndConfirmation", result.battleEndConfirmation?.let { c ->
+                    JSONObject().apply {
+                        put("stage", c.stage.name)
+                        put("confidence", c.confidence)
+                    }
+                } ?: JSONObject.NULL)
+                put("nodeMoveConfirmation", result.nodeMoveConfirmation?.let { m ->
+                    JSONObject().apply {
+                        put("confidence", m.confidence)
+                    }
+                } ?: JSONObject.NULL)
+                put("specialEquipment", result.specialEquipment?.let { s ->
+                    JSONObject().apply {
+                        put("stage", s.stage?.name ?: JSONObject.NULL)
+                        put("confidence", s.confidence)
+                        put("equipConfirmEnabled", s.equipConfirmEnabled ?: JSONObject.NULL)
+                        put("entryButtonMissReason", s.entryButtonMissReason ?: JSONObject.NULL)
+                    }
+                } ?: JSONObject.NULL)
+            },
+        )
+        put(
+            "nodeBindings",
+            state.nodeBindings?.let { match ->
+                JSONObject().apply {
+                    put("currentNodeId", match.currentNodeId ?: JSONObject.NULL)
+                    put("nextNodeId", match.nextNode?.blockId ?: JSONObject.NULL)
+                    put("logicalColumnOffset", match.logicalColumnOffset)
+                    put("topologyAlignmentScore", match.topologyAlignmentScore)
+                    put("visibleNodes", JSONArray().apply {
+                        match.visibleNodes.forEach { v ->
+                            put(JSONObject().apply {
+                                put("blockId", v.blockId)
+                                put("blockType", v.blockType)
+                                put("detectedBlockType", v.detectedBlockType ?: JSONObject.NULL)
+                                put("clickable", v.isClickable)
+                                put("visualConfidence", v.visualConfidence)
+                                put("typeConfidence", v.typeConfidence)
+                                put("topologyConfidence", v.topologyConfidence ?: JSONObject.NULL)
+                                put("bindingKind", v.topologyBindingKind?.name ?: JSONObject.NULL)
+                                put("routeSemanticRepair", v.routeSemanticRepair)
+                                put("rect", rectJson(v.screenRect))
+                            })
+                        }
+                    })
+                    put("conflicts", JSONArray().apply {
+                        match.conflicts.forEach { c ->
+                            put(JSONObject().apply {
+                                put("blockId", c.blockId)
+                                put("expectedType", c.expectedBlockType)
+                                put("detectedType", c.detectedBlockType)
+                                put("sourceClickable", c.sourceClickable)
+                                put("confidence", c.confidence)
+                                put("visualConfidence", c.visualConfidence ?: JSONObject.NULL)
+                                put("topologyConfidence", c.topologyConfidence ?: JSONObject.NULL)
+                                put("rect", rectJson(c.screenRect))
+                            })
+                        }
+                    })
+                    put("topology", JSONArray().apply {
+                        match.topologyMappings.forEach { t ->
+                            put(JSONObject().apply {
+                                put("blockId", t.blockId)
+                                put("logicalColumn", t.logicalColumn)
+                                put("visualColumn", t.visualColumn)
+                                put("visualRow", t.visualRow)
+                                put("bindingKind", t.bindingKind.name)
+                                put("topologyConfidence", t.topologyConfidence)
+                                put("clickable", t.isClickable)
+                            })
+                        }
+                    })
+                }
+            } ?: JSONObject.NULL,
+        )
+        put("incidentCount", synchronized(incidentLock) { recentIncidents.size })
+        put("ocrHealth", ocrHealthSource.get()?.let { source ->
+            runCatching { JSONObject(source()) }.getOrNull()
+        } ?: JSONObject.NULL)
         put(
             "nodes",
             JSONArray().apply {
@@ -900,6 +1183,9 @@ class LabyrinthDebugDashboardServer(
         const val SOCKET_TIMEOUT_MILLIS = 3_000
         const val MAX_HEADER_LINE_BYTES = 8_192
         const val MAX_STATE_HISTORY_ENTRIES = LABYRINTH_DEBUG_HISTORY_LIMIT
+        const val MAX_INCIDENT_COUNT = 10
+        const val MAX_INCIDENT_BYTES = 30L * 1024 * 1024
+        const val INCIDENT_COOLDOWN_MILLIS = 5_000L
         const val LOGCAT_LINE_LIMIT = 2_000
         const val MAX_LOGCAT_BYTES = 2 * 1024 * 1024
 

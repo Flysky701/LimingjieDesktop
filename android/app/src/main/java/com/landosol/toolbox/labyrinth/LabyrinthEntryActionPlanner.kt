@@ -759,13 +759,21 @@ class LabyrinthEntryActionPlanner(
         anchorIds = listOf(EntryAnchorId.ITEM_REWARD_CLOSE),
     )
 
+    private var lastNonUnknownState: LabyrinthEntryPageState? = null
+
     private fun observe(state: LabyrinthEntryPageState) {
         if (lastState == state) {
             stableFrameCount++
         } else {
             lastState = state
             stableFrameCount = 1
-            attemptsForState = 0
+            // Transient single UNKNOWN frames must not clear per-state attempt budgets.
+            if (state != LabyrinthEntryPageState.UNKNOWN) {
+                if (lastNonUnknownState != state) {
+                    attemptsForState = 0
+                }
+                lastNonUnknownState = state
+            }
         }
     }
 

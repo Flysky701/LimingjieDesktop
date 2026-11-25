@@ -27,6 +27,8 @@ sealed interface NodeAction {
         val visualConfidence: Double? = null,
         /** A distinct, correctly typed sibling supports this ordered partial/subset binding. */
         val hasOrderedSiblingEvidence: Boolean = false,
+        /** Logical column size when known; a 1-node column cannot waive semantic conflicts. */
+        val columnNodeCount: Int? = null,
     ) : NodeAction
     data object Complete : NodeAction
     data class Error(val message: String) : NodeAction
@@ -57,6 +59,9 @@ class LabyrinthNodeActionPlanner {
         val nextNode = matchResult.nextNode
         val targetMappings = matchResult.visibleNodes
             .filter { it.blockId == nextNode.blockId }
+        fun columnNodeCountFor(blockId: Long, column: Int): Int? =
+            matchResult.columnNodeCounts[NodeColumnKey(area = (blockId / 10_000).toInt(), column = column)]
+
         val inactiveRouteTopologyFallback = matchResult.topologyMappings
             .asSequence()
             .filter { topology ->
@@ -70,8 +75,11 @@ class LabyrinthNodeActionPlanner {
             }
             .filter { target ->
                 when (target.bindingKind) {
-                    NodeTopologyBindingKind.FULL_COLUMN ->
-                        target.topologyConfidence >= TOPOLOGY_ORDERED_OVERRIDE_MIN_CONFIDENCE
+                    NodeTopologyBindingKind.FULL_COLUMN -> {
+                        val columnCount = columnNodeCountFor(target.blockId, target.logicalColumn)
+                        target.topologyConfidence >= TOPOLOGY_ORDERED_OVERRIDE_MIN_CONFIDENCE &&
+                            (columnCount == null || columnCount >= 2)
+                    }
 
                     NodeTopologyBindingKind.PARTIAL_COLUMN,
                     NodeTopologyBindingKind.REACHABLE_SUBSET,
@@ -100,7 +108,10 @@ class LabyrinthNodeActionPlanner {
                 return false
             }
             return when (mapping.topologyBindingKind) {
-                NodeTopologyBindingKind.FULL_COLUMN -> true
+                NodeTopologyBindingKind.FULL_COLUMN -> {
+                    val columnCount = columnNodeCountFor(mapping.blockId, mapping.column)
+                    columnCount == null || columnCount >= 2
+                }
                 NodeTopologyBindingKind.PARTIAL_COLUMN,
                 NodeTopologyBindingKind.REACHABLE_SUBSET,
                 -> matchResult.visibleNodes.any { sibling ->
@@ -173,7 +184,10 @@ class LabyrinthNodeActionPlanner {
                         false
                     } else {
                         when (mapping.topologyBindingKind) {
-                            NodeTopologyBindingKind.FULL_COLUMN -> true
+                            NodeTopologyBindingKind.FULL_COLUMN -> {
+                                val columnCount = columnNodeCountFor(mapping.blockId, mapping.column)
+                                columnCount == null || columnCount >= 2
+                            }
                             NodeTopologyBindingKind.PARTIAL_COLUMN,
                             NodeTopologyBindingKind.REACHABLE_SUBSET,
                             -> matchResult.visibleNodes.any { sibling ->
@@ -196,6 +210,7 @@ class LabyrinthNodeActionPlanner {
                 // columns require a second mapped sibling to prove the vertical ordering.
                 if (
                     conflictMapping != null && !conflictMapping.routeSemanticRepair &&
+                    conflictMapping.visualConfidence >= PROTECTED_CONFLICT_MIN_VISUAL_CONFIDENCE &&
                     !labyrinthBossSemanticConflict(conflict.expectedBlockType, conflict.detectedBlockType) &&
                     (
                         targetMappings.any { mapping ->
@@ -221,6 +236,7 @@ class LabyrinthNodeActionPlanner {
                     hasOrderedSiblingEvidence = conflictMapping?.let { target ->
                         targetMappingsWithSiblingEvidence(matchResult, target)
                     } == true,
+                    columnNodeCount = columnNodeCountFor(nextNode.blockId, nextNode.column),
                 )
             }
 
@@ -342,6 +358,7 @@ class LabyrinthNodeActionPlanner {
         const val INACTIVE_ROUTE_TARGET_MIN_TOPOLOGY_CONFIDENCE = 0.82
         const val INACTIVE_ROUTE_SIBLING_MIN_VISUAL_CONFIDENCE = 0.60
         const val INACTIVE_ROUTE_SIBLING_MIN_TOPOLOGY_CONFIDENCE = 0.80
+        const val PROTECTED_CONFLICT_MIN_VISUAL_CONFIDENCE = 0.45
     }
 }
 

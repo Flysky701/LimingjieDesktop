@@ -145,11 +145,25 @@ class RelicOcrSchedulerTest {
         assertNull(scheduler.request("a", 1))
     }
 
-    @Test fun `failures use bounded retry budget too`() {
+    @Test fun `failures use bounded retry budget without poisoning cache with null read`() {
         repeat(2) {
             scheduler.complete(requireNotNull(scheduler.request("a", 1)), null)
+            assertNull(scheduler.cached("a", 1))
             now += 500
         }
         assertNull(scheduler.request("a", 1))
+        assertNull(scheduler.cached("a", 1))
+    }
+
+    @Test fun `timed out pending callback self heals instead of deadlocking scheduler`() {
+        val stuck = requireNotNull(scheduler.request("a", 1))
+        now += 10_000L
+        assertNull(scheduler.request("b", 2))
+        now += 60_000L
+        val recovered = scheduler.request("b", 2)
+        assertNotNull(recovered)
+        // Late callback from evicted ticket cannot overwrite new ticket or cache.
+        scheduler.complete(stuck, "stale")
+        assertNull(scheduler.cached("a", 1))
     }
 }

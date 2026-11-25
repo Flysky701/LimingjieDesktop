@@ -67,6 +67,7 @@ data class LabyrinthBattleCharacterMatch(
     val suspectedDisplayName: String? = displayName,
     val detectedAttribute: LabyrinthCharacterAttribute? = null,
     val initial1088RefinementEvidence: LabyrinthInitial1088RefinementEvidence? = null,
+    val iconCandidates: List<LabyrinthCharacterIconCandidate> = emptyList(),
 )
 
 data class LabyrinthBattleTeamObservation(
@@ -130,7 +131,9 @@ internal fun labyrinthShouldRefineInitial1088Card(
     suspectedCharacterId: String?,
     screenFullyVisible: Boolean,
     recognitionFullyVisible: Boolean,
-): Boolean = allowed && !trusted && suspectedCharacterId == "1088" &&
+    candidates: List<LabyrinthCharacterIconCandidate> = emptyList(),
+): Boolean = allowed && !trusted &&
+    (suspectedCharacterId == "1088" || candidates.take(3).any { it.characterId == "1088" }) &&
     screenFullyVisible && recognitionFullyVisible
 
 /**
@@ -259,18 +262,30 @@ class LabyrinthBattleTeamRecognizer(
         if (signature == openingStableSignature) {
             openingPendingSignature = null
             openingPendingStableFrames = 0
+            val slotById = layout.visibleSlots.associateBy(Slot::id)
             val refreshed = cached.copy(
                 currentFilter = layout.currentFilter,
                 filters = layout.filters,
                 visibleCharacters = cached.visibleCharacters.map { match ->
-                    match.copy(
+                    val slot = slotById[match.slotId]
+                    val evaluated = if (!match.trusted && slot != null) {
+                        observeSlot(
+                            frame = frame,
+                            slot = slot,
+                            selected = false,
+                            topRow = true,
+                            openingCard = true,
+                            viewport = OPENING_LAYOUT_PROFILE.viewport,
+                            allowInitial1088GeometryRefinement = openingGeometryRefinementMode,
+                        )
+                    } else null
+                    (evaluated ?: match).copy(
                         selected = isOpeningCardSelected(
                             frame,
-                            layout.visibleSlots.firstOrNull { it.id == match.slotId }
-                                ?.let { mapSlotRect(frame, it) } ?: match.screenRect,
+                            slot?.let { mapSlotRect(frame, it) } ?: match.screenRect,
                         ),
-                        initial1088RefinementEvidence = match.initial1088RefinementEvidence
-                            ?.copy(cacheHit = true),
+                        initial1088RefinementEvidence = (evaluated ?: match).initial1088RefinementEvidence
+                            ?.copy(cacheHit = evaluated == null),
                     )
                 },
                 scrollbar = layout.scrollbar,
@@ -352,14 +367,28 @@ class LabyrinthBattleTeamRecognizer(
         if (signature == stableSignature) {
             pendingSignature = null
             pendingStableFrames = 0
+            val slotById = layout.visibleSlots.associateBy(Slot::id)
             val refreshed = cached.copy(
                 currentFilter = layout.currentFilter,
                 filters = layout.filters,
                 // A battle selection only dims the card and adds a checkmark; it does not move
                 // the card, so the structural viewport signature deliberately stays unchanged.
-                // Refresh that dynamic state instead of replaying a stale cached selection.
+                // Re-evaluate untrusted visible slots on stationary frames so transient recognition
+                // misses can recover instead of remaining cached forever.
                 visibleCharacters = cached.visibleCharacters.map { match ->
-                    match.copy(selected = isBattleCardSelected(frame, match.screenRect))
+                    val slot = slotById[match.slotId]
+                    val evaluated = if (!match.trusted && slot != null) {
+                        observeSlot(
+                            frame = frame,
+                            slot = slot,
+                            selected = false,
+                            topRow = true,
+                            openingCard = false,
+                            viewport = layout.viewport,
+                        )
+                    } else null
+                    val current = evaluated ?: match
+                    current.copy(selected = isBattleCardSelected(frame, current.screenRect))
                 },
                 // The bottom current-member strip is the authoritative team state. Unlike the
                 // roster geometry it changes after every selection, so it must be re-read even
@@ -1122,6 +1151,7 @@ class LabyrinthBattleTeamRecognizer(
             suspectedCharacterId = character.suspectedCharacterId,
             screenFullyVisible = visibleScreenRect == screenRect,
             recognitionFullyVisible = visibleRecognitionRect == recognitionRect,
+            candidates = character.candidates,
         ) && openingRecoveryFitsViewport(frame, iconRect, viewport)
         // Observe only the existing opening recovery; do not add crops or scoring calls.
         val refinementCrops = if (refineInitial1088) {
@@ -1197,6 +1227,7 @@ class LabyrinthBattleTeamRecognizer(
             suspectedDisplayName = character.suspectedDisplayName,
             detectedAttribute = requiredAttribute,
             initial1088RefinementEvidence = initial1088Evidence,
+            iconCandidates = character.candidates.take(3),
         )
     }
 

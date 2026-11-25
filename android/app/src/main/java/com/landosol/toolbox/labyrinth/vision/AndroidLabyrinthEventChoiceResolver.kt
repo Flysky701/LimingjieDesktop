@@ -168,7 +168,20 @@ class AndroidLabyrinthEventChoiceResolver(
                 retryOcr(bitmap, cropRect, fingerprint, currentTitleFingerprint)
                 return result.copy(eventOcrDiagnostics = diagnostic.copy(status = "OCR_UNAVAILABLE"))
             }
-            val scheduled = schedule(bitmap, cropRect, fingerprint, requestTitleFingerprint = currentTitleFingerprint)
+            if (completedWithoutText) {
+                val scheduled = retryOcr(bitmap, cropRect, fingerprint, currentTitleFingerprint)
+                return result.copy(eventOcrDiagnostics = diagnostic.copy(
+                    status = "OCR_UNAVAILABLE",
+                    requestScheduled = scheduled,
+                ))
+            }
+            // Avoid flooding the OCR queue with full-screen fallback crops on noisy UNKNOWN frames
+            // when no complete calibrated event button layout is visible.
+            val scheduled = if (result.observation.state == LabyrinthEntryPageState.EVENT_CHOICE || completeLayoutCount != null) {
+                schedule(bitmap, cropRect, fingerprint, requestTitleFingerprint = currentTitleFingerprint)
+            } else {
+                false
+            }
             return result.copy(eventOcrDiagnostics = diagnostic.copy(
                 status = if (titleOnly) "TITLE_WAITING_OCR" else "WAITING_OCR",
                 requestScheduled = scheduled,

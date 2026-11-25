@@ -200,6 +200,32 @@ class OnnxOcrEngineTest {
         }
     }
 
+    @Test fun `transient runtime inference exception keeps worker alive and escalates after five failures`() {
+        val attempt = AtomicInteger()
+        val backend = object : StubBackend() {
+            override fun recognize(image: OcrImage): String {
+                val n = attempt.incrementAndGet()
+                if (n == 1) throw IllegalStateException("transient ORT glitch")
+                if (n >= 3) throw IllegalStateException("repeated failure $n")
+                return "恢复"
+            }
+        }
+        OnnxOcrEngine({ backend }, { _, _ -> }, maxConsecutiveFailures = 5).use { engine ->
+            assertNull(result(engine))
+            assertEquals("恢复", result(engine))
+            assertTrue(engine.status.value is OcrEngineStatus.Ready)
+            repeat(5) { assertNull(result(engine)) }
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (engine.status.value !is OcrEngineStatus.Failed && System.nanoTime() < deadline) Thread.yield()
+            assertTrue(engine.status.value is OcrEngineStatus.Failed)
+            assertNull(result(engine))
+            val telemetry = engine.telemetry()
+            assertTrue(telemetry.submitted >= 7)
+            assertTrue(telemetry.nullFailures >= 6)
+        }
+        assertEquals(1, backend.closed.get())
+    }
+
     private fun result(engine: OcrEngine): String? {
         val future = CompletableFuture<String?>()
         engine.submit(1, 1, intArrayOf(-1)) { future.complete(it) }

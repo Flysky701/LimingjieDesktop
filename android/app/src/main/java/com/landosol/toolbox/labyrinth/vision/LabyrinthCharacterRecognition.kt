@@ -318,9 +318,9 @@ class LabyrinthCharacterRecognizer(
         )
 
         val JOINED_ICON_SLOTS = listOf(
-            IconSlot("joined_first", EntryReferenceRect(530, 350, 90, 90)),
-            IconSlot("joined_second", EntryReferenceRect(530, 490, 90, 90)),
-            IconSlot("joined_third", EntryReferenceRect(530, 632, 90, 90)),
+            IconSlot("joined_first", EntryReferenceRect(530, 350, 90, 90), refineAmbiguousGeometry = true),
+            IconSlot("joined_second", EntryReferenceRect(530, 490, 90, 90), refineAmbiguousGeometry = true),
+            IconSlot("joined_third", EntryReferenceRect(530, 632, 90, 90), refineAmbiguousGeometry = true),
         )
 
         val ROLE_REWARD_LEGACY_NAME_SLOTS = listOf(

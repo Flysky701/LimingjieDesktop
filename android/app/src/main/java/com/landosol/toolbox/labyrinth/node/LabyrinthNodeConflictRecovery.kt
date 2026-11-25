@@ -66,7 +66,8 @@ internal class LabyrinthNodeConflictRecovery {
         val orderedTopology = topologyConfidence.isFinite() && topologyConfidence in 0.0..1.0 &&
             topologyConfidence >= MIN_ORDERED_TOPOLOGY_CONFIDENCE &&
             when (binding) {
-                NodeTopologyBindingKind.FULL_COLUMN -> true
+                NodeTopologyBindingKind.FULL_COLUMN ->
+                    (conflict.columnNodeCount?.let { it >= 2 } ?: (active.size >= 2 || conflict.hasOrderedSiblingEvidence))
                 NodeTopologyBindingKind.PARTIAL_COLUMN,
                 NodeTopologyBindingKind.REACHABLE_SUBSET,
                 -> conflict.hasOrderedSiblingEvidence

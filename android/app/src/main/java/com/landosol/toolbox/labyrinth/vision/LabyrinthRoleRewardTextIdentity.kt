@@ -11,12 +11,9 @@ internal fun roleRewardTextFirstMatch(
     if (roleRewardNameHasOutfitVariants(named, candidates)) {
         // The reward card prints the outfit suffix on its own line. An OCR result that equals a
         // plain base name may therefore be a truncated "千歌（礼服）", so the portrait must agree
-        // on the family before the text alone is allowed to bypass icon recognition.
+        // on the exact characterId before the base name is allowed to confirm as trusted.
         val portrait = portraitFallback()
-        val portraitFamily = portrait.characterId?.let { id ->
-            candidates.firstOrNull { it.characterId == id }?.let(::roleRewardNameFamily)
-        }
-        if (portraitFamily != roleRewardNameFamily(named)) return portrait
+        if (portrait.characterId != named.characterId) return portrait
     }
     return slot.copy(
         characterId = named.characterId, displayName = named.displayName,

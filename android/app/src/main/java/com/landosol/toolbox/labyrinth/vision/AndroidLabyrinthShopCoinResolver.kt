@@ -12,8 +12,9 @@ import android.graphics.Bitmap
  */
 class AndroidLabyrinthShopCoinResolver(
     submitTextRead: (Bitmap, (String?) -> Unit) -> Unit = AndroidChineseRoleNameOcr::readAsync,
+    clock: () -> Long = android.os.SystemClock::elapsedRealtime,
 ) {
-    private val ocr = AndroidRelicRoiOcr(submitTextRead, maximumAttempts = 6)
+    private val ocr = AndroidRelicRoiOcr(submitTextRead, maximumAttempts = 2, clock = clock)
 
     @Synchronized
     fun clear() {
@@ -36,13 +37,34 @@ class AndroidLabyrinthShopCoinResolver(
             referenceSize = STANDARD_REFERENCE,
             referenceRect = COIN_ROI,
         ) ?: return result
-        val read = ocr.read(bitmap, "shop-coin", rect, scale = 2)
-        val value = parseCoinBalance(read?.text)
-        val confirmed = value != null && read != null && read.confirmations >= 2
+        // Dual preprocessing redundancy: compare distinct scale/padding variants rather than
+        // repeating the exact same deterministic CPU ORT crop twice.
+        val read1 = ocr.read(bitmap, "shop-coin-s2", rect, scale = 2)
+        val val1 = parseCoinBalance(read1?.text)
+        val read2 = if (read1 != null) ocr.read(bitmap, "shop-coin-s3", rect, scale = 3) else null
+        val val2 = parseCoinBalance(read2?.text)
+        if (val1 != null && val2 == val1) {
+            return result.copy(
+                shopObservation = shop.copy(coinBalance = val1, coinBalanceConfirmed = true),
+            )
+        }
+        val read3 = if (read1 != null && read2 != null) {
+            val padLeft = (rect.left - 4).coerceAtLeast(0)
+            val padTop = (rect.top - 4).coerceAtLeast(0)
+            val padRight = (rect.left + rect.width + 4).coerceAtMost(bitmap.width)
+            val padBottom = (rect.top + rect.height + 4).coerceAtMost(bitmap.height)
+            val padded = EntryPixelRect(padLeft, padTop, padRight - padLeft, padBottom - padTop)
+            ocr.read(bitmap, "shop-coin-s4", padded, scale = 4)
+        } else null
+        val val3 = parseCoinBalance(read3?.text)
+        val agreed = listOfNotNull(val1, val2, val3)
+            .groupingBy { it }.eachCount()
+            .entries.firstOrNull { it.value >= 2 }?.key
+        val candidate = agreed ?: val3 ?: val2 ?: val1
         return result.copy(
             shopObservation = shop.copy(
-                coinBalance = value,
-                coinBalanceConfirmed = confirmed,
+                coinBalance = candidate,
+                coinBalanceConfirmed = agreed != null,
             ),
         )
     }

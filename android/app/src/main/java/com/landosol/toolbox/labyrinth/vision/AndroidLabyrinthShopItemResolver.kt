@@ -57,18 +57,17 @@ class AndroidLabyrinthShopItemResolver(
             val resolved = categories.resolve(item, read?.text, read?.id, attempt)
             val labelPending = categories.needsRoleName(resolved) &&
                 categories.labelGraceOpen(item.slotId, now)
-            if (resolved.categoryState == LabyrinthShopCategoryState.READY && read != null && !labelPending) {
+            if (resolved.categoryState == LabyrinthShopCategoryState.READY && read?.text != null && !labelPending) {
                 accepted[item.slotId] = fingerprint to read
             } else {
-                // Retire this crop variant only once its OCR actually completed (read != null),
-                // not on a fixed interval: the reads share one serial queue and a time clock was
-                // failing titles that were still being processed. The engine's own last answer
-                // tells the difference between "queued" and "dead".
+                // Retire this crop variant only once its OCR actually completed with non-null text
+                // (never treat transient null failures as permanent variant exhaustion),
+                // or after the engine-silent backstop elapses.
                 categories.noteVariantOutcome(
                     slot = item.slotId,
                     fingerprint = fingerprint,
                     variant = variant,
-                    completed = read != null,
+                    completed = read?.text != null,
                     engineLastCompletedAt = ocr.lastCompletionAt(),
                     now = now,
                 )
