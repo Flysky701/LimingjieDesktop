@@ -20,7 +20,7 @@ val generateBuildConfig by tasks.registering {
 
                 object BuildConfig {
                     const val VERSION_NAME = "$versionName"
-                    const val VERSION_CODE = 10090
+                    const val VERSION_CODE = 20000
                     const val APPLICATION_ID = "com.landosol.toolbox"
                     const val DEBUG = false
                 }

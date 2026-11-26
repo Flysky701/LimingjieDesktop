@@ -332,7 +332,7 @@ internal fun SettingsPage(graph: ControlSessionUi, openWizard: () -> Unit, openD
                         }
                     }
                     SettingsGroup.ABOUT -> Panel("关于") {
-                        Text("黎明界助手 ${AppVersion.name} · Windows 社区移植")
+                        Text("黎明界助手 ${AppVersion.name} · Windows 桌面版")
                         ProjectOriginsPanel()
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(shape = MaterialTheme.shapes.small, onClick = openWizard) { Text("重新打开使用向导") }

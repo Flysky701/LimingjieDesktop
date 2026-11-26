@@ -12,7 +12,7 @@ plugins {
     alias(libs.plugins.compose)
 }
 // jpackage requires a numeric base version; display labels and ZIPs keep the desktop suffix.
-val desktopPackageVersion = project.version.toString().substringBefore('+')
+val desktopPackageVersion = project.version.toString().substringBefore('+').substringBefore('-')
 kotlin { jvmToolchain(21) }
 dependencies {
     implementation(project(":core")); implementation(project(":device")); implementation(project(":ocr")); implementation(project(":platform"))
