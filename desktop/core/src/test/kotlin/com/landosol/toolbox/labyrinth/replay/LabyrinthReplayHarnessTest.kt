@@ -11,7 +11,7 @@ import org.junit.Test
  * Phase zero of the revised plan: replay stored frames through the real recognition pipeline and
  * print the statistics later phases are measured against. Never dispatches an action.
  *
- * Set `LABYRINTH_REPLAY_BUNDLE` to an unzipped debug bundle that was captured with the dashboard's
+ * Set `LABYRINTH_REPLAY_BUNDLE` to an unzipped debug bundle that was captured using the former
  * per-frame archive enabled to replay a live run instead of the checked-in fixtures.
  */
 class LabyrinthReplayHarnessTest {
@@ -70,7 +70,7 @@ class LabyrinthReplayHarnessTest {
             readImage = ::readImage,
         )
         val frames = harness.replayBundle(requireNotNull(bundle))
-        assumeTrue("bundle has no archived frames; enable 逐帧归档 on the dashboard before downloading", frames.isNotEmpty())
+        assumeTrue("legacy bundle has no archived frames", frames.isNotEmpty())
         val summary = harness.summarize(frames)
         println("replay-bundle ${bundle.name}\n" + summary.report())
         frames.filter { it.recorded != null && it.recorded.page != it.result.observation.state.name }.forEach {

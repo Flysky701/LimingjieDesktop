@@ -3,15 +3,13 @@ package com.landosol.toolbox.labyrinth.kernel
 import com.landosol.toolbox.automation.*
 import com.landosol.toolbox.gamedata.*
 import com.landosol.toolbox.labyrinth.*
-import com.landosol.toolbox.labyrinth.debug.LabyrinthDebugDashboardServer
+import com.landosol.toolbox.labyrinth.debug.LabyrinthDiagnosticsRecorder
 import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds as K
 import com.landosol.toolbox.labyrinth.kernel.event.*
 import com.landosol.toolbox.labyrinth.vision.*
-import java.net.URI
 import java.util.zip.ZipInputStream
 import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
 import kotlinx.coroutines.*
-import kotlinx.serialization.json.Json
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -92,9 +90,9 @@ class EventDomainKernelFlowTest {
         Unit
     }
 
-    @Test fun unknownPolicyAndDashboardExportReadTheSessionLog() = runBlocking {
+    @Test fun unknownPolicyAndDiagnosticsExportReadTheSessionLog() = runBlocking {
         val replay = Replay()
-        val server = LabyrinthDebugDashboardServer(port = 0, processLogSource = { ByteArray(0) })
+        val recorder = LabyrinthDiagnosticsRecorder(processLogSource = { ByteArray(0) })
         try {
             replay.start()
             val session = replay.session
@@ -108,24 +106,16 @@ class EventDomainKernelFlowTest {
             replay.feed(observed(obs.event.copy(choices = listOf(choice.copy(description = "消耗200金币 + 金币×300"))), known = false))
             assertTrue(session.state.value.eventChoiceDecision is LabyrinthEventChoiceDecision.Wait)
             assertEquals(3, replay.log.filter(kind = K.EVENT_UNKNOWN_OBSERVED).size)
-            server.start()
-            fun url(path: String) = URI("http://127.0.0.1:" + server.boundPort + path).toURL()
-            fun archive(): Map<String,String> = ZipInputStream(url("/logs.zip").openStream()).use { zip ->
-                buildMap { while (true) {
-                    val entry = zip.nextEntry ?: break
-                    if (entry.name == "kernel/events.ndjson") put(entry.name, zip.readBytes().decodeToString())
-                } }
+            fun kernelEvents(): String? = ZipInputStream(recorder.exportDiagnosticZip().inputStream()).use { zip ->
+                generateSequence { zip.nextEntry }.firstOrNull { it.name == "kernel/events.ndjson" }
+                    ?.let { zip.readBytes().decodeToString() }
             }
-            assertTrue(archive().isEmpty())
-            server.attachKernelEventSource(replay.log)
-            val snapshot = Json.decodeFromString<KernelLogSnapshot>(url("/api/kernel/events").readText())
-            assertEquals(replay.log.snapshot(), snapshot)
-            val connection = url("/api/kernel/events?format=ndjson").openConnection()
-            assertEquals("application/x-ndjson; charset=utf-8", connection.contentType)
-            val ndjson = connection.getInputStream().bufferedReader().use { it.readText() }
-            assertEquals(replay.log.toNdjson(), ndjson)
-            assertEquals(ndjson, archive()["kernel/events.ndjson"])
-        } finally { server.close(); replay.session.stop("offline replay complete") }
+            assertNull(kernelEvents())
+            recorder.attachKernelEventSource(replay.log)
+            assertEquals(replay.log.toNdjson(), kernelEvents())
+            recorder.attachKernelEventSource(null)
+            assertNull(kernelEvents())
+        } finally { recorder.close(); replay.session.stop("offline replay complete") }
         Unit
     }
 }

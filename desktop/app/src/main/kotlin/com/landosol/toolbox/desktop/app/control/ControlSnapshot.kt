@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentHashMap
  * devices:[DeviceDescriptor]; history:[DesktopRunRecord]; logs:[UserLogLine] (compact tail, last 50)
  * keyLogs:[UserLogLine] (all retained KEY, WARNING and ERROR entries in chronological order)
  * historyTotal:Int; historyRevision:Long; logTotal:Int; logRevision:Long
- * dataDirectory:String; debugUrl:String?; complete lists and crash names are requested on demand
+ * dataDirectory:String; complete lists and crash names are requested on demand
  * preview:{jpeg:String(base64),timestampMillis:Long}?; only for a selected worker with an expanded, visible preview
  * captcha:{ticketId:String,url:String,accountAlias:String,error:String?}?
  * notices:[String]; title:String optional binding display. Shell adds instance identity/connection status.

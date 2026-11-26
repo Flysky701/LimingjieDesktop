@@ -55,8 +55,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.util.concurrent.atomic.AtomicInteger
-import java.net.InetSocketAddress
-import java.net.ServerSocket
+import java.util.zip.ZipFile
 
 /** Synthetic local data only. Device calls fail unless a test explicitly supplies a fake result. */
 class GraphControlServiceTest {
@@ -155,11 +154,6 @@ class GraphControlServiceTest {
         val leases = UserResourceLeases(runtime)
         val service = GraphControlService(graph, "synthetic-profile", "离线测试", leases, runtime)
         try {
-            val dashboardPort = requireNotNull(graph.debugPort)
-            assertEquals("http://127.0.0.1:$dashboardPort/", graph.debugUrl)
-            assertThrows(java.net.BindException::class.java) {
-                ServerSocket().use { it.reuseAddress = false; it.bind(InetSocketAddress("127.0.0.1", dashboardPort)) }
-            }
             val earlyGoals = listOf(DesktopGoal(1, 1))
             service.execute(ControlOps.SAVE_SETUP, controlArgs(
                 "settings" to ControlModelCodec.encode(LabyrinthRerollSettings()), "goals" to ControlModelCodec.encode(earlyGoals)))
@@ -229,8 +223,6 @@ class GraphControlServiceTest {
         } }
         assertEquals(0, fake.ioCalls.get())
         assertEquals(1, fake.closeCalls.get())
-        assertNull(graph.debugPort)
-        assertNull(graph.debugUrl)
     }
 
     @Test fun stopPreemptsAnInFlightDiscoveryInsteadOfWaitingForTheCommandMutex() = runBlocking {
@@ -476,7 +468,13 @@ class GraphControlServiceTest {
             val diagTarget = directory.root.toPath().resolve("existing-debug.zip")
             java.nio.file.Files.writeString(diagTarget, "old-content")
             service.execute(ControlOps.DIAGNOSTICS_EXPORT, buildJsonObject { put("path", diagTarget.toString()) })
-            assertTrue(java.nio.file.Files.size(diagTarget) > 20L)
+            ZipFile(diagTarget.toFile()).use { zip ->
+                fun entry(name: String) = zip.getInputStream(checkNotNull(zip.getEntry(name))).bufferedReader().use { it.readText() }
+                assertTrue(Json.parseToJsonElement(entry("manifest.json")).jsonObject.containsKey("traceId"))
+                assertEquals("waiting", Json.parseToJsonElement(entry("latest-snapshot.json")).jsonObject.getValue("status").jsonPrimitive.content)
+                assertEquals("", entry("state-history.jsonl"))
+                assertNotNull(zip.getEntry("process.log"))
+            }
 
             val stats = service.execute(ControlOps.REPLAYS_STATS, emptyArgs())
             assertEquals(0, stats.getValue("episodes").jsonPrimitive.int)

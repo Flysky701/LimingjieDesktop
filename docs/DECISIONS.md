@@ -24,5 +24,5 @@
 
 ## 日志、诊断与分发
 
-- `AppLogger` 通过 `LogRedactor` 和 `RollingFileLogSink` 保存脱敏的进程日志，用户控制台通过 `RunTelemetryBus` 写入同一进程日志。每个运行会话绑定完整的 `traceId`。回环诊断服务按需导出 `/logs.zip`，其中的事故现场 PNG 附带含 `traceId` 的 JSON。
+- `AppLogger` 通过 `LogRedactor` 和 `RollingFileLogSink` 保存脱敏的进程日志，用户控制台通过 `RunTelemetryBus` 写入同一进程日志。每个运行会话绑定完整的 `traceId`。每个设备进程内的 `LabyrinthDiagnosticsRecorder` 保留有上限的识别历史与事故现场，由桌面端按需直接导出 ZIP。事故现场的 PNG 与含 `traceId` 的 JSON 成对保存。
 - 便携包使用 `jpackage` 生成自带 Java 运行时的应用镜像，内置 OCR 和战斗模型。`--self-test` 用独立数据目录检查运行环境，联网项仅执行 TLS 握手。检查档位和打包入口见 [桌面开发与构建](DEVELOPMENT.md)。

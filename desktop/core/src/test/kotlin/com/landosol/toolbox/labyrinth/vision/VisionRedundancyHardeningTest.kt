@@ -7,7 +7,7 @@ import com.landosol.toolbox.vision.PixelImage
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSessionState
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionStatus
 import com.landosol.toolbox.labyrinth.LabyrinthFrameTrace
-import com.landosol.toolbox.labyrinth.debug.LabyrinthDebugDashboardServer
+import com.landosol.toolbox.labyrinth.debug.LabyrinthDiagnosticsRecorder
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeActionPlanner
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeConflictRecovery
 import com.landosol.toolbox.labyrinth.node.LabyrinthNodeTypes
@@ -21,8 +21,6 @@ import com.landosol.toolbox.labyrinth.node.NodePositionMapping
 import com.landosol.toolbox.labyrinth.node.NodeTopologyBindingKind
 import com.landosol.toolbox.labyrinth.node.NodeTopologyMapper
 import com.landosol.toolbox.protocol.labyrinth.LabyrinthMapNode
-import java.io.ByteArrayInputStream
-import java.net.Socket
 import java.util.zip.ZipInputStream
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -344,13 +342,11 @@ class VisionRedundancyHardeningTest {
     }
 
     @Test
-    fun `debug dashboard captures lossless PNG incidents and includes expanded diagnostic fields in logs zip`() {
-        val server = LabyrinthDebugDashboardServer(port = 0, allowAddressReuse = false)
-        server.attachOcrHealthSource { mapOf("status" to "Ready", "nullFailures" to 1L) }
-        server.start()
+    fun `diagnostics recorder captures automatic PNG incidents and expanded snapshot fields`() {
+        val recorder = LabyrinthDiagnosticsRecorder()
+        recorder.attachOcrHealthSource { mapOf("status" to "Ready", "nullFailures" to 1L) }
+        val bitmap = NativeBitmap.create(64, 36)
         try {
-            val port = requireNotNull(server.boundPort)
-            val bitmap = NativeBitmap.create(64, 36)
             val state = LabyrinthEntryRecognitionSessionState(
                 status = LabyrinthEntryRecognitionStatus.ERROR,
                 message = "动作超时",
@@ -378,54 +374,38 @@ class VisionRedundancyHardeningTest {
                     trusted = true,
                 ),
             )
-            server.publish(
-                bitmap, state, result,
-                AutomationOverlayPresentation(
-                    sessionId = AutomationSessionId(1L),
-                    title = "t",
-                    status = "err",
-                    dryRun = false,
-                ),
+            val presentation = AutomationOverlayPresentation(
+                sessionId = AutomationSessionId(1L), title = "t", status = "err", dryRun = false,
             )
+            recorder.publish(bitmap, state, result, presentation, nowMillis = 10_000L)
+            recorder.publish(bitmap, state, result, presentation, nowMillis = 10_001L)
+            assertEquals(1, recorder.incidentCount())
+            recorder.publish(bitmap, state, result, presentation, nowMillis = 15_000L)
+            assertEquals(2, recorder.incidentCount())
 
-            val stateJson = Socket("127.0.0.1", port).use { s ->
-                s.getOutputStream().write("GET /api/state HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".toByteArray())
-                val raw = s.getInputStream().readBytes()
-                val text = String(raw, Charsets.UTF_8)
-                JSONObject(text.substringAfter("\r\n\r\n"))
+            val entries = ZipInputStream(recorder.exportDiagnosticZip().inputStream()).use { zip ->
+                buildMap {
+                    while (true) {
+                        val entry = zip.nextEntry ?: break
+                        put(entry.name, zip.readBytes())
+                    }
+                }
             }
+            val stateJson = JSONObject(entries.getValue("latest-snapshot.json").decodeToString())
             assertEquals(4321, stateJson.getJSONObject("shop").getInt("coinBalance"))
             assertTrue(stateJson.getJSONObject("shop").getBoolean("coinBalanceConfirmed"))
             assertEquals("ex_test", stateJson.getJSONObject("exEncounter").getString("encounterId"))
             assertEquals("Ready", stateJson.getJSONObject("ocrHealth").getString("status"))
-            assertTrue(stateJson.getInt("incidentCount") >= 1)
+            assertEquals(2, stateJson.getInt("incidentCount"))
             assertTrue(stateJson.has("modals"))
-
-            val zipBytes = Socket("127.0.0.1", port).use { s ->
-                s.getOutputStream().write("GET /logs.zip HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".toByteArray())
-                val raw = s.getInputStream().readBytes()
-                val headerEnd = raw.indices.first { i ->
-                    i + 3 < raw.size && raw[i] == 13.toByte() && raw[i + 1] == 10.toByte() &&
-                        raw[i + 2] == 13.toByte() && raw[i + 3] == 10.toByte()
-                } + 4
-                raw.copyOfRange(headerEnd, raw.size)
-            }
-            val names = mutableListOf<String>()
-            ZipInputStream(ByteArrayInputStream(zipBytes)).use { zin ->
-                while (true) {
-                    val entry = zin.nextEntry ?: break
-                    names += entry.name
-                    if (entry.name.endsWith(".png")) {
-                        val header = zin.readNBytes(8)
-                        assertEquals(0x89.toByte(), header[0])
-                        assertEquals('P'.code.toByte(), header[1])
-                    }
-                }
-            }
-            assertTrue("Expected lossless PNG incident in zip, got $names", names.any { it.startsWith("incidents/") && it.endsWith(".png") })
-            assertTrue("Expected incident metadata json in zip, got $names", names.any { it.startsWith("incidents/") && it.endsWith(".json") })
+            val png = entries.getValue("incidents/001_session_error.png")
+            assertEquals(0x89.toByte(), png[0])
+            assertEquals('P'.code.toByte(), png[1])
+            val incident = JSONObject(entries.getValue("incidents/001_session_error.json").decodeToString())
+            assertEquals(10_000L, incident.getLong("incidentCapturedAtMillis"))
         } finally {
-            server.close()
+            bitmap.recycle()
+            recorder.close()
         }
     }
 }

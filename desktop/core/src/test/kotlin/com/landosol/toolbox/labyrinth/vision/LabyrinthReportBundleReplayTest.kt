@@ -159,7 +159,7 @@ class LabyrinthReportBundleReplayTest {
         //    "下一步" on a loss makes the client show "遗物效果结果", and the existing generic-confirm
         //    branch closes it with no session change.
         //
-        //    Deliberately *not* asserted here: the replayed page state. This is the dashboard's
+        //    Deliberately *not* asserted here: the replayed page state. This is the legacy bundle's
         //    960x540 panel copy, and the popup's page score is min(title, close) against anchors
         //    tuned for the 1920x1080 capture; on the scaled copy the title reads ~0.76, below the
         //    0.80 strong-modal line and the ambiguity margin, so the page falls back to UNKNOWN.

@@ -47,7 +47,6 @@ class DesktopGraphIntegrationTest {
         val data = directory.root.toPath().resolve("graph")
         val graph = DesktopAppGraph(data, suppliedDevice = fake, startupUpdates = false)
         fake.onLost = { graph.stopAll(it) }
-        var debugPort: Int? = null
         var captchaPort = 0
         try {
             graph.connectDevice("fixture-only")
@@ -57,7 +56,6 @@ class DesktopGraphIntegrationTest {
             val id = graph.database.accountDao().insert(AccountEntity(alias = "offline-integration", serverId = GameServer.CN_BILIBILI.storageId,
                 gameUid = null, credentialKey = "synthetic-unused", isSelected = false, createdAt = 1, updatedAt = 1))
             assertEquals("offline-integration", graph.database.accountDao().getById(id)?.alias)
-            debugPort = graph.debugPort
             graph.captchaHost.open(CaptchaChallenge("synthetic", "synthetic", "synthetic", "geetest"), {}, {}).use {
                 captchaPort = URI(it.url).port
             }
@@ -103,11 +101,7 @@ class DesktopGraphIntegrationTest {
             withTimeout(5000) { graph.stopAll("integration stop").join() }
             assertFalse(graph.labyrinthEntryRecognitionSession.state.value.running)
             assertNull(AppLogger.currentTraceId())
-            val connection = URI("http://127.0.0.1:${checkNotNull(debugPort)}/logs.zip").toURL().openConnection().apply {
-                connectTimeout = 3000
-                readTimeout = 3000
-            }
-            val entries = ZipInputStream(connection.getInputStream()).use { zip ->
+            val entries = ZipInputStream(graph.exportDiagnosticZip().inputStream()).use { zip ->
                 buildMap {
                     while (true) {
                         val entry = zip.nextEntry ?: break
@@ -168,8 +162,8 @@ class DesktopGraphIntegrationTest {
         assertEquals(PowerMode.IDLE, powerMode(graph))
         assertNull(graph.preview.value); assertNull(CaptureFrameBus.currentOwner())
         assertThrows(IllegalStateException::class.java) { DesktopBindings.services }
-        for (port in listOfNotNull(debugPort, captchaPort.takeIf { it > 0 })) ServerSocket().use { socket ->
-            socket.reuseAddress = false; socket.bind(InetSocketAddress("127.0.0.1", port))
+        if (captchaPort > 0) ServerSocket().use { socket ->
+            socket.reuseAddress = false; socket.bind(InetSocketAddress("127.0.0.1", captchaPort))
         }
         val database = data.resolve("databases/${AppDatabase.FILE_NAME}")
         val moved = database.resolveSibling("closed-database.db")
@@ -198,7 +192,7 @@ class DesktopGraphIntegrationTest {
 
     private fun ownedThreads(): Set<Thread> = Thread.getAllStackTraces().keys.filterTo(mutableSetOf()) {
         it.isAlive && (it.name in setOf("desktop-capture", "landosol-ocr", "desktop-power-state",
-            "desktop-runtime-diagnostics", "labyrinth-debug-dashboard", "labyrinth-debug-http") ||
+            "desktop-runtime-diagnostics") ||
             it.name.startsWith("desktop-captcha-"))
     }
 

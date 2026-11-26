@@ -4,12 +4,10 @@ import com.landosol.toolbox.core.AppContext
 import com.landosol.toolbox.core.logging.AppLogger
 import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.automation.capture.*
-import com.landosol.toolbox.labyrinth.debug.LabyrinthDebugDashboardServer
+import com.landosol.toolbox.labyrinth.debug.LabyrinthDiagnosticsRecorder
 import com.landosol.toolbox.labyrinth.debug.LabyrinthRuntimeDiagnostics
 import com.landosol.toolbox.labyrinth.vision.DesktopChineseRoleNameOcr
 import com.landosol.toolbox.protocol.bilibili.CaptchaChallenge
-import java.net.ServerSocket
-import java.net.URI
 import java.nio.file.Files
 import java.util.zip.ZipInputStream
 import javax.swing.SwingUtilities
@@ -132,44 +130,38 @@ class DesktopAdaptersTest {
         } finally { DesktopBindings.release(services) }
     }
 
-    @Test fun diagnosticsExportsUnifiedLogsAndReleasesItsSocket() {
+    @Test fun diagnosticsExportsUnifiedLogsAndRuntimeDetails() {
         val directory = Files.createTempDirectory("diagnostics 中文")
-        val socket = ServerSocket()
         val diagnostics = LabyrinthRuntimeDiagnostics(AppContext(directory.toFile()))
         val traceId = "adapters-diagnostics-fixture"
-        val server = LabyrinthDebugDashboardServer(port = 0, runtimeDiagnostics = diagnostics,
-            userLogSource = { "console token=console-fixture".encodeToByteArray() },
-            serverSocketFactory = { socket }, allowAddressReuse = false)
+        diagnostics.environmentDetails = { JSONObject().put("message", "password=environment-fixture") }
+        val recorder = LabyrinthDiagnosticsRecorder(runtimeDiagnostics = diagnostics,
+            userLogSource = { "console token=console-fixture".encodeToByteArray() })
         try {
             AppLogger.bindTrace(traceId)
             AppLogger.i("Fixture", "password=fixture-password access_key=\"fixture-key\" loginId=fixture-login token=fixture-token")
-            server.start()
-            val connection = URI("http://127.0.0.1:${socket.localPort}/logs.zip").toURL().openConnection().apply { connectTimeout = 3000; readTimeout = 3000 }
             val entries = mutableMapOf<String, String>()
-            ZipInputStream(connection.getInputStream()).use { zip ->
+            ZipInputStream(recorder.exportDiagnosticZip().inputStream()).use { zip ->
                 while (true) { val entry = zip.nextEntry ?: break; entries[entry.name] = zip.readBytes().toString(Charsets.UTF_8) }
             }
             assertEquals(setOf(
-                "README.txt", "summary.txt", "manifest.json", "state/latest.json", "fast/latest.json",
-                "fast/history.ndjson", "environment.json", "runtime/history.ndjson", "state/history.ndjson",
-                "process.log", "user-console.log", "logs/logcat.txt",
+                "summary.txt", "manifest.json", "latest-snapshot.json", "state-history.jsonl",
+                "fast/history.ndjson", "environment.json", "runtime/history.ndjson", "process.log", "user-console.log",
             ), entries.keys)
             val allText = entries.values.joinToString("\n")
-            listOf("fixture-password", "fixture-key", "fixture-login", "fixture-token", "console-fixture")
+            listOf("fixture-password", "fixture-key", "fixture-login", "fixture-token", "console-fixture", "environment-fixture")
                 .forEach { assertFalse("Leaked $it", allText.contains(it)) }
             assertEquals("traceId=$traceId\n", entries.getValue("summary.txt"))
             assertEquals(traceId, JSONObject(entries.getValue("manifest.json")).getString("traceId"))
             assertEquals("console token=<redacted>", entries.getValue("user-console.log"))
             val process = entries.getValue("process.log")
             assertTrue(process.contains("[trace=$traceId] Fixture: password=<redacted>"))
-            assertTrue(entries.getValue("logs/logcat.txt").endsWith(process))
-            val port = socket.localPort
-            server.close()
-            ServerSocket().use { next -> next.reuseAddress = false; next.bind(java.net.InetSocketAddress("127.0.0.1", port)) }
+            val environment = JSONObject(entries.getValue("environment.json"))
+            assertEquals("desktop", environment.getString("platform"))
+            assertEquals("password=<redacted>", environment.getJSONObject("desktop").getString("message"))
         } finally {
             AppLogger.clearTrace(traceId)
-            server.close()
-            socket.close()
+            recorder.close()
             diagnostics.close()
         }
     }

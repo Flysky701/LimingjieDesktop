@@ -91,7 +91,7 @@ import com.landosol.toolbox.protocol.bilibili.InMemoryGameSessionRegistry
 import com.landosol.toolbox.security.EncryptedCredentialStore
 import com.landosol.toolbox.security.EncryptedSdkSessionStore
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSession
-import com.landosol.toolbox.labyrinth.debug.LabyrinthDebugDashboardServer
+import com.landosol.toolbox.labyrinth.debug.LabyrinthDiagnosticsRecorder
 import com.landosol.toolbox.labyrinth.kernel.KernelRuntime
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionStartResult
 import com.landosol.toolbox.labyrinth.LabyrinthAutoRunConfig
@@ -319,9 +319,8 @@ class DesktopAppGraph(
                 .put("screenshotP95Millis", ready?.timing?.firstOrNull { it.mode == ready.selectedMode }?.p95Millis ?: 0)
         }
     } }
-    val debugPort: Int? get() = labyrinthDebugDashboard?.boundPort
-    val debugUrl get() = debugPort?.let { "http://127.0.0.1:$it/" }
-    val incidentCount: Int get() = labyrinthDebugDashboard?.incidentCount() ?: 0
+    val incidentCount: Int get() = diagnosticsRecorder.incidentCount()
+    fun exportDiagnosticZip(): ByteArray = diagnosticsRecorder.exportDiagnosticZip()
 
     data class ReplayExportStats(val episodes: Int, val battleSamples: Int)
 
@@ -417,10 +416,7 @@ class DesktopAppGraph(
             if (state is DeviceConnectionState.Ready) persistIdentity(state.device)
             else resolutionGuard.disarm(clearStatus = true)
         } }
-        // The dashboard is loopback-only, so it is safe to start for test/release APKs too.
-        // Starting it here also makes http://127.0.0.1:8765/ immediately reachable from a
-        // browser running inside the emulator, before the first recognition session starts.
-        labyrinthDebugDashboard
+        diagnostics.start()
         autoRunScope.launch { settings.state.collect { network.setMode(it.networkMode) } }
         autoRunScope.launch {
             combine(CaptureStateRegistry.observe(), labyrinthController.uiState) { capture, state ->
@@ -594,16 +590,13 @@ class DesktopAppGraph(
     val labyrinthCnDatabaseRepository by lazy {
         DesktopLabyrinthCnDatabaseRepository(context, onNotice = { log.add(it) })
     }
-    private val labyrinthDebugDashboard by lazy {
-        LabyrinthDebugDashboardServer(
-            port = 0, processLogSource = AppLogger::snapshot,
-            userLogSource = { log.text().toByteArray(Charsets.UTF_8) },
-            traceIdProvider = { latestTraceId },
-            allowAddressReuse = false,
-            frameArchiveDirectory = java.io.File(cacheDir, "labyrinth-frame-archive"),
+    private val diagnosticsRecorder: LabyrinthDiagnosticsRecorder by lazy {
+        LabyrinthDiagnosticsRecorder(
             runtimeDiagnostics = diagnostics,
-        ).also { dashboard ->
-            dashboard.attachOcrHealthSource {
+            userLogSource = { log.text().encodeToByteArray() },
+            traceIdProvider = { latestTraceId },
+        ).also { recorder ->
+            recorder.attachOcrHealthSource {
                 val t = ocr.telemetry()
                 mapOf(
                     "status" to ocr.status.value.javaClass.simpleName,
@@ -613,13 +606,10 @@ class DesktopAppGraph(
                     "consecutiveFailures" to t.consecutiveFailures,
                 )
             }
-            dashboard.start()
-        }.takeIf { it.boundPort != null }
+        }
     }
+
     val labyrinthEntryRecognitionSession: LabyrinthEntryRecognitionSession by lazy {
-        // Start the debug endpoint with its initial waiting snapshot instead of waiting for the
-        // first captured frame. That keeps first-frame capture failures observable in the browser.
-        val debugDashboard = labyrinthDebugDashboard
         val roleDecisionRuntime = (labyrinthRoleDecisionData as? LabyrinthRoleDecisionDataResult.Ready)?.runtime
         val roleDecisionUnavailableReason =
             (labyrinthRoleDecisionData as? LabyrinthRoleDecisionDataResult.Unavailable)?.reason
@@ -752,9 +742,7 @@ class DesktopAppGraph(
                     context, com.landosol.toolbox.automation.capture.CaptureStateRegistry::captureSize,
                 )::process
             },
-            fastFramePublisher = debugDashboard?.let { dashboard ->
-                { fast, state -> dashboard.publishFast(fast, state) }
-            },
+            fastFramePublisher = diagnosticsRecorder::publishFastFrame,
             captureStop = { captureService.stop() },
             overlayCoordinator = automationOverlayCoordinator,
             actionExecutor = automationActionExecutor,
@@ -793,12 +781,12 @@ class DesktopAppGraph(
                 val recordId = if (state.dryRun || state.sessionId == null) null
                     else state.runId?.let { "run:$it" } ?: "recognition:${state.sessionId}"
                 scoreSidecar?.observe(recordId, result.observation.state, frame.bitmap, frame.timestampMillis)
-                debugDashboard?.publish(
-                        bitmap = frame.bitmap,
-                        state = state,
-                        result = result,
-                        presentation = presentation,
-                        nowMillis = frame.timestampMillis,
+                diagnosticsRecorder.publish(
+                    bitmap = frame.bitmap,
+                    state = state,
+                    result = result,
+                    presentation = presentation,
+                    nowMillis = frame.timestampMillis,
                 )
             },
             actionScope = recognitionScope,
@@ -817,7 +805,7 @@ class DesktopAppGraph(
                     runBlocking(Dispatchers.IO) { actionDevice.launch(target) }
                 }
             },
-        ).also { debugDashboard?.attachKernelEventSource(it.kernelRuntime.log) }
+        ).also { diagnosticsRecorder.attachKernelEventSource(it.kernelRuntime.log) }
     }
 
     val database: AppDatabase by lazy { openedDatabase ?: AppDatabase.create(context) }
@@ -1039,7 +1027,6 @@ class DesktopAppGraph(
                     automationOverlayCoordinator.state.value == null
             },
         )
-        val resetDashboard = labyrinthDebugDashboard
         GameSessionResetWorkflow(
             actionScope = resetScope,
             sessionManager = automationSessionManager,
@@ -1082,25 +1069,8 @@ class DesktopAppGraph(
             actionExecutor = automationActionExecutor,
             entryActionPlannerFactory = { LabyrinthEntryActionPlanner() },
             channelPrompts = channelLoginPromptAssistant("LabyrinthReset"),
-            debugFramePublisher = resetDashboard?.let { dashboard ->
-                { frame, resetState, result, presentation ->
-                    // The dashboard is keyed to the labyrinth session state; during a reset the
-                    // session is stopped, so hand it a synthetic snapshot that carries the reset
-                    // stage in the message and the real frame/page for the picture.
-                    dashboard.publish(
-                        bitmap = frame.bitmap,
-                        state = com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSessionState(
-                            status = com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionStatus.RUNNING,
-                            dryRun = false,
-                            frameCount = resetState.frameCount,
-                            actionCount = resetState.actionCount,
-                            message = "会话重置 ${resetState.stage.name}：${resetState.message ?: ""}",
-                        ),
-                        result = result,
-                        presentation = presentation,
-                        nowMillis = frame.timestampMillis,
-                    )
-                }
+            debugFramePublisher = { frame, resetState, result, presentation ->
+                diagnosticsRecorder.publishReset(frame.bitmap, resetState, result, presentation, frame.timestampMillis)
             },
         )
     }
@@ -1447,7 +1417,7 @@ class DesktopAppGraph(
                 withContext(Dispatchers.Main) { viewModels.clear() }
                 databaseUpdateScope.cancel(); accountServerScope.cancel(); autoRunScope.cancel(); mainScope.cancel(); recognitionScope.cancel(); resetScope.cancel()
                 listOf<() -> Unit>({ captureService.close() }, { device.close() }, { ocr.close() }, { battleModel.close() }, { captchaHost.close() },
-                    { labyrinthDebugDashboard?.close(); Unit }, { diagnostics.close() }, { database.close() }, { power.close() }, { network.close() })
+                    diagnosticsRecorder::close, { diagnostics.close() }, { database.close() }, { power.close() }, { network.close() })
                     .forEach { release -> runCatching(release).onFailure { AppLogger.e(APP_LOG_TAG, "释放桌面资源失败", it) } }
                 DesktopBindings.release(installedServices)
                 setPreviewRequested(false)

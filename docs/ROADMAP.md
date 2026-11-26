@@ -6,7 +6,7 @@
 
 - 配置分为环境与界面、策略、凭据三个域。前两个域分别通过 `AtomicConfigStore<T>` 保存到 `settings/app.json` 和 `settings/strategies.json`，凭据由独立的 Windows DPAPI 存储管理。参见 [架构与实现决策](DECISIONS.md)。
 - 迷宫七个业务域统一实现 `KernelDomainModule`，由 `LabyrinthKernelBundle` 装配。总控的 `ControlModelCodec` 为配置和设备画像提供生成式序列化快路径，沿用既有快照格式。参见 [迷宫事件内核](KERNEL_REFACTOR.md)。
-- `AppLogger`、`LogRedactor`、`RollingFileLogSink` 和 `RunTelemetryBus` 统一进程日志与用户控制台遥测。`/logs.zip` 中的日志、内核事件和事故现场 PNG 元数据通过 `traceId` 关联。参见 [日志与诊断](DEVELOPMENT.md#日志与诊断)。
+- `AppLogger`、`LogRedactor`、`RollingFileLogSink` 和 `RunTelemetryBus` 统一进程日志与用户控制台遥测。`LabyrinthDiagnosticsRecorder` 从设备进程直接导出诊断 ZIP，日志、内核事件和事故现场 PNG 元数据通过 `traceId` 关联。参见 [日志与诊断](DEVELOPMENT.md#日志与诊断)。
 - 页面、地图节点、角色奖励和金币识别采用多信号互证。低置信或冲突场景可保留无损原图和状态快照，供离线复查。参见 [已知限制与待办](KNOWN_LIMITATIONS.md)。
 - 便携包内置战斗 ONNX 模型，禁用或加载失败时回退到规则评分。局内金币账本和战斗样本记录已接入会话。Path B 的折扣、路线、商店和边际估值逻辑已与 Python 参考实现完成离线数值对齐，可导出匿名回放。参见 [跨语言对齐用例](../desktop/core/src/test/kotlin/com/landosol/toolbox/labyrinth/kernel/planning/CrossLanguagePathBParityTest.kt)。
 

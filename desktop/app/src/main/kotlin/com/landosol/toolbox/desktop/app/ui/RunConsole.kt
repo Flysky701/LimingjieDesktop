@@ -39,7 +39,6 @@ import com.landosol.toolbox.desktop.app.strategy.battleDecisionPrefix
 import com.landosol.toolbox.desktop.app.ui.theme.*
 import com.landosol.toolbox.desktop.device.DeviceConnectionState
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
-import com.landosol.toolbox.desktop.platform.BrowserLauncher
 import com.landosol.toolbox.labyrinth.*
 import com.landosol.toolbox.labyrinth.batch.*
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleModelDecisionStatus
@@ -151,7 +150,7 @@ internal fun RunConsole(
                             onNavigate = { target ->
                                 if (target == "Run") select(DesktopTask.RECOGNIZE) else navigate(Page.valueOf(target))
                             },
-                            onExportDiagnostics = if (graph.debugUrl != null) ::exportDiagnostics else null,
+                            onExportDiagnostics = ::exportDiagnostics,
                         )
                     }
 
@@ -357,7 +356,7 @@ internal fun RunConsole(
                         graph = graph,
                         modifier = Modifier.weight(1f),
                         searchFocus = searchFocus,
-                        onExportDiagnostics = if (graph.debugUrl != null) ::exportDiagnostics else null,
+                        onExportDiagnostics = ::exportDiagnostics,
                     )
                 }
             }
@@ -928,11 +927,6 @@ internal fun LogPanel(
                 if (onExportDiagnostics != null) {
                     TextButton(onClick = onExportDiagnostics, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
                         Text("导出ZIP", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-                if (graph.debugUrl != null) {
-                    TextButton(onClick = { graph.debugUrl?.let(BrowserLauncher::open) }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
-                        Text("诊断面板", style = MaterialTheme.typography.labelSmall)
                     }
                 }
                 TextButton(

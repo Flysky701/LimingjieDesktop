@@ -26,6 +26,6 @@
 
 同一个 runtime 的 `eventSeq` 持续递增。每次启动生成独立的 `traceId`，派生记录通过 `causeEventSeq` 指向直接原因，并携带相关帧号和场景代。可以沿父指针查看观察、状态归约、决策、许可、派发与回执。输入回执表明执行器返回的结果，节点到达、购买完成和整局通关还分别要求后续页面证据。钩子可否决领域动作，事件选项覆盖还需再次通过按钮门禁。
 
-内存日志保留最近 2,000 条，`causalChain` 返回其中仍保留的链段。启用落盘后，`KernelJournalSink` 按 trace 追加 `events.ndjson`，刷新记录并替换 `snapshot.json`，停止时关闭文件。`KernelJournalReader.verifyAndLoad` 检查记录可解码、trace 一致、序号递增以及快照计数和末尾序号匹配。调试面板的 `GET /api/kernel/events` 提供内存快照，支持 `?format=ndjson`，绑定会话的 `/logs.zip` 可导出同一日志。
+内存日志保留最近 2,000 条，`causalChain` 返回其中仍保留的链段。启用落盘后，`KernelJournalSink` 按 trace 追加 `events.ndjson`，刷新记录并替换 `snapshot.json`，停止时关闭文件。`KernelJournalReader.verifyAndLoad` 检查记录可解码、trace 一致、序号递增以及快照计数和末尾序号匹配。`LabyrinthDiagnosticsRecorder` 读取绑定会话的内存日志，在直接导出的诊断 ZIP 中写入脱敏的 `kernel/events.ndjson`。
 
 会话启动时将 `traceId` 绑定到 `AppLogger`，停止时清除进程日志的活动绑定。诊断包的 `manifest.json` 保留最近一次会话的标识，事故现场的 JSON 保存采集时的标识，可与同包中的 PNG、内核事件和进程日志对照。参见 [日志与诊断](DEVELOPMENT.md#日志与诊断)。

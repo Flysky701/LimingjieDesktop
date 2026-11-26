@@ -3069,7 +3069,7 @@ class LabyrinthEntryRecognitionSession(
             val measuredVisionMillis = (System.nanoTime() - visionStarted) / 1_000_000
             val handlingStarted = System.nanoTime()
             // stop()/pause may run while an expensive frame is being recognized. Never let that
-            // stale result mutate a stopped/paused session or publish an old dashboard frame.
+            // stale result mutate a stopped/paused session or publish stale diagnostics.
             if (activeSessionId != sessionId || _state.value.paused || roleDecisionGeneration.get() != frameGeneration ||
                 frameShopVersion != shopEvidenceVersion || frame.timestampMillis <= shopRequiredCapturedAfter) return@runCatching
             processFrameResult(

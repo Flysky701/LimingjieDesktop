@@ -1,162 +1,86 @@
 package com.landosol.toolbox.labyrinth.debug
 
+import com.landosol.toolbox.AppVersion
+import com.landosol.toolbox.automation.capture.CaptureTelemetry
+import com.landosol.toolbox.automation.overlay.AutomationOverlayPresentation
+import com.landosol.toolbox.automation.session.GameSessionResetState
+import com.landosol.toolbox.automation.session.GameSessionResetStatus
 import com.landosol.toolbox.core.MonotonicClock
-import com.landosol.toolbox.vision.NativeBitmap
 import com.landosol.toolbox.core.logging.AppLogger
 import com.landosol.toolbox.core.logging.LogRedactor
-import com.landosol.toolbox.AppVersion
-import com.landosol.toolbox.automation.overlay.AutomationOverlayPresentation
 import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionSessionState
+import com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionStatus
 import com.landosol.toolbox.labyrinth.LabyrinthEventChoiceDecision
 import com.landosol.toolbox.labyrinth.LabyrinthRoutePreviewCache
-import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
-import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
-import java.io.BufferedInputStream
-import java.io.BufferedOutputStream
-import com.landosol.toolbox.automation.capture.CaptureTelemetry
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.ServerSocket
-import java.net.Socket
-import java.text.SimpleDateFormat
-import java.util.ArrayDeque
-import java.util.Date
-import java.util.Locale
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 import com.landosol.toolbox.labyrinth.kernel.KernelEvent
 import com.landosol.toolbox.labyrinth.kernel.KernelEventLog
+import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
+import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
+import com.landosol.toolbox.labyrinth.vision.LabyrinthFastFrameObservation
+import com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryState
+import com.landosol.toolbox.vision.NativeBitmap
+import java.io.ByteArrayOutputStream
+import java.io.Closeable
+import java.util.Locale
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.encodeToJsonElement
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * Tiny loopback-only HTTP dashboard for live labyrinth debugging.
- *
- * The desktop browser connects directly to the loopback address.
- */
-internal const val LABYRINTH_DEBUG_HISTORY_LIMIT = 600
-
-class LabyrinthDebugDashboardServer(
-    private val port: Int = DEFAULT_PORT,
-    /** Directory for the optional per-frame archive; null disables the feature entirely. */
-    private val frameArchiveDirectory: File? = null,
+/** Records bounded maze diagnostics in memory and exports a redacted ZIP on demand. */
+class LabyrinthDiagnosticsRecorder(
     private val runtimeDiagnostics: LabyrinthRuntimeDiagnostics? = null,
     private val processLogSource: () -> ByteArray = AppLogger::snapshot,
-    private val serverSocketFactory: () -> ServerSocket = ::ServerSocket,
-    private val allowAddressReuse: Boolean = true,
     private val userLogSource: (() -> ByteArray?)? = null,
-    private val traceIdProvider: (() -> String?)? = AppLogger::currentTraceId,
-) : AutoCloseable {
-    @Volatile private var kernelSource: KernelEventLog? = null
-    private val ocrHealthSource = AtomicReference<(() -> Map<String, Any?>)?>(null)
-    fun attachKernelEventSource(source: KernelEventLog?) { kernelSource = source }
-    fun attachOcrHealthSource(source: (() -> Map<String, Any?>)?) { ocrHealthSource.set(source) }
-    fun incidentCount(): Int = synchronized(incidentLock) { recentIncidents.size }
-
-    private data class Snapshot(
-        val json: ByteArray,
-        val jpeg: ByteArray?,
-        val frameVersion: Long,
-        /** Capture time of [jpeg], which is not always the time of [json] — see [publish]. */
-        val jpegMillis: Long = Long.MIN_VALUE,
-    )
-
-    private data class IncidentEntry(
-        val sequence: Long,
-        val slug: String,
-        val png: ByteArray,
-        val json: ByteArray,
-        val timestampMillis: Long,
-    ) {
-        val totalBytes: Long get() = png.size.toLong() + json.size.toLong()
+    private val traceIdProvider: () -> String? = AppLogger::currentTraceId,
+) : Closeable {
+    private data class IncidentEntry(val sequence: Long, val slug: String, val png: ByteArray, val json: ByteArray) {
+        val totalBytes: Long get() = png.size.toLong() + json.size
     }
 
-    private val running = AtomicBoolean(false)
-    @Volatile private var boundSocket: ServerSocket? = null
-    val boundPort: Int? get() = boundSocket?.takeIf { !it.isClosed && it.isBound }?.localPort
-    private val historyLock = Any()
-    /** Per-frame JPEG archive for offline replay. Off by default; toggled from the dashboard. */
-    private val frameArchiveEnabled = AtomicBoolean(false)
-    private val frameArchiveLock = Any()
-    private var frameArchiveSequence = 0L
-    private val frameArchiveFiles = ArrayDeque<File>()
-    private val recentStates = ArrayDeque<ByteArray>()
-    private val latest = AtomicReference(
-        Snapshot(
-            json = "{\"status\":\"waiting\"}".toByteArray(Charsets.UTF_8),
-            jpeg = null,
-            frameVersion = 0L,
-        ),
+    private data class ExportSnapshot(
+        val states: List<String>,
+        val fastStates: List<String>,
+        val incidents: List<IncidentEntry>,
+        val kernelSource: KernelEventLog?,
     )
-    /** Capture time of the JPEG currently stored in [latest]. */
-    @Volatile
-    private var latestJpegMillis = Long.MIN_VALUE
-    @Volatile
-    private var lastJpegAt = Long.MIN_VALUE
-    private val fastHistoryLock = Any()
-    private val recentFastStates = ArrayDeque<ByteArray>()
-    private val latestFast = AtomicReference("{\"available\":false}".toByteArray(Charsets.UTF_8))
-    private val incidentLock = Any()
+
+    private val lock = Any()
+    private var closed = false
+    private var kernelSource: KernelEventLog? = null
+    @Volatile private var ocrHealthSource: (() -> Map<String, Any?>)? = null
+    private val recentStates = ArrayDeque<String>()
+    private val recentFastStates = ArrayDeque<String>()
+    private val recentIncidents = ArrayDeque<IncidentEntry>()
     private var incidentSequence = 0L
     private var incidentTotalBytes = 0L
     private var lastAutoIncidentKey: String? = null
     private var lastAutoIncidentAt = Long.MIN_VALUE
-    private val recentIncidents = ArrayDeque<IncidentEntry>()
 
-    fun publishFast(
-        observation: com.landosol.toolbox.labyrinth.vision.LabyrinthFastFrameObservation,
+    fun attachKernelEventSource(source: KernelEventLog?) = synchronized(lock) {
+        if (!closed) kernelSource = source
+    }
+
+    fun attachOcrHealthSource(source: (() -> Map<String, Any?>)?) = synchronized(lock) {
+        if (!closed) ocrHealthSource = source
+    }
+
+    fun incidentCount(): Int = synchronized(lock) { recentIncidents.size }
+
+    fun publishFastFrame(
+        observation: LabyrinthFastFrameObservation,
         state: LabyrinthEntryRecognitionSessionState,
     ) {
         val json = JSONObject(labyrinthFastDiagnosticPayload(
             observation, state, System.currentTimeMillis(), AppVersion.name, AppVersion.code,
-        )).toString().toByteArray(Charsets.UTF_8)
-        latestFast.set(json)
-        synchronized(fastHistoryLock) {
+        )).put("traceId", currentTraceId() ?: JSONObject.NULL).toString()
+        synchronized(lock) {
+            if (closed) return
             recentFastStates.addLast(json)
-            while (recentFastStates.size > MAX_STATE_HISTORY_ENTRIES) recentFastStates.removeFirst()
+            if (recentFastStates.size > STATE_HISTORY_LIMIT) recentFastStates.removeFirst()
         }
-    }
-
-    /** HTTP-side merge: detailed timestamp/boxes stay untouched; fast evidence is nested separately. */
-    private fun stateResponse(): ByteArray = JSONObject(String(latest.get().json, Charsets.UTF_8)).apply {
-        put("fastObservation", JSONObject(String(latestFast.get(), Charsets.UTF_8)))
-    }.toString().toByteArray(Charsets.UTF_8)
-
-    @Synchronized fun start() {
-        if (!running.compareAndSet(false, true)) return
-        var candidate: ServerSocket? = null
-        val server = runCatching {
-            serverSocketFactory().also { candidate = it }.apply {
-                reuseAddress = allowAddressReuse
-                // Bind synchronously so the dashboard is already reachable before the UI can
-                // launch the external browser.
-                bind(InetSocketAddress(InetAddress.getByName(IPV4_LOOPBACK), port))
-            }
-        }.getOrElse { failure ->
-            runCatching { candidate?.close() }
-            running.set(false)
-            AppLogger.e(LOG_TAG, "debug dashboard failed to bind $IPV4_LOOPBACK:$port", failure)
-            return
-        }
-        boundSocket = server
-        runCatching { AppLogger.i(LOG_TAG, "debug dashboard listening on http://$IPV4_LOOPBACK:${server.localPort}/") }
-        runtimeDiagnostics?.start()
-        Thread({ runServer(server) }, "labyrinth-debug-dashboard").apply {
-            isDaemon = true
-            start()
-        }
-    }
-
-    @Synchronized override fun close() {
-        running.set(false)
-        boundSocket?.close()
-        boundSocket = null
     }
 
     fun publish(
@@ -165,29 +89,48 @@ class LabyrinthDebugDashboardServer(
         result: LabyrinthEntryFrameResult,
         presentation: AutomationOverlayPresentation,
         nowMillis: Long = System.currentTimeMillis(),
+    ) = publishFrame(bitmap, state, result, presentation, nowMillis)
+
+    fun publishReset(
+        bitmap: NativeBitmap,
+        state: GameSessionResetState,
+        result: LabyrinthEntryFrameResult,
+        presentation: AutomationOverlayPresentation,
+        nowMillis: Long = System.currentTimeMillis(),
     ) {
-        val previous = latest.get()
-        val shouldRefreshJpeg = previous.jpeg == null ||
-            lastJpegAt == Long.MIN_VALUE ||
-            nowMillis - lastJpegAt >= JPEG_REFRESH_INTERVAL_MILLIS
-        val jpeg = if (shouldRefreshJpeg) {
-            ByteArrayOutputStream().use { output ->
-                bitmap.compress(NativeBitmap.CompressFormat.JPEG, JPEG_QUALITY, output)
-                output.toByteArray()
-            }.also { lastJpegAt = nowMillis }
-        } else {
-            previous.jpeg
+        val status = when (state.status) {
+            GameSessionResetStatus.IDLE -> LabyrinthEntryRecognitionStatus.IDLE
+            GameSessionResetStatus.RUNNING -> LabyrinthEntryRecognitionStatus.RUNNING
+            GameSessionResetStatus.STOPPED -> LabyrinthEntryRecognitionStatus.STOPPED
+            GameSessionResetStatus.ERROR -> LabyrinthEntryRecognitionStatus.ERROR
         }
-        val version = if (shouldRefreshJpeg) previous.frameVersion + 1L else previous.frameVersion
-        val jpegMillis = if (shouldRefreshJpeg) nowMillis else previous.jpegMillis
-        latestJpegMillis = jpegMillis
-        val archivedFrame = archiveFrame(bitmap, state.frameCount)
-        val jsonObject = buildJson(state, result, presentation, version, nowMillis, archivedFrame, jpegMillis)
+        val session = LabyrinthEntryRecognitionSessionState(
+            status = status,
+            sessionId = state.sessionId,
+            dryRun = false,
+            paused = state.paused,
+            frameCount = state.frameCount,
+            actionCount = state.actionCount,
+            message = "会话重置 ${state.stage.name}：${state.message.orEmpty()}",
+        )
+        val reset = JSONObject().put("stage", state.stage.name).put("lastBlock", state.lastBlock.name)
+        publishFrame(bitmap, session, result, presentation, nowMillis, reset)
+    }
+
+    private fun publishFrame(
+        bitmap: NativeBitmap,
+        state: LabyrinthEntryRecognitionSessionState,
+        result: LabyrinthEntryFrameResult,
+        presentation: AutomationOverlayPresentation,
+        nowMillis: Long,
+        reset: JSONObject? = null,
+    ) {
+        val json = buildJson(state, result, presentation, nowMillis)
+        reset?.let { json.put("reset", it) }
         detectAutoIncidentReason(state, result)?.let { (reasonKey, reasonLabel) ->
-            val shouldCapture = synchronized(incidentLock) {
-                if (lastAutoIncidentKey == reasonKey && lastAutoIncidentAt != Long.MIN_VALUE &&
-                    nowMillis - lastAutoIncidentAt < INCIDENT_COOLDOWN_MILLIS
-                ) {
+            val shouldCapture = synchronized(lock) {
+                if (closed) return
+                if (lastAutoIncidentKey == reasonKey && nowMillis - lastAutoIncidentAt < INCIDENT_COOLDOWN_MILLIS) {
                     false
                 } else {
                     lastAutoIncidentKey = reasonKey
@@ -195,20 +138,16 @@ class LabyrinthDebugDashboardServer(
                     true
                 }
             }
-            if (shouldCapture) {
-                storeIncident(reasonLabel, bitmap, jsonObject, nowMillis)
-                jsonObject.put("incidentCount", synchronized(incidentLock) { recentIncidents.size })
-            }
+            if (shouldCapture) storeIncident(reasonLabel, bitmap, json, nowMillis)
         }
-        val json = jsonObject.toString().toByteArray(Charsets.UTF_8)
-        latest.set(Snapshot(json = json, jpeg = jpeg, frameVersion = version, jpegMillis = jpegMillis))
-        synchronized(historyLock) {
-            recentStates.addLast(json)
-            while (recentStates.size > MAX_STATE_HISTORY_ENTRIES) recentStates.removeFirst()
+        synchronized(lock) {
+            if (closed) return
+            recentStates.addLast(json.put("incidentCount", recentIncidents.size).toString())
+            if (recentStates.size > STATE_HISTORY_LIMIT) recentStates.removeFirst()
         }
     }
 
-    fun recordIncident(
+    fun captureIncident(
         reason: String,
         bitmap: NativeBitmap,
         state: LabyrinthEntryRecognitionSessionState,
@@ -216,55 +155,37 @@ class LabyrinthDebugDashboardServer(
         presentation: AutomationOverlayPresentation,
         nowMillis: Long = System.currentTimeMillis(),
     ) {
-        val previous = latest.get()
-        val jsonObject = buildJson(
-            state = state,
-            result = result,
-            presentation = presentation,
-            frameVersion = previous.frameVersion,
-            nowMillis = nowMillis,
-            archivedFrame = null,
-            jpegMillis = nowMillis,
-        )
-        storeIncident(reason, bitmap, jsonObject, nowMillis)
+        storeIncident(reason, bitmap, buildJson(state, result, presentation, nowMillis), nowMillis)
     }
 
-    private fun storeIncident(
-        reason: String,
-        bitmap: NativeBitmap,
-        baseJson: JSONObject,
-        nowMillis: Long,
-    ) {
-        runCatching {
-            val traceId = traceIdProvider?.invoke()?.let(LogRedactor::redact)
+    private fun storeIncident(reason: String, bitmap: NativeBitmap, snapshot: JSONObject, nowMillis: Long) {
+        try {
             val safeReason = LogRedactor.redact(reason)
             val png = ByteArrayOutputStream().use { output ->
-                bitmap.compress(NativeBitmap.CompressFormat.PNG, 100, output)
+                check(bitmap.compress(NativeBitmap.CompressFormat.PNG, 100, output)) { "PNG encoder unavailable" }
                 output.toByteArray()
             }
-            val meta = JSONObject(baseJson.toString()).apply {
+            val meta = JSONObject(snapshot.toString()).apply {
                 put("incidentReason", safeReason)
                 put("incidentCapturedAtMillis", nowMillis)
-                put("traceId", traceId ?: JSONObject.NULL)
-            }.toString().toByteArray(Charsets.UTF_8)
+            }
+            val json = redactedJson(meta.toString()).encodeToByteArray()
+            if (png.size.toLong() + json.size > MAX_INCIDENT_BYTES) return
             val slug = safeReason.lowercase(Locale.US)
                 .replace(Regex("[^a-z0-9_-]+"), "_")
                 .trim('_')
                 .ifEmpty { "incident" }
                 .take(40)
-            synchronized(incidentLock) {
-                val entry = IncidentEntry(++incidentSequence, slug, png, meta, nowMillis)
+            synchronized(lock) {
+                if (closed) return
+                val entry = IncidentEntry(++incidentSequence, slug, png, json)
                 recentIncidents.addLast(entry)
                 incidentTotalBytes += entry.totalBytes
-                while (
-                    recentIncidents.size > MAX_INCIDENT_COUNT ||
-                    (recentIncidents.size > 1 && incidentTotalBytes > MAX_INCIDENT_BYTES)
-                ) {
-                    val evicted = recentIncidents.removeFirst()
-                    incidentTotalBytes -= evicted.totalBytes
+                while (recentIncidents.size > MAX_INCIDENT_COUNT || incidentTotalBytes > MAX_INCIDENT_BYTES) {
+                    incidentTotalBytes -= recentIncidents.removeFirst().totalBytes
                 }
             }
-        }.onFailure { failure ->
+        } catch (failure: Exception) {
             AppLogger.w(LOG_TAG, "lossless incident capture failed", failure)
         }
     }
@@ -276,7 +197,7 @@ class LabyrinthDebugDashboardServer(
         val page = result.observation.state.name
         val reject = state.frameTrace.actionRejectReason
         return when {
-            state.status == com.landosol.toolbox.labyrinth.LabyrinthEntryRecognitionStatus.ERROR ->
+            state.status == LabyrinthEntryRecognitionStatus.ERROR ->
                 "error:$page:${state.message.orEmpty()}" to "session_error"
             state.nodeBindings?.conflicts?.isNotEmpty() == true || reject?.contains("conflict") == true ->
                 "conflict:${state.nodeBindings?.nextNode?.blockId}:${reject.orEmpty()}" to "node_conflict"
@@ -284,309 +205,101 @@ class LabyrinthDebugDashboardServer(
                 "timeout:$page:${reject.orEmpty()}" to "action_timeout"
             result.battleFailure != null ->
                 "battle_failed:${result.battleFailure.layout.name}" to "battle_failed"
-            result.shopObservation?.items?.any {
-                it.categoryState == com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryState.EXHAUSTED
-            } == true ->
-                "shop_exhausted:${result.shopObservation.items.count { it.categoryState == com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryState.EXHAUSTED }}" to "shop_ocr_exhausted"
-            else -> null
-        }
-    }
-
-    /**
-     * Write one downscaled JPEG per recognized frame while the archive switch is on. The archive
-     * is bounded to the same depth as the state history so the diagnostic zip stays around a few
-     * tens of megabytes. Returns the archive file name recorded in the history entry, or null.
-     */
-    private fun archiveFrame(bitmap: NativeBitmap, frameCount: Long): String? {
-        if (!frameArchiveEnabled.get()) return null
-        val directory = frameArchiveDirectory ?: return null
-        return runCatching {
-            if (!directory.isDirectory && !directory.mkdirs()) return null
-            val scale = FRAME_ARCHIVE_WIDTH.toFloat() / bitmap.width
-            val scaled = if (bitmap.width > FRAME_ARCHIVE_WIDTH) {
-                NativeBitmap.createScaled(
-                    bitmap,
-                    FRAME_ARCHIVE_WIDTH,
-                    (bitmap.height * scale).toInt().coerceAtLeast(1),
-                    true,
-                )
-            } else {
-                bitmap
-            }
-            val name: String
-            val file: File
-            synchronized(frameArchiveLock) {
-                frameArchiveSequence++
-                name = "%06d-f%d.jpg".format(Locale.US, frameArchiveSequence, frameCount)
-                file = File(directory, name)
-                frameArchiveFiles.addLast(file)
-                while (frameArchiveFiles.size > MAX_STATE_HISTORY_ENTRIES) {
-                    frameArchiveFiles.removeFirst().delete()
+            else -> {
+                val exhausted = result.shopObservation?.items.orEmpty().count {
+                    it.categoryState == LabyrinthShopCategoryState.EXHAUSTED
                 }
-            }
-            file.outputStream().use { output ->
-                scaled.compress(NativeBitmap.CompressFormat.JPEG, FRAME_ARCHIVE_JPEG_QUALITY, output)
-            }
-            if (scaled !== bitmap) scaled.recycle()
-            name
-        }.getOrElse { failure ->
-            AppLogger.w(LOG_TAG, "frame archive write failed", failure)
-            null
-        }
-    }
-
-    private fun setFrameArchiveEnabled(enabled: Boolean) {
-        frameArchiveEnabled.set(enabled)
-        if (!enabled) return
-        synchronized(frameArchiveLock) {
-            // A fresh archive per enable so a replay bundle never mixes two sessions.
-            frameArchiveFiles.forEach(File::delete)
-            frameArchiveFiles.clear()
-            frameArchiveSequence = 0L
-        }
-    }
-
-    private fun archivedFramesSnapshot(): List<File> = synchronized(frameArchiveLock) {
-        frameArchiveFiles.filter(File::isFile)
-    }
-
-    private fun runServer(server: ServerSocket) {
-        runCatching {
-            server.use {
-                while (running.get() && boundSocket === server) {
-                    val socket = server.accept()
-                    Thread({ handle(socket) }, "labyrinth-debug-http").apply {
-                        isDaemon = true
-                        start()
-                    }
-                }
-            }
-        }.onFailure { failure ->
-            if (running.get() && boundSocket === server) AppLogger.e(LOG_TAG, "debug dashboard stopped unexpectedly on $IPV4_LOOPBACK:${server.localPort}", failure)
-        }
-        synchronized(this) { if (boundSocket === server) { running.set(false); boundSocket = null } }
-    }
-
-    private fun handle(socket: Socket) {
-        socket.use { client ->
-            client.soTimeout = SOCKET_TIMEOUT_MILLIS
-            val input = BufferedInputStream(client.getInputStream())
-            val output = BufferedOutputStream(client.getOutputStream())
-            val requestLine = readLine(input) ?: return
-            // Consume the small request header so browsers can reuse their normal request path.
-            while (true) {
-                val line = readLine(input) ?: break
-                if (line.isEmpty()) break
-            }
-            val target = requestLine.split(' ').getOrNull(1) ?: "/"
-            val path = target.substringBefore('?')
-            when (path) {
-                "/", "/index.html" -> respond(output, "text/html; charset=utf-8", DASHBOARD_HTML)
-                "/api/state" -> respond(output, "application/json; charset=utf-8", stateResponse())
-                "/api/fast-state" -> respond(output, "application/json; charset=utf-8", latestFast.get())
-                "/api/kernel/events" -> {
-                    val source = kernelSource
-                    if (!requestLine.startsWith("GET ")) {
-                        respond(output, "text/plain", "GET only", status = "405 Method Not Allowed")
-                    } else if ("format=ndjson" in target.substringAfter('?', "").split('&')) {
-                        respond(output, "application/x-ndjson; charset=utf-8", source?.let(::redactedKernelNdjson).orEmpty())
-                    } else {
-                        respond(output, "application/json; charset=utf-8",
-                            source?.snapshot()?.let { LogRedactor.redactJson(Json.encodeToJsonElement(it)).toString() }
-                                ?: """{"summary":null,"events":[]}""")
-                    }
-                }
-                "/api/route-preview" -> respond(
-                    output,
-                    "application/json; charset=utf-8",
-                    LabyrinthRoutePreviewCache.payload(),
-                )
-                "/api/archive/on" -> {
-                    setFrameArchiveEnabled(frameArchiveDirectory != null)
-                    respond(output, "application/json; charset=utf-8", archiveStatusJson())
-                }
-                "/api/archive/off" -> {
-                    setFrameArchiveEnabled(false)
-                    respond(output, "application/json; charset=utf-8", archiveStatusJson())
-                }
-                "/api/archive" -> respond(output, "application/json; charset=utf-8", archiveStatusJson())
-                "/logs.zip", "/download/logs.zip" -> {
-                    val snapshot = latest.get()
-                    val history = synchronized(historyLock) { recentStates.toList() }
-                    val incidents = synchronized(incidentLock) { recentIncidents.toList() }
-                    val zip = buildDiagnosticZip(snapshot, history, archivedFramesSnapshot(), incidents)
-                    val filename = "limingjie-debug-${timestampForFilename()}.zip"
-                    respond(
-                        output = output,
-                        contentType = "application/zip",
-                        body = zip,
-                        extraHeaders = mapOf("Content-Disposition" to "attachment; filename=\"$filename\""),
-                    )
-                }
-                "/frame.jpg" -> {
-                    val jpeg = latest.get().jpeg
-                    if (jpeg == null) {
-                        respond(output, "text/plain; charset=utf-8", "frame not ready", status = "404 Not Found")
-                    } else {
-                        respond(output, "image/jpeg", jpeg)
-                    }
-                }
-                else -> respond(output, "text/plain; charset=utf-8", "not found", status = "404 Not Found")
+                if (exhausted > 0) "shop_exhausted:$exhausted" to "shop_ocr_exhausted" else null
             }
         }
     }
 
-    private fun respond(
-        output: BufferedOutputStream,
-        contentType: String,
-        body: String,
-        status: String = "200 OK",
-    ) = respond(output, contentType, body.toByteArray(Charsets.UTF_8), status)
+    fun exportDiagnosticZip(): ByteArray {
+        val snapshot = synchronized(lock) {
+            ExportSnapshot(recentStates.toList(), recentFastStates.toList(), recentIncidents.toList(), kernelSource)
+        }
+        val traceId = currentTraceId()
+        val manifest = JSONObject().put("traceId", traceId ?: JSONObject.NULL)
+        val latest = snapshot.states.lastOrNull()?.let(::JSONObject)
+            ?: JSONObject().put("status", "waiting").put("traceId", traceId ?: JSONObject.NULL)
+        latest.put("fastObservation", snapshot.fastStates.lastOrNull()?.let(::JSONObject)
+            ?: JSONObject().put("available", false))
 
-    private fun respond(
-        output: BufferedOutputStream,
-        contentType: String,
-        body: ByteArray,
-        status: String = "200 OK",
-        extraHeaders: Map<String, String> = emptyMap(),
-    ) {
-        val header = buildString {
-            append("HTTP/1.1 $status\r\n")
-            append("Content-Type: $contentType\r\n")
-            append("Content-Length: ${body.size}\r\n")
-            append("Cache-Control: no-store\r\n")
-            extraHeaders.forEach { (name, value) -> append("$name: $value\r\n") }
-            append("Connection: close\r\n")
-            append("\r\n")
-        }.toByteArray(Charsets.US_ASCII)
-        output.write(header)
-        output.write(body)
-        output.flush()
-    }
-
-    private fun readLine(input: BufferedInputStream): String? {
         val bytes = ByteArrayOutputStream()
-        while (bytes.size() < MAX_HEADER_LINE_BYTES) {
-            val next = input.read()
-            if (next < 0) return if (bytes.size() == 0) null else bytes.toString(Charsets.UTF_8.name())
-            if (next == '\n'.code) break
-            if (next != '\r'.code) bytes.write(next)
-        }
-        return bytes.toString(Charsets.UTF_8.name())
-    }
-
-    private fun archiveStatusJson(): String = JSONObject().apply {
-        put("supported", frameArchiveDirectory != null)
-        put("enabled", frameArchiveEnabled.get())
-        put("frames", archivedFramesSnapshot().size)
-    }.toString()
-
-    private fun redactedKernelNdjson(source: KernelEventLog): String = source.recent().joinToString("\n") {
-        LogRedactor.redactJson(Json.encodeToJsonElement<KernelEvent>(it)).toString()
-    }
-
-    private fun buildDiagnosticZip(
-        snapshot: Snapshot,
-        history: List<ByteArray>,
-        archivedFrames: List<File>,
-        incidents: List<IncidentEntry>,
-    ): ByteArray = ByteArrayOutputStream().use { bytes ->
-        val traceId = traceIdProvider?.invoke()?.let(LogRedactor::redact)
-        val processLog = LogRedactor.redact(processLogSource().decodeToString()).encodeToByteArray()
-        val userLog = userLogSource?.invoke()?.takeIf { it.isNotEmpty() }
-            ?.let { LogRedactor.redact(it.decodeToString()).encodeToByteArray() }
         ZipOutputStream(bytes).use { zip ->
             fun entry(name: String, content: ByteArray) {
                 zip.putNextEntry(ZipEntry(name))
                 zip.write(content)
                 zip.closeEntry()
             }
+            fun textEntry(name: String, content: String) = entry(name, content.encodeToByteArray())
+            fun historyEntry(name: String, lines: Sequence<String>) {
+                zip.putNextEntry(ZipEntry(name))
+                for (line in lines) {
+                    zip.write(redactedJson(line).encodeToByteArray())
+                    zip.write('\n'.code)
+                }
+                zip.closeEntry()
+            }
 
-            entry(
-                "README.txt",
-                buildString {
-                    appendLine("黎明界助手调试日志包")
-                    appendLine("应用版本: ${AppVersion.label}")
-                    appendLine("生成时间: ${System.currentTimeMillis()}")
-                    appendLine("服务地址: http://$IPV4_LOOPBACK:${boundPort ?: port}/")
-                    appendLine("environment.json: 导出时的 Android 版本、设备、显示器、DPI、权限与运行状态")
-                    appendLine("runtime/history.ndjson: 每 10 秒后台采样的进程 CPU/内存与捕获状态，最多保留约 1 小时；不包含电脑端负载")
-                    appendLine("state/latest.json: 最近已发布的详细识别快照；不等于最新快观察")
-                    appendLine("state/history.ndjson: 最近 ${history.size} 条详细识别状态历史")
-                    appendLine("fast/latest.json 与 fast/history.ndjson: 独立快观察/控制状态，最多${LABYRINTH_DEBUG_HISTORY_LIMIT}条；先核对两个流的frameSequence与timestamp，不能拿快页面给旧详细框背书；未启用时available=false")
-                    appendLine(
-                        "frame/latest.jpg: 最近一帧截图（若已有）；对应 frameVersion=" +
-                            "${snapshot.frameVersion}，拍摄于 ${snapshot.jpegMillis}。" +
-                            "截图每 $JPEG_REFRESH_INTERVAL_MILLIS ms 才刷新一次，因此它可能早于 " +
-                            "state/latest.json：先比对两者的 frameVersion 再下结论",
-                    )
-                    appendLine("frames/: 逐帧缩放截图（仅在面板开启逐帧归档后存在，${archivedFrames.size} 张）")
-                    appendLine("incidents/: 异常事件无损 PNG 原图与结构化快照（${incidents.size} 条）")
-                    appendLine("state/history.ndjson 每条的 archivedFrame 字段指向 frames/ 中的文件名")
-                    appendLine("summary.txt 与 manifest.json: 导出时的运行 traceId")
-                    appendLine("process.log: 当前 App 进程最近日志（logs/logcat.txt 为兼容入口）")
-                    if (userLog != null) appendLine("user-console.log: 用户控制台日志")
-                }.toByteArray(Charsets.UTF_8),
-            )
-            entry("summary.txt", "traceId=${traceId.orEmpty()}\n".encodeToByteArray())
-            entry("manifest.json", JSONObject().put("traceId", traceId ?: JSONObject.NULL).toString().encodeToByteArray())
-            kernelSource?.let { entry("kernel/events.ndjson", redactedKernelNdjson(it).encodeToByteArray()) }
-            entry("state/latest.json", snapshot.json)
-            entry("fast/latest.json", latestFast.get())
-            val fastHistory = synchronized(fastHistoryLock) { recentFastStates.toList() }
-            entry("fast/history.ndjson", fastHistory.fold(ByteArrayOutputStream()) { out, json ->
-                out.apply { write(json); write(10) }
-            }.toByteArray())
+            textEntry("manifest.json", manifest.toString())
+            textEntry("summary.txt", "traceId=${traceId.orEmpty()}\n")
+            textEntry("latest-snapshot.json", redactedJson(latest.toString()))
+            historyEntry("state-history.jsonl", snapshot.states.asSequence())
+            historyEntry("fast/history.ndjson", snapshot.fastStates.asSequence())
             runtimeDiagnostics?.let { diagnostics ->
-                entry("environment.json", diagnostics.environmentJson())
-                entry("runtime/history.ndjson", diagnostics.historyNdjson())
+                textEntry("environment.json", redactedJson(diagnostics.environmentJson().decodeToString()))
+                historyEntry("runtime/history.ndjson", diagnostics.historyNdjson().decodeToString()
+                    .lineSequence().filter(String::isNotBlank))
             }
-            entry(
-                "state/history.ndjson",
-                history.fold(ByteArrayOutputStream()) { output, json ->
-                    output.apply {
-                        write(json)
-                        write('\n'.code)
-                    }
-                }.toByteArray(),
-            )
-            snapshot.jpeg?.let { entry("frame/latest.jpg", it) }
-            archivedFrames.forEach { file ->
-                runCatching { entry("frames/${file.name}", file.readBytes()) }
+            textEntry("process.log", LogRedactor.redact(processLogSource().decodeToString()))
+            userLogSource?.invoke()?.takeIf { it.isNotEmpty() }?.let {
+                textEntry("user-console.log", LogRedactor.redact(it.decodeToString()))
             }
-            incidents.forEach { incident ->
+            snapshot.kernelSource?.let { source ->
+                val events = source.recent().joinToString("\n") {
+                    LogRedactor.redactJson(Json.encodeToJsonElement<KernelEvent>(it)).toString()
+                }
+                textEntry("kernel/events.ndjson", events)
+            }
+            snapshot.incidents.forEach { incident ->
                 val prefix = "incidents/%03d_%s".format(Locale.US, incident.sequence, incident.slug)
                 entry("$prefix.png", incident.png)
                 entry("$prefix.json", incident.json)
             }
-            entry("process.log", processLog)
-            userLog?.let { entry("user-console.log", it) }
-            entry(
-                "logs/logcat.txt",
-                "# 黎明界助手 ${AppVersion.label}\n".encodeToByteArray() + processLog,
-            )
         }
-        bytes.toByteArray()
+        return bytes.toByteArray()
     }
 
-    private fun timestampForFilename(): String =
-        SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+    private fun currentTraceId(): String? = traceIdProvider()?.let(LogRedactor::redact)
+
+    private fun redactedJson(json: String): String = LogRedactor.redactJson(Json.parseToJsonElement(json)).toString()
+
+    override fun close() = synchronized(lock) {
+        closed = true
+        kernelSource = null
+        ocrHealthSource = null
+        recentStates.clear()
+        recentFastStates.clear()
+        recentIncidents.clear()
+        incidentTotalBytes = 0L
+        lastAutoIncidentKey = null
+    }
 
     private fun buildJson(
         state: LabyrinthEntryRecognitionSessionState,
         result: LabyrinthEntryFrameResult,
         presentation: AutomationOverlayPresentation,
-        frameVersion: Long,
         nowMillis: Long,
-        archivedFrame: String? = null,
-        jpegMillis: Long = Long.MIN_VALUE,
     ): JSONObject = JSONObject().apply {
         put("appVersion", AppVersion.name)
         put("appVersionCode", AppVersion.code)
         put("timestamp", nowMillis)
         put("elapsedRealtimeMillis", MonotonicClock.elapsedRealtime())
-        put("frameVersion", frameVersion)
-        put("historyLimit", LABYRINTH_DEBUG_HISTORY_LIMIT)
+        put("traceId", currentTraceId() ?: JSONObject.NULL)
+        put("historyLimit", STATE_HISTORY_LIMIT)
+        put("sessionId", state.sessionId?.value ?: JSONObject.NULL)
+        put("sessionStatus", state.status.name)
         val capture = CaptureTelemetry.snapshot()
         put("captureCounters", JSONObject().apply {
             put("scope", "process_lifetime")
@@ -648,14 +361,6 @@ class LabyrinthDebugDashboardServer(
         } } ?: JSONObject.NULL)
         // 路线预览的缓存键：包含当前节点，推进到下一格才会让页面重新取一次。
         put("routePreviewKey", LabyrinthRoutePreviewCache.key() ?: JSONObject.NULL)
-        // The stored JPEG is refreshed at most every JPEG_REFRESH_INTERVAL_MILLIS, so several
-        // consecutive rows share one picture and only the first of them was actually taken from
-        // it. Say when the picture was taken, otherwise a reader pairs these scores with an image
-        // of a different page and draws the wrong conclusion (2026-09-20 bundle 121348: five rows
-        // shared frameVersion 6 while the page went UNKNOWN -> HOME -> UNKNOWN -> HOME).
-        put("frameImageTimestamp", jpegMillis.takeIf { it != Long.MIN_VALUE } ?: JSONObject.NULL)
-        put("frameImageStale", jpegMillis != Long.MIN_VALUE && jpegMillis != nowMillis)
-        put("archivedFrame", archivedFrame ?: JSONObject.NULL)
         put("title", presentation.title)
         put("status", presentation.status)
         put("detail", presentation.detail.orEmpty())
@@ -1137,8 +842,8 @@ class LabyrinthDebugDashboardServer(
                 }
             } ?: JSONObject.NULL,
         )
-        put("incidentCount", synchronized(incidentLock) { recentIncidents.size })
-        put("ocrHealth", ocrHealthSource.get()?.let { source ->
+        put("incidentCount", incidentCount())
+        put("ocrHealth", ocrHealthSource?.let { source ->
             runCatching { JSONObject(source()) }.getOrNull()
         } ?: JSONObject.NULL)
         put(
@@ -1163,78 +868,10 @@ class LabyrinthDebugDashboardServer(
     }
 
     private companion object {
-        const val LOG_TAG = "LabyrinthDebugHttp"
-        const val IPV4_LOOPBACK = "127.0.0.1"
-        const val DEFAULT_PORT = 8765
-        const val JPEG_QUALITY = 68
-        const val JPEG_REFRESH_INTERVAL_MILLIS = 750L
-        const val FRAME_ARCHIVE_WIDTH = 960
-        const val FRAME_ARCHIVE_JPEG_QUALITY = 60
-        const val SOCKET_TIMEOUT_MILLIS = 3_000
-        const val MAX_HEADER_LINE_BYTES = 8_192
-        const val MAX_STATE_HISTORY_ENTRIES = LABYRINTH_DEBUG_HISTORY_LIMIT
+        const val LOG_TAG = "LabyrinthDiagnosticsRecorder"
+        const val STATE_HISTORY_LIMIT = 600
         const val MAX_INCIDENT_COUNT = 10
         const val MAX_INCIDENT_BYTES = 30L * 1024 * 1024
         const val INCIDENT_COOLDOWN_MILLIS = 5_000L
-
-        val DASHBOARD_HTML = """
-            <!doctype html>
-            <html lang="zh-CN">
-            <head>
-              <meta charset="utf-8">
-              <meta name="viewport" content="width=device-width,initial-scale=1">
-              <title>黎明界实时分析 ${AppVersion.name}</title>
-              <style>
-                *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#0b1020;color:#e8edf8}
-                header{padding:14px 18px;border-bottom:1px solid #27314d;display:flex;gap:18px;align-items:center;position:sticky;top:0;background:#0b1020ee;z-index:3;flex-wrap:wrap}
-                .pill{padding:5px 9px;border:1px solid #34415f;border-radius:999px;font-size:13px}.grid{display:grid;grid-template-columns:minmax(620px,1.6fr) minmax(360px,1fr);gap:14px;padding:14px}
-                a.action{color:#e8edf8;text-decoration:none;background:#1b2948;border-color:#4f6fa8}a.action:hover{background:#263a63}
-                .card{background:#121a2f;border:1px solid #27314d;border-radius:12px;padding:12px;overflow:hidden}.frameWrap{position:relative;width:100%;line-height:0}.frameWrap img{width:100%;height:auto;display:block;border-radius:8px}.box{position:absolute;border:2px solid #57d3ff;pointer-events:none}.box.sel{border-color:#ffd166}.box.bad{border-color:#ff6b6b}.box span{position:absolute;left:0;top:0;transform:translateY(-100%);background:#07101dcc;color:#fff;font:12px/1.25 monospace;padding:2px 4px;white-space:nowrap;max-width:360px;overflow:hidden;text-overflow:ellipsis}
-                h2{font-size:15px;margin:0 0 8px}.kv{display:grid;grid-template-columns:120px 1fr;gap:4px 9px;font-size:13px}.kv b{color:#9eb0d3;font-weight:500}pre{white-space:pre-wrap;word-break:break-word;margin:0;font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;color:#d7e2ff}.stack{display:grid;gap:14px}.json{max-height:380px;overflow:auto}.muted{color:#8292b5;font-size:12px}.routeMeta{font-size:12px;color:#9eb0d3;margin-bottom:2px}.floors{display:grid;gap:2px}.floorTitle{font-size:12px;color:#8292b5;margin:7px 0 3px}.nodes{display:grid;gap:4px}.node{border:1px solid #27314d;border-radius:4px;padding:2px 1px;text-align:center;font-size:11px;line-height:1.35;color:#d7e2ff}.node .col{font-size:10px;color:#8292b5}.node.spec{border-color:#4f6fa8;background:#1b2948}.node.current{outline:1px solid #ffd166}@media(max-width:1050px){.grid{grid-template-columns:1fr}}
-              </style>
-            </head>
-            <body>
-              <header><strong>黎明界实时分析</strong><span class="pill">${AppVersion.label}</span><span class="pill" id="status">等待数据</span><span class="pill" id="page">-</span><span class="muted" id="stamp"></span><a class="pill action" href="/logs.zip">下载日志 ZIP</a><a class="pill action" href="#" id="archiveToggle">逐帧归档：读取中</a></header>
-              <main class="grid">
-                <section class="card"><div class="frameWrap" id="frameWrap"><img id="frame" alt="latest frame"></div></section>
-                <section class="stack">
-                  <div class="card"><h2>会话</h2><div class="kv" id="summary"></div></div>
-                  <div class="card"><h2>路线预览 · 每层节点</h2><div class="routeMeta" id="routeMeta">等待已验证路线</div><div class="floors" id="routeFloors"></div><div class="muted" id="routeNote"></div></div>
-                  <div class="card"><h2>完整分析</h2><pre id="detail"></pre></div>
-                  <div class="card"><h2>结构化结果</h2><pre class="json" id="json"></pre></div>
-                </section>
-              </main>
-              <script>
-                let frameVersion=-1;
-                const esc=s=>String(s??'').replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c]));
-                function hasSelectionInside(el){const s=window.getSelection?.();if(!s||s.isCollapsed||s.rangeCount===0)return false;return el.contains(s.anchorNode)||el.contains(s.focusNode)}
-                function setTextStable(el,value){const next=String(value??'');if(el.textContent===next||hasSelectionInside(el))return;el.textContent=next}
-                function setHtmlStable(el,value){const next=String(value??'');if(el.innerHTML===next||hasSelectionInside(el))return;el.innerHTML=next}
-                function drawBoxes(boxes){const wrap=document.getElementById('frameWrap');wrap.querySelectorAll('.box').forEach(x=>x.remove());for(const b of boxes||[]){const d=document.createElement('div');d.className='box '+(b.selected?'sel':(!b.recognized?'bad':''));d.style.left=(b.left*100)+'%';d.style.top=(b.top*100)+'%';d.style.width=(b.width*100)+'%';d.style.height=(b.height*100)+'%';const s=document.createElement('span');s.textContent=b.label;d.appendChild(s);wrap.appendChild(d)}}
-                let routeKey=null;
-                async function refreshRoute(d){
-                  const key=d.routePreviewKey??null;if(key===routeKey)return;routeKey=key;
-                  const meta=document.getElementById('routeMeta'),floors=document.getElementById('routeFloors'),note=document.getElementById('routeNote');
-                  if(key===null){setTextStable(meta,'等待已验证路线');setHtmlStable(floors,'');setTextStable(note,'');return}
-                  try{const r=await fetch('/api/route-preview',{cache:'no-store'});const p=await r.json();if(routeKey!==key)return;
-                    if(!p){setTextStable(meta,'尚无路线预览');setHtmlStable(floors,'');setTextStable(note,'');return}
-                    setTextStable(meta,'开局 '+p.enterId+' · '+(p.modeLabel||p.mode)+' · 难度 '+p.difficulty+' · '+(p.topologyVerified?'校验通过':'校验异常'));
-                    let html='';
-                    for(const f of p.floors||[]){html+='<div class="floorTitle">第 '+f.area+' 区域 · '+f.columnCount+' 列</div><div class="nodes" style="grid-template-columns:repeat('+f.columnCount+',minmax(0,1fr))">';
-                      for(const n of f.nodes){const cls='node'+(n.specified?' spec':'')+((p.currentBlockId===n.blockId)?' current':'');html+='<div class="'+cls+'"><div class="col">'+n.column+'</div><div>'+esc(n.label)+'</div></div>'}
-                      html+='</div>'}
-                    if((p.issues||[]).length)html+='<div class="muted" style="margin-top:6px">'+p.issues.map(esc).join('；')+'</div>';
-                    setHtmlStable(floors,html);setTextStable(note,p.note||'');
-                  }catch(e){routeKey=null;setTextStable(meta,'路线预览读取失败，等待重试')}
-                }
-                let archiveOn=false;
-                async function refreshArchive(){try{const r=await fetch('/api/archive',{cache:'no-store'});const a=await r.json();archiveOn=!!a.enabled;const t=document.getElementById('archiveToggle');t.textContent=a.supported?('逐帧归档：'+(a.enabled?'开('+a.frames+')':'关')):'逐帧归档：不可用';}catch(e){}}
-                document.getElementById('archiveToggle').addEventListener('click',async ev=>{ev.preventDefault();try{await fetch(archiveOn?'/api/archive/off':'/api/archive/on',{cache:'no-store'});}catch(e){}refreshArchive();});
-                refreshArchive();setInterval(refreshArchive,3000);
-                async function tick(){try{const r=await fetch('/api/state',{cache:'no-store'});const d=await r.json();setTextStable(document.getElementById('status'),d.status||'-');setTextStable(document.getElementById('page'),(d.page||'-')+' '+Number(d.pageConfidence||0).toFixed(3));setTextStable(document.getElementById('stamp'),new Date(d.timestamp||Date.now()).toLocaleTimeString());setTextStable(document.getElementById('detail'),d.detail||'');void refreshRoute(d);const budget=d.fastObservation?.balancedDiagnostics??d.balancedDiagnostics;const budgetLabel=budget?.threadBudgetDescription??'等待运行时预算';const eventLane=budget?.eventPlanning;const eventLabel=eventLane?.eventId?(eventLane.eventId+' · '+eventLane.phase+' · 提交'+eventLane.submittedCount+'／取消'+eventLane.cancelledCount+'／OCR续算'+eventLane.ocrRefreshRetainedCount):'暂无事件规划';const frameSize=(d.frameWidth??0)+' × '+(d.frameHeight??0);setHtmlStable(document.getElementById('summary'),'<b>业务线程预算</b><span>'+esc(budgetLabel)+'</span><b>事件规划</b><span>'+esc(eventLabel)+'</span><b>进入处理帧</b><span>'+(d.receivedFrameCount??0)+'</span><b>识别帧</b><span>'+(d.recognizedFrameCount??0)+'</span><b>捕获尺寸</b><span>'+frameSize+'</span><b>宽高比</b><span>'+Number(d.frameAspectRatio||0).toFixed(3)+'</span><b>耗时</b><span>'+(d.elapsedMillis??0)+' ms</span><b>动作</b><span>'+(d.actionCount??0)+'</span><b>消息</b><span>'+esc(d.message??'')+'</span>');const compact={balancedDiagnostics:budget,frameTiming:d.frameTiming,captureCounters:d.captureCounters,historyLimit:d.historyLimit,trace:d.trace,stageMillis:d.stageMillis,nodeSearchMode:d.nodeSearchMode,nodeSearchWindowCount:d.nodeSearchWindowCount,finalBossPlatforms:d.finalBossPlatforms,finalBossPlatformCandidates:d.finalBossPlatformCandidates,frame:{width:d.frameWidth,height:d.frameHeight,aspectRatio:d.frameAspectRatio},openingViewport:d.openingViewport,nodeRelicStacks:d.nodeRelicStacks,relicChoices:d.relicChoices,characters:d.characters,nodes:d.nodes,pageScores:d.pageScores,anchorScores:d.anchorScores,matchedFeatures:d.matchedFeatures};setTextStable(document.getElementById('json'),JSON.stringify(compact,null,2));drawBoxes(d.boxes);if(d.frameVersion!==frameVersion){frameVersion=d.frameVersion;document.getElementById('frame').src='/frame.jpg?v='+frameVersion}}catch(e){setTextStable(document.getElementById('status'),'连接失败')}finally{setTimeout(tick,500)}}tick();
-              </script>
-            </body>
-            </html>
-        """.trimIndent()
     }
 }

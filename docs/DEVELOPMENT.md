@@ -38,7 +38,7 @@
 
 `AppLogger` 使用 `LogRedactor` 脱敏，交给 `RollingFileLogSink` 写入 `logs/app.log` 并按大小轮换。`UserLog` 将脱敏后的事件发布到 `RunTelemetryBus`，由总线写入同一进程日志。控制台条目及重复折叠保存在各设备实例。
 
-调试面板的 `/logs.zip` 包含 `process.log`、有内容时的 `user-console.log` 和已绑定的内核事件。`manifest.json` 记录最近一次会话的 `traceId`，`incidents/` 下的无损 PNG 与采集时的 JSON 元数据成对存放。通过完整的 `traceId` 可查询同一运行的内核事件、进程日志和事故现场。参见 [迷宫事件内核](KERNEL_REFACTOR.md#因果与落盘)。
+进程内的 `LabyrinthDiagnosticsRecorder` 直接生成诊断 ZIP。`latest-snapshot.json` 包含最近的详细识别和独立快观察，`state-history.jsonl` 和 `fast/history.ndjson` 分别保留最多 600 条记录。诊断包包含 `process.log`、有内容时的 `user-console.log` 和已绑定的 `kernel/events.ndjson`。`manifest.json` 记录最近一次会话的 `traceId`，`incidents/` 下的无损 PNG 与采集时的 JSON 元数据成对存放，最多保留 10 条、合计 30 MiB。通过完整的 `traceId` 可查询同一运行的内核事件、进程日志和事故现场。参见 [迷宫事件内核](KERNEL_REFACTOR.md#因果与落盘)。
 
 ## 测试与 CI
 

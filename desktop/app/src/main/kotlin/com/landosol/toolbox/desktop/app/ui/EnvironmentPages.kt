@@ -394,8 +394,7 @@ internal fun DiagnosticsPage(graph: ControlSessionUi, targetLabel: String? = nul
         subtitle = "查看任务事件、OCR 健康度与事故现场，或导出诊断包与匿名回放。",
     ) {
         Message(actions.message, onDismiss = { actions.message = null })
-        Panel("诊断面板与事故现场") {
-            Text(graph.debugUrl ?: "诊断服务不可用，请查看当前实例日志。", color = Muted, style = MaterialTheme.typography.bodySmall)
+        Panel("诊断记录与事故现场") {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 StatusBadge(
                     "OCR：${when (ocr) {
@@ -415,8 +414,7 @@ internal fun DiagnosticsPage(graph: ControlSessionUi, targetLabel: String? = nul
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(shape = MaterialTheme.shapes.small, onClick = { graph.debugUrl?.let(BrowserLauncher::open) }, enabled = graph.debugUrl != null) { Text("在浏览器打开") }
-                OutlinedButton(
+                Button(
                     shape = MaterialTheme.shapes.small,
                     onClick = {
                         actions.run {
@@ -426,7 +424,7 @@ internal fun DiagnosticsPage(graph: ControlSessionUi, targetLabel: String? = nul
                             }
                         }
                     },
-                    enabled = graph.debugUrl != null && !actions.working,
+                    enabled = !actions.working,
                 ) { Text("导出诊断包") }
                 OutlinedButton(shape = MaterialTheme.shapes.small, onClick = { actions.run { graph.request(ControlOps.OPEN_LOGS) } }) { Text("打开日志目录") }
             }

@@ -23,10 +23,8 @@ import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.awt.Desktop
-import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -135,7 +133,6 @@ class GraphControlService(
             put("logRevision", logRevision)
             put("logTotal", graph.log.lines.value.size)
             put("dataDirectory", graph.dataDirectory.toString())
-            put("debugUrl", graph.debugUrl)
             put("incidentCount", graph.incidentCount)
             put("preview", preview)
             put("notices", cachedModel("notices", graph.notices.value))
@@ -383,25 +380,7 @@ class GraphControlService(
             ControlOps.LOG_ADD -> graph.log.add(args.requiredString("text"), kind = enumValueOf(args.string("kind") ?: "NORMAL"))
             ControlOps.DIAGNOSTICS_EXPORT -> {
                 val target = Path.of(args.requiredString("path")).toAbsolutePath().normalize()
-                withContext(Dispatchers.IO) {
-                    val url = checkNotNull(graph.debugUrl) { "诊断面板不可用" } + "logs.zip"
-                    val parent = checkNotNull(target.parent) { "目标路径无效" }
-                    Files.createDirectories(parent)
-                    val temp = Files.createTempFile(parent, "limingjie-debug-", ".zip.tmp")
-                    try {
-                        java.net.URI(url).toURL().openConnection().apply { connectTimeout = 5_000; readTimeout = 15_000 }.getInputStream().use { input ->
-                            Files.newOutputStream(temp).use(input::copyTo)
-                        }
-                        try {
-                            Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-                        } catch (_: AtomicMoveNotSupportedException) {
-                            Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
-                        }
-                    } finally {
-                        Files.deleteIfExists(temp)
-                    }
-                }
-                graph.log.add("诊断包已导出：${target.fileName}")
+                withContext(Dispatchers.IO) { AtomicFiles.write(target, graph.exportDiagnosticZip()) }
             }
             ControlOps.REPLAYS_STATS -> {
                 val stats = graph.replayStats()

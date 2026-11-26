@@ -142,7 +142,7 @@ class GameSessionResetWorkflow(
     private val actionExecutor: SessionBoundActionExecutor? = null,
     private val entryActionPlannerFactory: () -> LabyrinthEntryActionPlanner = { LabyrinthEntryActionPlanner() },
     private val totalTimeoutMillis: Long = DEFAULT_TOTAL_TIMEOUT_MILLIS,
-    /** Mirrors every recognized frame to the debug dashboard so the reset phase is observable. */
+    /** Publishes recognized reset frames to the diagnostics recorder. */
     private val debugFramePublisher: ((CapturedFrame, GameSessionResetState, LabyrinthEntryFrameResult, AutomationOverlayPresentation) -> Unit)? = null,
     /** Channel SDK login dialogs (九游) recognised through accessibility, not frames. */
     private val channelPrompts: ChannelLoginPromptAssistant? = null,

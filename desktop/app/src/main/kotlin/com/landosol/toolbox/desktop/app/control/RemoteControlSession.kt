@@ -127,7 +127,6 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
         .map(read).distinctUntilChanged().stateIn(scope,SharingStarted.Eagerly,read(consoleState.value))
     val assets = AppAssets()
     val dataDirectory get()=Path.of(models.value.text("dataDirectory") ?: ".")
-    val debugUrl get()=models.value.text("debugUrl")
     val incidentCount: StateFlow<Int> = field("incidentCount") { it.document["incidentCount"]?.jsonPrimitive?.intOrNull ?: 0 }
     val notices: StateFlow<List<String>> = listField("notices")
     val gameClientResolution get()=models.value.model("gameClient",GameClientResolution.Unavailable as GameClientResolution)
