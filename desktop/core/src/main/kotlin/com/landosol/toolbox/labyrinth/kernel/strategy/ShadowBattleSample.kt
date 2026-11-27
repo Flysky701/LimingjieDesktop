@@ -17,6 +17,7 @@ data class ObservedBattleResult(
     val totalDamage: Long,
     val enemyFinalHps: List<Long> = emptyList(),
     val seed: Int = -1, // A live battle generally has no observed simulator seed.
+    val hasExactFrames: Boolean = true,
 ) {
     init {
         require(result in 0..2 && battleFrames >= 0 && limitSeconds > 0)
@@ -75,7 +76,7 @@ fun shadowBattleSample(
     require(team.size in 1..5 && team.distinct().size == team.size && owned.containsAll(team))
     val outcome = when {
         observed.result == 0 -> 0
-        observed.result == 2 || observed.battleFrames >= observed.limitSeconds * 60L - 2 -> 1
+        observed.result == 2 || (observed.hasExactFrames && observed.battleFrames >= observed.limitSeconds * 60L - 2) -> 1
         else -> 2
     }
     val elapsed = observed.battleFrames / 60.0
@@ -90,5 +91,13 @@ fun shadowBattleSample(
 }
 
 /** The runtime supplies the journal's sequence and trace. Only call once the observed labels are available. */
-fun KernelRuntime.recordBattleSample(sample: ShadowBattleSample) =
-    emit(KernelDomain.BATTLE, KernelEventKinds.BATTLE_SAMPLE_OBSERVED, BattleSamplePayload(sample))
+fun KernelRuntime.recordBattleSample(
+    sample: ShadowBattleSample,
+    damageObserved: Boolean = true,
+    timeSource: String = "sim",
+    reviveTriggered: Boolean = false,
+) = emit(
+    KernelDomain.BATTLE,
+    KernelEventKinds.BATTLE_SAMPLE_OBSERVED,
+    BattleSamplePayload(sample, damageObserved, timeSource, reviveTriggered),
+)

@@ -118,6 +118,17 @@ fun LabyrinthNodeJson.toLabyrinthMapNode(): LabyrinthMapNode = LabyrinthMapNode(
     isAreaLastPoint = isAreaLastPoint,
 )
 
+fun LabyrinthMapNode.toLabyrinthNodeJson(): LabyrinthNodeJson = LabyrinthNodeJson(
+    area = area,
+    column = column,
+    row = row,
+    blockId = blockId,
+    blockType = blockType,
+    questId = questId,
+    nextBlockIds = nextBlockIds,
+    isAreaLastPoint = isAreaLastPoint,
+)
+
 interface LabyrinthRouteStore {
     suspend fun save(
         config: LabyrinthRerollConfig,
@@ -130,6 +141,14 @@ interface LabyrinthRouteStore {
 
     /** Advances only the latest matching opening; implementations must reject route regression. */
     suspend fun updateCurrentBlock(accountId: Long, enterId: Long, currentBlockId: Long): Boolean = false
+
+    /** Persists a dynamically replanned continuation for an active run. */
+    suspend fun updatePlannedRoute(
+        accountId: Long,
+        enterId: Long,
+        nodes: List<LabyrinthNodeJson>,
+        currentBlockId: Long,
+    ): Boolean = false
 }
 
 internal fun LabyrinthRouteJson.withOpeningRelicsFrom(previous: LabyrinthRouteJson?): LabyrinthRouteJson {
@@ -388,6 +407,33 @@ class RoomLabyrinthRouteStore(
             routeJson = Json.encodeToString(LabyrinthRouteJson.serializer(), advanced),
         ) == 1
         if (updated) LabyrinthRoutePreviewCache.publish(advanced)
+        updated
+    }
+
+    override suspend fun updatePlannedRoute(
+        accountId: Long,
+        enterId: Long,
+        nodes: List<LabyrinthNodeJson>,
+        currentBlockId: Long,
+    ): Boolean = database.writeTransaction {
+        val dao = database.labyrinthRouteDao()
+        val entity = dao.getLatestByAccount(accountId) ?: return@writeTransaction false
+        if (entity.enterId != enterId) return@writeTransaction false
+        val saved = runCatching {
+            Json.decodeFromString(LabyrinthRouteJson.serializer(), entity.routeJson)
+        }.getOrNull() ?: return@writeTransaction false
+        if (saved.enterId != enterId) return@writeTransaction false
+        if (nodes.none { it.blockId == currentBlockId }) return@writeTransaction false
+        val replanned = saved.copy(nodes = nodes, currentBlockId = currentBlockId)
+        if (replanned == saved) {
+            LabyrinthRoutePreviewCache.publish(saved)
+            return@writeTransaction true
+        }
+        val updated = dao.updateRouteJson(
+            id = entity.id,
+            routeJson = Json.encodeToString(LabyrinthRouteJson.serializer(), replanned),
+        ) == 1
+        if (updated) LabyrinthRoutePreviewCache.publish(replanned)
         updated
     }
 }

@@ -1,5 +1,6 @@
 package com.landosol.toolbox.labyrinth.kernel.planning
 
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 
 data class ShopDiscountModel(
@@ -55,13 +56,134 @@ data class ShopShelfModel(
     }
 
     companion object {
+        private const val REGULAR_SHOP_POOL_1STAR = 25
+        private const val REGULAR_SHOP_POOL_2STAR = 25
+        private const val REGULAR_SHOP_POOL_3STAR = 25
+        private const val WEIGHT_1STAR = 65.0
+        private const val WEIGHT_2STAR = 30.0
+        private const val WEIGHT_3STAR = 5.0
+        private const val MIN_SHELF_PROB = 1e-4
+
+        private val REMAINING_POOL_CACHE = ConcurrentHashMap<Triple<Int, Int, Int>, ShopShelfModel>()
+
+        fun liveCalibrated(): ShopShelfModel = LIVE_CALIBRATED_SHELVES
+
+        /**
+         * Exact weighted without-replacement 3-slot relic shelf distribution over the remaining
+         * regular shop pool `(rem1, rem2, rem3)` with per-relic star weights `65 : 30 : 5`
+         * (calibrated against 1,793 live non-Area-4 shelves / 5,379 relic offers + owned snapshots).
+         */
+        fun forRemainingRelicPool(rem1: Int, rem2: Int, rem3: Int): ShopShelfModel {
+            val r1 = rem1.coerceAtLeast(0)
+            val r2 = rem2.coerceAtLeast(0)
+            val r3 = rem3.coerceAtLeast(0)
+            if (r1 + r2 + r3 <= 0) return LIVE_CALIBRATED_SHELVES
+            val key = Triple(r1, r2, r3)
+            return REMAINING_POOL_CACHE.getOrPut(key) {
+                buildWeightedWithoutReplacementShelves(r1, r2, r3)
+            }
+        }
+
+        /**
+         * Depletes the regular 25/25/25 purchasable relic pool by [ownedRelicIds]
+         * (excluding 4xxxx/5xxxx guild relics and 3x006 4★ relics) and returns the resulting shelf model.
+         */
+        fun forOwnedRelics(ownedRelicIds: Set<Int>): ShopShelfModel {
+            if (ownedRelicIds.isEmpty()) return forRemainingRelicPool(
+                REGULAR_SHOP_POOL_1STAR,
+                REGULAR_SHOP_POOL_2STAR,
+                REGULAR_SHOP_POOL_3STAR,
+            )
+            val owned1 = ownedRelicIds.count { it in 10_000..19_999 }
+            val owned2 = ownedRelicIds.count { it in 20_000..29_999 }
+            val owned3 = ownedRelicIds.count { it in 31_001..35_999 && it % 10 != 6 }
+            val rem1 = (REGULAR_SHOP_POOL_1STAR - owned1).coerceIn(0, REGULAR_SHOP_POOL_1STAR)
+            val rem2 = (REGULAR_SHOP_POOL_2STAR - owned2).coerceIn(0, REGULAR_SHOP_POOL_2STAR)
+            val rem3 = (REGULAR_SHOP_POOL_3STAR - owned3).coerceIn(0, REGULAR_SHOP_POOL_3STAR)
+            if (rem1 + rem2 + rem3 < 3) return liveCalibrated()
+            return forRemainingRelicPool(rem1, rem2, rem3)
+        }
+
         fun fromObservations(observations: Iterable<Iterable<ShopItem>>): ShopShelfModel {
             val shelves = observations.map { it.toList() }
             return ShopShelfModel(shelves.groupingBy { it }.eachCount().map { (shelf, count) ->
                 count.toDouble() / shelves.size to shelf
             })
         }
+
+        private fun buildWeightedWithoutReplacementShelves(r1: Int, r2: Int, r3: Int): ShopShelfModel {
+            val weights = doubleArrayOf(WEIGHT_1STAR, WEIGHT_2STAR, WEIGHT_3STAR)
+            val counts = intArrayOf(r1, r2, r3)
+            val kinds = arrayOf(ShopItemKind.RELIC_1STAR, ShopItemKind.RELIC_2STAR, ShopItemKind.RELIC_3STAR)
+            val grouped = linkedMapOf<Triple<Int, Int, Int>, Double>()
+
+            fun draw(slot: Int, prob: Double, p0: Int, p1: Int, p2: Int) {
+                if (slot == 3) {
+                    val sorted = intArrayOf(p0, p1, p2).apply { sort() }
+                    val triple = Triple(sorted[0], sorted[1], sorted[2])
+                    grouped[triple] = (grouped[triple] ?: 0.0) + prob
+                    return
+                }
+                val totalWeight = counts[0] * weights[0] + counts[1] * weights[1] + counts[2] * weights[2]
+                if (totalWeight <= 0.0) {
+                    draw(slot + 1, prob, p0, p1, p2)
+                    return
+                }
+                for (star in 0..2) {
+                    val c = counts[star]
+                    if (c <= 0) continue
+                    val branchProb = prob * (c * weights[star] / totalWeight)
+                    counts[star] = c - 1
+                    when (slot) {
+                        0 -> draw(1, branchProb, star + 1, p1, p2)
+                        1 -> draw(2, branchProb, p0, star + 1, p2)
+                        else -> draw(3, branchProb, p0, p1, star + 1)
+                    }
+                    counts[star] = c
+                }
+            }
+
+            draw(0, 1.0, 0, 0, 0)
+            val filtered = grouped.entries
+                .filter { it.value >= MIN_SHELF_PROB }
+                .ifEmpty { grouped.entries.toList() }
+                .sortedByDescending { it.value }
+            val rawSum = filtered.sumOf { it.value }
+            val normalizedProbs = filtered.map { it.value / rawSum }.toMutableList()
+            val residual = 1.0 - normalizedProbs.sum()
+            if (normalizedProbs.isNotEmpty() && abs(residual) > 0.0) {
+                normalizedProbs[0] = (normalizedProbs[0] + residual).coerceIn(0.0, 1.0)
+            }
+            val shelves = filtered.mapIndexed { idx, (triple, _) ->
+                val relicKinds = listOf(triple.first, triple.second, triple.third)
+                    .filter { it in 1..3 }
+                    .map { kinds[it - 1] }
+                normalizedProbs[idx] to calibratedShelf(*relicKinds.toTypedArray())
+            }
+            return ShopShelfModel(shelves)
+        }
     }
+}
+
+private fun calibratedShelf(vararg relicKinds: ShopItemKind): List<ShopItem> =
+    relicKinds.mapIndexed { index, kind ->
+        val price = when (kind) {
+            ShopItemKind.RELIC_1STAR -> 1800
+            ShopItemKind.RELIC_2STAR -> 2800
+            ShopItemKind.RELIC_3STAR -> 3800
+            else -> 9999
+        }
+        ShopItem("${kind.name}_$index", kind, price)
+    } + listOf(
+        ShopItem("ROLE_IMPRINT_0", ShopItemKind.ROLE_IMPRINT, 1200),
+        ShopItem("ROLE_IMPRINT_1", ShopItemKind.ROLE_IMPRINT, 1200),
+        ShopItem("ROLE_CHOICE_IMPRINT_0", ShopItemKind.ROLE_CHOICE_IMPRINT, 2800),
+    )
+
+// Fallback mid-run shelf distribution matching 1,793 non-Area-4 shelves / 5,379 relic offers
+// (1★ ~59.8%, 2★ ~34.4%, 3★ ~5.9%) under 65:30:5 weighted without-replacement from (18, 22, 23).
+private val LIVE_CALIBRATED_SHELVES: ShopShelfModel by lazy {
+    ShopShelfModel.forRemainingRelicPool(18, 22, 23)
 }
 
 /** Wallet totals reflect the selected purchases on the visible shelf before any refresh fee. */
@@ -186,6 +308,14 @@ private class ShopDp(
         var best = Decision(futureValue(state.wallet, state.shops - 1), EXIT)
         for ((index, item) in state.shelf.withIndex()) {
             if (index in state.bought || discount.price(item.basePrice) > state.wallet.gold) continue
+            if (index > 0 && (index - 1) !in state.bought) {
+                val prev = state.shelf[index - 1]
+                if (prev.characterId == null && item.characterId == null &&
+                    prev.relicId == null && item.relicId == null &&
+                    prev.kind == item.kind && prev.basePrice == item.basePrice &&
+                    prev.extraBattlePts == item.extraBattlePts && prev.collectionCount == item.collectionCount
+                ) continue
+            }
             val (next, pts) = purchase(state, index)
             val value = pts + item.extraBattlePts + decision(next).value
             if (value > best.value) best = Decision(value, index)

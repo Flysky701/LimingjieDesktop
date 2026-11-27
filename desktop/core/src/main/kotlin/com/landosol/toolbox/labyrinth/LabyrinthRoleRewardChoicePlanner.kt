@@ -234,7 +234,10 @@ class LabyrinthRoleRewardChoicePlanner(
         val ruleRank = ruleOrder.withIndex().associate { it.value to it.index }
         val ranked = tryPathB {
             evaluateRoleChoices(planning.planningState(owned), ruleOrder, planning.upcomingExams,
-                planning.passEstimator, planning.scoreSettings)
+                planning.passEstimator, planning.scoreSettings,
+                shelfModel = com.landosol.toolbox.labyrinth.kernel.planning.ShopShelfModel.forOwnedRelics(
+                    planning.observedRelicIds,
+                ))
         }?.takeIf { results ->
             results.all { it.totalScore.isFinite() } &&
                 (results.all { it.usedModel } || results.none { it.usedModel })

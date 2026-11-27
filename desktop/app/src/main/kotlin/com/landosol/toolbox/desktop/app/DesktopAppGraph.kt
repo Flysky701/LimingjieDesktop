@@ -775,6 +775,9 @@ class DesktopAppGraph(
             routeProgressSaver = { accountId, enterId, currentBlockId ->
                 labyrinthRouteStore.updateCurrentBlock(accountId, enterId, currentBlockId)
             },
+            routeReplanSaver = { accountId, enterId, nodes, currentBlockId ->
+                labyrinthRouteStore.updatePlannedRoute(accountId, enterId, nodes, currentBlockId)
+            },
             routeExecutionGate = ::validateLabyrinthExecutionForAccount,
             nodeTemplateLoader = { LabyrinthNodeTemplateLoader(context).load() },
             debugFramePublisher = { frame, state, result, presentation ->
@@ -893,7 +896,9 @@ class DesktopAppGraph(
             if (sharedData == null) labyrinthStrategySettings else sharedRerollCache,
             launchForeground = ::startRerollHost,
             scope = mainScope,
-            beforeRerollLogin = { accountId -> withContext(Dispatchers.IO) { hardCloseChannelClientBeforeReroll(accountId) } },
+            beforeRerollLogin = { accountId, automaticRetire ->
+                withContext(Dispatchers.IO) { hardCloseChannelClientBeforeReroll(accountId, automaticRetire) }
+            },
             afterStandaloneReroll = { accountId -> coldStartChannelClientAfterReroll(accountId) },
         )
     }
@@ -907,40 +912,39 @@ class DesktopAppGraph(
         com.landosol.toolbox.automation.session.GameClientHardCloser(
             foregroundPackage = { device.foregroundPackage },
             pressHome = { actionDevice.home() },
-            killBackgroundProcesses = { packageName -> check(runBlocking(Dispatchers.IO) { actionDevice.forceStop(packageName) }) { "无法强制停止客户端" } },
+            killBackgroundProcesses = { packageName -> check(actionDevice.forceStop(packageName)) { "无法强制停止客户端" } },
             canKillOtherApps = true,
             trace = { step -> AppLogger.i(CLIENT_LOG_TAG, step) },
         )
     }
 
-    private suspend fun hardCloseChannelClientBeforeReroll(accountId: Long): String? {
+    private suspend fun hardCloseChannelClientBeforeReroll(accountId: Long, automaticRetire: Boolean): String? {
         val isBatch = labyrinthBatchController.state.value?.stage in ACTIVE_BATCH_STAGES
-        val closesClient = selectedGameServer?.let(com.landosol.toolbox.automation.session.ChannelSdkTraits::closesClientBeforeReroll) == true
-        if (isBatch && batchPreparedClient == (accountId to gamePackageName)) {
+        val server = selectedGameServer
+        if (isBatch && batchPreparedClient == (accountId to server?.packageName)) {
             return resolutionGuard.beforeClientReset()
         }
-        if (isBatch) {
-            val rejection = if (closesClient) resolutionGuard.beforeClientReset() else resolutionGuard.actionRejection()
-            rejection?.let { return it }
+        // A previous reroll's ticket cannot authorize this reroll.
+        gameClientHardCloseLedger.clear()
+        val actionsReady = actionsAvailable()
+        val closesClient = com.landosol.toolbox.automation.session.ChannelSdkTraits.closesClientBeforeReroll(server)
+        if (!isBatch && !closesClient && !(automaticRetire && actionsReady)) return null
+        if (server == null) return "刷开局前无法确定要大退的游戏客户端"
+        val targetPackage = server.packageName
+        if (!actionsReady) {
+            return "${server.displayName}刷开局前需要先大退游戏，但设备未连接或触控不可用"
         }
-        else if (closesClient) {
+        if (!isBatch) {
             try { resolutionGuard.checkForStart() }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Exception) { return failure.message ?: "截图尺寸检查失败，请到设备页重新检查" }
         }
-        // Whatever an earlier reroll left behind is void from here on, whichever channel this is.
-        gameClientHardCloseLedger.clear()
-        val server = selectedGameServer
-            ?.takeIf(com.landosol.toolbox.automation.session.ChannelSdkTraits::closesClientBeforeReroll)
-            ?: return null
-        if (!actionsAvailable()) {
-            return "${server.displayName}刷开局前需要先大退游戏，但设备未连接或触控不可用"
-        }
-        return when (val result = gameClientHardCloser.close(server.packageName)) {
+        resolutionGuard.beforeClientReset()?.let { return it }
+        return when (val result = gameClientHardCloser.close(targetPackage)) {
             com.landosol.toolbox.automation.session.GameClientHardCloseResult.KillRequested -> {
                 // Only a request: the cold start that follows must still prove the process died.
-                gameClientHardCloseLedger.issue(accountId, server.packageName)
-                AppLogger.i(CLIENT_LOG_TAG, "刷开局前已请求大退 ${server.packageName}（账号 $accountId）")
+                gameClientHardCloseLedger.issue(accountId, targetPackage)
+                AppLogger.i(CLIENT_LOG_TAG, "刷开局前已请求大退 $targetPackage（账号 $accountId）")
                 null
             }
             is com.landosol.toolbox.automation.session.GameClientHardCloseResult.Failed ->
@@ -1097,18 +1101,25 @@ class DesktopAppGraph(
                             log.add("会话重置失败：$detail", kind = UserLogKind.WARNING)
                         }
 
-                    // AnchorTriggerSessionExpiryTerminator taps the recognised trigger, expects the
-                    // "session expired" popup, taps 返回标题, then the entry planner navigates
-                    // title → home → adventure → labyrinth home. READY means the stale local
-                    // state is gone and the new server entry is what the client sees.
-                    // Spent before anything can fail, so it never outlives this sync.
-                    val hardClosed = consumeGameClientHardClosed(accountId, gamePackageName)
+                    // Spend the ticket before anything can fail, so it never outlives this sync.
+                    val targetPackage = gamePackageName
+                    val hardClosed = consumeGameClientHardClosed(accountId, targetPackage)
                     if (!CaptureStateRegistry.isActive()) {
                         return failure(
                             "屏幕捕获已停止" + (CaptureStateRegistry.lastStopReason()?.let { "（$it）" } ?: ""),
                         )
                     }
-                    return when (val started = gameSessionResetWorkflow.start(clientHardClosed = hardClosed)) {
+                    if (!hardClosed) {
+                        if (targetPackage == null || !actionsAvailable()) {
+                            return failure("无法大退游戏：游戏客户端未确定或触控不可用")
+                        }
+                        resolutionGuard.beforeClientReset()?.let { return failure(it) }
+                        val result = gameClientHardCloser.close(targetPackage)
+                        if (result is com.landosol.toolbox.automation.session.GameClientHardCloseResult.Failed) {
+                            return failure(result.reason)
+                        }
+                    }
+                    return when (val started = gameSessionResetWorkflow.start(clientHardClosed = true)) {
                         is GameSessionResetStartResult.Started -> {
                             val final = gameSessionResetWorkflow.state.first { !it.running }
                             val ok = final.status == GameSessionResetStatus.STOPPED &&
@@ -1116,7 +1127,7 @@ class DesktopAppGraph(
                                 final.lastBlock == SessionBlockKind.NONE
                             if (ok) {
                                 com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult.Success(
-                                    if (hardClosed) "hard-close-cold-start" else "home-tab-session-expiry",
+                                    "hard-close-cold-start",
                                 )
                             } else {
                                 failure(

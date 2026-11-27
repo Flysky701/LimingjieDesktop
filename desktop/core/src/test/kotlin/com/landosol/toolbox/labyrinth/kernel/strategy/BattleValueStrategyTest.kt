@@ -667,4 +667,92 @@ class BattleValueStrategyTest {
         assertEquals(0.80, estimate.pPass, 1e-12)
         assertTrue(estimator.batches.isNotEmpty())
     }
+
+    @Test fun retryPrefersDiverseCoreOverFourOfFiveRepeatedFailure() {
+        val roster = modelRoster(7)
+        val valueContext = modelContext(roster)
+        val ids = roster.map { it.characterId }
+        val unitIds = valueContext.ownedUnits.map { it.unitId }
+        val failed1 = ids.subList(0, 5)
+        val failed2 = ids.subList(0, 4) + ids[5]
+        val fourOverlap = (unitIds.subList(0, 4) + unitIds[6]).sorted()
+        val diverseThreeOverlap = (listOf(unitIds[0], unitIds[1], unitIds[4], unitIds[5], unitIds[6])).sorted()
+        val estimator = ModelEstimator { team ->
+            when (team) {
+                fourOverlap -> 0.72
+                diverseThreeOverlap -> 0.65
+                else -> 0.20
+            }
+        }
+        val planner = planner(roster).withBattleValueEstimator(estimator)
+        val failedSignatures = setOf(
+            labyrinthBattleTeamSignature(failed1),
+            labyrinthBattleTeamSignature(failed2),
+        )
+        val result = (planner.retryRecommendation(
+            acquiredCharacterIds = ids,
+            context = valueContext.ruleContext,
+            failedTeamSignatures = failedSignatures,
+            retryNumber = 2,
+            lastFailedTeamSignature = labyrinthBattleTeamSignature(failed2),
+            battleValueContext = valueContext,
+        ) as LabyrinthBattleTeamRecommendationResult.Ready).recommendation
+        val chosenUnits = result.members.map { requireNotNull(labyrinthCharacterIdToUnitId(it.characterId)) }.sorted()
+        assertEquals(diverseThreeOverlap, chosenUnits)
+        assertTrue(result.modelAssessment?.adopted == true)
+    }
+
+    @Test fun bossSearchesDisjointSecondTeamWithoutVanguardGateAndCapsLowTwoTeamDamageEstimate() {
+        val roster = modelRoster(10)
+        val ruleContext = LabyrinthRoleDecisionContext(0, currentArea = 3, frontlineSurvivalGateEnabled = false, optimizeBossVanguardSynergy = true)
+        val valueContext = modelContext(roster, ruleContext)
+        val firstTeam = valueContext.ownedUnits.take(5).map { it.unitId }.sorted()
+        val secondTeam = valueContext.ownedUnits.drop(5).map { it.unitId }.sorted()
+        val estimator = ModelEstimator(damageMean = { 0.30 }) { team ->
+            when (team) {
+                firstTeam -> 0.60
+                secondTeam -> 0.70
+                else -> 0.10
+            }
+        }
+        val result = requireNotNull(ModelGuidedBattleTeamSearcher(estimator, optimizer = null).search(
+            valueContext, roster, emptyList(), emptySet(), requestedBossTeamCount = 2, supplementLead = false,
+        ))
+        assertEquals(2, result.teams.size)
+        val packed = result.teams.map { t -> t.map { requireNotNull(labyrinthCharacterIdToUnitId(it.characterId)) }.sorted() }
+        assertEquals(setOf(firstTeam, secondTeam), packed.toSet())
+        assertEquals(listOf(0.70, 0.60), result.assessment.teamWinProbabilities)
+
+        // Two <20% teams must stay conservative (capped <= 0.68, below SAFE 0.70) even with high mean damage.
+        val lowTwoTeamProb = combinedMultiTeamPassProb(listOf(
+            BattleValue(0.08, 0.0, 0.92, 0.85, 0.0, 0.08),
+            BattleValue(0.06, 0.0, 0.94, 0.85, 0.0, 0.06),
+        ))
+        assertEquals(0.68, lowTwoTeamProb, 1e-12)
+        assertTrue(lowTwoTeamProb < BattleConfidenceTier.SAFE_THRESHOLD)
+    }
+
+    @Test fun lowConfidenceFallbackLogsRuleLeadNnWinProbability() {
+        val roster = modelRoster(6)
+        val ids = roster.map { it.characterId }
+        val valueContext = modelContext(roster)
+        val planner = planner(roster)
+        val rule = (planner.initialRecommendation(ids, valueContext.ruleContext)
+            as LabyrinthBattleTeamRecommendationResult.Ready).recommendation
+        val ruleUnitIds = rule.members.map { requireNotNull(labyrinthCharacterIdToUnitId(it.characterId)) }.sorted()
+        val modelIds = ids.filterNot { it == rule.members.first().characterId }
+        val modelUnitIds = modelIds.map { requireNotNull(labyrinthCharacterIdToUnitId(it)) }.sorted()
+        val estimator = ModelEstimator { team ->
+            when (team) {
+                modelUnitIds -> 0.49
+                ruleUnitIds -> 0.40
+                else -> 0.10
+            }
+        }
+        val rec = (planner.withBattleValueEstimator(estimator)
+            .initialRecommendation(ids, valueContext.ruleContext, battleValueContext = valueContext)
+            as LabyrinthBattleTeamRecommendationResult.Ready).recommendation
+        assertEquals(0.40, requireNotNull(rec.modelAssessment?.ruleLeadWinProbability), 1e-12)
+        assertTrue(rec.logText().contains("规则队NN胜率=40.0%"))
+    }
 }

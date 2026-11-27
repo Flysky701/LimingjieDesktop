@@ -10,6 +10,8 @@ import com.landosol.toolbox.desktop.device.*
 import com.landosol.toolbox.desktop.ocr.OcrEngineStatus
 import com.landosol.toolbox.desktop.platform.PowerMode
 import com.landosol.toolbox.desktop.shared.DesktopBindings
+import com.landosol.toolbox.labyrinth.batch.LabyrinthBatchInvalidationResult
+import com.landosol.toolbox.labyrinth.batch.LabyrinthBatchPorts
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import com.landosol.toolbox.labyrinth.*
 import com.landosol.toolbox.protocol.labyrinth.*
@@ -334,6 +336,44 @@ class DesktopGraphIntegrationTest {
         }
     }
 
+    @Test fun batchBilibiliResetWithoutHardCloseTicketForceStopsAndRequiresColdStartTitle() = runBlocking {
+        val root = generateSequence(Path.of("").toAbsolutePath()) { it.parent }
+            .first { Files.exists(it.resolve("desktop/core/src/test/resources/shop/shop.png")) }
+        val original = ImageIO.read(root.resolve("desktop/core/src/test/resources/shop/shop.png").toFile())
+        val fixture = java.awt.image.BufferedImage(1280, 720, java.awt.image.BufferedImage.TYPE_INT_RGB).apply {
+            createGraphics().apply {
+                drawImage(original, 0, 0, width, height, null)
+                dispose()
+            }
+        }
+        val pixels = fixture.getRGB(0, 0, fixture.width, fixture.height, null, 0, fixture.width)
+        // The fake keeps showing the in-game page after launch, as a surviving process would.
+        val fake = FixtureDevice(fixture.width, fixture.height, pixels).apply { packageRunning = true }
+        val graph = DesktopAppGraph(directory.root.toPath().resolve("batch-cold-start"), suppliedDevice = fake, startupUpdates = false)
+        try {
+            val server = GameServer.CN_BILIBILI
+            val accountId = graph.database.accountDao().insert(AccountEntity(
+                alias = "offline-cold-start", serverId = server.storageId, gameUid = null,
+                credentialKey = "synthetic-unused", isSelected = true, createdAt = 1, updatedAt = 1,
+            ))
+            graph.connectDevice("fixture-only")
+            withTimeout(5_000) { graph.labyrinthController.uiState.first { it.selectedAccount?.id == accountId } }
+            withTimeout(5_000) { while (graph.selectedGameServer != server) delay(10) }
+            graph.resolutionGuard.checkForStart()
+            graph.captureService.start()
+            val controller = graph.labyrinthBatchController
+            val ports = controller.javaClass.getDeclaredField("ports").apply { isAccessible = true }
+                .get(controller) as LabyrinthBatchPorts
+
+            val outcome = withTimeout(15_000) { ports.invalidateClientSessionAndReturn(accountId) }
+
+            assertEquals(listOf("stop:${server.packageName}", "launch:${server.packageName}"), fake.processEvents.toList())
+            assertTrue(outcome.toString(), outcome is LabyrinthBatchInvalidationResult.Failure &&
+                outcome.message.contains("大退未生效：冷启动后先出现 SHOP"))
+            assertEquals(0, fake.acceptedActions.get())
+        } finally { withTimeout(15_000) { graph.shutdown() } }
+    }
+
     @Test fun batchRejectsStaleServerCacheBeforeProcessQueryOrOpeningMutation() = runBlocking {
         val fake=FixtureDevice(1920,1080,IntArray(1920*1080)).apply {
             packageRunning=true
@@ -435,8 +475,17 @@ class DesktopGraphIntegrationTest {
         override suspend fun tap(x: Float, y: Float, expectedPackage: String) = action(expectedPackage).also { if (it is TouchResult.Completed) actions += AutomationAction.Tap(ScreenPoint(x, y)) }
         override suspend fun swipe(fromX: Float, fromY: Float, toX: Float, toY: Float, durationMillis: Long, holdMillis: Long, expectedPackage: String) = action(expectedPackage).also { if (it is TouchResult.Completed) actions += AutomationAction.Swipe(ScreenPoint(fromX, fromY), ScreenPoint(toX, toY), durationMillis, holdMillis) }
         override suspend fun back(expectedPackage: String) = action(expectedPackage).also { if (it is TouchResult.Completed) actions += AutomationAction.Back }
-        override suspend fun home() = true.also { lifecycleActions.incrementAndGet() }
-        override suspend fun launch(packageName: String) = true.also { lifecycleActions.incrementAndGet() }
+        override suspend fun home(): Boolean {
+            lifecycleActions.incrementAndGet()
+            foreground = null
+            return true
+        }
+        override suspend fun launch(packageName: String): Boolean {
+            lifecycleActions.incrementAndGet()
+            processEvents += "launch:$packageName"
+            foreground = packageName
+            return true
+        }
         override suspend fun isPackageRunning(packageName:String):Boolean {
             processEvents+="query:$packageName"
             check(!processQueryFails) { "synthetic query failure" }

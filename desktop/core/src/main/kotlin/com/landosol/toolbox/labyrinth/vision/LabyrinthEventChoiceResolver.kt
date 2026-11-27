@@ -74,6 +74,7 @@ class LabyrinthEventChoiceResolver(
     private var slotCaches = emptyList<LabyrinthEventOcrCache>()
     private var nextSlotRead = 0
     private var lastEventId: String? = null
+    private var lastCompleteLayoutCount: Int? = null
     private var stableFrames = 0
     private var lastOcrRequestAtMillis = Long.MIN_VALUE
 
@@ -124,7 +125,7 @@ class LabyrinthEventChoiceResolver(
             referenceSize = STANDARD_REFERENCE,
             referenceRect = OCR_REFERENCE_RECT,
         ) ?: return result.copy(eventOcrDiagnostics = LabyrinthEventOcrDiagnostics("INVALID_CROP"))
-        val customTitleScope = customTitleEvents.isNotEmpty() && completeLayoutCount == 2
+        val customTitleScope = titleOnly
         val titleRect = if (customTitleScope) layoutMapper.titleBounds(2, bitmap.width, bitmap.height) else null
         val currentTitleFingerprint = titleRect?.let { titleFingerprint(bitmap, it) }
         val fingerprint = if (customTitleScope) {
@@ -151,13 +152,22 @@ class LabyrinthEventChoiceResolver(
             canReuseLabyrinthEventOcrText(lookup, customTitleScope, currentTitleFingerprint, titleMatch)
         }
         if (observedText == null) {
-            lastEventId = null
-            stableFrames = 0
             // Failed/empty/expired title probes have a bounded exit to full OCR.
             val completedWithoutText = lookup.diagnostics.pendingRequestId == null &&
                 lookup.diagnostics.lastCompletedRequestId != null &&
                 lookup.diagnostics.lastResultStatus in setOf("EMPTY_TEXT", "FAILED_OR_UNAVAILABLE")
             val titleTimedOut = (lookup.diagnostics.pendingAgeMillis ?: 0L) >= 5_000L
+            val transientOcrRefresh = result.observation.state == LabyrinthEntryPageState.EVENT_CHOICE &&
+                completeLayoutCount != null &&
+                completeLayoutCount == lastCompleteLayoutCount &&
+                !completedWithoutText &&
+                !titleTimedOut &&
+                !titleOnly
+            if (!transientOcrRefresh) {
+                lastEventId = null
+                lastCompleteLayoutCount = null
+                stableFrames = 0
+            }
             if (titleOnly && (completedWithoutText || titleTimedOut)) {
                 fullOcrFallback = true
                 ocrCache.clear()
@@ -196,6 +206,7 @@ class LabyrinthEventChoiceResolver(
         val event = match.event ?: run {
             if (titleOnly) {
                 lastEventId = null
+                lastCompleteLayoutCount = null
                 stableFrames = 0
                 fullOcrFallback = true
                 ocrCache.clear()
@@ -209,8 +220,9 @@ class LabyrinthEventChoiceResolver(
             if (result.observation.state == LabyrinthEntryPageState.EVENT_CHOICE && completeLayoutCount != null &&
                 lookup.diagnostics.fingerprintDistance == 0) {
                 val id = "ocr/$completeLayoutCount/" + UUID.nameUUIDFromBytes(observedText.toByteArray(Charsets.UTF_8))
-                stableFrames = if (lastEventId == id) stableFrames + 1 else 1
+                stableFrames = if (lastEventId == id && lastCompleteLayoutCount == completeLayoutCount) stableFrames + 1 else 1
                 lastEventId = id
+                lastCompleteLayoutCount = completeLayoutCount
                 val descriptions = if (readUnknownOptionText()) unknownChoiceDescriptions(bitmap, id, completeLayoutCount) else emptyList()
                 val visuals = layoutMapper.buttonRects(completeLayoutCount, bitmap.width, bitmap.height).mapIndexed { index, rect ->
                     val choice = EventChoiceResource(id = "$id/${index + 1}", slot = index + 1, name = "选项${index + 1}",
@@ -224,6 +236,7 @@ class LabyrinthEventChoiceResolver(
                         stableFrames = stableFrames))
             }
             lastEventId = null
+            lastCompleteLayoutCount = null
             stableFrames = 0
             val scheduled = retryOcr(bitmap, cropRect, fingerprint, currentTitleFingerprint)
             return result.copy(eventOcrDiagnostics = diagnostic.copy(
@@ -233,8 +246,13 @@ class LabyrinthEventChoiceResolver(
             ))
         }
         unknownPageId = null
-        stableFrames = if (lastEventId == event.id) stableFrames + 1 else 1
+        stableFrames = if (lastEventId == event.id && (lastCompleteLayoutCount == null || lastCompleteLayoutCount == completeLayoutCount)) {
+            stableFrames + 1
+        } else {
+            1
+        }
         lastEventId = event.id
+        lastCompleteLayoutCount = completeLayoutCount
         val orderedChoices = event.choices.sortedBy { it.slot }
         val buttonRects = layoutMapper.buttonRects(orderedChoices.size, bitmap.width, bitmap.height)
         if (buttonRects.size != orderedChoices.size) return result.copy(eventOcrDiagnostics = diagnostic.copy(
@@ -424,6 +442,7 @@ class LabyrinthEventChoiceResolver(
         fullOcrFallback = false
         ocrCache.clear()
         lastEventId = null
+        lastCompleteLayoutCount = null
         stableFrames = 0
         lastOcrRequestAtMillis = Long.MIN_VALUE
     }

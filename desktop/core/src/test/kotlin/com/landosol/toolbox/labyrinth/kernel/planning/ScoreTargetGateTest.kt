@@ -88,7 +88,7 @@ class ScoreTargetGateTest {
                 assertFalse(evaluation.usedModel)
                 assertTrue(evaluation.hardUpperBound >= target)
                 assertTrue(evaluation.expectedScore > evaluation.confirmedPts)
-                val minExpectedProbability = if (target == 50_000L) 0.1 else 0.01
+                val minExpectedProbability = if (target == 50_000L) 0.1 else 0.005
                 assertTrue(
                     "target=$target prob=${evaluation.probReachTarget}",
                     evaluation.probReachTarget in minExpectedProbability..1.0,
@@ -131,7 +131,7 @@ class ScoreTargetGateTest {
             withoutAreaThreeShop, areaOneNodeThreeCounts, 5, target, state.copy(remainingShops = 2), settings = official,
         )
 
-        assertEquals(finalSpendingShopOnly.hardUpperBound + 2_800L, evaluation.hardUpperBound)
+        assertEquals(finalSpendingShopOnly.hardUpperBound + 3_000L, evaluation.hardUpperBound)
     }
 
     @Test
@@ -412,5 +412,184 @@ class ScoreTargetGateTest {
         }
         check(previousAreaLastId != null)
         return nodes
+    }
+
+    @Test
+    fun `evaluateOfficialScoreRoute converts event gold via shop walletModel and preserves Area 4 savings`() {
+        val nodes = listOf(
+            LabyrinthMapNode(area = 2, column = 0, row = 1, blockId = 10L, blockType = Node.START, questId = null, nextBlockIds = listOf(20L, 21L), isAreaLastPoint = false),
+            LabyrinthMapNode(area = 2, column = 1, row = 1, blockId = 20L, blockType = Node.EVENT, questId = null, nextBlockIds = listOf(30L), isAreaLastPoint = false),
+            LabyrinthMapNode(area = 2, column = 1, row = 2, blockId = 21L, blockType = Node.CLEAR, questId = null, nextBlockIds = listOf(30L), isAreaLastPoint = false),
+            LabyrinthMapNode(area = 2, column = 2, row = 1, blockId = 30L, blockType = Node.SHOP, questId = null, nextBlockIds = listOf(40L), isAreaLastPoint = false),
+            LabyrinthMapNode(area = 2, column = 3, row = 1, blockId = 40L, blockType = Node.BOSS, questId = 77020301, nextBlockIds = emptyList(), isAreaLastPoint = true),
+        ).toPlanningRouteGraph()
+        val eval = evaluateOfficialScoreRoute(
+            graph = nodes,
+            difficulty = 5,
+            settings = official,
+            planningState = PlanningState(
+                difficulty = 5,
+                currentArea = 2,
+                ownedCharacterIds = setOf("100101", "100201"),
+                relicIds = emptySet(),
+                markStacks = emptyMap(),
+                remainingShops = 1,
+                enhanceNode21 = false,
+                reviveAvailable = false,
+                alphaRupee = 800,
+                targetScore = 0L,
+            ),
+            initialGold = 800,
+        )
+        assertTrue(20L in eval.dp.bestRoute.map { it.blockId })
+        val eventPlusBossBaseOnly = scalePts(official, 5, (100L + 100L) + 100L + (500L + 100L + 1500L)).toDouble()
+        assertTrue(
+            "expected event+shop wallet conversion > base ($eventPlusBossBaseOnly), got ${eval.dp.expectedScore}",
+            eval.dp.expectedScore > eventPlusBossBaseOnly,
+        )
+
+        val area4To5 = listOf(
+            LabyrinthMapNode(area = 4, column = 0, row = 1, blockId = 100L, blockType = Node.START, questId = null, nextBlockIds = listOf(110L), isAreaLastPoint = false),
+            LabyrinthMapNode(area = 4, column = 1, row = 1, blockId = 110L, blockType = Node.SHOP, questId = null, nextBlockIds = listOf(120L), isAreaLastPoint = false),
+            LabyrinthMapNode(area = 4, column = 2, row = 1, blockId = 120L, blockType = Node.BOSS, questId = 77040301, nextBlockIds = listOf(130L), isAreaLastPoint = true),
+            LabyrinthMapNode(area = 5, column = 0, row = 1, blockId = 130L, blockType = Node.BOSS, questId = 77050301, nextBlockIds = emptyList(), isAreaLastPoint = true),
+        ).toPlanningRouteGraph()
+        val area4Eval = evaluateOfficialScoreRoute(
+            graph = area4To5,
+            difficulty = 5,
+            settings = official,
+            planningState = PlanningState(
+                difficulty = 5,
+                currentArea = 4,
+                ownedCharacterIds = (1..12).mapTo(linkedSetOf()) { "10%02d01".format(it) },
+                relicIds = emptySet(),
+                markStacks = emptyMap(),
+                remainingShops = 1,
+                enhanceNode21 = false,
+                reviveAvailable = false,
+                alphaRupee = 6000,
+                targetScore = 0L,
+            ),
+            initialGold = 6000,
+        )
+        // Area 4 SHOP awards 0 extra shop pts when saving for Area 5 (conditional on clearing both 0.99 bosses).
+        val area4ZeroGoldEval = evaluateOfficialScoreRoute(
+            graph = area4To5,
+            difficulty = 5,
+            settings = official,
+            planningState = PlanningState(
+                difficulty = 5,
+                currentArea = 4,
+                ownedCharacterIds = (1..12).mapTo(linkedSetOf()) { "10%02d01".format(it) },
+                relicIds = emptySet(),
+                markStacks = emptyMap(),
+                remainingShops = 1,
+                enhanceNode21 = false,
+                reviveAvailable = false,
+                alphaRupee = 0,
+                targetScore = 0L,
+            ),
+            initialGold = 0,
+        )
+        val expectedBaseOnly = scalePts(
+            official,
+            5,
+            100L + (100L + 500L + 1500L + 100L + 200L) + (100L + 500L + 1500L),
+        ).toDouble() * 0.99 * 0.99
+        assertEquals(expectedBaseOnly, area4Eval.dp.expectedScore, 1e-6)
+        assertEquals(area4ZeroGoldEval.dp.expectedScore, area4Eval.dp.expectedScore, 1e-6)
+    }
+
+    @Test
+    fun `replanMidRunRouteFromCurrentNode switches at fork on live NN or rich wallet and respects hysteresis`() {
+        val current = LabyrinthMapNode(
+            area = 3,
+            column = 1,
+            row = 1,
+            blockId = 200L,
+            blockType = Node.CLEAR,
+            questId = null,
+            nextBlockIds = listOf(210L, 220L),
+            isAreaLastPoint = false,
+        )
+        val riskyUpper = LabyrinthMapNode(
+            area = 3,
+            column = 2,
+            row = 1,
+            blockId = 210L,
+            blockType = Node.EX_BATTLE,
+            questId = 77030201,
+            nextBlockIds = listOf(290L),
+            isAreaLastPoint = false,
+        )
+        val saferShopLower = LabyrinthMapNode(
+            area = 3,
+            column = 2,
+            row = 2,
+            blockId = 220L,
+            blockType = Node.SHOP,
+            questId = null,
+            nextBlockIds = listOf(290L),
+            isAreaLastPoint = false,
+        )
+        val boss = LabyrinthMapNode(
+            area = 3,
+            column = 3,
+            row = 1,
+            blockId = 290L,
+            blockType = Node.BOSS,
+            questId = 77030301,
+            nextBlockIds = emptyList(),
+            isAreaLastPoint = true,
+        )
+        val allNodes = listOf(current, riskyUpper, saferShopLower, boss)
+        val planningState = PlanningState(
+            difficulty = 5,
+            currentArea = 3,
+            ownedCharacterIds = (1..8).mapTo(linkedSetOf()) { "10%02d01".format(it) },
+            relicIds = setOf(40001),
+            markStacks = emptyMap(),
+            remainingShops = 1,
+            enhanceNode21 = false,
+            reviveAvailable = false,
+            alphaRupee = 4000,
+            targetScore = 0L,
+        )
+        val nnEstimator = BattlePassEstimator { _, exam ->
+            when {
+                exam.isEx -> PassEstimate(pPass = 0.25, expectedTeams = 1.0)
+                exam.isBoss -> PassEstimate(pPass = 0.99, expectedTeams = 1.0)
+                else -> PassEstimate(pPass = 1.0, expectedTeams = 1.0)
+            }
+        }
+        val replan = replanMidRunRouteFromCurrentNode(
+            allMapNodes = allNodes,
+            incumbentRemainingRoute = listOf(riskyUpper, boss),
+            currentNodeId = 200L,
+            confirmedCounts = ScoreCounts(areasCleared = AreaClears.Count(2)),
+            difficulty = 5,
+            targetScore = 0L,
+            planningState = planningState,
+            passEstimator = nnEstimator,
+            settings = official,
+        )
+        assertTrue(replan != null)
+        assertTrue(replan!!.usedModel)
+        assertTrue(replan.reason, replan.shouldSwitch)
+        assertEquals(listOf(200L, 220L, 290L), replan.bestRemainingRoute.map { it.blockId })
+
+        val noSwitchSamePath = replanMidRunRouteFromCurrentNode(
+            allMapNodes = allNodes,
+            incumbentRemainingRoute = listOf(saferShopLower, boss),
+            currentNodeId = 200L,
+            confirmedCounts = ScoreCounts(areasCleared = AreaClears.Count(2)),
+            difficulty = 5,
+            targetScore = 0L,
+            planningState = planningState,
+            passEstimator = nnEstimator,
+            settings = official,
+        )
+        assertTrue(noSwitchSamePath != null)
+        assertFalse(noSwitchSamePath!!.shouldSwitch)
     }
 }

@@ -16,6 +16,7 @@ import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryFrameResult
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageObservation
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import com.landosol.toolbox.labyrinth.vision.LabyrinthNodeMoveConfirmationObservation
+import com.landosol.toolbox.labyrinth.vision.NODE_SEARCH_MODE_DEFERRED
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -1126,6 +1127,144 @@ class LabyrinthEntryRecognitionPolicyTest {
                 dispatchedAtMillis = Long.MIN_VALUE,
                 landedAtMillis = Long.MIN_VALUE,
                 intervalMillis = 650L,
+            ),
+        )
+    }
+
+    @Test
+    fun `delayed generic reward before MOVE_CONFIRM never confirms LINK arrival`() {
+        // Without MOVE_CONFIRM, delayed CHARACTER_JOINED / ITEM_REWARD from previous EVENT must be ignored.
+        assertFalse(
+            labyrinthCanConfirmNodeEntryForPending(
+                expectedBlockType = LabyrinthNodeTypes.LINK,
+                pageState = LabyrinthEntryPageState.CHARACTER_JOINED,
+                moveConfirmationDispatched = false,
+            ),
+        )
+        assertFalse(
+            labyrinthCanConfirmNodeEntryForPending(
+                expectedBlockType = LabyrinthNodeTypes.LINK,
+                pageState = LabyrinthEntryPageState.ITEM_REWARD,
+                moveConfirmationDispatched = false,
+            ),
+        )
+        // Once MOVE_CONFIRM was dispatched (or LINK_CHOICE itself opened), confirmation remains allowed.
+        assertTrue(
+            labyrinthCanConfirmNodeEntryForPending(
+                expectedBlockType = LabyrinthNodeTypes.LINK,
+                pageState = LabyrinthEntryPageState.CHARACTER_JOINED,
+                moveConfirmationDispatched = true,
+            ),
+        )
+        assertTrue(
+            labyrinthCanConfirmNodeEntryForPending(
+                expectedBlockType = LabyrinthNodeTypes.LINK,
+                pageState = LabyrinthEntryPageState.LINK_CHOICE,
+                moveConfirmationDispatched = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `type mismatch cursor guard blocks battle-vs-nonbattle and current-node drift`() {
+        assertFalse(
+            labyrinthShouldAdvanceCursorOnTypeMismatch(
+                expectedBlockType = LabyrinthNodeTypes.EX_BATTLE,
+                observedType = LabyrinthNodeTypes.LINK,
+                currentNodeBlockType = LabyrinthNodeTypes.LINK,
+            ),
+        )
+        assertFalse(
+            labyrinthShouldAdvanceCursorOnTypeMismatch(
+                expectedBlockType = LabyrinthNodeTypes.SHOP,
+                observedType = LabyrinthNodeTypes.LINK,
+                currentNodeBlockType = LabyrinthNodeTypes.LINK,
+            ),
+        )
+        assertTrue(
+            labyrinthShouldAdvanceCursorOnTypeMismatch(
+                expectedBlockType = LabyrinthNodeTypes.EVENT,
+                observedType = LabyrinthNodeTypes.SHOP,
+                currentNodeBlockType = LabyrinthNodeTypes.NORMAL_BATTLE,
+            ),
+        )
+    }
+
+    @Test
+    fun `event completion waits for settle window and consecutive NODE_SELECTION frames`() {
+        assertFalse(labyrinthEventCompletionReady(Long.MIN_VALUE, 2, 10_000L))
+        assertFalse(labyrinthEventCompletionReady(1_000L, 1, 5_000L))
+        assertFalse(labyrinthEventCompletionReady(1_000L, 2, 3_999L))
+        assertTrue(labyrinthEventCompletionReady(1_000L, 2, 4_000L))
+    }
+
+    @Test
+    fun `mid-run planning waits for clickable nodes or a settled map`() {
+        val blockedNode = NodeClassification(1, 1, LabyrinthNodeTypes.NORMAL_BATTLE, 0.95, isClickable = false)
+        val clickableNode = blockedNode.copy(isClickable = true)
+
+        assertFalse(labyrinthMidRunPlanningReady("normal", listOf(blockedNode), 1, 1_000L, 1_000L))
+        assertTrue(labyrinthMidRunPlanningReady("normal", listOf(blockedNode, clickableNode), 2, 1_000L, 1_100L))
+        assertFalse(labyrinthMidRunPlanningReady("normal", listOf(blockedNode), 2, 1_000L, 3_000L))
+        assertFalse(labyrinthMidRunPlanningReady("normal", listOf(blockedNode), 3, 1_000L, 2_999L))
+        assertTrue(labyrinthMidRunPlanningReady("normal", listOf(blockedNode), 3, 1_000L, 3_000L))
+        assertFalse(labyrinthMidRunPlanningReady(NODE_SEARCH_MODE_DEFERRED, listOf(clickableNode), 2, 1_000L, 1_100L))
+    }
+
+    @Test
+    fun `cursor rollback triggers once when FULL_COLUMN shows previous column still clickable`() {
+        val prev = com.landosol.toolbox.protocol.labyrinth.LabyrinthMapNode(
+            area = 3, column = 3, row = 1, blockId = 30301L,
+            blockType = LabyrinthNodeTypes.EVENT, questId = null, nextBlockIds = listOf(30401L), isAreaLastPoint = false,
+        )
+        val current = com.landosol.toolbox.protocol.labyrinth.LabyrinthMapNode(
+            area = 3, column = 4, row = 1, blockId = 30401L,
+            blockType = LabyrinthNodeTypes.LINK, questId = null, nextBlockIds = listOf(30501L), isAreaLastPoint = false,
+        )
+        val next = com.landosol.toolbox.protocol.labyrinth.LabyrinthMapNode(
+            area = 3, column = 5, row = 1, blockId = 30501L,
+            blockType = LabyrinthNodeTypes.EX_BATTLE, questId = 77030501, nextBlockIds = emptyList(), isAreaLastPoint = false,
+        )
+        val lastMatch = com.landosol.toolbox.labyrinth.node.NodeMatchResult(
+            currentNodeId = current.blockId,
+            currentNodeType = current.blockType,
+            nextNode = next,
+            visibleNodes = emptyList(),
+            topologyMappings = listOf(
+                com.landosol.toolbox.labyrinth.node.NodeTopologyMapping(
+                    blockId = current.blockId,
+                    expectedBlockType = current.blockType,
+                    logicalColumn = current.column,
+                    visualColumn = 1,
+                    visualRow = 1,
+                    screenRect = EntryPixelRect(200, 200, 120, 120),
+                    detectedBlockType = LabyrinthNodeTypes.LINK,
+                    visualConfidence = 0.92,
+                    topologyConfidence = 0.95,
+                    isClickable = true,
+                    bindingKind = NodeTopologyBindingKind.FULL_COLUMN,
+                ),
+            ),
+            isComplete = false,
+        )
+        assertTrue(
+            labyrinthShouldRollbackCursorOnTypeConflict(
+                currentNode = current,
+                nextNode = next,
+                previousNode = prev,
+                lastMatch = lastMatch,
+                conflictDetectedBlockType = LabyrinthNodeTypes.LINK,
+                alreadyRolledBack = false,
+            ),
+        )
+        assertFalse(
+            labyrinthShouldRollbackCursorOnTypeConflict(
+                currentNode = current,
+                nextNode = next,
+                previousNode = prev,
+                lastMatch = lastMatch,
+                conflictDetectedBlockType = LabyrinthNodeTypes.LINK,
+                alreadyRolledBack = true,
             ),
         )
     }

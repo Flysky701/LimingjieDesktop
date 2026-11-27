@@ -221,10 +221,9 @@ class LabyrinthController(
     private val launchForeground: () -> Unit,
     /**
      * Runs before a reroll logs in to the game server. Returns a failure message to abort the
-     * reroll, or null to go on. The application uses it to hard-close channel clients whose SDK
-     * logs out when the client is taken over (ChannelSdkTraits.closesClientBeforeReroll).
+     * reroll, or null to go on. Automatic standalone retirements request a client reset here.
      */
-    private val beforeRerollLogin: suspend (accountId: Long) -> String? = { null },
+    private val beforeRerollLogin: suspend (accountId: Long, automaticRetire: Boolean) -> String? = { _, _ -> null },
     /** Runs after a standalone (non-batch) reroll ends; the batch cold-starts the client itself. */
     private val afterStandaloneReroll: suspend (accountId: Long) -> Unit = {},
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
@@ -544,7 +543,7 @@ class LabyrinthController(
         val config = labyrinthBatchRerollConfig(base, guildId, difficulty)
         chrome.update { it.copy(isWorking = true, message = null, progress = "批量：正在刷取 $guildId", routeBlockIds = emptyList()) }
         try {
-            beforeRerollLogin(account.id)?.let { reason -> return failure(reason) }
+            beforeRerollLogin(account.id, false)?.let { reason -> return failure(reason) }
             var sessionResets = 0
             while (true) {
                 val session = ensureGameSession(account, PendingLoginAction.START)
@@ -624,7 +623,7 @@ class LabyrinthController(
         }
         // The explicit read that produced this opening already took the client's session; close
         // the client before it can meet 6002, so the batch cold-starts it instead.
-        beforeRerollLogin(account.id)?.let { reason ->
+        beforeRerollLogin(account.id, false)?.let { reason ->
             return com.landosol.toolbox.labyrinth.batch.LabyrinthBatchReusableOpeningCheck.Failure(reason)
         }
         val session = sessionRegistry.read(accountId)
@@ -671,7 +670,7 @@ class LabyrinthController(
         runningJob = scope.launch {
             chrome.update { it.copy(isWorking = true, message = null, routeBlockIds = emptyList()) }
             try {
-                beforeRerollLogin(account.id)?.let { reason ->
+                beforeRerollLogin(account.id, config.abandonExisting)?.let { reason ->
                     chrome.update { it.copy(message = reason) }
                     return@launch
                 }

@@ -2,6 +2,7 @@ package com.landosol.toolbox.labyrinth.kernel.strategy
 
 import com.landosol.toolbox.labyrinth.LabyrinthRoleProfile
 import com.landosol.toolbox.labyrinth.LabyrinthTeamOptimizer
+import com.landosol.toolbox.labyrinth.canonicalLabyrinthRoleId
 import com.landosol.toolbox.labyrinth.formatBattleWinProbability
 import com.landosol.toolbox.labyrinth.hasEligibleVanguardAtActualFront
 import com.landosol.toolbox.labyrinth.isEligibleBattleVanguard
@@ -67,6 +68,15 @@ internal class ModelGuidedBattleTeamSearcher(
         val affinities = estimator.unitAffinities(valueContext).orEmpty()
         val affinityOrder = compareByDescending<Int> { affinities[it] ?: Double.NEGATIVE_INFINITY }.thenBy { it }
         val talentByUnitId = valueContext.ownedUnits.associate { it.unitId to it.talentId }
+        val canonicalOwnedByChar = valueContext.ownedUnits.associate {
+            canonicalLabyrinthRoleId(it.profile.characterId) to it.unitId
+        }
+        val failedUnitIdSets = failedTeamSignatures.mapNotNull { signature ->
+            val unitSet = signature.split(',').mapNotNull { canonicalOwnedByChar[it.trim()] }.toSet()
+            unitSet.takeIf { it.isNotEmpty() }
+        }
+        fun maxFailedOverlap(ids: List<Int>): Int =
+            if (failedUnitIdSets.isEmpty()) 0 else failedUnitIdSets.maxOf { failed -> ids.count { it in failed } }
         val ruleSeeds = ruleTeams.mapNotNull { team ->
             team.map { ownedByCharacter[it]?.unitId ?: return@mapNotNull null }.sorted()
         }
@@ -145,6 +155,30 @@ internal class ModelGuidedBattleTeamSearcher(
                 for (count in 1..2) {
                     yield((vanguard.take(count) + rear + vanguard.drop(count)).take(teamSize))
                 }
+                if (failedUnitIdSets.isNotEmpty() && availableIds.size >= teamSize + 2) {
+                    val latestFailed = failedUnitIdSets.last()
+                    val nonFailedByAffinity = byAffinity.filter { it !in latestFailed }
+                    if (nonFailedByAffinity.size >= teamSize) {
+                        yield(nonFailedByAffinity.take(teamSize))
+                    }
+                    for (order in seedOrders) {
+                        val retained = order.filter { it in latestFailed }
+                        val fresh = order.filter { it !in latestFailed }
+                        if (fresh.size >= 2) {
+                            yield((retained.take((teamSize - 2).coerceAtLeast(0)) + fresh).take(teamSize))
+                        }
+                        if (fresh.size >= 3) {
+                            yield((retained.take((teamSize - 3).coerceAtLeast(0)) + fresh).take(teamSize))
+                        }
+                    }
+                    val latestFailedList = byAffinity.filter { it in latestFailed }
+                    for (removedPair in combinations(latestFailedList, minOf(2, latestFailedList.size))) {
+                        val kept = latestFailedList.filterNot { it in removedPair }
+                        if (kept.size + nonFailedByAffinity.size >= teamSize) {
+                            yield((kept + nonFailedByAffinity).take(teamSize))
+                        }
+                    }
+                }
             }
             evaluate(seeds, MAX_CANDIDATES)?.let { return it }
             if (evaluated.isEmpty()) {
@@ -167,7 +201,28 @@ internal class ModelGuidedBattleTeamSearcher(
             for (round in 0 until SEARCH_ROUNDS) {
                 val remaining = MAX_CANDIDATES - evaluated.size
                 if (remaining == 0) break
+                val roundBudget = maxOf(1, remaining / (SEARCH_ROUNDS - round))
                 val beam = evaluated.values.sortedWith(teamPriority).take(BEAM_SIZE)
+                val before = evaluated.size
+                if (failedUnitIdSets.isNotEmpty() && availableIds.size >= teamSize + 2) {
+                    val diverseNeighbors = sequence {
+                        val streams = ArrayDeque(beam.map { team ->
+                            swaps(team.unitIds, byAffinity, 2).filter { maxFailedOverlap(it) <= 3 }.iterator()
+                        })
+                        while (streams.isNotEmpty()) {
+                            val stream = streams.removeFirst()
+                            if (stream.hasNext()) {
+                                yield(stream.next())
+                                streams.addLast(stream)
+                            }
+                        }
+                    }
+                    val diverseBudget = minOf(roundBudget, maxOf(12, roundBudget / 2))
+                    evaluate(diverseNeighbors, diverseBudget)?.let { return it }
+                }
+                val stillRemaining = MAX_CANDIDATES - evaluated.size
+                if (stillRemaining == 0) break
+                val normalBudget = maxOf(1, (roundBudget - (evaluated.size - before)).coerceAtLeast(1))
                 val neighbors = sequence {
                     val streams = ArrayDeque(beam.flatMap { team ->
                         (1..2).map { swaps(team.unitIds, byAffinity, it).iterator() }
@@ -180,8 +235,7 @@ internal class ModelGuidedBattleTeamSearcher(
                         }
                     }
                 }
-                val before = evaluated.size
-                evaluate(neighbors, maxOf(1, remaining / (SEARCH_ROUNDS - round)))?.let { return it }
+                evaluate(neighbors, minOf(stillRemaining, normalBudget))?.let { return it }
                 if (evaluated.size == before) break
             }
             return null
@@ -192,19 +246,32 @@ internal class ModelGuidedBattleTeamSearcher(
         if (evaluated.isEmpty()) return noEligibleCandidate
 
         val ranked = evaluated.values.sortedWith(teamPriority)
-        val leadSolo = ranked.first()
+        val rawLeadSolo = ranked.first()
         val fullTeamSlots = eligibleByUnitId.size / TEAM_SIZE
         val autoDowngraded = requestedBossTeamCount == 1 && autoDowngradeBossMaxTeams > 1 &&
-            leadSolo.value.pWin < valueContext.strategyStyle.bossSoloMinPWin && fullTeamSlots >= 2
+            rawLeadSolo.value.pWin < valueContext.strategyStyle.bossSoloMinPWin && fullTeamSlots >= 2
         val effectiveTeamCount = minOf(
             if (autoDowngraded) autoDowngradeBossMaxTeams else requestedBossTeamCount,
             fullTeamSlots,
         )
+        val leadSolo = if (effectiveTeamCount == 1 && failedUnitIdSets.isNotEmpty() && maxFailedOverlap(rawLeadSolo.unitIds) >= 4) {
+            val bestDiverse = ranked.firstOrNull { maxFailedOverlap(it.unitIds) <= 3 }
+            val acceptDiverse = bestDiverse != null && when {
+                failedUnitIdSets.size >= 2 ->
+                    bestDiverse.value.pWin >= BattleConfidenceTier.MARGINAL_THRESHOLD ||
+                        rawLeadSolo.value.pWin - bestDiverse.value.pWin <= 0.20
+                else ->
+                    rawLeadSolo.value.pWin - bestDiverse.value.pWin <= 0.08
+            }
+            if (acceptDiverse) requireNotNull(bestDiverse) else rawLeadSolo
+        } else {
+            rawLeadSolo
+        }
         val safePacked = if (effectiveTeamCount > 1) {
             packTeams(ranked, effectiveTeamCount, teamPriority)
         } else listOf(leadSolo)
         val supplements = linkedMapOf<List<Int>, EvaluatedTeam>()
-        val supplementPacked = if (requireVanguard && safePacked.size < effectiveTeamCount) {
+        val supplementPacked = if (safePacked.size < effectiveTeamCount) {
             val remainingIds = eligibleByUnitId.keys - safePacked.flatMap { it.unitIds }.toSet()
             if (remainingIds.size >= teamSize) {
                 rankCandidates(remainingIds, enforceVanguard = false, ruleSeeds = emptyList(), evaluated = supplements)
@@ -213,13 +280,13 @@ internal class ModelGuidedBattleTeamSearcher(
             packTeams(supplements.values, effectiveTeamCount - safePacked.size, teamPriority)
         } else emptyList()
         val packing = safePacked + supplementPacked
-        val joint = if (effectiveTeamCount > 1) combinedMultiTeamPassProb(packing.map { it.value }) else null
+        val joint = if (packing.size >= 2) combinedMultiTeamPassProb(packing.map { it.value }) else null
         val lead = packing.first().value
         val effectiveProb = joint ?: lead.pWin
         val tier = BattleConfidenceTier.classify(effectiveProb)
-        val adoptionNote = if (tier == BattleConfidenceTier.UNSAFE) {
+        val ruleValues = mutableListOf<BattleValue>()
+        if (ruleSeeds.isNotEmpty()) {
             val usedRuleUnits = hashSetOf<Int>()
-            val ruleValues = mutableListOf<BattleValue>()
             val ruleTeamLimit = effectiveTeamCount.coerceAtLeast(1)
             for (ids in ruleSeeds) {
                 if (ruleValues.size == ruleTeamLimit) break
@@ -228,11 +295,14 @@ internal class ModelGuidedBattleTeamSearcher(
                 usedRuleUnits += ids
                 ruleValues += team.value
             }
+        }
+        val ruleLeadProb = ruleValues.firstOrNull()?.pWin
+        val adoptionNote = if (tier == BattleConfidenceTier.UNSAFE && ruleValues.isNotEmpty()) {
             val ruleProb = combinedMultiTeamPassProb(ruleValues)
             val ruleTotalDamage = ruleValues.sumOf { it.damageMean }
             val nnTotalDamage = packing.sumOf { it.value.damageMean }
-            if (ruleValues.isNotEmpty() && (effectiveProb >= ruleProb + 0.15 ||
-                    (packing.size >= 2 && nnTotalDamage >= ruleTotalDamage + 0.25))) {
+            if (effectiveProb >= ruleProb + 0.15 ||
+                (packing.size >= 2 && nnTotalDamage >= ruleTotalDamage + 0.25)) {
                 "NN低胜率优选（${formatBattleWinProbability(effectiveProb)} 优于规则队 ${formatBattleWinProbability(ruleProb)}）"
             } else null
         } else null
@@ -246,6 +316,7 @@ internal class ModelGuidedBattleTeamSearcher(
                 teamWinProbabilities = packing.map { it.value.pWin },
                 autoDowngradedToMultiTeam = autoDowngraded,
                 adoptionNote = adoptionNote,
+                ruleLeadWinProbability = ruleLeadProb,
             ),
         ))
     }

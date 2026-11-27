@@ -4,8 +4,14 @@ import com.landosol.toolbox.labyrinth.kernel.KernelDomain
 import com.landosol.toolbox.labyrinth.kernel.KernelEventKinds
 import com.landosol.toolbox.labyrinth.kernel.KernelRuntime
 import com.landosol.toolbox.labyrinth.kernel.BattleSamplePayload
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleQuestCatalogMeta
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleRosterUnit
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -142,5 +148,65 @@ class LabyrinthAlphaRupeeLedgerAndShadowSampleTest {
         assertFalse(shouldRecord(combatTeamIndex = 2))
         assertFalse(shouldRecord(plannedTeams = 2))
         assertFalse(shouldRecord(committedTeamCount = 2))
+    }
+
+    @Test fun liveRecorderPreventsSlowWipeTimeoutFlipPreservesReviveAndUsesCatalogMeta() {
+        val runtime = KernelRuntime()
+        val recorder = LabyrinthShadowBattleRecorder()
+        val roster = (1001..1005).map { id ->
+            BattleRosterUnit(id * 100 + 1, LabyrinthRoleProfile(id.toString(), "Role$id"))
+        }
+        val team = roster.map { it.unitId }
+        val context = BattleValueContext(
+            questId = 770420801,
+            area = 4,
+            difficulty = 5,
+            ownedUnits = roster,
+            ruleContext = LabyrinthRoleDecisionContext(0),
+            relicIds = listOf(50002),
+            markStacks = List(5) { 0 },
+            alphaRupee = 1200,
+            reviveAvailable = true,
+        )
+        val sig = "b".repeat(64)
+        val meta = BattleQuestCatalogMeta(bucket = "special_dual_ex", canonicalWaveSig = sig, dbVersion = "202611131613")
+
+        // 1) Slow loading live BATTLE_FAILED (wall-clock >= 90s) must stay outcome=2 (wipe), NOT outcome=1 (timeout).
+        assertTrue(recorder.beginAttempt(context, team, LabyrinthCombatKind.EX, null, labyrinthGuildId = 2, startedAtMillis = 1_000L, catalogMeta = meta))
+        val slowWipe = requireNotNull(recorder.completeAttempt(resultCode = 1, observedAtMillis = 96_000L, runtime = runtime))
+        assertEquals(listOf(0, 0, 1), slowWipe.outcomeCounts)
+        assertEquals("special_dual_ex", slowWipe.bucket)
+        assertEquals(sig, slowWipe.canonicalWaveSig)
+        assertEquals("202611131613", slowWipe.dbVersion)
+
+        // 2) Relic revive TWO_BUTTON failure preserves pending attempt and tags reviveTriggered=true on final completion.
+        assertTrue(recorder.beginAttempt(context, team, LabyrinthCombatKind.EX, null, labyrinthGuildId = 2, startedAtMillis = 100_000L, catalogMeta = meta))
+        recorder.markReviveTriggered()
+        assertTrue(recorder.hasPendingAttempt())
+        val revivedWin = requireNotNull(recorder.completeAttempt(resultCode = 0, observedAtMillis = 135_000L, runtime = runtime))
+        assertEquals(listOf(1, 0, 0), revivedWin.outcomeCounts)
+
+        val events = runtime.log.filter(domain = KernelDomain.BATTLE, kind = KernelEventKinds.BATTLE_SAMPLE_OBSERVED)
+        assertEquals(2, events.size)
+        val firstPayload = events[0].payload as BattleSamplePayload
+        val secondPayload = events[1].payload as BattleSamplePayload
+        assertFalse(firstPayload.damageObserved)
+        assertEquals("wall_clock", firstPayload.timeSource)
+        assertFalse(firstPayload.reviveTriggered)
+        assertFalse(secondPayload.damageObserved)
+        assertEquals("wall_clock", secondPayload.timeSource)
+        assertTrue(secondPayload.reviveTriggered)
+
+        // Strict 23-key contract on ShadowBattleSample itself remains intact.
+        val sampleKeys = Json.parseToJsonElement(Json.encodeToString(slowWipe)).jsonObject.keys
+        assertEquals(
+            setOf(
+                "sample_id", "round_id", "source", "db_version", "quest_id", "canonical_wave_sig", "bucket",
+                "area", "difficulty", "guild_id", "team_unit_ids", "owned_unit_ids", "owned_unit_count",
+                "owned_role_counts", "owned_talent_counts", "relic_ids", "mark_stacks", "alpha_rupee",
+                "revive_available", "runs", "outcome_counts", "mean_damage_ratio", "mean_win_rem_time",
+            ),
+            sampleKeys,
+        )
     }
 }

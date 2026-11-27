@@ -1,5 +1,6 @@
 package com.landosol.toolbox.desktop.app.strategy
 
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleQuestCatalogMeta
 import java.nio.file.Files
 import java.nio.file.Path
 import java.security.MessageDigest
@@ -51,6 +52,8 @@ internal data class BattleFeatureCatalog(
     val units: Map<Int, CatalogUnit>, val enemies: Map<Int, List<Double>>, val quests: Map<Int, List<Int>>,
     val relics: Map<Int, CatalogRelic>, val maxArea: Int, val maxDifficulty: Int,
     val unitIndex: Map<Int, Int>, val enemyIndex: Map<Int, Int>, val questIndex: Map<Int, Int>, val relicIndex: Map<Int, Int>,
+    val dbVersion: String = "",
+    val questMeta: Map<Int, BattleQuestCatalogMeta> = emptyMap(),
 ) {
     companion object {
         const val UNIT_FEATURES = 27
@@ -89,13 +92,22 @@ internal data class BattleFeatureCatalog(
                         listOf("is_boss_unit", "has_dot_resist", "has_cc_resist").map { e.flag(it).numeric() }
                 }
             }
-            val quests = entries("quests").mapValues { it.value.ints("enemy_ids") }
+            val dbVersion = root["db_version"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val questEntries = entries("quests")
+            val quests = questEntries.mapValues { it.value.ints("enemy_ids") }
+            val questMeta = questEntries.mapNotNull { (questId, q) ->
+                val bucket = q["bucket"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank)
+                val sig = q["canonical_wave_sig"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank)
+                if (bucket != null && sig != null) {
+                    questId to BattleQuestCatalogMeta(bucket = bucket, canonicalWaveSig = sig, dbVersion = dbVersion)
+                } else null
+            }.toMap()
             val relics = entries("relics").mapValues { (_, r) ->
                 CatalogRelic(r.number("front_pdef_to_atk_mult"), r.number("front_mdef_to_atk_mult"),
                     r.flag("gold_scaling"), r.flag("owned_unit_scaling"), r.number("element_bonus_amp"))
             }
             return BattleFeatureCatalog(units, enemies, quests, relics, root.int("max_area"), root.int("max_difficulty"),
-                indices(units.keys), indices(enemies.keys), indices(quests.keys), indices(relics.keys))
+                indices(units.keys), indices(enemies.keys), indices(quests.keys), indices(relics.keys), dbVersion, questMeta)
         }
 
         private fun JsonObject.staticFeatures(size: Int, fallback: () -> List<Double>): List<Double> =

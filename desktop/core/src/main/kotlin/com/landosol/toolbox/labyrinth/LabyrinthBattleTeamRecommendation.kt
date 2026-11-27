@@ -84,6 +84,11 @@ data class LabyrinthBattleTeamRecommendation(
         modelTrace?.questId?.let { append(" | questId=$it") }
         if (modelTrace?.status != BattleModelDecisionStatus.ADOPTED) {
             modelTrace?.detail?.takeIf { it.isNotBlank() }?.let { append(" | 模型说明=$it") }
+            if (modelTrace?.status == BattleModelDecisionStatus.LOW_CONFIDENCE_FALLBACK) {
+                modelAssessment?.ruleLeadWinProbability?.let {
+                    append(" | 规则队NN胜率=${formatBattleWinProbability(it)}")
+                }
+            }
         }
     }
 }

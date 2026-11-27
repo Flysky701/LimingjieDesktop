@@ -135,6 +135,11 @@ internal class DesktopBattleModel(
                     else null
                 }
 
+            override fun questCatalogMeta(questId: Int): BattleQuestCatalogMeta? =
+                synchronized(this@DesktopBattleModel) {
+                    if (active != null && active === loaded?.bundle) active.questCatalogMeta(questId) else null
+                }
+
             override fun estimateWithSource(
                 context: BattleValueContext,
                 candidates: List<List<Int>>,

@@ -1,8 +1,14 @@
 package com.landosol.toolbox.labyrinth.vision
 
+import com.landosol.toolbox.gamedata.EventChoiceResource
 import com.landosol.toolbox.gamedata.EventResource
+import com.landosol.toolbox.gamedata.LabyrinthEventOcrDocument
+import com.landosol.toolbox.vision.NativeBitmap
+import java.io.File
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -201,6 +207,154 @@ class LabyrinthEventScopedOcrReuseTest {
         assertEquals(TITLE_A, lookup.requestTitleFingerprint)
         assertEquals(newRequest, lookup.diagnostics.pendingRequestId)
         assertFalse(canReuse(lookup, "3316", TITLE_B))
+    }
+
+    @Test
+    fun `full ocr fallback for non custom two choice event tolerates animation jitter and transient waiting ocr`() {
+        val ocr = Json.decodeFromString<LabyrinthEventOcrDocument>(
+            File("src/main/resources/assets/resource-packs/cn-bilibili/labyrinth-event-ocr.json").readText(),
+        )
+        val mapper = LabyrinthEventLayoutMapper(ocr.layouts)
+        val width = 640
+        val height = 360
+        val pixels = IntArray(width * height) { -1 }
+        fun paint(rect: EntryPixelRect, color: Int) {
+            for (y in rect.top until rect.top + rect.height) {
+                pixels.fill(color, y * width + rect.left, y * width + rect.left + rect.width)
+            }
+        }
+        mapper.buttonRects(2, width, height).forEach { paint(it, 0xff63a6f7.toInt()) }
+        val fullCrop = requireNotNull(mapper.ocrBounds(2, width, height))
+        // Paint a high-contrast left-to-right gradient in the crop so shifting one sample column changes dHash.
+        for (y in fullCrop.top + 80 until fullCrop.top + 120) {
+            for (x in fullCrop.left until fullCrop.left + fullCrop.width) {
+                val gray = ((x - fullCrop.left) * 255 / fullCrop.width.coerceAtLeast(1)).coerceIn(0, 255)
+                pixels[y * width + x] = (0xff shl 24) or (gray shl 16) or (gray shl 8) or gray
+            }
+        }
+
+        val event3315 = EventResource(
+            id = "3315",
+            name = "完美！不过食材还有很多哦！",
+            choices = listOf(
+                EventChoiceResource("33152", "这么多 根本吃不完吧！", 1, "随机职能的 选择印记×2"),
+                EventChoiceResource("33151", "诶嘿嘿～ 再一下就好……", 2, "有50％的概率获得全体选择印记×２"),
+            ),
+        )
+        val event1108 = EventResource(
+            id = "1108",
+            name = "在地下城迷路了！要走哪边？",
+            choices = listOf(
+                EventChoiceResource("11081", "难道不是左边吗？", 1, "阿尔法金币×1000"),
+                EventChoiceResource("11082", "当然是右边啊！", 2, "50％概率获得★1迷宫遗物×1 50％概率获得随机职能的 随机印记×2"),
+            ),
+        )
+        var holdPending = false
+        var deferredDone: ((String?) -> Unit)? = null
+        val fullText3315 = "完美！不过食材还有很多哦！\n" +
+            "这么多 根本吃不完吧！随机职能的 选择印记×2\n" +
+            "诶嘿嘿～ 再一下就好……有50％的概率获得全体选择印记×２"
+        val resolver = LabyrinthEventChoiceResolver(
+            data = LabyrinthEventRecognitionData(listOf(event3315, event1108), ocr),
+            submitTextRead = { _, done ->
+                if (holdPending) {
+                    deferredDone = done
+                } else {
+                    done(fullText3315)
+                }
+            },
+            eventChoiceOverrides = mapOf("在地下城迷路了！要走哪边？" to "难道不是左边吗？"),
+            eventCustomizationEnabled = true,
+        )
+        val unknownFrame = LabyrinthEntryFrameResult(
+            LabyrinthEntryPageObservation(LabyrinthEntryPageState.UNKNOWN, 1.0, emptyMap(), LabyrinthAnchorScores(emptyMap())),
+            emptyList(),
+            0,
+            frameWidth = width,
+            frameHeight = height,
+        )
+        val eventPageFrame = LabyrinthEntryFrameResult(
+            LabyrinthEntryPageObservation(
+                LabyrinthEntryPageState.EVENT_CHOICE,
+                1.0,
+                mapOf(LabyrinthEntryPageState.EVENT_CHOICE to 1.0),
+                LabyrinthAnchorScores(emptyMap()),
+            ),
+            emptyList(),
+            0,
+            frameWidth = width,
+            frameHeight = height,
+        )
+        val bitmapA = NativeBitmap.create(pixels, width, height)
+        val sampleY2 = fullCrop.top + ((2.0 * (fullCrop.height - 1)) / 7.0).toInt()
+        val sampleX4 = fullCrop.left + ((4.0 * (fullCrop.width - 1)) / 8.0).toInt()
+        val pixelsChangedOnce = pixels.copyOf().also { copy ->
+            for (y in (sampleY2 - 4).coerceAtLeast(fullCrop.top)..(sampleY2 + 4).coerceAtMost(fullCrop.top + fullCrop.height - 1)) {
+                copy.fill(
+                    0xff000000.toInt(),
+                    y * width + (sampleX4 - 4).coerceAtLeast(fullCrop.left),
+                    y * width + (sampleX4 + 4).coerceAtMost(fullCrop.left + fullCrop.width),
+                )
+            }
+        }
+        val bitmapSmallJitter = NativeBitmap.create(pixelsChangedOnce, width, height)
+        val pixelsMajorShift = pixels.copyOf().also { copy ->
+            for (y in fullCrop.top until fullCrop.top + fullCrop.height) {
+                for (x in fullCrop.left until fullCrop.left + fullCrop.width) {
+                    val v = if ((x + y) % 16 < 8) 0xff101010.toInt() else 0xfff0f0f0.toInt()
+                    copy[y * width + x] = v
+                }
+            }
+            for (rect in mapper.buttonRects(2, width, height)) {
+                for (y in rect.top until rect.top + rect.height) {
+                    copy.fill(0xff63a6f7.toInt(), y * width + rect.left, y * width + rect.left + rect.width)
+                }
+            }
+        }
+        val bitmapMajorShift = NativeBitmap.create(pixelsMajorShift, width, height)
+        try {
+            // 1) Initial title-only probe misses custom titles -> TITLE_FALLBACK switches to fullOcrFallback.
+            assertEquals("TITLE_WAITING_OCR", resolver.resolve(bitmapA, unknownFrame).eventOcrDiagnostics?.status)
+            assertEquals("TITLE_FALLBACK", resolver.resolve(bitmapA, unknownFrame).eventOcrDiagnostics?.status)
+            // 2) Full OCR fallback caches full text and produces first candidate match for 3315.
+            assertEquals("WAITING_OCR", resolver.resolve(bitmapA, unknownFrame).eventOcrDiagnostics?.status)
+            val firstMatch = resolver.resolve(bitmapA, unknownFrame)
+            assertEquals("CANDIDATE_MATCH", firstMatch.eventOcrDiagnostics?.status)
+            assertEquals("3315", firstMatch.eventChoiceSelection?.event?.id)
+            assertEquals(1, firstMatch.eventChoiceSelection?.stableFrames)
+
+            // 3) Transient WAITING_OCR frame (major crop shift forces cache miss) on EVENT_CHOICE preserves stableFrames=1,
+            //    and once OCR completes again the next frame reaches stableFrames=2, trusted=true.
+            holdPending = true
+            val waiting = resolver.resolve(bitmapMajorShift, eventPageFrame)
+            assertEquals("WAITING_OCR", waiting.eventOcrDiagnostics?.status)
+            deferredDone?.invoke(fullText3315)
+            holdPending = false
+            val secondAfterWait = resolver.resolve(bitmapMajorShift, eventPageFrame)
+            assertEquals("TRUSTED_MATCH", secondAfterWait.eventOcrDiagnostics?.status)
+            assertEquals(2, secondAfterWait.eventChoiceSelection?.stableFrames)
+            assertTrue(secondAfterWait.eventChoiceSelection?.trusted == true)
+
+            // 4) Non-custom fullOcrFallback also accepts 1..8 bit crop jitter when reusing text directly.
+            holdPending = true
+            resolver.resolve(bitmapA, eventPageFrame)
+            deferredDone?.invoke(fullText3315)
+            holdPending = false
+            val anchor = resolver.resolve(bitmapA, eventPageFrame)
+            val reused = resolver.resolve(bitmapSmallJitter, eventPageFrame)
+            val distance = reused.eventOcrDiagnostics?.cache?.fingerprintDistance
+            assertEquals("HIT", reused.eventOcrDiagnostics?.cache?.status)
+            assertTrue("expected distance in 1..8, got $distance", distance in 1..8)
+            assertEquals("TRUSTED_MATCH", reused.eventOcrDiagnostics?.status)
+            assertEquals(
+                requireNotNull(anchor.eventChoiceSelection).stableFrames + 1,
+                reused.eventChoiceSelection?.stableFrames,
+            )
+        } finally {
+            bitmapA.recycle()
+            bitmapSmallJitter.recycle()
+            bitmapMajorShift.recycle()
+        }
     }
 
     private fun populatedCache(): LabyrinthEventOcrCache = LabyrinthEventOcrCache().also { cache ->

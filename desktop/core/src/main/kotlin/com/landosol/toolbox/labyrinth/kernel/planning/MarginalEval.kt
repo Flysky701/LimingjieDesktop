@@ -2,6 +2,7 @@ package com.landosol.toolbox.labyrinth.kernel.planning
 
 import com.landosol.toolbox.labyrinth.LabyrinthRelicMark
 import com.landosol.toolbox.labyrinth.canonicalLabyrinthRoleId
+import com.landosol.toolbox.labyrinth.kernel.strategy.labyrinthCharacterIdToUnitId
 import kotlin.math.abs
 
 data class BattleExam(
@@ -35,10 +36,17 @@ data class PassEstimate(
     val pPass: Double,
     val expectedTeams: Double,
     val teamWinProbs: List<Double> = emptyList(),
+    val selectedTeams: List<List<Int>> = emptyList(),
 )
 
 fun interface BattlePassEstimator {
     fun estimate(state: PlanningState, exam: BattleExam): PassEstimate?
+}
+
+interface SeedAwareBattlePassEstimator : BattlePassEstimator {
+    fun estimate(state: PlanningState, exam: BattleExam, seedTeams: List<List<Int>>): PassEstimate?
+    override fun estimate(state: PlanningState, exam: BattleExam): PassEstimate? =
+        estimate(state, exam, emptyList())
 }
 
 data class BattlePassProfile(
@@ -46,6 +54,7 @@ data class BattlePassProfile(
     val pPass: Double,
     val expectedTeams: Double,
     val expectedTimeSec: Double = 0.0,
+    val selectedTeamsByQuest: Map<Int, List<List<Int>>> = emptyMap(),
 )
 
 /** The revive charge survives a win and can retry one non-boss exam across the whole sequence. */
@@ -53,13 +62,21 @@ fun passProfile(
     state: PlanningState,
     exams: List<BattleExam>,
     estimator: BattlePassEstimator?,
+    seedTeamsByQuest: Map<Int, List<List<Int>>> = emptyMap(),
 ): BattlePassProfile? {
     var withCharge = if (state.reviveAvailable) 1.0 else 0.0
     var withoutCharge = 1.0 - withCharge
     var expectedTeams = 0.0
     var expectedTimeSec = 0.0
+    val selectedTeamsByQuest = linkedMapOf<Int, List<List<Int>>>()
     val conditional = exams.map { exam ->
-        val estimate = estimator?.estimate(state, exam) ?: return null
+        val estimate = when (estimator) {
+            is SeedAwareBattlePassEstimator -> estimator.estimate(state, exam, seedTeamsByQuest[exam.questId].orEmpty())
+            else -> estimator?.estimate(state, exam)
+        } ?: return null
+        if (estimate.selectedTeams.isNotEmpty()) {
+            selectedTeamsByQuest[exam.questId] = estimate.selectedTeams
+        }
         val p = estimate.pPass
         require(p in 0.0..1.0)
         val alive = withCharge + withoutCharge
@@ -70,7 +87,24 @@ fun passProfile(
         withoutCharge = (withoutCharge + retry) * p
         if (alive > 0.0) (withCharge + withoutCharge) / alive else 0.0
     }
-    return BattlePassProfile(conditional, withCharge + withoutCharge, expectedTeams, expectedTimeSec)
+    return BattlePassProfile(conditional, withCharge + withoutCharge, expectedTeams, expectedTimeSec, selectedTeamsByQuest)
+}
+
+private fun seedTeamsWithAddedCharacters(
+    beforeSeeds: Map<Int, List<List<Int>>>,
+    addedCharacterIds: Iterable<String>,
+): Map<Int, List<List<Int>>> {
+    val addedUnits = addedCharacterIds.mapNotNull(::labyrinthCharacterIdToUnitId).distinct()
+    if (beforeSeeds.isEmpty() || addedUnits.isEmpty()) return beforeSeeds
+    return beforeSeeds.mapValues { (_, teams) ->
+        val swaps = addedUnits.flatMap { addedUnitId ->
+            teams.take(1).flatMap { team ->
+                if (addedUnitId in team) emptyList()
+                else team.indices.map { slot -> team.toMutableList().apply { set(slot, addedUnitId) }.sorted() }
+            }
+        }
+        (teams + swaps).distinct()
+    }
 }
 
 fun battleValue(
@@ -179,9 +213,11 @@ fun evaluateRoleChoices(
 ): List<RoleChoiceEval> {
     val before = passProfile(state, exams, estimator)
     val beforeShop = walletValue(state, settings, shelfModel, shopCurve)
+    val beforeSeeds = before?.selectedTeamsByQuest.orEmpty()
     return candidates.map { id ->
         val after = awardCollections(state, settings, characterIds = listOf(id))
-        val profile = if (after == state) before else passProfile(after, exams, estimator)
+        val afterSeeds = if (after == state) beforeSeeds else seedTeamsWithAddedCharacters(beforeSeeds, listOf(id))
+        val profile = if (after == state) before else passProfile(after, exams, estimator, afterSeeds)
         val battle = if (before != null && profile != null) {
             battlePoints(exams, profile, settings, state.difficulty) - battlePoints(exams, before, settings, state.difficulty)
         } else 0.0
@@ -204,16 +240,17 @@ fun evaluateRelicChoices(
 ): List<RelicChoiceEval> {
     val before = passProfile(state, exams, estimator)
     val beforeShop = walletValue(state, settings, shelfModel, shopCurve)
+    val beforeSeeds = before?.selectedTeamsByQuest.orEmpty()
     return candidates.map { id ->
         val after = awardCollections(state, settings, relicIds = listOf(id), relicMarks = relicMarks)
-        val profile = if (after == state) before else passProfile(after, exams, estimator)
+        val profile = if (after == state) before else passProfile(after, exams, estimator, beforeSeeds)
         var battle = 0.0
         var markSynergy = 0.0
         if (before != null && profile != null) {
             val afterPts = battlePoints(exams, profile, settings, state.difficulty)
             battle = afterPts - battlePoints(exams, before, settings, state.difficulty)
             if (after.markStacks != state.markStacks) {
-                val withoutMark = passProfile(after.copy(markStacks = state.markStacks), exams, estimator)
+                val withoutMark = passProfile(after.copy(markStacks = state.markStacks), exams, estimator, beforeSeeds)
                 if (withoutMark != null) {
                     markSynergy = afterPts - battlePoints(exams, withoutMark, settings, state.difficulty)
                     battle -= markSynergy
@@ -311,6 +348,7 @@ fun evaluateEventOptions(
 
     val initialShop = payouts(state)?.expectedPts() ?: shopCurve?.invoke(state) ?: 0.0
     val initialProfile = passProfile(state, exams, estimator)
+    val beforeSeeds = initialProfile?.selectedTeamsByQuest.orEmpty()
     fun points(profile: BattlePassProfile) = battlePoints(exams, profile, settings, state.difficulty)
     val initialBattle = initialProfile?.let(::points) ?: 0.0
 
@@ -325,7 +363,9 @@ fun evaluateEventOptions(
             val (prob, after, elapsed) = outcome
             val distribution = payouts(after)
             val balance = distribution?.expectedPts() ?: shopCurve?.invoke(after) ?: 0.0
-            val profile = if (after == state) initialProfile else passProfile(after, exams, estimator)
+            val afterSeeds = if (after == state || beforeSeeds.isEmpty()) beforeSeeds
+            else seedTeamsWithAddedCharacters(beforeSeeds, after.ownedCharacterIds - state.ownedCharacterIds)
+            val profile = if (after == state) initialProfile else passProfile(after, exams, estimator, afterSeeds)
             direct += prob * (after.confirmedPts - state.confirmedPts)
             shop += prob * (balance - initialShop)
             time += prob * (elapsed + (profile?.expectedTimeSec ?: 0.0))

@@ -240,7 +240,9 @@ class LabyrinthRelicChoicePolicy(
         lastEvaluation?.takeIf { it.first == key }?.let { return it.second }
         val evaluation = tryPathB {
             evaluateRelicChoices(state, awards.keys, planning.upcomingExams, planning.passEstimator,
-                planning.scoreSettings, relicMarks = awards)
+                planning.scoreSettings,
+                shelfModel = com.landosol.toolbox.labyrinth.kernel.planning.ShopShelfModel.forOwnedRelics(state.relicIds),
+                relicMarks = awards)
         }?.takeIf { results ->
             results.all { it.totalScore.isFinite() && (planning.upcomingExams.isEmpty() || it.usedModel) }
         }

@@ -568,4 +568,35 @@ class NodeClickSessionGuardTest {
             assertEquals(1, f.calls.get())
         } finally { f.close() }
     }
+
+    @Test fun strongBindingWatchdogResetsContradictionHoldWithinMemoryWindow() = runBlocking {
+        val f = Fixture()
+        try {
+            f.start()
+            val at = f.nextCapture()
+            // Run one frame on NODE_SELECTION so nodeActionEvidence considers `at` fresh.
+            f.feedFull(f.frame(source = NodeFrameEvidenceSource.SEARCH), at)
+            withContext(LabyrinthFourThreadRuntime.controlDispatcher) {
+                val contradictoryStrongRect = EntryPixelRect(200, 140, 186, 233)
+                f.set("strongRouteTargetBindingBlockId", 10201L)
+                f.set("strongRouteTargetBindingRect", contradictoryStrongRect)
+                f.set("strongRouteTargetBindingAtMillis", at)
+                f.set("pendingNodeClickStableFrames", 0)
+                val action = NodeAction.ClickNode(10201L, LabyrinthNodeTypes.NORMAL_BATTLE, f.rect)
+                // Keep `timestampMillis == at` so nodeActionEvidence.isCurrentFrame remains verified across holds.
+                // First 19 weak contradictions within 8_000ms hold the click and keep stability at 0.
+                repeat(19) { step ->
+                    f.invoke("onNodeClickPlanned", f.id, f.nodes, action, 1280, 720, at, "v")
+                    assertEquals(step + 1, f.get("strongBindingContradictionCount"))
+                    assertEquals(0, f.get("pendingNodeClickStableFrames"))
+                    assertNotNull(f.get("strongRouteTargetBindingRect"))
+                }
+                // 20th contradiction trips the watchdog even while strong memory is still active (< 8_000ms).
+                f.invoke("onNodeClickPlanned", f.id, f.nodes, action, 1280, 720, at, "v")
+                assertEquals(0, f.get("strongBindingContradictionCount"))
+                assertNull(f.get("strongRouteTargetBindingRect"))
+                assertEquals(1, f.get("pendingNodeClickStableFrames"))
+            }
+        } finally { f.close() }
+    }
 }

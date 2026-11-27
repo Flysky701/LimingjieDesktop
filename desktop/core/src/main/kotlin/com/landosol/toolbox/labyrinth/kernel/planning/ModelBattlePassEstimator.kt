@@ -21,8 +21,8 @@ class ModelBattlePassEstimator(
     private val profiles: Map<String, LabyrinthRoleProfile>,
     private val optimizer: LabyrinthTeamOptimizer? = null,
     private val requireLeadVanguard: Boolean = true,
-) : BattlePassEstimator {
-    override fun estimate(state: PlanningState, exam: BattleExam): PassEstimate? {
+) : SeedAwareBattlePassEstimator {
+    override fun estimate(state: PlanningState, exam: BattleExam, seedTeams: List<List<Int>>): PassEstimate? {
         val owned = state.ownedCharacterIds.map(::canonicalLabyrinthRoleId).distinct().sorted()
         if (owned.size < TEAM_SIZE || owned.any { it !in profiles } || exam.maxTeams < 1) return null
         val encounter = if (exam.isBoss) {
@@ -53,10 +53,11 @@ class ModelBattlePassEstimator(
         var expectedTeams = 0.0
         val probabilities = ArrayList<Double>(teamCount)
         val selectedValues = ArrayList<BattleValue>(teamCount)
+        val selectedTeams = ArrayList<List<Int>>(teamCount)
         for (index in 0 until teamCount) {
             val roundRule = rule.copy(frontlineSurvivalGateEnabled = index == 0 && requireLeadVanguard)
             val budget = (MAX_CANDIDATES - evaluated.size) / (teamCount - index)
-            val teams = candidates(remaining, roundRule, budget, evaluated.keys)
+            val teams = candidates(remaining, roundRule, budget, evaluated.keys, seedTeams)
             if (teams.isNotEmpty()) {
                 val estimate = estimator.estimateWithSource(context, teams)
                 if (estimate.source != BattleValueSource.MODEL || estimate.values.size != teams.size ||
@@ -73,13 +74,14 @@ class ModelBattlePassEstimator(
             val p = best.value.pWin
             probabilities += p
             selectedValues += best.value
+            selectedTeams += best.key
             expectedTeams += miss
             miss *= 1.0 - p
             val selected = best.key.toSet()
             remaining = remaining.filterNot { it.unitId in selected }
         }
         val pPass = if (exam.isBoss && selectedValues.size >= 2) combinedMultiTeamPassProb(selectedValues) else 1.0 - miss
-        return PassEstimate(pPass, expectedTeams, probabilities)
+        return PassEstimate(pPass, expectedTeams, probabilities, selectedTeams)
     }
 
     private fun candidates(
@@ -87,10 +89,18 @@ class ModelBattlePassEstimator(
         rule: LabyrinthRoleDecisionContext,
         budget: Int,
         evaluated: Set<List<Int>>,
+        seedTeams: List<List<Int>> = emptyList(),
     ): List<List<Int>> {
         val gate = optimizer?.scoringConfig?.vanguardGate(rule)
         fun legal(team: List<BattleRosterUnit>) = !rule.frontlineSurvivalGateEnabled ||
             team.map { it.profile }.hasEligibleVanguardAtActualFront(rule, gate)
+
+        val byUnitId = ranked.associateBy { it.unitId }
+        val legalSeedRosters = seedTeams.mapNotNull { team ->
+            if (team.size == TEAM_SIZE && team.distinct().size == TEAM_SIZE && team.all { it in byUnitId }) {
+                team.map { byUnitId.getValue(it) }
+            } else null
+        }.filter(::legal)
 
         val vanguardSeeds = sequence {
             if (rule.frontlineSurvivalGateEnabled) {
@@ -106,8 +116,9 @@ class ModelBattlePassEstimator(
                 }
             }
         }
-        val lead = ranked.take(TEAM_SIZE).takeIf(::legal) ?: vanguardSeeds.firstOrNull() ?: return emptyList()
+        val lead = ranked.take(TEAM_SIZE).takeIf(::legal) ?: vanguardSeeds.firstOrNull() ?: legalSeedRosters.firstOrNull() ?: return emptyList()
         val seeds = sequence {
+            yieldAll(legalSeedRosters)
             yield(lead)
             if (optimizer != null) {
                 val shortlist = (lead + ranked).distinct().take(RULE_SEED_ROSTER_SIZE)

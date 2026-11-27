@@ -3,6 +3,7 @@ package com.landosol.toolbox.labyrinth
 import com.landosol.toolbox.labyrinth.kernel.planning.RouteDpResult
 import com.landosol.toolbox.labyrinth.kernel.planning.RouteGraph
 import com.landosol.toolbox.labyrinth.kernel.planning.ScoreSettings
+import com.landosol.toolbox.labyrinth.kernel.planning.evaluateOfficialScoreRoute
 import com.landosol.toolbox.labyrinth.kernel.planning.evaluateOpeningScoreTarget
 import com.landosol.toolbox.labyrinth.kernel.planning.solveRouteDp
 import com.landosol.toolbox.labyrinth.kernel.planning.toPlanningRouteGraph
@@ -72,8 +73,11 @@ data class LabyrinthRoutePolicy(
 
     fun lastColumn(area: Int): Int? = AREA_REQUIREMENTS[area]?.keys?.maxOrNull()
 
+    internal fun enforcesOfficialThirdBlock(area: Int): Boolean =
+        (area == 3 || area == 5) && (thirdBlockChoice != LabyrinthThirdBlockChoice.EITHER || perfectStart)
+
     internal fun acceptsOfficialThirdBlock(area: Int, blockType: Int?): Boolean =
-        (area != 3 && area != 5) || blockType in expectedTypes(area, 3)
+        !enforcesOfficialThirdBlock(area) || blockType in expectedTypes(area, 3)
 
     internal fun bossMatches(area: Int, route: List<LabyrinthMapNode>): Boolean =
         bossMatches(area, route.lastOrNull { it.blockType == BOSS_BLOCK_TYPE })
@@ -365,7 +369,13 @@ class LabyrinthOpeningRouteMatcher(
                 }
                 evaluation.bestRoute
             } else {
-                solveRouteDp(graph, settings, difficulty).bestRoute
+                evaluateOfficialScoreRoute(
+                    graph = graph,
+                    difficulty = difficulty,
+                    settings = settings,
+                    guildId = guildId,
+                    enhanceNodeIds = enhanceNodeIds,
+                ).dp.bestRoute
             }
         } else {
             val requiredResult = scoreWithRequiredBlockTypes(
@@ -406,7 +416,7 @@ class LabyrinthOpeningRouteMatcher(
         if (requiredByColumn.values.any { it.size > 1 }) return null
         val requiredColumns = floors.mapValues { (area, _) ->
             requiredByColumn.keys.filter { it.first == area }.map { it.second } +
-                listOfNotNull(3.takeIf { area == 3 || area == 5 })
+                listOfNotNull(3.takeIf { policy.enforcesOfficialThirdBlock(area) })
         }
         val graph = try {
             playable.map { node ->
@@ -513,7 +523,15 @@ class LabyrinthOpeningRouteMatcher(
                 RequiredBlockScoreResult(evaluation.bestRoute.map { originals.getValue(it.blockId) })
             }
         }
-        return RequiredBlockScoreResult(solveRouteDp(expanded, settings, difficulty).bestRoute.map { originals.getValue(it.blockId) })
+        return RequiredBlockScoreResult(
+            evaluateOfficialScoreRoute(
+                graph = expanded,
+                difficulty = difficulty,
+                settings = settings,
+                guildId = guildId,
+                enhanceNodeIds = enhanceNodeIds,
+            ).dp.bestRoute.map { originals.getValue(it.blockId) },
+        )
     }
 
     private fun searchLegacyTemplate(

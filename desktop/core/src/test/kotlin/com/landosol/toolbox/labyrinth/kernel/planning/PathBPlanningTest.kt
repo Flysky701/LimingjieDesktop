@@ -318,6 +318,81 @@ class PathBPlanningTest {
         assertEquals(listOf(5), context(route, area = 4).upcomingExams.map { it.area })
     }
 
+    @Test fun liveCalibratedShelvesMatchEmpiricalArchetypesAndSymmetryBreakingIsExact() {
+        val calibrated = ShopShelfModel.liveCalibrated()
+        assertTrue(calibrated.shelves.size in 7..10)
+        assertEquals(1.0, calibrated.shelves.sumOf { it.first }, 1e-12)
+        assertTrue(calibrated.shelves.all { (_, items) -> items.size == 6 })
+
+        fun marginalShare(model: ShopShelfModel, kind: ShopItemKind): Double =
+            model.shelves.sumOf { (p, items) ->
+                val relicCount = items.count { it.isRelic }.coerceAtLeast(1)
+                p * items.count { it.kind == kind } / relicCount.toDouble()
+            }
+
+        assertTrue(marginalShare(calibrated, ShopItemKind.RELIC_1STAR) in 0.57..0.62)
+        assertTrue(marginalShare(calibrated, ShopItemKind.RELIC_2STAR) in 0.32..0.37)
+        assertTrue(marginalShare(calibrated, ShopItemKind.RELIC_3STAR) in 0.05..0.07)
+
+        // Weighted without-replacement pool depletion: A5-level 1★ ownership reduces future 1★ offer share.
+        val area3Owned = setOf(11001, 11002, 11003, 11004, 21001, 21002, 31001, 40001, 50001)
+        val area5Owned = (11001..11010).toSet() + setOf(21001, 21002, 21003, 21004, 31001, 31002, 40001, 31006)
+        val a3Model = ShopShelfModel.forOwnedRelics(area3Owned)
+        val a5Model = ShopShelfModel.forOwnedRelics(area5Owned)
+        assertTrue(marginalShare(a3Model, ShopItemKind.RELIC_1STAR) > marginalShare(a5Model, ShopItemKind.RELIC_1STAR))
+        assertTrue(marginalShare(a5Model, ShopItemKind.RELIC_1STAR) in 0.53..0.60)
+
+        // Hard pool depletion bound: when only 1 unowned 1★ relic remains, no shelf may contain >=2 1★ relics.
+        val nearExhausted = ShopShelfModel.forRemainingRelicPool(rem1 = 1, rem2 = 5, rem3 = 5)
+        assertTrue(nearExhausted.shelves.all { (_, items) -> items.count { it.kind == ShopItemKind.RELIC_1STAR } <= 1 })
+
+        // Compare against identical shelves where unique relicIds disable symmetry breaking -> must be exact!
+        val noSymBreak = ShopShelfModel(calibrated.shelves.mapIndexed { sIdx, (p, items) ->
+            p to items.mapIndexed { iIdx, item -> item.copy(relicId = sIdx * 10 + iIdx + 1) }
+        })
+        val actual = shopScoreDistribution(5000, 1, official, 5, discount, calibrated, maxRefreshes = 1)
+        val expected = shopScoreDistribution(5000, 1, official, 5, discount, noSymBreak, maxRefreshes = 1)
+        assertEquals(expected.keys, actual.keys)
+        for ((pts, p) in expected) {
+            assertEquals("pts=$pts", p, actual.getValue(pts), 1e-12)
+        }
+    }
+
+    @Test fun seedLockingPreventsNonMonotonicPassDropWhenAddingCandidateCharacter() {
+        val profiles = profiles()
+        val initialOwned = (6001..6005).map { it.toString() }.toSet()
+        val strongBefore = (600101..600501 step 100).toList()
+        val state = baseState.copy(ownedCharacterIds = initialOwned)
+        val calls = mutableListOf<List<List<Int>>>()
+        val model = object : ContextualBattleValueEstimator {
+            override fun unitAffinities(context: BattleValueContext): Map<Int, Double> =
+                context.ownedUnits.associate {
+                    // Artificially rank 6001 lowest once 6006 joins so heuristic lead shifts away from strongBefore.
+                    it.unitId to if (it.unitId == 600101) -1000.0 else it.unitId.toDouble()
+                }
+
+            override fun estimateWithSource(context: BattleValueContext, candidates: List<List<Int>>): BattleValueEstimate {
+                calls += candidates
+                val values = candidates.map { team ->
+                    when (team) {
+                        strongBefore -> value(0.85)
+                        listOf(600101, 600201, 600301, 600401, 600601) -> value(0.88)
+                        else -> value(0.20)
+                    }
+                }
+                return BattleValueEstimate(values, BattleValueSource.MODEL)
+            }
+        }
+        val estimator = ModelBattlePassEstimator(model, profiles, requireLeadVanguard = false)
+        val evals = evaluateRoleChoices(state, listOf("6006"), listOf(boss.copy(maxTeams = 1)), estimator)
+        val eval = evals.single()
+        assertEquals(0.85, eval.beforePassProb, 1e-12)
+        assertTrue("afterPassProb=${eval.afterPassProb} dropped below beforePassProb=${eval.beforePassProb}",
+            eval.afterPassProb >= eval.beforePassProb)
+        assertEquals(0.88, eval.afterPassProb, 1e-12)
+        assertTrue(calls.size == 2 && calls.all { it.size <= 48 })
+    }
+
     private fun profiles(): Map<String, LabyrinthRoleProfile> = (6001..6018).associate { index ->
         val id = index.toString()
         val position = if (index == 6001 || index == 6002) 1 else index - 6000

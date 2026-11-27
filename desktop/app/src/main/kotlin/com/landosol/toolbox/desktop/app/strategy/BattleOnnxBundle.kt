@@ -2,6 +2,7 @@ package com.landosol.toolbox.desktop.app.strategy
 
 import ai.onnxruntime.*
 import com.landosol.toolbox.desktop.ocr.DesktopOrtEnvironment
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleQuestCatalogMeta
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValue
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueContext
 import java.nio.ByteBuffer
@@ -221,6 +222,8 @@ internal class BattleOnnxBundle private constructor(
             BattleValue(win, timeout, wipe, mean, ln(std), remaining)
         }
     }
+
+    fun questCatalogMeta(questId: Int): BattleQuestCatalogMeta? = features.catalog.questMeta[questId]
 
     override fun close() {
         try { towerB.close() } finally { towerA.close() }

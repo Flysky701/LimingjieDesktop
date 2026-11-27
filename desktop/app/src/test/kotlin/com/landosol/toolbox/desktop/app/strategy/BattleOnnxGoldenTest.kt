@@ -368,6 +368,10 @@ class BattleOnnxGoldenTest {
             }
             val sample = cases.first().getValue("sample").jsonObject
             val ctx = context(sample, bundle.features.catalog)
+            val meta = requireNotNull(bundle.questCatalogMeta(770421001))
+            assertEquals("robot_ex", meta.bucket)
+            assertEquals("202611131613", meta.dbVersion)
+            assertTrue(meta.canonicalWaveSig.matches(Regex("[a-f0-9]{64}")))
             val team = sample.ints("team_unit_ids")
             val ruleValue = BattleValue(1.0, 0.0, 0.0, 1.0, 0.0, 1.0)
             DesktopBattleModel({ directory }, {}).use { owner ->

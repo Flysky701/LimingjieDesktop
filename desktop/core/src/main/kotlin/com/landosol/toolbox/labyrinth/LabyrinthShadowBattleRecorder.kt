@@ -1,6 +1,7 @@
 package com.landosol.toolbox.labyrinth
 
 import com.landosol.toolbox.labyrinth.kernel.KernelRuntime
+import com.landosol.toolbox.labyrinth.kernel.strategy.BattleQuestCatalogMeta
 import com.landosol.toolbox.labyrinth.kernel.strategy.BattleValueContext
 import com.landosol.toolbox.labyrinth.kernel.strategy.ObservedBattleResult
 import com.landosol.toolbox.labyrinth.kernel.strategy.ShadowBattleSample
@@ -21,9 +22,11 @@ class LabyrinthShadowBattleRecorder {
         val roundId: UUID,
         val canonicalWaveSig: String,
         val bucket: String,
+        val dbVersion: String,
         val labyrinthGuildId: Int,
         val startedAtMillis: Long,
         val limitSeconds: Int,
+        var reviveTriggered: Boolean = false,
     )
 
     private var pendingAttempt: PendingBattleAttempt? = null
@@ -31,6 +34,11 @@ class LabyrinthShadowBattleRecorder {
 
     @Synchronized
     fun hasPendingAttempt(): Boolean = pendingAttempt != null
+
+    @Synchronized
+    fun markReviveTriggered() {
+        pendingAttempt?.reviveTriggered = true
+    }
 
     @Synchronized
     fun cancelPendingAttempt() {
@@ -58,6 +66,7 @@ class LabyrinthShadowBattleRecorder {
         labyrinthGuildId: Int,
         startedAtMillis: Long,
         limitSeconds: Int = DEFAULT_BATTLE_LIMIT_SECONDS,
+        catalogMeta: BattleQuestCatalogMeta? = null,
     ): Boolean {
         val ownedIds = context.ownedUnits.mapTo(hashSetOf()) { it.unitId }
         val normalizedTeam = teamUnitIds.distinct()
@@ -66,13 +75,19 @@ class LabyrinthShadowBattleRecorder {
             return false
         }
         val roundId = activeRoundId ?: UUID.randomUUID().also { activeRoundId = it }
+        val resolvedWaveSig = catalogMeta?.canonicalWaveSig?.takeIf { WAVE_SIG_REGEX.matches(it) }
+            ?: canonicalWaveSignature(context, kind, exEncounterId)
+        val resolvedBucket = catalogMeta?.bucket?.takeIf { BUCKET_REGEX.matches(it) }
+            ?: shadowBattleBucket(kind, context.area, context.difficulty, exEncounterId)
+        val resolvedDbVersion = catalogMeta?.dbVersion?.takeIf { it.isNotEmpty() && DB_VERSION_REGEX.matches(it) }.orEmpty()
         pendingAttempt = PendingBattleAttempt(
             context = context,
             teamUnitIds = normalizedTeam,
             sampleId = UUID.randomUUID(),
             roundId = roundId,
-            canonicalWaveSig = canonicalWaveSignature(context, kind, exEncounterId),
-            bucket = shadowBattleBucket(kind, context.area, context.difficulty, exEncounterId),
+            canonicalWaveSig = resolvedWaveSig,
+            bucket = resolvedBucket,
+            dbVersion = resolvedDbVersion,
             labyrinthGuildId = labyrinthGuildId,
             startedAtMillis = startedAtMillis,
             limitSeconds = limitSeconds,
@@ -98,6 +113,7 @@ class LabyrinthShadowBattleRecorder {
             limitSeconds = pending.limitSeconds,
             damageRatio = if (resultCode == 0) 1.0 else 0.0,
             totalDamage = 0L,
+            hasExactFrames = false,
         )
         val sample = shadowBattleSample(
             context = pending.context,
@@ -108,13 +124,22 @@ class LabyrinthShadowBattleRecorder {
             canonicalWaveSig = pending.canonicalWaveSig,
             bucket = pending.bucket,
             labyrinthGuildId = pending.labyrinthGuildId,
+            dbVersion = pending.dbVersion,
         )
-        runtime.recordBattleSample(sample)
+        runtime.recordBattleSample(
+            sample = sample,
+            damageObserved = false,
+            timeSource = "wall_clock",
+            reviveTriggered = pending.reviveTriggered,
+        )
         return sample
     }
 
     companion object {
         const val DEFAULT_BATTLE_LIMIT_SECONDS = 90
+        private val WAVE_SIG_REGEX = Regex("[a-f0-9]{64}")
+        private val BUCKET_REGEX = Regex("normal|special_dual_ex|robot_ex|other_ex|boss_other|boss_[0-9]+f_d5")
+        private val DB_VERSION_REGEX = Regex("[0-9]+([._-][0-9]+)*")
 
         internal fun shadowBattleBucket(
             kind: LabyrinthCombatKind,

@@ -898,6 +898,91 @@ internal fun labyrinthObservedDestinationType(
     else -> null
 }
 
+internal fun labyrinthIsDelayedGenericRewardPage(state: LabyrinthEntryPageState): Boolean =
+    state == LabyrinthEntryPageState.CHARACTER_JOINED ||
+        state == LabyrinthEntryPageState.ITEM_REWARD ||
+        state == LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION
+
+internal fun labyrinthCanConfirmNodeEntryForPending(
+    expectedBlockType: Int,
+    pageState: LabyrinthEntryPageState,
+    moveConfirmationDispatched: Boolean,
+): Boolean {
+    if (!labyrinthConfirmsNodeEntry(pageState)) return false
+    if (!moveConfirmationDispatched && labyrinthIsDelayedGenericRewardPage(pageState)) return false
+    return labyrinthNodeEntryMatchesExpectedType(expectedBlockType, pageState)
+}
+
+internal fun labyrinthShouldAdvanceCursorOnTypeMismatch(
+    expectedBlockType: Int,
+    observedType: Int,
+    currentNodeBlockType: Int?,
+): Boolean {
+    if (observedType == expectedBlockType) return true
+    val expectedBattle = expectedBlockType in setOf(
+        LabyrinthNodeTypes.NORMAL_BATTLE,
+        LabyrinthNodeTypes.EX_BATTLE,
+        LabyrinthNodeTypes.BOSS,
+    )
+    val observedBattle = observedType in setOf(
+        LabyrinthNodeTypes.NORMAL_BATTLE,
+        LabyrinthNodeTypes.EX_BATTLE,
+        LabyrinthNodeTypes.BOSS,
+    )
+    if (expectedBattle && !observedBattle) return false
+    if (observedBattle && !expectedBattle && expectedBlockType != LabyrinthNodeTypes.EVENT) return false
+    if (currentNodeBlockType != null && observedType == currentNodeBlockType) return false
+    return true
+}
+
+internal fun labyrinthEventCompletionReady(
+    firstNodeSelectionAtMillis: Long,
+    stableFrames: Int,
+    nowMillis: Long,
+    settleMillis: Long = 3_000L,
+    requiredFrames: Int = 2,
+): Boolean = firstNodeSelectionAtMillis != Long.MIN_VALUE &&
+    stableFrames >= requiredFrames &&
+    (nowMillis - firstNodeSelectionAtMillis) >= settleMillis
+
+internal fun labyrinthMidRunPlanningReady(
+    nodeSearchMode: String,
+    visibleNodes: List<NodeClassification>,
+    steadyFrames: Int,
+    firstSteadyAt: Long,
+    nowMillis: Long,
+): Boolean =
+    (steadyFrames >= 2 && nodeSearchMode != NODE_SEARCH_MODE_DEFERRED && visibleNodes.any { it.isClickable }) ||
+        (steadyFrames >= 3 && firstSteadyAt != Long.MIN_VALUE && nowMillis - firstSteadyAt >= 2_000L)
+
+internal fun labyrinthShouldRollbackCursorOnTypeConflict(
+    currentNode: LabyrinthMapNode?,
+    nextNode: LabyrinthMapNode?,
+    previousNode: LabyrinthMapNode?,
+    lastMatch: com.landosol.toolbox.labyrinth.node.NodeMatchResult?,
+    conflictDetectedBlockType: Int?,
+    alreadyRolledBack: Boolean,
+): Boolean {
+    if (alreadyRolledBack || currentNode == null || nextNode == null || previousNode == null) return false
+    if (currentNode.area != nextNode.area || previousNode.area != currentNode.area) return false
+    if (currentNode.column != nextNode.column - 1) return false
+    val prevColStillClickable = lastMatch?.topologyMappings.orEmpty().any { mapping ->
+        mapping.bindingKind == com.landosol.toolbox.labyrinth.node.NodeTopologyBindingKind.FULL_COLUMN &&
+            mapping.topologyConfidence >= 0.90 &&
+            mapping.isClickable &&
+            mapping.logicalColumn == currentNode.column
+    }
+    if (prevColStillClickable) return true
+    val detectedMatchesCurrent = conflictDetectedBlockType != null &&
+        conflictDetectedBlockType != nextNode.blockType &&
+        conflictDetectedBlockType == currentNode.blockType
+    return detectedMatchesCurrent && lastMatch?.conflicts.orEmpty().any { conflict ->
+        conflict.blockId == nextNode.blockId &&
+            conflict.sourceClickable &&
+            (conflict.topologyConfidence ?: 0.0) >= 0.90
+    }
+}
+
 /** Coarse signature used to detect that a map swipe produced no viewport movement. */
 internal fun labyrinthNodeViewportSignature(classifications: List<NodeClassification>): String =
     classifications
@@ -1313,6 +1398,7 @@ class LabyrinthEntryRecognitionSession(
     private val openingRelicCatalog: LabyrinthOpeningRelicCatalog = LabyrinthOpeningRelicCatalog(emptyList()),
     private val routeLoader: (suspend (Long?) -> LabyrinthRouteJson?)? = null,
     private val routeProgressSaver: (suspend (Long, Long, Long) -> Boolean)? = null,
+    private val routeReplanSaver: (suspend (Long, Long, List<LabyrinthNodeJson>, Long) -> Boolean)? = null,
     private val routeExecutionGate: (suspend (Long?) -> LabyrinthExecutionGateResult)? = null,
     private val nodeTemplateLoader: (() -> NodeTemplateSet)? = null,
     private val nodeSessionFactory: () -> LabyrinthNodeSession = {
@@ -1361,6 +1447,7 @@ class LabyrinthEntryRecognitionSession(
     private val countedEventBattleNodeIds = java.util.Collections.synchronizedSet(mutableSetOf<Long>())
     @Volatile private var lastScoreTargetCacheKey: String? = null
     @Volatile private var lastScoreTargetEval: ScoreTargetEvaluation? = null
+    @Volatile private var lastDynamicReplanCacheKey: String? = null
     private val alphaRupeeLedger = LabyrinthAlphaRupeeLedger()
     private val shadowBattleRecorder = LabyrinthShadowBattleRecorder()
     @Volatile private var plannedShopImprintIsChoice: Boolean? = null
@@ -1431,9 +1518,18 @@ class LabyrinthEntryRecognitionSession(
         }
     }
 
+    private fun clearEventCompletionSettle() {
+        eventCompletionPendingSettle = false
+        eventCompletionFirstNodeSelectionAt = Long.MIN_VALUE
+        eventCompletionNodeSelectionFrames = 0
+    }
+
     private fun resetKernelRoute(reason: String) {
         battleDomain.exitNestedBattleIfActive(reason, kernelRouteCause)
         encounterStack.clear(reason)
+        clearEventCompletionSettle()
+        resetNodeSelectionSteady()
+        synchronized(cursorRollbackAttemptedKeys) { cursorRollbackAttemptedKeys.clear() }
         kernelRouteCause = null
         kernelNodeReceipt = null
         kernelEventReceipt = null
@@ -1453,14 +1549,62 @@ class LabyrinthEntryRecognitionSession(
             battleDomain.exitNestedBattleIfActive(page.name, source)
             kernelRouteCause = battleDomain.currentCause ?: kernelRouteCause
         }
-        if (page == LabyrinthEntryPageState.NODE_SELECTION || page == LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE) {
+        if (page == LabyrinthEntryPageState.DAWN_REALM_HOME_IDLE) {
             val event = encounterStack.peek()?.takeIf { it.kind == KernelEncounterKind.EVENT }
             if (event != null) {
                 encounterStack.popExpected(event.id, "event_completed", kernelRouteCause ?: source)
                 kernelRouteCause = encounterStack.lastTransition() ?: kernelRouteCause
             }
+            clearEventCompletionSettle()
             kernelEventReceipt = null
             return
+        }
+        if (page == LabyrinthEntryPageState.NODE_SELECTION) {
+            val event = encounterStack.peek()?.takeIf { it.kind == KernelEncounterKind.EVENT }
+            if (event != null || eventCompletionPendingSettle) {
+                if (event != null) {
+                    eventCompletionPendingSettle = true
+                }
+                if (eventCompletionFirstNodeSelectionAt == Long.MIN_VALUE) {
+                    eventCompletionFirstNodeSelectionAt = timestampMillis
+                    eventCompletionNodeSelectionFrames = 1
+                } else {
+                    eventCompletionNodeSelectionFrames++
+                }
+                if (!labyrinthEventCompletionReady(
+                        firstNodeSelectionAtMillis = eventCompletionFirstNodeSelectionAt,
+                        stableFrames = eventCompletionNodeSelectionFrames,
+                        nowMillis = timestampMillis,
+                        settleMillis = EVENT_COMPLETION_REWARD_SETTLE_MILLIS,
+                        requiredFrames = EVENT_COMPLETION_STABLE_FRAMES,
+                    )
+                ) {
+                    return
+                }
+                if (event != null) {
+                    encounterStack.popExpected(event.id, "event_completed", kernelRouteCause ?: source)
+                    kernelRouteCause = encounterStack.lastTransition() ?: kernelRouteCause
+                }
+                clearEventCompletionSettle()
+                kernelEventReceipt = null
+            }
+            return
+        }
+        if (eventCompletionPendingSettle) {
+            eventCompletionFirstNodeSelectionAt = Long.MIN_VALUE
+            eventCompletionNodeSelectionFrames = 0
+            if (page in setOf(
+                    LabyrinthEntryPageState.CHARACTER_JOINED,
+                    LabyrinthEntryPageState.ITEM_REWARD,
+                    LabyrinthEntryPageState.INITIAL_CHARACTER_SELECTION,
+                    LabyrinthEntryPageState.RELIC_CHOICE,
+                    LabyrinthEntryPageState.BATTLE_CHALLENGE,
+                    LabyrinthEntryPageState.BATTLE_TEAM_SELECTION,
+                    LabyrinthEntryPageState.BATTLE_IN_PROGRESS,
+                )
+            ) {
+                eventCompletionPendingSettle = false
+            }
         }
         val persisted = labyrinthPersistedCurrentNode(validatedRoute)
         val battlePage = page in setOf(
@@ -1717,6 +1861,23 @@ class LabyrinthEntryRecognitionSession(
         } else {
             NODE_MAP_SETTLE_AFTER_POST_ACTION_MILLIS - (now - lastAction)
         }
+        val eventSettleRemaining = if (!eventCompletionPendingSettle) {
+            0L
+        } else if (eventCompletionFirstNodeSelectionAt == Long.MIN_VALUE) {
+            EVENT_COMPLETION_REWARD_SETTLE_MILLIS
+        } else if (!labyrinthEventCompletionReady(
+                firstNodeSelectionAtMillis = eventCompletionFirstNodeSelectionAt,
+                stableFrames = eventCompletionNodeSelectionFrames,
+                nowMillis = now,
+                settleMillis = EVENT_COMPLETION_REWARD_SETTLE_MILLIS,
+                requiredFrames = EVENT_COMPLETION_STABLE_FRAMES,
+            )
+        ) {
+            (EVENT_COMPLETION_REWARD_SETTLE_MILLIS - (now - eventCompletionFirstNodeSelectionAt)).coerceAtLeast(1L)
+        } else {
+            0L
+        }
+        val effectiveSettleRemaining = maxOf(settleRemaining, eventSettleRemaining)
         val pending = pendingNodeTransition
         val pendingHeld = pending != null && labyrinthKeepsPendingNodeTransition(
             elapsedMillis = now - (pending.confirmationDispatchedAtMillis ?: pending.dispatchedAtMillis),
@@ -1731,6 +1892,7 @@ class LabyrinthEntryRecognitionSession(
         val acquisitionHeld = !dryRun && relicChoiceCommitted && pendingRelicSelection != null
         val verificationHeld = !dryRun && relicStackLedger.peekWaitingForMap(now)
         if (record) lastNodeScanHoldReason = when {
+            eventSettleRemaining > 0L && eventSettleRemaining >= settleRemaining -> "EVENT_REWARD_SETTLE"
             settleRemaining > 0L -> "MAP_SETTLE"
             pendingHeld -> "PENDING_NODE_TRANSITION"
             acquisitionHeld -> "RELIC_ACQUISITION"
@@ -1738,7 +1900,7 @@ class LabyrinthEntryRecognitionSession(
             else -> null
         }
         return labyrinthNodeScanConsumable(
-            settleRemainingMillis = settleRemaining,
+            settleRemainingMillis = effectiveSettleRemaining,
             pendingTransitionHeld = pendingHeld,
             relicAcquisitionHeld = acquisitionHeld,
             relicVerificationHeld = verificationHeld,
@@ -2098,6 +2260,13 @@ class LabyrinthEntryRecognitionSession(
     private var eventChoiceCommittedChoiceId: String? = null
     /** Choices tapped on this event visit that left the page unchanged; see the planner's KDoc. */
     private val eventChoiceRejectedIds = linkedSetOf<String>()
+    @Volatile
+    private var eventCompletionPendingSettle = false
+    @Volatile
+    private var eventCompletionFirstNodeSelectionAt = Long.MIN_VALUE
+    @Volatile
+    private var eventCompletionNodeSelectionFrames = 0
+    private val cursorRollbackAttemptedKeys = mutableSetOf<Pair<Int, Long>>()
     private var relicFocusMark by shopDomain::focusMark
     /** Latest game-visible "当前：N" values. These override history-derived stacks when known. */
     private var relicStackLedger = LabyrinthRelicStackLedger()
@@ -2148,6 +2317,10 @@ class LabyrinthEntryRecognitionSession(
     @Volatile
     private var strongRouteTargetBindingAtMillis: Long = Long.MIN_VALUE
     @Volatile
+    private var strongBindingContradictionCount = 0
+    @Volatile
+    private var strongBindingContradictionSinceMillis: Long = Long.MIN_VALUE
+    @Volatile
     private var nodeScrollAttempts = 0
     /** Completed scan -> nudge -> scan cycles for the current target; bounds an unwinnable search. */
     private var nodeSearchRearmCount = 0
@@ -2169,6 +2342,8 @@ class LabyrinthEntryRecognitionSession(
     private var lastNodeActionAt = Long.MIN_VALUE
     @Volatile
     private var pendingNodeTransition: PendingNodeTransition? = null
+    private var nodeSelectionSteadyFirstAt = Long.MIN_VALUE
+    private var nodeSelectionSteadyFrames = 0
     // Semantic receipt survives page-local invalidation during title/loading re-entry.
     // Keep transition + source atomic so frame processing can never observe a mismatched pair.
     @Volatile
@@ -2911,6 +3086,7 @@ class LabyrinthEntryRecognitionSession(
         balancedFastCount++
         firstFrameWatchdog?.cancel(); firstFrameWatchdog = null
         val page = fast.observation.state
+        if (page != LabyrinthEntryPageState.NODE_SELECTION) resetNodeSelectionSteady()
         var positiveChanged = false
         if (resized) balancedPendingPositivePage = null
         when {
@@ -3128,6 +3304,7 @@ class LabyrinthEntryRecognitionSession(
         if (activeSessionId != sessionId || timestampMillis <= shopRequiredCapturedAfter ||
             (balancedMode && (_state.value.paused || manualPauseRequested.get() || stopRequested.get() ||
                 balancedDetailEpoch != balancedSceneEpoch))) return
+        if (result.observation.state != LabyrinthEntryPageState.NODE_SELECTION) resetNodeSelectionSteady()
         val processingShopVersion = shopEvidenceVersion
         logInitial1088Refinement(result, timestampMillis)
         eventCapturedAt = timestampMillis
@@ -3857,6 +4034,8 @@ class LabyrinthEntryRecognitionSession(
     private fun resetSessionRecoveryTracking() {
         recoveryDomain.resetTracking()
         mirrorSessionRecovery()
+        clearEventCompletionSettle()
+        synchronized(cursorRollbackAttemptedKeys) { cursorRollbackAttemptedKeys.clear() }
     }
 
     private fun mirrorSessionRecovery() {
@@ -5014,6 +5193,7 @@ class LabyrinthEntryRecognitionSession(
     private fun invalidateScoreTargetCache() {
         lastScoreTargetCacheKey = null
         lastScoreTargetEval = null
+        lastDynamicReplanCacheKey = null
     }
 
     private fun buildRunPlanningContext(observedAlphaCoin: Int? = null): LabyrinthRunPlanningContext? {
@@ -5082,7 +5262,11 @@ class LabyrinthEntryRecognitionSession(
             difficulty = route?.difficulty,
             relicIds = relicIds.mapNotNull(String::toIntOrNull).distinct().sorted(),
             markStacks = markStacks,
-            reviveAvailable = "50002" in relicIds && !battleRelicReviveConsumed,
+            reviveAvailable = (
+                "50002" in relicIds ||
+                    (!openingRelicBaselineKnown && route?.guildId == 2 &&
+                        LabyrinthOpeningRelicCatalog.ADDITIONAL_RELIC_NODE_ID in route?.openingRelics?.enhanceNodeIds.orEmpty())
+                ) && !battleRelicReviveConsumed,
             estimator = battleValueEstimator,
             exEncounterId = if (kind == LabyrinthCombatKind.EX) exEncounterStrategy?.id else null,
             alphaRupee = alphaRupeeLedger.currentBalance,
@@ -5866,39 +6050,32 @@ class LabyrinthEntryRecognitionSession(
         }
     }
 
-    private fun evaluateMidRunScoreTargetIfNeeded(
-        sessionId: AutomationSessionId,
+    private data class MidRunPlanningSnapshot(
+        val confirmedCounts: ScoreCounts,
+        val remainingRouteNodes: List<LabyrinthMapNode>,
+        val planningState: PlanningState,
+        val cacheKey: String,
+    )
+
+    private fun buildMidRunPlanningSnapshot(
+        route: LabyrinthRouteJson,
         nodeState: NodeSessionState,
-    ): Boolean {
-        val route = validatedRoute ?: return false
-        val targetScore = activeRunTargetScore
-        if (targetScore <= 0L) {
-            if (_state.value.scoreTargetStatus != null) {
-                _state.value = _state.value.copy(scoreTargetStatus = null)
-            }
-            return false
-        }
-        if (nodeState.isComplete ||
-            postBossStage != LabyrinthPostBossStage.NONE ||
-            pendingNodeTransition != null
-        ) {
-            return false
-        }
+        targetScore: Long,
+    ): MidRunPlanningSnapshot? {
         val acquiredIds = planningAcquiredIds()
-        if (acquiredIds.size < 3 && nodeState.visitedNodes.size <= 1) {
-            return false
-        }
+        if (acquiredIds.size < 3 && nodeState.visitedNodes.size <= 1) return null
         val routeNodes = route.toLabyrinthRoute().nodes
-        if (routeNodes.isEmpty()) return false
+        if (routeNodes.isEmpty()) return null
         val visitedSet = nodeState.visitedNodes.toSet()
         val remainingRouteNodes = routeNodes.filterNot { it.blockId in visitedSet }
-        if (remainingRouteNodes.isEmpty()) return false
+        if (remainingRouteNodes.isEmpty()) return null
 
         val visitedNodes = routeNodes.filter {
             it.blockId in visitedSet &&
                 it.blockType != LabyrinthNodeTypes.CLEAR &&
                 it.blockType != LabyrinthNodeTypes.UNKNOWN
         }
+        val scoredVisitedNodes = visitedNodes.filter { it.blockType != LabyrinthNodeTypes.START }
         val clearedAreaIds = routeNodes.groupBy(LabyrinthMapNode::area)
             .mapNotNull { (area, areaNodes) ->
                 val lastBlock = areaNodes.maxByOrNull(LabyrinthMapNode::column)?.blockId
@@ -5926,11 +6103,11 @@ class LabyrinthEntryRecognitionSession(
         val confirmedUnits = maxOf(acquiredIds.size, 5)
         val confirmedCounts = ScoreCounts(
             areasCleared = AreaClears.Ids(clearedAreaIds),
-            blocksCleared = BlockClears.AreaIds(visitedNodes.map(LabyrinthMapNode::area)),
+            blocksCleared = BlockClears.AreaIds(scoredVisitedNodes.map(LabyrinthMapNode::area)),
             units = confirmedUnits,
             relics = relicCount,
-            normalWins = visitedNodes.count { it.blockType == LabyrinthNodeTypes.NORMAL_BATTLE } + eventArenaNormalWins,
-            exWins = visitedNodes.count { it.blockType == LabyrinthNodeTypes.EX_BATTLE } + eventArenaExWins,
+            normalWins = visitedNodes.count { it.blockType == LabyrinthNodeTypes.NORMAL_BATTLE },
+            exWins = visitedNodes.count { it.blockType == LabyrinthNodeTypes.EX_BATTLE },
             bossWins = visitedNodes.count { it.blockType == LabyrinthNodeTypes.BOSS },
         )
         val estimator = planningEstimator
@@ -5941,34 +6118,134 @@ class LabyrinthEntryRecognitionSession(
             append(acquiredIds.size).append('|').append(confirmedUnits).append('|').append(relicCount).append('|')
             append(markStacks.entries.sortedBy { it.key.ordinal }.joinToString(",") { "${it.key.ordinal}:${it.value}" }).append('|')
             append(alphaRupee).append('|').append(reviveAvailable).append('|')
-            append(eventArenaNormalWins).append('|').append(eventArenaExWins).append('|')
             append(estimator != null).append('|').append(planningEstimatorRevision)
         }
+        val planningState = PlanningState(
+            difficulty = route.difficulty,
+            currentArea = nodeState.currentArea,
+            ownedCharacterIds = acquiredIds,
+            relicIds = relicIds,
+            markStacks = markStacks,
+            remainingShops = remainingRouteNodes.count { it.blockType == LabyrinthNodeTypes.SHOP },
+            enhanceNode21 = boostNode21,
+            reviveAvailable = reviveAvailable,
+            alphaRupee = alphaRupee,
+            targetScore = targetScore,
+        )
+        return MidRunPlanningSnapshot(confirmedCounts, remainingRouteNodes, planningState, cacheKey)
+    }
+
+    private fun maybeDynamicReplanAtFork(
+        sessionId: AutomationSessionId,
+        session: LabyrinthNodeSession,
+        nodeState: NodeSessionState,
+    ) {
+        val route = validatedRoute ?: return
+        if (route.evaluationMode != LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP || route.allNodes.isEmpty()) return
+        if (nodeState.isComplete || postBossStage != LabyrinthPostBossStage.NONE || pendingNodeTransition != null) return
+        if (!session.hasForwardForkAtCurrentNode()) return
+        val currentNodeId = nodeState.currentNodeId ?: return
+        val snapshot = buildMidRunPlanningSnapshot(route, nodeState, activeRunTargetScore) ?: return
+        if (snapshot.cacheKey == lastDynamicReplanCacheKey) return
+        lastDynamicReplanCacheKey = snapshot.cacheKey
+
+        val routeNodes = route.toLabyrinthRoute().nodes
+        val currentIndex = routeNodes.indexOfFirst { it.blockId == currentNodeId }
+        if (currentIndex < 0) return
+        val incumbentRemaining = routeNodes.drop(currentIndex + 1)
+        val replan = com.landosol.toolbox.labyrinth.kernel.planning.replanMidRunRouteFromCurrentNode(
+            allMapNodes = route.toFullMap(),
+            incumbentRemainingRoute = incumbentRemaining,
+            currentNodeId = currentNodeId,
+            confirmedCounts = snapshot.confirmedCounts,
+            difficulty = route.difficulty,
+            targetScore = activeRunTargetScore,
+            planningState = snapshot.planningState,
+            passEstimator = planningEstimator,
+            area3BossIds = route.area3BossIds.toSet(),
+            area5BossIds = route.area5BossIds.toSet(),
+        ) ?: return
+        if (!replan.shouldSwitch) return
+        if (!session.replaceRemainingRoute(replan.bestRemainingRoute)) return
+
+        val updatedNodes = routeNodes.take(currentIndex + 1) + replan.bestRemainingRoute.drop(1)
+        val updatedNodeJsons = updatedNodes.map(LabyrinthMapNode::toLabyrinthNodeJson)
+        validatedRoute = route.copy(nodes = updatedNodeJsons)
+        routeNodeCount = updatedNodes.size
+        resetPendingNodeClickStability()
+        resetStrongRouteTargetBinding()
+        nodeConflictRecovery.reset()
+        invalidateScoreTargetCache()
+        lastDynamicReplanCacheKey = snapshot.cacheKey
+        nodeLog(
+            "route-dynamic-replan current=#$currentNodeId next=#${replan.bestRemainingRoute.getOrNull(1)?.blockId} " +
+                "gold=${snapshot.planningState.alphaRupee} model=${replan.usedModel} ${replan.reason}",
+        )
+        if (!_state.value.dryRun) {
+            val accountId = activeRunAccountId
+            val saver = routeReplanSaver
+            if (accountId != null && saver != null) {
+                actionScope.launch {
+                    runCatching {
+                        persistenceMutex.withLock {
+                            saver(accountId, route.enterId, updatedNodeJsons, currentNodeId)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun evaluateMidRunScoreTargetIfNeeded(
+        sessionId: AutomationSessionId,
+        nodeState: NodeSessionState,
+    ): Boolean {
+        val route = validatedRoute ?: return false
+        val targetScore = activeRunTargetScore
+        if (targetScore <= 0L) {
+            if (_state.value.scoreTargetStatus != null) {
+                _state.value = _state.value.copy(scoreTargetStatus = null)
+            }
+            return false
+        }
+        if (nodeState.isComplete ||
+            postBossStage != LabyrinthPostBossStage.NONE ||
+            pendingNodeTransition != null
+        ) {
+            return false
+        }
+        val snapshot = buildMidRunPlanningSnapshot(route, nodeState, targetScore) ?: return false
+        val currentState = _state.value
+        val estimator = planningEstimator
         val cachedEval = lastScoreTargetEval
-        val evaluation = if (cacheKey == lastScoreTargetCacheKey && cachedEval != null) {
+        val evaluation = if (snapshot.cacheKey == lastScoreTargetCacheKey && cachedEval != null) {
             cachedEval
         } else {
-            val planningState = PlanningState(
+            val dagEval = if (route.evaluationMode == LabyrinthRouteEvaluationMode.OFFICIAL_SCORE_DP &&
+                route.allNodes.isNotEmpty() &&
+                nodeState.currentNodeId != null
+            ) {
+                com.landosol.toolbox.labyrinth.kernel.planning.evaluateMidRunScoreTargetOnDag(
+                    allMapNodes = route.toFullMap(),
+                    currentNodeId = nodeState.currentNodeId,
+                    confirmedCounts = snapshot.confirmedCounts,
+                    difficulty = route.difficulty,
+                    targetScore = targetScore,
+                    planningState = snapshot.planningState,
+                    passEstimator = estimator,
+                    area3BossIds = route.area3BossIds.toSet(),
+                    area5BossIds = route.area5BossIds.toSet(),
+                )
+            } else null
+            (dagEval ?: evaluateMidRunScoreTarget(
+                remainingRouteNodes = snapshot.remainingRouteNodes,
+                confirmedCounts = snapshot.confirmedCounts,
                 difficulty = route.difficulty,
-                currentArea = nodeState.currentArea,
-                ownedCharacterIds = acquiredIds,
-                relicIds = relicIds,
-                markStacks = markStacks,
-                remainingShops = remainingRouteNodes.count { it.blockType == LabyrinthNodeTypes.SHOP },
-                enhanceNode21 = boostNode21,
-                reviveAvailable = reviveAvailable,
-                alphaRupee = alphaRupee,
                 targetScore = targetScore,
-            )
-            evaluateMidRunScoreTarget(
-                remainingRouteNodes = remainingRouteNodes,
-                confirmedCounts = confirmedCounts,
-                difficulty = route.difficulty,
-                targetScore = targetScore,
-                planningState = planningState,
+                planningState = snapshot.planningState,
                 passEstimator = estimator,
-            ).also { eval ->
-                lastScoreTargetCacheKey = cacheKey
+            )).also { eval ->
+                lastScoreTargetCacheKey = snapshot.cacheKey
                 lastScoreTargetEval = eval
                 nodeLog(
                     "score-target target=$targetScore confirmed=${eval.confirmedPts} " +
@@ -7381,18 +7658,22 @@ class LabyrinthEntryRecognitionSession(
             battleRetryPlanning.invalidate()
         }
         if (pageState == LabyrinthEntryPageState.BATTLE_FAILED) {
-            shadowBattleRecorder.completeAttempt(1, timestampMillis, kernelRuntime)
-            val context = combatContext
-            if (context == null) {
-                finishFromPlanner(sessionId, "已识别战斗失败页，但缺少本次战斗上下文；未自动点击结束或重新挑战")
-                return
-            }
             // The two-button layout's lower-right button reads "下一步": it advances to the
             // "遗物效果结果" popup instead of retrying, so the three stop conditions below — which
             // exist for a run that keeps losing the same fight — must not apply to it. They would
             // otherwise reroll or end the run that was just revived. The three-button page and the
             // defensive path for a missing observation keep their exact previous behaviour.
             val advanceOnly = result.battleFailure?.layout == LabyrinthBattleFailureLayout.TWO_BUTTON
+            if (advanceOnly) {
+                shadowBattleRecorder.markReviveTriggered()
+            } else {
+                shadowBattleRecorder.completeAttempt(1, timestampMillis, kernelRuntime)
+            }
+            val context = combatContext
+            if (context == null) {
+                finishFromPlanner(sessionId, "已识别战斗失败页，但缺少本次战斗上下文；未自动点击结束或重新挑战")
+                return
+            }
             if (advanceOnly || awaitingRetryBattleAfterFailure) {
                 if (balancedMode && (battleRetryPlanning.busy || battleRetryPlanning.hasReady)) {
                     battleRetryPlanning.invalidate()
@@ -9061,6 +9342,8 @@ class LabyrinthEntryRecognitionSession(
                                     exEncounterId = exStrategy?.id,
                                     labyrinthGuildId = validatedRoute?.guildId ?: 0,
                                     startedAtMillis = battleStartedAt,
+                                    catalogMeta = (modelInputs.estimator as? com.landosol.toolbox.labyrinth.kernel.strategy.ContextualBattleValueEstimator)
+                                        ?.questCatalogMeta(battleContext.questId),
                                 )
                             } else {
                                 shadowBattleRecorder.cancelPendingAttempt()
@@ -9669,6 +9952,9 @@ class LabyrinthEntryRecognitionSession(
                         eventChoiceCommitted = true
                         eventChoiceCommittedAt = clock()
                         eventChoiceCommittedChoiceId = dispatchedEventChoiceId
+                        eventCompletionPendingSettle = true
+                        eventCompletionFirstNodeSelectionAt = Long.MIN_VALUE
+                        eventCompletionNodeSelectionFrames = 0
                         alphaRupeeLedger.onEventChoiceCommitted(dispatchedEventChoiceId, eventChoiceCommittedAt)
                         syncAlphaRupeeState()
                     }
@@ -10032,6 +10318,11 @@ class LabyrinthEntryRecognitionSession(
         }
     }
 
+    private fun resetNodeSelectionSteady() {
+        nodeSelectionSteadyFirstAt = Long.MIN_VALUE
+        nodeSelectionSteadyFrames = 0
+    }
+
     private fun handleNodeSelectionFrame(
         sessionId: AutomationSessionId,
         result: LabyrinthEntryFrameResult,
@@ -10059,7 +10350,25 @@ class LabyrinthEntryRecognitionSession(
         if (lastPostEntryActionAt != Long.MIN_VALUE &&
             timestampMillis - lastPostEntryActionAt < NODE_MAP_SETTLE_AFTER_POST_ACTION_MILLIS
         ) {
+            resetNodeSelectionSteady()
             val message = "弹窗关闭后等待节点地图稳定"
+            if (_state.value.message != message) {
+                _state.value = _state.value.copy(message = message)
+                overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
+            }
+            return
+        }
+        if (eventCompletionPendingSettle &&
+            !labyrinthEventCompletionReady(
+                firstNodeSelectionAtMillis = eventCompletionFirstNodeSelectionAt,
+                stableFrames = eventCompletionNodeSelectionFrames,
+                nowMillis = timestampMillis,
+                settleMillis = EVENT_COMPLETION_REWARD_SETTLE_MILLIS,
+                requiredFrames = EVENT_COMPLETION_STABLE_FRAMES,
+            )
+        ) {
+            resetNodeSelectionSteady()
+            val message = "事件结束，等待延迟奖励弹窗确认"
             if (_state.value.message != message) {
                 _state.value = _state.value.copy(message = message)
                 overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
@@ -10142,7 +10451,21 @@ class LabyrinthEntryRecognitionSession(
             return
         }
         if (result.nodeMoveConfirmation == null && postBossStage == LabyrinthPostBossStage.NONE) {
-            if (evaluateMidRunScoreTargetIfNeeded(sessionId, nodeState)) return
+            if (nodeSelectionSteadyFrames == 0) nodeSelectionSteadyFirstAt = timestampMillis
+            nodeSelectionSteadyFrames++
+            if (labyrinthMidRunPlanningReady(
+                    nodeSearchMode = result.nodeSearchMode,
+                    visibleNodes = result.nodeClassifications,
+                    steadyFrames = nodeSelectionSteadyFrames,
+                    firstSteadyAt = nodeSelectionSteadyFirstAt,
+                    nowMillis = timestampMillis,
+                )
+            ) {
+                maybeDynamicReplanAtFork(sessionId, session, nodeState)
+                if (evaluateMidRunScoreTargetIfNeeded(sessionId, nodeState)) return
+            }
+        } else {
+            resetNodeSelectionSteady()
         }
         // The processor skipped this frame's map scan because, when it looked, one of the two
         // gates above was still closed (see nodeScanConsumable). Both gates only open with time,
@@ -10458,29 +10781,49 @@ class LabyrinthEntryRecognitionSession(
                 candidateHasStrongOrderedTopology = strongOrdered,
             )
         ) {
-            resetPendingNodeClickStability()
-            val source = when {
-                targetMapping?.routeSemanticRepair == true -> "semantic-repair"
-                else -> targetMapping?.topologyBindingKind?.name ?: "none"
+            strongBindingContradictionCount++
+            if (strongBindingContradictionSinceMillis == Long.MIN_VALUE) {
+                strongBindingContradictionSinceMillis = timestampMillis
             }
-            nodeLog(
-                "node-click-held target=$label reason=weak-rebinding-contradicts-strong-column " +
-                    "strongRect=$strongRouteTargetBindingRect candidateRect=$rect source=$source " +
-                    "age=${timestampMillis - strongRouteTargetBindingAtMillis}ms",
-                warning = true,
-            )
-            traceReject("node-weak-rebinding")
-            if (activeSessionId == sessionId) {
-                _state.value = _state.value.copy(
-                    message = "$label 刚以完整列定位，当前帧仅剩单个候选且位置不同；不采信，等待完整列重新出现",
+            val contradictionElapsed = (timestampMillis - strongBindingContradictionSinceMillis).coerceAtLeast(0L)
+            if (
+                strongBindingContradictionCount >= NODE_STRONG_BINDING_WATCHDOG_MAX_HOLDS ||
+                contradictionElapsed >= NODE_STRONG_BINDING_WATCHDOG_MILLIS
+            ) {
+                nodeLog(
+                    "node-strong-binding-watchdog-expired target=$label holds=$strongBindingContradictionCount " +
+                        "elapsed=${contradictionElapsed}ms action=reset-strong-binding",
+                    warning = true,
                 )
+                resetStrongRouteTargetBinding()
+            } else {
+                resetPendingNodeClickStability()
+                val source = when {
+                    targetMapping?.routeSemanticRepair == true -> "semantic-repair"
+                    else -> targetMapping?.topologyBindingKind?.name ?: "none"
+                }
+                nodeLog(
+                    "node-click-held target=$label reason=weak-rebinding-contradicts-strong-column " +
+                        "strongRect=$strongRouteTargetBindingRect candidateRect=$rect source=$source " +
+                        "age=${timestampMillis - strongRouteTargetBindingAtMillis}ms " +
+                        "holds=$strongBindingContradictionCount/$NODE_STRONG_BINDING_WATCHDOG_MAX_HOLDS",
+                    warning = true,
+                )
+                traceReject("node-weak-rebinding")
+                if (activeSessionId == sessionId) {
+                    _state.value = _state.value.copy(
+                        message = "$label 刚以完整列定位，当前帧仅剩单个候选且位置不同；不采信，等待完整列重新出现",
+                    )
+                }
+                return
             }
-            return
         }
         if (strongOrdered && rect != null) {
             strongRouteTargetBindingBlockId = action.blockId
             strongRouteTargetBindingRect = rect
             strongRouteTargetBindingAtMillis = timestampMillis
+            strongBindingContradictionCount = 0
+            strongBindingContradictionSinceMillis = Long.MIN_VALUE
         }
         // 同一目标和同一物理位置需连续多帧稳定才允许点击。模板窗口明显跳动时重新计数，
         // 避免把前一帧的正确底座与后一帧落在底栏附近的噪声框累计在一起。
@@ -10705,6 +11048,7 @@ class LabyrinthEntryRecognitionSession(
     }
 
     private fun prepareNodeTransitionContext(blockType: Int, area: Int?) {
+        resetNodeSelectionSteady()
         resetNodeMoveConfirmationTracking()
         lastPublishedShopPathBTarget = null
         nodeEntryMismatchFrames = 0
@@ -11034,6 +11378,19 @@ class LabyrinthEntryRecognitionSession(
                     "source=${recoveredReceipt?.sourceId}",
             )
         }
+        if (pending.confirmationDispatchedAtMillis == null && labyrinthIsDelayedGenericRewardPage(pageState)) {
+            nodeLog(
+                "node-entry-ignored-delayed-reward target=${pending.label} page=${pageState.name} moveConfirmed=false",
+                warning = true,
+            )
+            pendingNodeTransition = null
+            confirmedNodeEntryReceipt = null
+            nodeEntryMismatchFrames = 0
+            nodeEntryMismatchPage = null
+            resetPendingNodeClickStability()
+            resetNodeMoveConfirmationTracking()
+            return
+        }
         if (!labyrinthNodeEntryMatchesExpectedType(pending.blockType, pageState)) {
             // Link and relic pages share their title and remaining-count anchors and differ by a
             // few glyphs in the instruction line; the first frame after entry can classify as the
@@ -11068,6 +11425,33 @@ class LabyrinthEntryRecognitionSession(
                 _state.value = _state.value.copy(
                     message = "节点${pending.label}与${pageState.name}不符；等待可确认的实际页面",
                 )
+                return
+            }
+            val currentNodeBlockType = session.currentNode()?.blockType
+            if (!labyrinthShouldAdvanceCursorOnTypeMismatch(pending.blockType, observedType, currentNodeBlockType)) {
+                nodeLog(
+                    "node-entry-mismatch-blocked-cursor-advance target=${pending.label} " +
+                        "expected=${LabyrinthNodeTypes.labelOf(pending.blockType)} actual=${pageState.name} " +
+                        "observedType=${LabyrinthNodeTypes.labelOf(observedType)} " +
+                        "currentNodeType=${currentNodeBlockType?.let(LabyrinthNodeTypes::labelOf) ?: "none"}",
+                    warning = true,
+                )
+                prepareNodeTransitionContext(observedType, activeNodeArea)
+                pendingNodeTransition = null
+                confirmedNodeEntryReceipt = null
+                nodeEntryMismatchFrames = 0
+                nodeEntryMismatchPage = null
+                resetPendingNodeClickStability()
+                nodeTapAttempts = 0
+                resetNodeMoveConfirmationTracking()
+                resetNodeScrollSearchGate()
+                if (activeSessionId == sessionId) {
+                    _state.value = _state.value.copy(
+                        combatContext = combatContext,
+                        message = "路线预期${pending.label}，实际进入${pageState.name}；判定为前序/错位节点，保持路线游标不前进并先处理当前页面",
+                    )
+                    overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
+                }
                 return
             }
             nodeLog(
@@ -11206,6 +11590,8 @@ class LabyrinthEntryRecognitionSession(
         strongRouteTargetBindingBlockId = Long.MIN_VALUE
         strongRouteTargetBindingRect = null
         strongRouteTargetBindingAtMillis = Long.MIN_VALUE
+        strongBindingContradictionCount = 0
+        strongBindingContradictionSinceMillis = Long.MIN_VALUE
     }
 
     private fun resetNodeScrollSearchGate() {
@@ -11246,6 +11632,71 @@ class LabyrinthEntryRecognitionSession(
             nodeConflictRecovery.reset()
         }
         if (labyrinthNodeRecoveryNudgeExhausted(nodeRecoveryNudgeCount)) {
+            if (reason == "persistent-type-conflict") {
+                val activeNodeSession = nodeSession
+                val currentNode = activeNodeSession?.currentNode()
+                val nextNode = activeNodeSession?.currentRouteTarget()
+                val previousNode = activeNodeSession?.previousSameAreaRouteNode()
+                val lastMatch = activeNodeSession?.getLastMatchResult()
+                val rollbackKey = currentNode?.area?.let { it to targetBlockId }
+                val conflictDetectedType = lastMatch?.conflicts
+                    ?.filter { it.blockId == targetBlockId && it.sourceClickable }
+                    ?.maxByOrNull { it.confidence }
+                    ?.detectedBlockType
+                val alreadyRolledBack = rollbackKey == null ||
+                    synchronized(cursorRollbackAttemptedKeys) { rollbackKey in cursorRollbackAttemptedKeys }
+                if (activeNodeSession != null &&
+                    labyrinthShouldRollbackCursorOnTypeConflict(
+                        currentNode = currentNode,
+                        nextNode = nextNode,
+                        previousNode = previousNode,
+                        lastMatch = lastMatch,
+                        conflictDetectedBlockType = conflictDetectedType,
+                        alreadyRolledBack = alreadyRolledBack,
+                    )
+                ) {
+                    val restored = activeNodeSession.rollbackCurrentNodeOneStep()
+                    if (restored != null && currentNode != null) {
+                        synchronized(cursorRollbackAttemptedKeys) { cursorRollbackAttemptedKeys += requireNotNull(rollbackKey) }
+                        val route = validatedRoute
+                        validatedRoute = route?.copy(currentBlockId = restored.blockId)
+                        if (!_state.value.dryRun) {
+                            val accountId = activeRunAccountId
+                            val saver = routeReplanSaver
+                            if (accountId != null && route != null && saver != null) {
+                                actionScope.launch {
+                                    runCatching {
+                                        persistenceMutex.withLock {
+                                            saver(accountId, route.enterId, route.nodes, restored.blockId)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        nodeErrorStreak = 0
+                        nodeRecoveryNudgeCount = 0
+                        nodeSearchRearmCount = 0
+                        nodeScrollAttempts = 0
+                        nodeConflictRecovery.reset()
+                        nodeViewportScanner.reset()
+                        resetPendingNodeClickStability()
+                        resetStrongRouteTargetBinding()
+                        resetNodeScrollSearchGate()
+                        nodeLog(
+                            "node-cursor-rollback-resync from=#${currentNode.blockId} to=#${restored.blockId} " +
+                                "next=#${currentNode.blockId} area=${currentNode.area}",
+                            warning = true,
+                        )
+                        if (activeSessionId == sessionId) {
+                            _state.value = _state.value.copy(
+                                message = "${label}持续类型冲突且上一列仍可点，已将游标回退至#${restored.blockId}并重对下一节点#${currentNode.blockId}",
+                            )
+                            overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
+                        }
+                        return
+                    }
+                }
+            }
             // Oscillating in place has provably stopped helping. Give the segmented scan a fresh
             // budget so the camera actually travels; bound the alternation so a genuinely
             // unclassifiable node still reaches a diagnosable stop instead of looping forever.
@@ -12492,6 +12943,8 @@ class LabyrinthEntryRecognitionSession(
         const val NODE_CLICK_STABLE_FRAMES = 3
         /** How long a strong FULL_COLUMN target rect outranks weaker re-bindings without a gesture. */
         const val NODE_STRONG_BINDING_MEMORY_MILLIS = 8_000L
+        const val NODE_STRONG_BINDING_WATCHDOG_MAX_HOLDS = 20
+        const val NODE_STRONG_BINDING_WATCHDOG_MILLIS = 30_000L
         const val NODE_CLICK_INTERVAL_MILLIS = 2_500L
         const val NODE_ENTRY_CONFIRMATION_TIMEOUT_MILLIS = 6_000L
         const val NODE_MOVE_CONFIRMATION_APPEAR_TIMEOUT_MILLIS = 6_000L
@@ -12524,6 +12977,8 @@ class LabyrinthEntryRecognitionSession(
         const val SHOP_SCROLL_DURATION_MILLIS = 360L
         const val CHARACTER_ACQUISITION_ACTION_INTERVAL_MILLIS = 650L
         const val NODE_MAP_SETTLE_AFTER_POST_ACTION_MILLIS = 2_000L
+        const val EVENT_COMPLETION_REWARD_SETTLE_MILLIS = 3_000L
+        const val EVENT_COMPLETION_STABLE_FRAMES = 2
         const val MAX_POST_ENTRY_ATTEMPTS = 6
         const val BATTLE_TEAM_CHARACTER_FEEDBACK_TIMEOUT_MILLIS = 4_000L
         /**

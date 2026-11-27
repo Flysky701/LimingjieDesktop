@@ -344,6 +344,31 @@ class LabyrinthNodeSession(
      */
     fun getState(): NodeSessionState = state
 
+    /** 当前状态节点。 */
+    fun currentNode(): LabyrinthMapNode? =
+        state.currentNodeId?.let { id -> allMapNodes.firstOrNull { it.blockId == id } }
+
+    /** 同区域内上一跳路线节点（用于 TYPE_CONFLICT 超前游标安全回退 1 步）。 */
+    fun previousSameAreaRouteNode(): LabyrinthMapNode? {
+        val currentId = state.currentNodeId ?: return null
+        val currentIndex = routeNodes.indexOfFirst { it.blockId == currentId }
+        if (currentIndex <= 0) return null
+        return routeNodes[currentIndex - 1].takeIf { it.area == state.currentArea }
+    }
+
+    /** 将路线游标安全回退到同区域上一跳节点，返回回退后的当前节点；跨区域或无上一步时返回 null。 */
+    fun rollbackCurrentNodeOneStep(): LabyrinthMapNode? {
+        if (state.isComplete) return null
+        val currentId = state.currentNodeId ?: return null
+        val previous = previousSameAreaRouteNode() ?: return null
+        state = state.copy(
+            currentNodeId = previous.blockId,
+            visitedNodes = state.visitedNodes - currentId,
+        )
+        lastMatchResult = null
+        return previous
+    }
+
     /** Route-proven next node, available before the first visual map pass of a viewport. */
     fun currentRouteTarget(): LabyrinthMapNode? {
         if (state.isComplete) return null
@@ -352,6 +377,46 @@ class LabyrinthNodeSession(
         if (currentIndex < 0) return null
         return routeNodes.getOrNull(currentIndex + 1)
             ?.takeIf { it.area == state.currentArea }
+    }
+
+    /** True when the map topology offers at least two same-area forward edges from the current node. */
+    fun hasForwardForkAtCurrentNode(): Boolean {
+        if (state.isComplete) return false
+        val currentId = state.currentNodeId ?: return false
+        val current = allMapNodes.firstOrNull { it.blockId == currentId } ?: return false
+        val sameAreaNextCount = current.nextBlockIds.asSequence()
+            .distinct()
+            .count { childId ->
+                allMapNodes.any { it.blockId == childId && it.area == current.area && it.column > current.column }
+            }
+        return sameAreaNextCount >= 2
+    }
+
+    /**
+     * Dynamically switches the planned continuation starting at [state.currentNodeId].
+     * Preserves visited prefix in [routeNodes] and verifies topology connectivity in [allMapNodes].
+     */
+    fun replaceRemainingRoute(newRemainingFromCurrent: List<LabyrinthMapNode>): Boolean {
+        if (state.isComplete) return false
+        val currentId = state.currentNodeId ?: return false
+        if (newRemainingFromCurrent.isEmpty() || newRemainingFromCurrent.first().blockId != currentId) return false
+        val byId = allMapNodes.associateBy(LabyrinthMapNode::blockId)
+        if (newRemainingFromCurrent.any { it.blockId !in byId }) return false
+        for (i in 0 until newRemainingFromCurrent.lastIndex) {
+            val prev = byId.getValue(newRemainingFromCurrent[i].blockId)
+            val next = byId.getValue(newRemainingFromCurrent[i + 1].blockId)
+            if (next.area == prev.area) {
+                if (next.blockId !in prev.nextBlockIds || next.column <= prev.column) return false
+            } else if (next.area < prev.area) {
+                return false
+            }
+        }
+        val currentIndex = routeNodes.indexOfFirst { it.blockId == currentId }
+        if (currentIndex < 0) return false
+        routeNodes = routeNodes.take(currentIndex + 1) +
+            newRemainingFromCurrent.drop(1).map { byId.getValue(it.blockId) }
+        lastMatchResult = null
+        return true
     }
 
     /**

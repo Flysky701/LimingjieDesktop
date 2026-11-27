@@ -2,6 +2,7 @@ package com.landosol.toolbox.automation.session
 
 import com.landosol.toolbox.labyrinth.vision.LabyrinthEntryPageState
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
 sealed interface GameClientHardCloseResult {
@@ -30,7 +31,7 @@ sealed interface GameClientHardCloseResult {
 class GameClientHardCloser(
     private val foregroundPackage: () -> String?,
     private val pressHome: suspend () -> Boolean,
-    private val killBackgroundProcesses: (String) -> Unit,
+    private val killBackgroundProcesses: suspend (String) -> Unit,
     /** False from Android 14 (API 34), where killBackgroundProcesses cannot reach other apps. */
     private val canKillOtherApps: Boolean,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -64,6 +65,7 @@ class GameClientHardCloser(
         delay(settleMillis)
         val killed = runCatching { killBackgroundProcesses(packageName) }
         killed.exceptionOrNull()?.let { error ->
+            if (error is CancellationException) throw error
             return GameClientHardCloseResult.Failed("结束游戏进程失败：${error.message ?: error.javaClass.simpleName}")
         }
         trace("hard-close kill-requested pkg=$packageName")

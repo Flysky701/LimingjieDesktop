@@ -38,7 +38,12 @@ data class KernelEventEnvelope<out P : KernelEventPayload>(
 )
 
 @Serializable sealed interface KernelEventPayload
-@Serializable data class BattleSamplePayload(val sample: ShadowBattleSample) : KernelEventPayload
+@Serializable data class BattleSamplePayload(
+    val sample: ShadowBattleSample,
+    val damageObserved: Boolean = true,
+    val timeSource: String = "sim",
+    val reviveTriggered: Boolean = false,
+) : KernelEventPayload
 @Serializable data class SessionLifecyclePayload(val sessionId: String, val phase: String) : KernelEventPayload
 @Serializable data class FrameObservedPayload(val pageState: String, val capturedAtMillis: Long) : KernelEventPayload
 @Serializable data class StateReducedPayload(

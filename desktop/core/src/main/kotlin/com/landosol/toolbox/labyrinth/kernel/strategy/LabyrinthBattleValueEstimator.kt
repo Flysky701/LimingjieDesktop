@@ -72,8 +72,11 @@ internal fun combinedMultiTeamPassProb(values: List<BattleValue>): Double {
         val std = exp(it.damageLogStd).coerceIn(0.15, 0.35)
         std * std
     }
-    val pDamage = if (totalDamage <= 0.0) 0.0
+    val rawDamage = if (totalDamage <= 0.0) 0.0
         else normalCdf((totalDamage - 1.15) / sqrt(totalVar)).coerceAtMost(0.98)
+    val pDamage = if (values.size == 2 && values.maxOf { it.pWin.coerceIn(0.0, 1.0) } < 0.20) {
+        rawDamage.coerceAtMost(0.68)
+    } else rawDamage
     return maxOf(pIndep, pDamage).coerceIn(0.0, 1.0)
 }
 
@@ -128,6 +131,12 @@ data class BattleModelTrace(
     val detail: String? = null,
 )
 
+data class BattleQuestCatalogMeta(
+    val bucket: String,
+    val canonicalWaveSig: String,
+    val dbVersion: String = "",
+)
+
 data class BattleModelAssessment(
     val tier: BattleConfidenceTier,
     val pWin: Double,
@@ -140,6 +149,7 @@ data class BattleModelAssessment(
     val teamWinProbabilities: List<Double> = emptyList(),
     val autoDowngradedToMultiTeam: Boolean = false,
     val adoptionNote: String? = null,
+    val ruleLeadWinProbability: Double? = null,
 )
 
 data class BattleValueEstimate(
@@ -151,6 +161,7 @@ data class BattleValueEstimate(
 interface ContextualBattleValueEstimator : LabyrinthBattleValueEstimator {
     fun estimateWithSource(context: BattleValueContext, candidates: List<List<Int>>): BattleValueEstimate
     fun unitAffinities(context: BattleValueContext): Map<Int, Double>? = null
+    fun questCatalogMeta(questId: Int): BattleQuestCatalogMeta? = null
     override fun estimate(context: BattleValueContext, candidates: List<List<Int>>): List<BattleValue> =
         estimateWithSource(context, candidates).values
 }

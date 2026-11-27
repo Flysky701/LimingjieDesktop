@@ -1,5 +1,7 @@
 package com.landosol.toolbox.labyrinth
 
+import com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthRunPlanningContext
+import com.landosol.toolbox.labyrinth.kernel.planning.ScoreSettings
 import com.landosol.toolbox.labyrinth.vision.EntryPixelRect
 import com.landosol.toolbox.labyrinth.vision.LabyrinthRelicMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopCategoryState
@@ -71,6 +73,56 @@ class LabyrinthShopArea5RoundThresholdTest {
         assertEquals("r2", (policy.decide(5, items.toList(), emptyList(), refreshAvailable = true, refreshesUsedInVisit = 1, coinBalance = 14_520) as LabyrinthShopDecision.BuyRelic).item.slotId)
         items.removeAt(0)
         assertEquals("r3", (policy.decide(5, items.toList(), emptyList(), refreshAvailable = true, refreshesUsedInVisit = 1, coinBalance = 14_520) as LabyrinthShopDecision.BuyRelic).item.slotId)
+    }
+
+    @Test
+    fun lowBalanceBelowPostRefreshImprintClosesInsteadOfWastingRefresh() {
+        val policy = LabyrinthShopPolicy()
+        val items = listOf(relic("21001", 2), relic("31001", 3))
+        val decision = policy.decide(
+            currentArea = 5,
+            items = items,
+            acquired = emptyList(),
+            refreshAvailable = true,
+            refreshAvailabilityKnown = true,
+            refreshesUsedInVisit = 0,
+            coinBalance = 1_000,
+            stockScanComplete = true,
+        )
+        assertTrue("Expected Close when 1000-300 < cheapest offer, got $decision", decision is LabyrinthShopDecision.Close)
+    }
+
+    @Test
+    fun pathBPlansAllSecondaryArea5ShelfThroughShopDp() {
+        val policy = LabyrinthShopPolicy()
+        val items = listOf(relic("21001", 2), relic("31001", 3))
+        val planning = LabyrinthRunPlanningContext(
+            enabled = true,
+            difficulty = 5,
+            currentArea = 5,
+            upcomingExams = emptyList(),
+            remainingShops = 1,
+            enhanceNode21 = true,
+            reviveAvailable = false,
+            observedRelicIds = setOf(40003),
+            markStacks = emptyMap(),
+            alphaRupee = 6_000,
+            scoreSettings = ScoreSettings.currentOfficial(),
+            passEstimator = null,
+            cacheFingerprint = "test-area5-secondary",
+        )
+        val decision = policy.decide(
+            currentArea = 5,
+            items = items,
+            acquired = emptyList(),
+            refreshAvailable = true,
+            refreshAvailabilityKnown = true,
+            refreshesUsedInVisit = 0,
+            coinBalance = 6_000,
+            stockScanComplete = true,
+            planningContext = planning,
+        )
+        assertEquals("PathB-官方分", decision.planningSource)
     }
 
     private fun relic(id: String, rarity: Int): LabyrinthShopItemMatch {

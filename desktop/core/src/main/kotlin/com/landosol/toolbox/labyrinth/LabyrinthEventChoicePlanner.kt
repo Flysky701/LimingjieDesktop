@@ -714,7 +714,10 @@ class LabyrinthEventChoicePlanner(
             val result = evaluation.specificRoles.getOrPut(role.characterId) {
                 tryPathB {
                     evaluateRoleChoices(planning.planningState(evaluation.acquiredIds), listOf(role.characterId),
-                        planning.upcomingExams, planning.passEstimator, planning.scoreSettings).single()
+                        planning.upcomingExams, planning.passEstimator, planning.scoreSettings,
+                        shelfModel = com.landosol.toolbox.labyrinth.kernel.planning.ShopShelfModel.forOwnedRelics(
+                            planning.observedRelicIds,
+                        )).single()
                 }
             }
             if (result != null) {
@@ -744,6 +747,10 @@ class LabyrinthEventChoicePlanner(
             val points = marginalGoldPts(before, delta, planning.remainingShops,
                 planning.scoreSettings, planning.difficulty,
                 ShopDiscountModel(planning.enhanceNode21, 40003 in planning.observedRelicIds),
+                shelfModel = com.landosol.toolbox.labyrinth.kernel.planning.ShopShelfModel.forOwnedRelics(
+                    planning.observedRelicIds,
+                ),
+                maxRefreshes = 2,
                 ownedCharacterIds = evaluation.acquiredIds)
             if (wallet == null && coins < 0) -points else points
         }

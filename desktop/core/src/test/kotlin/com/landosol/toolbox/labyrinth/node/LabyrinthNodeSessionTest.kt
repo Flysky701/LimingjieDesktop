@@ -229,4 +229,55 @@ class LabyrinthNodeSessionTest {
 
         assertEquals(null, session.uniqueReachableRouteTarget())
     }
+
+    @Test
+    fun `hasForwardForkAtCurrentNode and replaceRemainingRoute validate edges and switch route cleanly`() {
+        val n301 = node(area = 3, column = 1, row = 1, blockId = 301, blockType = LabyrinthNodeTypes.START, nextBlockIds = listOf(302, 312))
+        val n302 = node(area = 3, column = 2, row = 1, blockId = 302, blockType = LabyrinthNodeTypes.EX_BATTLE, nextBlockIds = listOf(303))
+        val n303 = node(area = 3, column = 3, row = 1, blockId = 303, blockType = LabyrinthNodeTypes.BOSS, isAreaLastPoint = true)
+        val n312 = node(area = 3, column = 2, row = 2, blockId = 312, blockType = LabyrinthNodeTypes.EVENT, nextBlockIds = listOf(313))
+        val n313 = node(area = 3, column = 3, row = 2, blockId = 313, blockType = LabyrinthNodeTypes.BOSS, isAreaLastPoint = true)
+        val all = listOf(n301, n302, n303, n312, n313)
+        val session = sessionWith(allNodes = all, route = listOf(n301, n302, n303), currentNodeId = 301)
+
+        assertTrue(session.hasForwardForkAtCurrentNode())
+        assertEquals(302L, session.currentRouteTarget()?.blockId)
+
+        // Invalid replacements (disconnected edge / wrong start) are rejected without mutating state.
+        assertTrue(!session.replaceRemainingRoute(listOf(n301, n313)))
+        assertTrue(!session.replaceRemainingRoute(listOf(n302, n303)))
+        assertEquals(302L, session.currentRouteTarget()?.blockId)
+
+        // Valid replacement switches continuation to 312 -> 313 and preserves visited prefix.
+        assertTrue(session.replaceRemainingRoute(listOf(n301, n312, n313)))
+        assertEquals(312L, session.currentRouteTarget()?.blockId)
+        assertEquals(listOf(301L), session.getState().visitedNodes)
+    }
+
+    @Test
+    fun `previousSameAreaRouteNode and rollbackCurrentNodeOneStep step back safely without crossing area`() {
+        val a2Boss = node(area = 2, column = 6, row = 1, blockId = 20601, blockType = LabyrinthNodeTypes.BOSS, nextBlockIds = listOf(30101), isAreaLastPoint = true)
+        val n301 = node(area = 3, column = 1, row = 1, blockId = 30101, blockType = LabyrinthNodeTypes.START, nextBlockIds = listOf(30201))
+        val n302 = node(area = 3, column = 2, row = 1, blockId = 30201, blockType = LabyrinthNodeTypes.EVENT, nextBlockIds = listOf(30301))
+        val n303 = node(area = 3, column = 3, row = 1, blockId = 30301, blockType = LabyrinthNodeTypes.LINK, nextBlockIds = listOf(30401))
+        val n304 = node(area = 3, column = 4, row = 1, blockId = 30401, blockType = LabyrinthNodeTypes.EX_BATTLE, isAreaLastPoint = true)
+        val session = sessionWith(
+            allNodes = listOf(a2Boss, n301, n302, n303, n304),
+            route = listOf(a2Boss, n301, n302, n303, n304),
+            currentNodeId = 30301L,
+        )
+
+        assertEquals(30301L, session.currentNode()?.blockId)
+        assertEquals(30201L, session.previousSameAreaRouteNode()?.blockId)
+        assertEquals(30201L, session.rollbackCurrentNodeOneStep()?.blockId)
+        assertEquals(30201L, session.getState().currentNodeId)
+        assertEquals(30301L, session.currentRouteTarget()?.blockId)
+        assertTrue(30301L !in session.getState().visitedNodes)
+
+        assertEquals(30101L, session.rollbackCurrentNodeOneStep()?.blockId)
+        // Must stop at area boundary (30101 is the first node in Area 3; do not roll back into a2Boss).
+        assertEquals(null, session.previousSameAreaRouteNode())
+        assertEquals(null, session.rollbackCurrentNodeOneStep())
+        assertEquals(30101L, session.getState().currentNodeId)
+    }
 }

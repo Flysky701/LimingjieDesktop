@@ -4,6 +4,7 @@ import com.landosol.toolbox.labyrinth.kernel.planning.LabyrinthRunPlanningContex
 import com.landosol.toolbox.labyrinth.kernel.planning.ShopDiscountModel
 import com.landosol.toolbox.labyrinth.kernel.planning.ShopItem
 import com.landosol.toolbox.labyrinth.kernel.planning.ShopItemKind
+import com.landosol.toolbox.labyrinth.kernel.planning.ShopShelfModel
 import com.landosol.toolbox.labyrinth.kernel.planning.planShopVisit
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemMatch
 import com.landosol.toolbox.labyrinth.vision.LabyrinthShopItemKind
@@ -215,6 +216,7 @@ class LabyrinthShopPolicy(
             val plan = tryPathB {
                 planShopVisit(offers, gold, planning.scoreSettings, planning.difficulty,
                     ShopDiscountModel(planning.enhanceNode21, 40003 in planning.observedRelicIds),
+                    shelfModel = ShopShelfModel.forOwnedRelics(planning.observedRelicIds),
                     refreshCount = refreshesUsedInVisit,
                     maxRefreshes = minOf(areaRefreshBudget ?: Int.MAX_VALUE, planning.scoreSettings.shopRefreshCosts.size),
                     refreshAvailable = areaRefreshPermitted && refreshAvailable,
@@ -639,6 +641,34 @@ class LabyrinthShopPolicy(
         randomImprint?.let { item ->
             return LabyrinthShopDecision.BuyRoleImprint(item, item.roleImprintLabel ?: "职能印记", "5图购买随机角色印记")
         }
+        if (stockScanComplete && allowSecondaryPurchases && planningContext?.enabled == true) {
+            val secondaryRelics = recognizedRelicMatches(items, setOf(2, 3), acquired)
+            val secondaryImprint = if (refreshesUsedInVisit >= 2 && allowClearancePurchases) {
+                bestChoiceImprint(items)
+            } else null
+            if (secondaryRelics.isNotEmpty() || secondaryImprint != null) {
+                val secondaryRelicDecision = if (secondaryRelics.isNotEmpty()) {
+                    relicChoicePolicy.choose(
+                        acquired = acquired,
+                        candidates = secondaryRelics.mapNotNull { it.relicMatch },
+                        lockedFocus = lockedFocus,
+                        calibratedStacks = calibratedStacks,
+                        currentArea = 5,
+                        planningContext = planningContext,
+                        acquiredCharacterIds = acquiredCharacterIds,
+                    )
+                } else null
+                if (secondaryRelics.isEmpty() || secondaryRelicDecision != null) {
+                    planShelf(
+                        secondaryRelics,
+                        secondaryImprint,
+                        secondaryRelicDecision,
+                        areaRefreshPermitted,
+                        2,
+                    )?.let { return it }
+                }
+            }
+        }
         if (refreshesUsedInVisit == 0) {
             if (coinBalance >= ROUND1_STAR2_MIN_BALANCE) {
                 buyBestRelic(items, setOf(2), acquired, calibratedStacks, 5, lockedFocus, planningContext, acquiredCharacterIds)?.let { return it }
@@ -668,6 +698,12 @@ class LabyrinthShopPolicy(
         if (!stockScanComplete) return scanWait()
         if (refreshesUsedInVisit < 2) {
             val cost = if (refreshesUsedInVisit == 0) 300 else 600
+            val minCheapestOffer = planningContext?.let {
+                ShopDiscountModel(it.enhanceNode21, 40003 in it.observedRelicIds).price(1200)
+            } ?: MIN_DISCOUNTED_IMPRINT_PRICE
+            if (coinBalance - cost < minCheapestOffer) {
+                return LabyrinthShopDecision.Close("5图刷新后余额不足以购买任何商品，退出商店")
+            }
             if (!refreshAvailabilityKnown) return LabyrinthShopDecision.Wait("等待刷新按钮稳定识别（5图）")
             if (refreshAvailable && coinBalance >= cost) {
                 return LabyrinthShopDecision.Refresh("5图第" + (refreshesUsedInVisit + 1) + "次刷新（" + cost + "金币）")
@@ -768,5 +804,6 @@ class LabyrinthShopPolicy(
         const val ROUND1_STAR3_MIN_BALANCE = 17_000
         const val ROUND2_STAR2_MIN_BALANCE = 12_320
         const val ROUND2_STAR3_MIN_BALANCE = 14_520
+        const val MIN_DISCOUNTED_IMPRINT_PRICE = 780
     }
 }

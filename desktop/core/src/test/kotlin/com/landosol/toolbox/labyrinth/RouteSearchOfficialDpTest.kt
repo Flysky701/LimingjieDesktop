@@ -175,6 +175,36 @@ class RouteSearchOfficialDpTest {
         assertFalse((valueReject as RouteSearchResult.Rejected).fatal)
     }
 
+    @Test
+    fun `official score DP without perfectStart and with EITHER allows EX at Area 3 and 5 column 3`() {
+        val map = fiveAreaMap()
+        val relaxed = policy.copy(perfectStart = false, thirdBlockChoice = LabyrinthThirdBlockChoice.EITHER)
+        val route = found(search(map, relaxed))
+        val col3Types = route.nodes.filter { it.area in setOf(3, 5) && it.column == 3 }.map { it.blockType }
+        assertEquals(listOf(Node.EX_BATTLE, Node.EX_BATTLE), col3Types)
+
+        // Explicit thirdBlockChoice = RELIC still constrains column 3 even when perfectStart = false.
+        val relicOnly = policy.copy(perfectStart = false, thirdBlockChoice = LabyrinthThirdBlockChoice.RELIC)
+        val relicRoute = found(search(map, relicOnly))
+        assertEquals(listOf(Node.RELIC, Node.RELIC), relicRoute.nodes.filter { it.area in setOf(3, 5) && it.column == 3 }.map { it.blockType })
+    }
+
+    @Test
+    fun `official score DP without targetScore values EVENT plus SHOP conversion via walletModel`() {
+        val fork = listOf(
+            node(1, 1, Node.START, 2, 12),
+            node(1, 2, Node.NORMAL_BATTLE, 3),
+            node(1, 3, Node.NORMAL_BATTLE, 4),
+            node(1, 12, Node.EVENT, 13),
+            node(1, 13, Node.SHOP, 4),
+            node(1, 4, Node.BOSS),
+        )
+        val full = fork + basicArea(2) + bossArea(3) + basicArea(4) + bossArea(5)
+        val relaxed = policy.copy(perfectStart = false, thirdBlockChoice = LabyrinthThirdBlockChoice.EITHER, targetScore = 0L)
+        val route = found(LabyrinthOpeningRouteMatcher().search(7, full, difficulty = 5, policy = relaxed, guildId = 1, enhanceNodeIds = setOf(21)))
+        assertTrue("Expected EVENT->SHOP branch, got ${route.blockIds}", 112L in route.blockIds && 113L in route.blockIds)
+    }
+
     private fun search(nodes: List<LabyrinthMapNode>, policy: LabyrinthRoutePolicy = this.policy): RouteSearchResult =
         LabyrinthOpeningRouteMatcher().search(7, nodes, policy = policy)
 
