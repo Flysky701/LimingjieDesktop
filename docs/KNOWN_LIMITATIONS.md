@@ -2,9 +2,17 @@
 
 常见问题排查见 [使用指南](USER-GUIDE.md#日志与常见问题)；视觉全面审查/冗余增强、NN 模型交付与 Path B 规划路线见 [统一路线图](ROADMAP.md)。
 
+## 下一版 Todo
+
+- [ ] **统一 Path B 的路线、事件、商店和结算估值。** 目前刷分路线缺少逐节点的余额转移，商店用剩余店数和通用货架估算留币价值。以已确认的 α 币余额为起点，按实际强化、战斗类型和游戏内剩余秒数估算后续收入，按事件选项的成功、失败和保底分别推演金币与收集变化。事件加赛按结算口径计算金币和实际收集。退店时把累计分数、余款和更新后的角色与遗物交回路线，按后续各店的实际楼层与规则估值，保留超过 10,000 币的余额及商店收益分布。开局筛图优先验证是否有一条走满 6 个地图 EX 的可达路线，局中用同一套状态转移计算达标率和撤退上界。 [路线估分](../desktop/core/src/main/kotlin/com/landosol/toolbox/labyrinth/kernel/planning/ScoreTargetGate.kt) · [事件估值](../desktop/core/src/main/kotlin/com/landosol/toolbox/labyrinth/LabyrinthEventChoicePlanner.kt) · [商店 DP](../desktop/core/src/main/kotlin/com/landosol/toolbox/labyrinth/kernel/planning/ShopDp.kt) · [#4](https://github.com/Flysky701/LimingjieDesktop/issues/4)
+- [ ] **三、四、五图用全局收益比较购买、刷新和退店。** 移除三图只买 ★1 遗物及随机印记余额 7,620／3,510 的旧经验门槛。让已确认、买得起且游戏允许购买的商品进入 Path B 候选，按折扣价、刷新费和剩余刷新次数推演，计入提前获得的角色和遗物对后续战斗的收益。四图按后续楼层收益比较支出与留币，五图计入后续固定分和目标缺分后比较整排货。路线和商店使用同一目标，有刷分目标时比较达标率和预计耗时，普通刷分按期望结算分评估。先验证两次刷新内的购买组合，第三次刷新（1,200 币）仅评估游戏允许、余额较高且能明显提高达标率的情形。 [商店策略](../desktop/core/src/main/kotlin/com/landosol/toolbox/labyrinth/LabyrinthShopPolicy.kt) · [#5](https://github.com/Flysky701/LimingjieDesktop/issues/5)
+- [ ] **将三图 Boss 一刀率和战斗剩余秒数纳入编队估值。** 保留通关率优先，在胜率接近的阵容间比较三图 Boss 一刀概率及预计金币收益。游戏内剩余秒数用于算金币，现实耗时用于算刷分效率。 [战斗评估](../desktop/core/src/main/kotlin/com/landosol/toolbox/labyrinth/kernel/planning/ModelBattlePassEstimator.kt) · [#6](https://github.com/Flysky701/LimingjieDesktop/issues/6)
+
+用同一批地图与随机输入离线对照通关率、均分、52,000 达标率和用时。以三图余额 7,205、货架有 1 件 ★2 遗物和 2 枚随机印记为例，验证同一余额与货架下，后续收入或目标缺分变化时能在购买、刷新和退店之间切换。覆盖余额跨 10,000、事件失败保底、三图 Boss 一刀与两刀的金币差，以及五图余额 1,820 且还差 400 分时整排货的选择。OCR 样本、回放字段和离线对照一并跟踪。 [#8](https://github.com/Flysky701/LimingjieDesktop/issues/8)
+
 ## 待修复与验证问题
 
-以下问题位于 `desktop/core` 核心业务中：
+以下为 `desktop/core` 核心业务的实机回归清单。 [#7](https://github.com/Flysky701/LimingjieDesktop/issues/7)
 
 | ID | 问题与当前修复摘要 | 状态与验证要求 |
 | --- | --- | --- |
