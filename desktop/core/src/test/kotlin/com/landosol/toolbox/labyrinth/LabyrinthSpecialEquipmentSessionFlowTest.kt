@@ -897,7 +897,12 @@ class LabyrinthSpecialEquipmentSessionFlowTest {
         // ⇒ actionLabel 为 null（用例失败，且「取消」从未被点击）。
         assertEquals("特别装备：点击「取消」", session.state.value.frameTrace.actionLabel)
         assertEquals(LabyrinthSpecialEquipmentFlowStage.DONE, flowStage(session))
-        assertTrue(session.state.value.message.orEmpty().contains("超限"))
+
+        awaitActionLatch(session)
+        val state = session.state.value
+        assertEquals("特别装备：点击「取消」", state.lastActionLabel)
+        val message = state.message.orEmpty()
+        assertTrue(message, message.contains("超限"))
     }
 
     @Test

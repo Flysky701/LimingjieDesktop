@@ -9033,15 +9033,15 @@ class LabyrinthEntryRecognitionSession(
         }
 
         // 4) 有待派发的点击，而且这一帧满足派发条件 ⇒ **真的派发出去之后再提交 stage**。
-        publishSpecialEquipmentMessage(
-            if (decision.finished) specialEquipmentDiagnostic ?: decision.message else decision.message,
-        )
+        val diagnostic = specialEquipmentDiagnostic.takeIf { decision.finished }
+        publishSpecialEquipmentMessage(diagnostic ?: decision.message)
         if (
             !dispatchSpecialEquipmentAction(
                 sessionId = sessionId,
                 rect = requireNotNull(rect),
                 label = specialEquipmentTapLabel(tap),
                 timestampMillis = timestampMillis,
+                diagnostic = diagnostic,
             )
         ) {
             // 单动作锁被占：这一下没有落到画面上，与「动作间隔未到」同等处理——stage 不前进（结束决策
@@ -9104,6 +9104,7 @@ class LabyrinthEntryRecognitionSession(
         rect: EntryPixelRect,
         label: String,
         timestampMillis: Long,
+        diagnostic: String?,
     ): Boolean {
         if (!beginGuardedAction()) return false
         val authorization = authorizeBattleAction(
@@ -9140,12 +9141,14 @@ class LabyrinthEntryRecognitionSession(
             authorization.receipt(actionResult.javaClass.simpleName)?.let { kernelRouteCause = it }
             when (actionResult) {
                 is AutomationActionResult.Executed -> if (activeSessionId == sessionId) {
-                    val current = _state.value
-                    _state.value = current.copy(
-                        actionCount = current.actionCount + 1,
-                        lastActionLabel = label,
-                        message = "已执行：$label；等待画面确认",
-                    )
+                    val acknowledgement = "已执行：$label；等待画面确认"
+                    _state.update { current ->
+                        current.copy(
+                            actionCount = current.actionCount + 1,
+                            lastActionLabel = label,
+                            message = diagnostic?.let { "$acknowledgement。$it" } ?: acknowledgement,
+                        )
+                    }
                     overlayCoordinator.update(sessionId, buildOverlayPresentation(sessionId))
                 }
                 is AutomationActionResult.Rejected -> {

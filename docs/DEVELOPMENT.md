@@ -44,7 +44,7 @@
 
 Windows CI 在桌面构建输入变更的 PR 和 `main` 推送、`desktop-v*` 标签推送及手动触发时运行。默认执行 `check`，勾选 `full_checks` 加上 `-Pfull -PincludeOcrEval`。桌面标签或 `package_candidate` 触发 `:app:packagePortableZip`。同时启用 `full_checks` 与打包时，追加 `-PincludePackagedRuntime`，并对解压后的便携包运行 `--self-test`。
 
-GitHub 托管运行器通过仓库变量 `LIMINGJIE_NN_BUNDLE_URL` 获取战斗模型 ZIP。ZIP 根目录应直接包含 `tower_a.onnx`、`tower_b.onnx`、`manifest.json`、`golden_io.json` 和 `feature_pack.json`。日常检查和单独的 OCR 评估使用仓库内的输入。OCR 的报告 `ocr-eval.json` 和差异表 `ocr-eval-diff.tsv` 位于 `desktop/ocr/build/reports/`，样本来源见 [OCR 样本清单](../desktop/ocr/evaluation/manifest.json)。
+打包时，GitHub 托管运行器默认从 LimingjieNN 的固定提交获取战斗模型。设置仓库变量 `LIMINGJIE_NN_BUNDLE_URL` 可改用自定义 ZIP，根目录须直接包含 `tower_a.onnx`、`tower_b.onnx`、`manifest.json`、`golden_io.json` 和 `feature_pack.json`。两种来源都由 Gradle 核对文件校验和。日常检查和单独的 OCR 评估使用仓库内的输入。OCR 的报告 `ocr-eval.json` 和差异表 `ocr-eval-diff.tsv` 位于 `desktop/ocr/build/reports/`，样本来源见 [OCR 样本清单](../desktop/ocr/evaluation/manifest.json)。
 
 `src/probe` 中的手动探针（`:device:probeDevice`、`:app:probeGraph`）用于连接本机设备调试，不包含在常规 `test` / `check` 中。
 

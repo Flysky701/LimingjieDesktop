@@ -85,11 +85,20 @@ jobs:
           MODEL_URL: ${{ vars.LIMINGJIE_NN_BUNDLE_URL }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not $env:MODEL_URL) { throw 'Set LIMINGJIE_NN_BUNDLE_URL to the battle model ZIP URL' }
           $archive = Join-Path $env:RUNNER_TEMP 'battle-model.zip'
           $bundle = Join-Path $env:RUNNER_TEMP 'battle-model'
-          Invoke-WebRequest -Uri $env:MODEL_URL -OutFile $archive
+          $modelCommit = '91286d179a1acbb088895258fb9a78ec069a4d3a'
+          $useDefaultBundle = -not $env:MODEL_URL
+          $source = if ($useDefaultBundle) {
+            "https://codeload.github.com/Flysky701/LimingjieNN/zip/$modelCommit"
+          } else {
+            $env:MODEL_URL
+          }
+          Invoke-WebRequest -Uri $source -OutFile $archive
           Expand-Archive -LiteralPath $archive -DestinationPath $bundle
+          if ($useDefaultBundle) {
+            $bundle = Join-Path $bundle "LimingjieNN-$modelCommit/models/s4_m2b_r1_seed43"
+          }
           "bundle=$bundle" >> $env:GITHUB_OUTPUT
       - name: Run selected checks and build requested ZIP
         env:
