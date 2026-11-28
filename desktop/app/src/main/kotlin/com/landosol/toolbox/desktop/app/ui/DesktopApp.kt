@@ -116,26 +116,51 @@ internal fun DesktopApp(
         var standaloneGuild by remember(configuration.selectedAccount?.id) { mutableStateOf(LabyrinthRerollOptions.DEFAULT_GUILD_ID) }
         var setupMessage by remember { mutableStateOf<String?>(null) }
         var pendingSetupExit by remember { mutableStateOf<(() -> Unit)?>(null) }
+        LaunchedEffect(setup.dirty) { if (setup.dirty) setupMessage = null }
         LaunchedEffect(configuration.rerollSettings(), preferences.goals) { setup.sync(configuration, preferences.goals) }
         fun cancelSetup() { setup.reset(graph.labyrinthController.uiState.value, graph.ux.preferences.state.value.goals); setupMessage = null }
         fun saveSetup() {
-            if (graph.busy || actions.working) return
+            if (actions.working) return
+            if (graph.busy) {
+                setupMessage = if (connection != WorkerConnectionStatus.CONNECTED) {
+                    "控制连接未就绪，无法保存配置"
+                } else {
+                    "任务运行中，请先停止后再保存"
+                }
+                return
+            }
             setupMessage = null
             val current = graph.labyrinthController.uiState.value
             setup.validationError(current)?.let { setupMessage = it; return }
             val settingsToSave = setup.settingsToSave(current)
+            val settingsChanged = settingsToSave != current.rerollSettings()
             val goalsToSave = setup.savedGoals()
             val accountId = current.selectedAccount?.id
             actions.run {
-                if (graph.busy || graph.labyrinthController.uiState.value.selectedAccount?.id != accountId) return@run
-                graph.request(ControlOps.SAVE_SETUP, controlArgs("settings" to ControlModelCodec.encode(settingsToSave), "goals" to ControlModelCodec.encode(goalsToSave)))
-                graph.awaitSnapshot { snapshot ->
+                if (graph.busy || graph.labyrinthController.uiState.value.selectedAccount?.id != accountId) {
+                    setupMessage = "当前状态或账号已变化，请重新核对后再保存"
+                    return@run
+                }
+                graph.request(
+                    ControlOps.SAVE_SETUP,
+                    buildJsonObject {
+                        put("settings", ControlModelCodec.encode(settingsToSave))
+                        put("goals", ControlModelCodec.encode(goalsToSave))
+                        accountId?.let { put("accountId", it) }
+                    },
+                )
+                val matched = graph.awaitSnapshot("配置保存结果尚未确认，请稍后重试") { snapshot ->
                     snapshot.console.task.selectedAccount?.id == accountId &&
                         snapshot.console.task.rerollSettings() == settingsToSave &&
                         snapshot.model("preferences", DesktopPreferences()).goals == goalsToSave
                 }
-                setup.reset(graph.labyrinthController.uiState.value, graph.ux.preferences.state.value.goals)
-                setupMessage = null
+                setup.reset(matched.console.task, matched.model("preferences", DesktopPreferences()).goals)
+                setupMessage = if (settingsChanged) {
+                    if (settingsToSave.targetScore > 0L) "配置已保存（刷分目标 ${settingsToSave.targetScore}）"
+                    else "配置已保存（刷分目标已关闭）"
+                } else {
+                    "配置已保存"
+                }
             }
         }
         if (page == Page.Run && !fullConfiguration) {

@@ -251,6 +251,51 @@ class DesktopGraphIntegrationTest {
         } finally { withTimeout(15_000) { reopened.shutdown() } }
     }
 
+    @Test fun hiddenUnownedRerollingSuspendsCaptureWithoutStoppingRegistryAndResumesOnPreviewOrNextStage() = runBlocking {
+        val fake = FixtureDevice(1920, 1080, IntArray(1920 * 1080))
+        val graph = DesktopAppGraph(directory.root.toPath().resolve("reroll-capture-suspend"), suppliedDevice = fake, startupUpdates = false)
+        try {
+            graph.connectDevice("fixture-only")
+            graph.setPreviewRequested(false)
+            graph.captureService.start()
+            assertTrue(CaptureStateRegistry.isActive())
+            withTimeout(3_000) { while (fake.captures.get() < 2) delay(20) }
+
+            val stateField = graph.labyrinthBatchController.javaClass.getDeclaredField("_state").apply { isAccessible = true }
+            @Suppress("UNCHECKED_CAST")
+            val batchState = stateField.get(graph.labyrinthBatchController) as MutableStateFlow<com.landosol.toolbox.labyrinth.batch.LabyrinthBatchCheckpoint?>
+            val baseCheckpoint = com.landosol.toolbox.labyrinth.batch.LabyrinthBatchCheckpoint(
+                batchId = "suspend-test",
+                accountId = 1L,
+                goals = listOf(com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoal(3, 1, com.landosol.toolbox.labyrinth.batch.LabyrinthBatchGoalMode.CLEARS)),
+                stage = com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.REROLLING,
+                currentDifficulty = 5,
+                updatedAt = 1L,
+            )
+            batchState.value = baseCheckpoint
+            delay(350)
+            val suspendedCount = fake.captures.get()
+            delay(700)
+            assertEquals("hidden unowned REROLLING must suspend frame acquisition", suspendedCount, fake.captures.get())
+            assertTrue("capture registry must stay active while suspended", CaptureStateRegistry.isActive())
+
+            // Expanding preview wakes capture immediately.
+            graph.setPreviewRequested(true)
+            withTimeout(3_000) { while (fake.captures.get() == suspendedCount) delay(20) }
+            graph.setPreviewRequested(false)
+            delay(350)
+            val reSuspendedCount = fake.captures.get()
+            delay(650)
+            assertEquals(reSuspendedCount, fake.captures.get())
+
+            // Transitioning out of REROLLING resumes capture automatically even while preview is hidden.
+            batchState.value = baseCheckpoint.copy(stage = com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.INVALIDATING_OLD_CLIENT_SESSION)
+            withTimeout(3_000) { while (fake.captures.get() == reSuspendedCount) delay(20) }
+        } finally {
+            withTimeout(15_000) { graph.shutdown() }
+        }
+    }
+
     @Test fun unsupportedResolutionBlocksRealGraphBeforeBatchMutationAndEntryActions() = runBlocking {
         val fake = FixtureDevice(960,540,IntArray(960*540))
         val graph = DesktopAppGraph(directory.root.toPath().resolve("resolution"),suppliedDevice=fake,startupUpdates=false)

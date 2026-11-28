@@ -1,5 +1,6 @@
 package com.landosol.toolbox.labyrinth.batch
 
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -475,5 +476,43 @@ class LabyrinthBatchControllerTest {
         val legacyJson = """{"batchId":"legacy","accountId":7,"goals":[{"guildId":1,"targetCount":1,"mode":"CLEARS"}],"currentDifficulty":5,"updatedAt":1000}"""
         val decoded = kotlinx.serialization.json.Json.decodeFromString(LabyrinthBatchCheckpoint.serializer(), legacyJson)
         assertEquals(0, decoded.scoreRetiredRuns)
+    }
+
+    @Test
+    fun `halt and haltForEnvironment set haltReason before emitting terminal checkpoint`() = runTest {
+        val ports = FakePorts()
+        val batch = controller(ports)
+        batch.start("b1", 7L, listOf(goal(guild = 1, count = 1)), difficulty = 1)
+        var observedReasonAtTerminalStage: LabyrinthBatchHaltReason? = null
+        val job = launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+            batch.state.collect { checkpoint ->
+                if (checkpoint?.stage == LabyrinthBatchStage.PAUSED) {
+                    observedReasonAtTerminalStage = batch.haltReason.value
+                }
+            }
+        }
+        try {
+            batch.stop("用户停止任务")
+            assertEquals(LabyrinthBatchHaltReason.USER_STOPPED, observedReasonAtTerminalStage)
+
+            observedReasonAtTerminalStage = null
+            val envBatch = controller(FakePorts())
+            envBatch.start("b2", 7L, listOf(goal(guild = 1, count = 1)), difficulty = 1)
+            val envJob = launch(kotlinx.coroutines.Dispatchers.Unconfined) {
+                envBatch.state.collect { checkpoint ->
+                    if (checkpoint?.stage == LabyrinthBatchStage.PAUSED) {
+                        observedReasonAtTerminalStage = envBatch.haltReason.value
+                    }
+                }
+            }
+            try {
+                envBatch.haltForEnvironment(LabyrinthBatchHaltReason.CAPTURE_LOST, "屏幕捕获停止")
+                assertEquals(LabyrinthBatchHaltReason.CAPTURE_LOST, observedReasonAtTerminalStage)
+            } finally {
+                envJob.cancel()
+            }
+        } finally {
+            job.cancel()
+        }
     }
 }

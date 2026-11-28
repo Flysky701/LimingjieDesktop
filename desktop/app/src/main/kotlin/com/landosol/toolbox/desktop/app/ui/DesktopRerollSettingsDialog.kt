@@ -13,7 +13,8 @@ import androidx.compose.ui.unit.dp
 import com.landosol.toolbox.desktop.app.control.ControlModelCodec
 import com.landosol.toolbox.desktop.app.control.ControlOps
 import com.landosol.toolbox.desktop.app.control.ControlSessionUi
-import com.landosol.toolbox.desktop.app.control.controlArgs
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import com.landosol.toolbox.desktop.app.ui.theme.DesktopCorners
 import com.landosol.toolbox.desktop.app.ui.theme.LocalDesktopColors
 import com.landosol.toolbox.labyrinth.*
@@ -27,8 +28,18 @@ internal fun DesktopRerollSettingsDialog(
     busy: Boolean,
     onClose: () -> Unit,
 ) {
-    var draft by remember(state.selectedAccount?.id, state.rerollSettings()) {
+    var lastSaved by remember(state.selectedAccount?.id) {
         mutableStateOf(state.rerollSettings())
+    }
+    var draft by remember(state.selectedAccount?.id) {
+        mutableStateOf(lastSaved)
+    }
+    LaunchedEffect(state.rerollSettings()) {
+        val incoming = state.rerollSettings()
+        if (incoming != lastSaved) {
+            if (draft == lastSaved) draft = incoming
+            lastSaved = incoming
+        }
     }
     val actions = rememberActions(graph)
     var localError by remember { mutableStateOf<String?>(null) }
@@ -210,8 +221,14 @@ internal fun DesktopRerollSettingsDialog(
                     )
 
                     HorizontalDivider(color = Line)
-                    var targetScoreInput by remember(state.selectedAccount?.id, draft.targetScore) {
+                    var targetScoreInput by remember(state.selectedAccount?.id) {
                         mutableStateOf(if (draft.targetScore > 0L) draft.targetScore.toString() else "")
+                    }
+                    LaunchedEffect(draft.targetScore) {
+                        val parsed = targetScoreInput.toLongOrNull() ?: 0L
+                        if (parsed != draft.targetScore) {
+                            targetScoreInput = if (draft.targetScore > 0L) draft.targetScore.toString() else ""
+                        }
                     }
                     Text("刷分目标（DP 自动撤退门禁）", style = MaterialTheme.typography.labelLarge)
                     Row(
@@ -350,8 +367,14 @@ internal fun DesktopRerollSettingsDialog(
                             val toSave = draft
                             val accountId = state.selectedAccount?.id
                             actions.run {
-                                graph.request(ControlOps.SAVE_REROLL, controlArgs("value" to ControlModelCodec.encode(toSave)))
-                                graph.awaitSnapshot { snap ->
+                                graph.request(
+                                    ControlOps.SAVE_REROLL,
+                                    buildJsonObject {
+                                        put("value", ControlModelCodec.encode(toSave))
+                                        accountId?.let { put("accountId", it) }
+                                    },
+                                )
+                                graph.awaitSnapshot("保存结果尚未确认，请稍后重试") { snap ->
                                     snap.console.task.selectedAccount?.id == accountId && snap.console.task.rerollSettings() == toSave
                                 }
                                 onClose()

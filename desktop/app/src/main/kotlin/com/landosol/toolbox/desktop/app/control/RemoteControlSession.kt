@@ -159,8 +159,13 @@ class ControlSessionUi(val port:ControlSessionPort,previous:ControlSessionUi?=nu
     fun fire(op:String,args:JsonObject=JsonObject(emptyMap())):Job=scope.launch {
         try{request(op,args)}catch(cancelled:CancellationException){throw cancelled}catch(failure:Exception){localError.value=failure.message ?: "操作失败"}
     }
-    suspend fun awaitSnapshot(predicate:(ControlUiSnapshot)->Boolean) {
-        withTimeout(8000){port.snapshots.first{predicate(ControlUiSnapshot(it))}}
+    suspend fun awaitSnapshot(
+        timeoutMessage: String = "操作结果尚未确认，请稍后重试",
+        predicate: (ControlUiSnapshot) -> Boolean,
+    ): ControlUiSnapshot {
+        return withTimeoutOrNull(8000) {
+            ControlUiSnapshot(port.snapshots.first { predicate(ControlUiSnapshot(it)) })
+        } ?: error(timeoutMessage)
     }
     suspend fun loadLabyrinthRoleRatings():List<LabyrinthRoleRatingItem> {
         val reply=request(ControlOps.CATALOG)

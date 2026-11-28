@@ -235,8 +235,8 @@ class LabyrinthBatchController(
         val current = _state.value ?: return@withLock
         if (current.stage !in ACTIVE_STAGES) return@withLock
         if (current.stage == LabyrinthBatchStage.RUNNING_LABYRINTH) ports.stopRun(message)
-        persist(current.copy(stage = LabyrinthBatchStage.PAUSED, message = message, updatedAt = clock()))
         _haltReason.value = reason
+        persist(current.copy(stage = LabyrinthBatchStage.PAUSED, message = message, updatedAt = clock()))
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -376,8 +376,8 @@ class LabyrinthBatchController(
             -> LabyrinthBatchStage.PAUSED
             else -> LabyrinthBatchStage.FAILED
         }
-        persist(checkpoint.copy(stage = terminalStage, message = message, updatedAt = clock()))
         _haltReason.value = reason
+        persist(checkpoint.copy(stage = terminalStage, message = message, updatedAt = clock()))
     }
 
     private suspend fun persist(checkpoint: LabyrinthBatchCheckpoint) {

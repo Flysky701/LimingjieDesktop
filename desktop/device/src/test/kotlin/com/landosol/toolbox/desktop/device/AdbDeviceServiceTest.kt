@@ -710,4 +710,113 @@ class AdbDeviceServiceTest {
             assertTrue(lost.isEmpty())
         }
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun singleTcpTimeoutRecoversWithoutTransportReset() = runTest {
+        val adb = FakeAdb()
+        val touch = RecordingTouch()
+        val events = CopyOnWriteArrayList<String>()
+        val lost = CopyOnWriteArrayList<String>()
+        val serial = "127.0.0.1:16416"
+        val timedOutOnce = AtomicInteger()
+        virtualService(adb, touch, events, lost).useWithVirtualTime { device ->
+            device.connect(serial)
+            adb.calls.clear()
+            adb.handler = { call ->
+                if (call.arguments == listOf("cat", "/proc/sys/kernel/random/boot_id") && timedOutOnce.incrementAndGet() == 1) {
+                    AdbResult.Failure(AdbFailureKind.Timeout, "ADB 命令超时（3000ms）")
+                } else {
+                    adb.default(call)
+                }
+            }
+            withTimeout(5_000) { while (events.none { it.contains("已确认原模拟器启动身份") }) delay(20) }
+            assertFalse(adb.calls.any { it.arguments.firstOrNull() in setOf("disconnect", "connect") })
+            assertTrue(lost.isEmpty())
+            assertTrue(device.state.value is DeviceConnectionState.Ready)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun repeatedTcpTimeoutResetsTransportAndVerifiesOriginalBootId() = runTest {
+        val adb = FakeAdb()
+        val touch = RecordingTouch()
+        val events = CopyOnWriteArrayList<String>()
+        val lost = CopyOnWriteArrayList<String>()
+        val serial = "127.0.0.1:16416"
+        var resetCompleted = false
+        virtualService(adb, touch, events, lost).useWithVirtualTime { device ->
+            device.connect(serial)
+            adb.calls.clear()
+            adb.handler = { call -> when {
+                call.arguments == listOf("disconnect", serial) -> FakeAdb.success("disconnected $serial")
+                call.arguments == listOf("connect", serial) -> {
+                    resetCompleted = true
+                    FakeAdb.success("connected to $serial")
+                }
+                !resetCompleted && call.arguments in setOf(listOf("get-state"), listOf("cat", "/proc/sys/kernel/random/boot_id")) ->
+                    AdbResult.Failure(AdbFailureKind.Timeout, "ADB 命令超时（3000ms）")
+                else -> adb.default(call)
+            } }
+            withTimeout(10_000) { while (events.none { it.contains("已确认原模拟器启动身份") }) delay(50) }
+            val disconnectIndex = adb.calls.indexOfFirst { it.arguments == listOf("disconnect", serial) }
+            val connectIndex = adb.calls.indexOfFirst { it.arguments == listOf("connect", serial) }
+            val bootAfterResetIndex = adb.calls.withIndex().indexOfLast { it.value.arguments == listOf("cat", "/proc/sys/kernel/random/boot_id") }
+            assertTrue(disconnectIndex >= 0 && connectIndex > disconnectIndex && bootAfterResetIndex > connectIndex)
+            assertTrue(lost.isEmpty())
+            assertTrue(device.state.value is DeviceConnectionState.Ready)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun repeatedTcpTimeoutWithChangedBootIdFailsClosedWithoutTouch() = runTest {
+        val adb = FakeAdb()
+        val touch = RecordingTouch()
+        val lost = CopyOnWriteArrayList<String>()
+        val serial = "127.0.0.1:16416"
+        var resetCompleted = false
+        virtualService(adb, touch, lost = lost).useWithVirtualTime { device ->
+            device.connect(serial)
+            adb.calls.clear()
+            adb.handler = { call -> when {
+                call.arguments == listOf("disconnect", serial) -> FakeAdb.success("disconnected $serial")
+                call.arguments == listOf("connect", serial) -> {
+                    resetCompleted = true
+                    FakeAdb.success("connected to $serial")
+                }
+                !resetCompleted && call.arguments in setOf(listOf("get-state"), listOf("cat", "/proc/sys/kernel/random/boot_id")) ->
+                    AdbResult.Failure(AdbFailureKind.Timeout, "ADB 命令超时（3000ms）")
+                resetCompleted && call.arguments == listOf("cat", "/proc/sys/kernel/random/boot_id") ->
+                    FakeAdb.success("20000000-1111-2222-3333-444444444444")
+                else -> adb.default(call)
+            } }
+            withTimeout(10_000) { while (lost.isEmpty() || device.state.value !is DeviceConnectionState.Failed) delay(50) }
+            assertTrue(lost.single().contains("启动身份已变化"))
+            assertEquals(TouchResult.Rejected("触控服务未连接"), device.back(FakeAdb.GAME))
+            assertTrue(touch.gestures.isEmpty())
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun persistentTcpTimeoutExhaustingDeadlineStopsTaskAndLeavesItStopped() = runTest {
+        val adb = FakeAdb()
+        val touch = RecordingTouch()
+        val lost = CopyOnWriteArrayList<String>()
+        val serial = "127.0.0.1:16416"
+        virtualService(adb, touch, lost = lost).useWithVirtualTime { device ->
+            device.connect(serial)
+            adb.calls.clear()
+            adb.handler = { call -> when {
+                call.arguments == listOf("disconnect", serial) -> FakeAdb.success("disconnected $serial")
+                call.arguments == listOf("connect", serial) -> FakeAdb.success("connected to $serial")
+                call.arguments in setOf(listOf("get-state"), listOf("cat", "/proc/sys/kernel/random/boot_id")) ->
+                    AdbResult.Failure(AdbFailureKind.Timeout, "ADB 命令超时（3000ms）")
+                else -> adb.default(call)
+            } }
+            withTimeout(45_000) { while (lost.isEmpty()) delay(100) }
+            assertTrue(lost.single().contains("ADB 命令超时"))
+            assertTrue(adb.calls.any { it.arguments == listOf("disconnect", serial) })
+            assertEquals(TouchResult.Rejected("触控服务未连接"), device.back(FakeAdb.GAME))
+            assertTrue(touch.gestures.isEmpty())
+        }
+    }
 }

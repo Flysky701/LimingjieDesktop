@@ -290,6 +290,81 @@ class GraphControlServiceTest {
         } finally { service.shutdown() }
     }
 
+    @Test fun saveSetupRejectsAccountMismatchAndControllerRejectionWhilePreservingGoalsOnly() = runBlocking {
+        val fake = NoIoDevice()
+        val graph = DesktopAppGraph(directory.root.toPath().resolve("save-guard"), suppliedDevice = fake, startupUpdates = false)
+        val service = GraphControlService(graph, "save-guard", "保存守卫")
+        try {
+            val earlyGoals = listOf(DesktopGoal(3, 5))
+            service.execute(ControlOps.SAVE_SETUP, controlArgs(
+                "settings" to ControlModelCodec.encode(LabyrinthRerollSettings()),
+                "goals" to ControlModelCodec.encode(earlyGoals),
+            ))
+            assertEquals(earlyGoals, graph.ux.preferences.state.value.goals)
+
+            val accountId = graph.accountRepository.create(NormalizedAccountInput("guard-account", "uid-1", "pw", null, GameServer.CN_BILIBILI))
+            withTimeout(10_000) { graph.labyrinthController.uiState.first { it.selectedAccount?.id == accountId && it.settingsReady } }
+
+            // Account mismatch must reject before persisting.
+            val mismatchError = runCatching {
+                service.execute(ControlOps.SAVE_SETUP, buildJsonObject {
+                    put("settings", ControlModelCodec.encode(graph.labyrinthController.uiState.value.rerollSettings().copy(targetScore = 50_000L)))
+                    put("goals", ControlModelCodec.encode(earlyGoals))
+                    put("accountId", accountId + 999)
+                })
+            }.exceptionOrNull()
+            assertTrue(mismatchError?.message.orEmpty().contains("当前账号已切换"))
+            assertEquals(0L, graph.labyrinthController.uiState.value.targetScore)
+
+            // Valid save persists targetScore and includes it in the controller confirmation message.
+            val updated = graph.labyrinthController.uiState.value.rerollSettings().copy(targetScore = 50_000L)
+            service.execute(ControlOps.SAVE_REROLL, buildJsonObject {
+                put("value", ControlModelCodec.encode(updated))
+                put("accountId", accountId)
+            })
+            val refreshed = withTimeout(5_000) { graph.labyrinthController.uiState.first { it.targetScore == 50_000L } }
+            assertTrue(refreshed.message.orEmpty().contains("50000"))
+
+            // Controller-level rejection (e.g. working) must surface instead of returning accepted.
+            val activeField = graph.labyrinthController.javaClass.getDeclaredField("chrome").apply { isAccessible = true }
+            @Suppress("UNCHECKED_CAST")
+            val chrome = activeField.get(graph.labyrinthController) as MutableStateFlow<*>
+            assertNull(graph.labyrinthController.saveSettingsChecked(updated.copy(targetScore = 52_000L)))
+            assertNotNull(chrome.value)
+            val err = graph.labyrinthController.saveSettingsChecked(updated.copy(targetScore = -1L))
+            assertTrue(err.orEmpty().contains("刷分目标无效"))
+        } finally {
+            service.shutdown()
+        }
+    }
+
+    @Test fun manualStopCancelsAuthenticatedRequestWithoutRevocationErrorWhileRevokeDenies() = runBlocking {
+        val runtime = directory.root.toPath().resolve("stop-guard-runtime")
+        val data = directory.root.toPath().resolve("stop-guard-data")
+        val leases = UserResourceLeases(runtime)
+        val fake = NoIoDevice()
+        val graph = DesktopAppGraph(data, suppliedDevice = fake, startupUpdates = false)
+        val service = GraphControlService(graph, "stop-guard", "停止守卫", leases, runtime)
+        try {
+            val guard = checkNotNull(graph.authenticatedAccountGuard)
+            val stoppingField = service.javaClass.getDeclaredField("stopping").apply { isAccessible = true }
+            val stoppingFlag = stoppingField.get(service) as java.util.concurrent.atomic.AtomicBoolean
+            stoppingFlag.set(true)
+            val stopFailure = runCatching { guard(GameServer.CN_BILIBILI, 987654L) }.exceptionOrNull()
+            assertTrue("Expected CancellationException during manual stop, got $stopFailure", stopFailure is CancellationException)
+            // Must not have acquired a UID lease.
+            leases.acquireAccount("cn-bilibili", "987654").close()
+
+            stoppingFlag.set(false)
+            service.revokeActions("synthetic revoke")
+            val revokeFailure = runCatching { guard(GameServer.CN_BILIBILI, 987654L) }.exceptionOrNull()
+            assertTrue("Expected IllegalStateException after revoke, got $revokeFailure", revokeFailure is IllegalStateException)
+            assertTrue(revokeFailure?.message.orEmpty().contains("控制连接已停止"))
+        } finally {
+            service.shutdown()
+        }
+    }
+
     private fun emptyArgs() = JsonObject(emptyMap())
 
     @Suppress("UNCHECKED_CAST")

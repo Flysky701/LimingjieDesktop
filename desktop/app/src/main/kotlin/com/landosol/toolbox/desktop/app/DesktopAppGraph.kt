@@ -299,7 +299,14 @@ class DesktopAppGraph(
         onWarning = { log.add(it, true) }, onLost = { stopAll(it) },
         deferFrame = { resolutionGuard.deferTransitionFrame(it.width, it.height) },
         previewEnabled = { previewRequested },
-        captureSuspended = { automationOverlayCoordinator.state.value?.paused == true && !previewRequested },
+        captureSuspended = {
+            !previewRequested && (
+                automationOverlayCoordinator.state.value?.paused == true ||
+                    (labyrinthBatchController.state.value?.stage ==
+                        com.landosol.toolbox.labyrinth.batch.LabyrinthBatchStage.REROLLING &&
+                        com.landosol.toolbox.automation.capture.CaptureFrameBus.currentOwner() == null)
+                )
+        },
         dispatchSuspended = { automationOverlayCoordinator.state.value?.paused == true },
     )
     fun setPreviewRequested(requested: Boolean) = synchronized(previewLock) {

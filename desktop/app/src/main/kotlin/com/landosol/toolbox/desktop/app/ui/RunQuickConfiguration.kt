@@ -99,8 +99,8 @@ internal data class RunGoalInput(val guildId: Int, val count: String, val clears
 
 /** UI draft only. Business settings are saved through the original account controller. */
 internal class RunSetupDraft(state: LabyrinthUiState, goals: List<DesktopGoal>) {
-    private var savedSettings = state.rerollSettings()
-    private var savedGoals = goalInputs(state, goals)
+    private var savedSettings by mutableStateOf(state.rerollSettings())
+    private var savedGoals by mutableStateOf(goalInputs(state, goals))
     var settings by mutableStateOf(savedSettings)
     var goals by mutableStateOf(savedGoals)
     val dirty get() = settings != savedSettings || goals != savedGoals
@@ -118,9 +118,11 @@ internal class RunSetupDraft(state: LabyrinthUiState, goals: List<DesktopGoal>) 
         val merged = settingsToSave(state)
         savedSettings = state.rerollSettings()
         settings = merged
-        if (this.goals == savedGoals) {
-            savedGoals = goalInputs(state, goals)
-            this.goals = savedGoals
+        val previousSavedGoals = savedGoals
+        val nextSavedGoals = goalInputs(state, goals)
+        savedGoals = nextSavedGoals
+        if (this.goals == previousSavedGoals) {
+            this.goals = nextSavedGoals
         }
     }
 
@@ -324,9 +326,17 @@ internal fun RunTaskSetup(
                     }
                 }
 
-                var targetScoreInput by remember(state.selectedAccount?.id, draft.settings.targetScore) {
+                var targetScoreInput by remember(state.selectedAccount?.id) {
                     mutableStateOf(if (draft.settings.targetScore > 0L) draft.settings.targetScore.toString() else "")
                 }
+                LaunchedEffect(draft.settings.targetScore) {
+                    val parsed = targetScoreInput.toLongOrNull() ?: 0L
+                    if (parsed != draft.settings.targetScore) {
+                        targetScoreInput = if (draft.settings.targetScore > 0L) draft.settings.targetScore.toString() else ""
+                    }
+                }
+                val targetScoreError = draft.settings.targetScore.takeIf { it > LabyrinthRerollOptions.MAX_TARGET_SCORE }
+                    ?.let { "刷分目标不能超过 ${LabyrinthRerollOptions.MAX_TARGET_SCORE}" }
                 DesktopTooltip("输入最终结算总分目标（如 50000），开局与局内 DP 判为无法达标时自动撤退并重刷下一局；留空或 0 表示关闭") {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("刷分目标", style = MaterialTheme.typography.bodySmall)
@@ -342,7 +352,11 @@ internal fun RunTaskSetup(
                             modifier = Modifier.width(120.dp),
                             placeholder = "0（关闭）",
                         )
-                        Text("最终结算总分 · 0 关闭", style = MaterialTheme.typography.bodySmall, color = Muted)
+                        Text(
+                            targetScoreError ?: "最终结算总分 · 0 关闭",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (targetScoreError != null) MaterialTheme.colorScheme.error else Muted,
+                        )
                     }
                 }
 

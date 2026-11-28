@@ -90,6 +90,40 @@ class ControlSessionConsoleTest {
         }
     }
 
+    @Test fun awaitSnapshotReturnsMatchedSnapshotAndSurfacesTimeoutWithoutSwallowingCallerCancel() = runBlocking<Unit> {
+        val port = ConsolePort("await-test")
+        val ui = withContext(Dispatchers.Main) { ControlSessionUi(port) }
+        try {
+            val matched = async {
+                ui.awaitSnapshot("保存超时") { it.console.task.targetScore == 50_000L }
+            }
+            delay(50)
+            port.snapshots.value = buildJsonObject {
+                put("console", ControlModelCodec.encode(RunConsoleState(task = LabyrinthUiState(targetScore = 50_000L))))
+            }
+            assertEquals(50_000L, withTimeout(3_000) { matched.await() }.console.task.targetScore)
+
+            // Timeout must throw IllegalStateException (not CancellationException) so UiActions displays it.
+            val timeoutJob = async {
+                runCatching { ui.awaitSnapshot("保存结果尚未确认") { it.console.task.targetScore == 99_999L } }
+            }
+            val timeoutFailure = withTimeout(12_000) { timeoutJob.await() }.exceptionOrNull()
+            assertTrue(timeoutFailure is IllegalStateException)
+            assertEquals("保存结果尚未确认", timeoutFailure?.message)
+
+            // External caller cancellation still propagates as CancellationException.
+            val cancelledJob = launch {
+                ui.awaitSnapshot("保存结果尚未确认") { false }
+            }
+            delay(50)
+            cancelledJob.cancel()
+            cancelledJob.join()
+            assertTrue(cancelledJob.isCancelled)
+        } finally {
+            withContext(Dispatchers.Main) { ui.close() }
+        }
+    }
+
     private suspend fun awaitConsole(ui: ControlSessionUi, serial: String, stopping: Boolean) = withTimeout(5_000) {
         ui.ux.console.first { it.device == DeviceConnectionState.Connecting(serial) && it.stopping == stopping }
         ui.device.state.first { it == DeviceConnectionState.Connecting(serial) }

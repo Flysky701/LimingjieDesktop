@@ -12,6 +12,15 @@ Selected client-compatibility fixes also come from
 <https://github.com/SatenRuiko10032/limingjie-assistant>, including contributions by
 SatenRuiko10032 and quickgk. Original attribution and the CC BY-NC-SA 4.0 license are retained.
 
+## LimingjieNN (黎明界NN)
+
+Companion repository: <https://github.com/Flysky701/LimingjieNN>
+
+Provides offline two-tower battle neural network training, the Path B global score planning
+reference implementation, and the bundled ONNX battle model (`tower_a.onnx`, `tower_b.onnx`,
+`manifest.json`, `golden_io.json`, and `feature_pack.json`) verified by SHA-256 during
+Windows desktop packaging.
+
 ## AutoPCR
 
 The upstream AutoPCR project (Python) is a behavioral, protocol, and

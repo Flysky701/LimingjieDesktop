@@ -336,8 +336,8 @@ internal fun SettingsPage(graph: ControlSessionUi, openWizard: () -> Unit, openD
                         ProjectOriginsPanel()
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(shape = MaterialTheme.shapes.small, onClick = openWizard) { Text("重新打开使用向导") }
-                            TextButton(onClick = { BrowserLauncher.open("https://github.com/wbero/limingjie-assistant/blob/main/LICENSE") }) { Text("许可证") }
-                            TextButton(onClick = { BrowserLauncher.open("https://github.com/wbero/limingjie-assistant/blob/main/THIRD_PARTY_NOTICES.md") }) { Text("第三方声明") }
+                            TextButton(onClick = { BrowserLauncher.open("https://github.com/Flysky701/LimingjieDesktop/blob/main/LICENSE") }) { Text("许可证") }
+                            TextButton(onClick = { BrowserLauncher.open("https://github.com/Flysky701/LimingjieDesktop/blob/main/THIRD_PARTY_NOTICES.md") }) { Text("第三方声明") }
                         }
                     }
                 }
@@ -525,8 +525,8 @@ internal fun SetupWizard(graph: ControlSessionUi, shared: Boolean = false, devic
                         0 -> ProjectOriginsPanel()
                         1 -> {
                             Text("使用助手和模拟器时，请勿同时使用 VPN 或其他网络代理。", style = MaterialTheme.typography.titleMedium)
-                            Text("这是 Windows 社区移植版。以下使用风险沿用上游说明：", color = Muted)
-                            Text("当前为测试版本，流程可能卡死、停在未知页面、误识别或误操作，不保证自动完成。仅测试过 MuMu 模拟器（B 服）与雷电模拟器 9（小米、华为、vivo 渠道服）、1920 × 1080 分辨率，手机及其他环境暂未测试。请留意运行状态，出现异常及时暂停，不建议无人值守运行。")
+                            Text("本应用为独立的 Windows 桌面端，使用前请确认以下风险说明：", color = Muted)
+                            Text("自动执行可能受画面变化或网络波动影响，出现卡死、停在未知页面、误识别或误操作，不保证全程自动完成。常用测试环境为 MuMu 12（B 服）与雷电模拟器 9（小米、华为、vivo 渠道服），自动执行支持 1920 × 1080 横屏（1280 × 720 开放测试中）。请留意运行状态，异常时及时暂停，不建议无人值守运行。")
                             Text("本项目与游戏官方无关。自动操作和非官方接口访问可能带来账号限制或封禁风险，不保证账号安全；使用前请自行确认游戏相关规则。")
                             Text("角色选择、商店购买、刷新、战斗及彻底撤退会改变真实游戏状态，可能消耗资源或丢失当前开局。启动前核对账号、策略和撤退选项。")
                             Text("“已执行”仅表示操作已派发，不代表游戏已完成预期操作。当前角色列表滚动、边界回弹、识别与流程衔接仍可能异常，需要人工接管。")

@@ -1215,24 +1215,33 @@ class LabyrinthController(
     fun reportMessage(message: String) { chrome.update { it.copy(message = message) } }
 
     fun saveSettings(settings: LabyrinthRerollSettings) {
-        val admission = configurationAdmission() ?: return
-        try { saveSettingsAdmitted(settings) } finally { admission.close() }
+        saveSettingsChecked(settings)
     }
 
-    private fun saveSettingsAdmitted(settings: LabyrinthRerollSettings) {
-        if (chrome.value.isWorking || chrome.value.captcha != null) return
-        val accountId = settingsAccountId ?: return
-        settings.validationError()?.let { reportMessage(it); return }
+    fun saveSettingsChecked(settings: LabyrinthRerollSettings): String? {
+        val admission = configurationAdmission()
+            ?: return com.landosol.toolbox.automation.TaskConfigurationGate.TRANSFER_MESSAGE
+        return try { saveSettingsAdmitted(settings) } finally { admission.close() }
+    }
+
+    private fun saveSettingsAdmitted(settings: LabyrinthRerollSettings): String? {
+        if (chrome.value.isWorking || chrome.value.captcha != null) {
+            return "任务运行中或正在验证，无法保存设置".also(::reportMessage)
+        }
+        val accountId = settingsAccountId ?: return "当前未加载账号配置".also(::reportMessage)
+        settings.validationError()?.let { reportMessage(it); return it }
         if (settings.difficulty > (chrome.value.maxUnlockedDifficulty ?: LabyrinthRerollOptions.MAX_DIFFICULTY)) {
-            reportMessage("所选难度尚未解锁"); return
+            return "所选难度尚未解锁".also(::reportMessage)
         }
         try {
             settingsStore.save(accountId, settings)
         } catch (failure: Exception) {
-            reportMessage(failure.message ?: "刷开局设置保存失败")
-            return
+            val message = failure.message ?: "刷开局设置保存失败"
+            reportMessage(message)
+            return message
         }
         onConfigurationImported(accountId, settings)
+        return null
     }
 
     /** Invalidates the old opening verdict only after a complete configuration commit. */
@@ -1240,6 +1249,7 @@ class LabyrinthController(
         if (accountId != settingsAccountId) return
         explicitlyReadInitialOpening = null
         applySettings(settings)
+        val targetScoreNote = if (settings.targetScore > 0L) "（刷分目标 ${settings.targetScore}）" else "（刷分目标已关闭）"
         // A prior TARGET verdict was evaluated against the old difficulty/route policy.
         // Require an explicit fresh read before presenting it as the current server state.
         chrome.update {
@@ -1252,7 +1262,7 @@ class LabyrinthController(
                 routeBlockIds = emptyList(),
                 currentOpeningReadStatus = LabyrinthCurrentOpeningReadStatus.NOT_READ,
                 currentOpeningReadMessage = "设置已变化，请重新读取当前开局以更新路线判定",
-                message = "刷开局设置已保存；请重新登录并读取当前开局",
+                message = "刷开局设置已保存$targetScoreNote；请重新登录并读取当前开局",
             )
         }
     }

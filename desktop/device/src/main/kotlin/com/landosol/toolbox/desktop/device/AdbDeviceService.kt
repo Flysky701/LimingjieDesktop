@@ -662,15 +662,21 @@ class AdbDeviceService internal constructor(
         var attempt = 0
         var nextConnectAttempt = 1
         var connectedOnce = false
+        var consecutiveTimeouts = if (failure.adbFailure == AdbFailureKind.Timeout) 1 else 0
         val recovered = withTimeoutOrNull(TRANSPORT_RECOVERY_MILLIS) {
             while (true) {
                 delay(1_000)
                 attempt++
                 try {
-                    if (':' in value.serial &&
-                        failure.adbFailure in setOf(AdbFailureKind.DeviceOffline, AdbFailureKind.DeviceNotFound, AdbFailureKind.ConnectionRefused) &&
-                        attempt >= nextConnectAttempt) {
-                        if (connectedOnce && failure.adbFailure == AdbFailureKind.DeviceOffline) {
+                    val offlineOrMissing = failure.adbFailure in setOf(
+                        AdbFailureKind.DeviceOffline,
+                        AdbFailureKind.DeviceNotFound,
+                        AdbFailureKind.ConnectionRefused,
+                    )
+                    // Give the first timeout one ordinary re-probe; reset the TCP transport only if it repeats.
+                    val repeatedTimeout = failure.adbFailure == AdbFailureKind.Timeout && consecutiveTimeouts >= 2
+                    if (':' in value.serial && (offlineOrMissing || repeatedTimeout) && attempt >= nextConnectAttempt) {
+                        if (repeatedTimeout || (connectedOnce && failure.adbFailure == AdbFailureKind.DeviceOffline)) {
                             disconnectTcpTransport(value.serial)
                         }
                         val connectResult = try {
@@ -700,6 +706,7 @@ class AdbDeviceService internal constructor(
                     break
                 } catch (error: DeviceOperationException) {
                     if (error.adbFailure !in transientTransportFailures) throw error
+                    consecutiveTimeouts = if (error.adbFailure == AdbFailureKind.Timeout) consecutiveTimeouts + 1 else 0
                     failure = error
                 }
             }

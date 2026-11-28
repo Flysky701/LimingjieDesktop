@@ -87,4 +87,26 @@ class RunSetupDraftTest {
         draft.settings = draft.settings.copy(targetScore = LabyrinthRerollOptions.MAX_TARGET_SCORE + 1)
         assertTrue(draft.validationError(updatedFromLaterLoad)?.contains("刷分目标无效") == true)
     }
+
+    @Test fun syncClearsDirtyWhenIncomingBaselineAcknowledgesEditedGoalsAndSettings() {
+        val initial = ready.copy(targetScore = 51_000L)
+        val draft = RunSetupDraft(initial, listOf(DesktopGoal(3, 10, true)))
+        assertFalse(draft.dirty)
+
+        draft.settings = draft.settings.copy(targetScore = 50_000L)
+        draft.goals = draft.goals.map { if (it.guildId == 3) it.copy(count = "5") else it }
+        assertTrue(draft.dirty)
+
+        // Late unrelated update keeps dirty edits intact.
+        draft.sync(initial, listOf(DesktopGoal(3, 10, true)))
+        assertTrue(draft.dirty)
+        assertEquals(50_000L, draft.settings.targetScore)
+        assertEquals(listOf(DesktopGoal(3, 5, true)), draft.savedGoals())
+
+        // Incoming baseline acknowledging the exact edited targetScore and goals clears dirty.
+        draft.sync(initial.copy(targetScore = 50_000L), listOf(DesktopGoal(3, 5, true)))
+        assertFalse(draft.dirty)
+        assertEquals(50_000L, draft.settings.targetScore)
+        assertEquals(listOf(DesktopGoal(3, 5, true)), draft.savedGoals())
+    }
 }

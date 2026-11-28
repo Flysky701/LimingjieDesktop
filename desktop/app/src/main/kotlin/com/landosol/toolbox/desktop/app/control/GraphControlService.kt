@@ -182,16 +182,25 @@ class GraphControlService(
             ControlOps.START -> startTask(args)
             ControlOps.PAUSE -> graph.setTaskPaused(args["paused"]?.jsonPrimitive?.booleanOrNull)
             ControlOps.DISMISS_MESSAGE -> graph.labyrinthController.dismissMessage()
-            ControlOps.SAVE_REROLL -> saveReroll(decode(args.required("value")))
+            ControlOps.SAVE_REROLL -> saveReroll(
+                decode(args.required("value")),
+                args["accountId"]?.jsonPrimitive?.longOrNull,
+            )
             ControlOps.SAVE_SETUP -> {
                 requireIdle()
                 val settings: LabyrinthRerollSettings = decode(args.required("settings"))
                 val goals: List<DesktopGoal> = decode(args.required("goals"))
+                val expectedAccountId = args["accountId"]?.jsonPrimitive?.longOrNull
                 validateGoals(goals)
                 settings.validationError()?.let { error(it) }
                 // The original quick form can save goals before an account is selected.
                 // Unchanged account settings must also keep an explicitly read opening reusable.
-                if (settings != graph.labyrinthController.uiState.value.rerollSettings()) saveReroll(settings)
+                val currentSettings = graph.labyrinthController.uiState.value.rerollSettings()
+                if (settings != currentSettings) {
+                    saveReroll(settings, expectedAccountId)
+                } else if (expectedAccountId != null && graph.labyrinthController.uiState.value.selectedAccount?.id != expectedAccountId) {
+                    error("当前账号已切换，请重新核对后再保存")
+                }
                 graph.markRuntimePreferencesEdited()
                 withContext(Dispatchers.IO) { graph.ux.preferences.update { it.copy(goals = goals) } }
             }
@@ -484,16 +493,26 @@ class GraphControlService(
         yield()
     }
 
-    private suspend fun saveReroll(value: LabyrinthRerollSettings) {
+    private suspend fun saveReroll(value: LabyrinthRerollSettings, expectedAccountId: Long? = null) {
         requireIdle()
-        check(graph.labyrinthController.uiState.value.settingsReady) { "请先选择账号，等待配置加载" }
-        value.validationError()?.let { error(it) }
-        check(value.difficulty in graph.labyrinthController.uiState.value.availableDifficulties) { "所选难度尚未解锁" }
-        graph.sharedData?.let { shared ->
-            val id = checkNotNull(graph.labyrinthController.uiState.value.selectedAccount?.id) { "请先绑定共享账号" }
-            shared.saveReroll(id, value)
+        val state = graph.labyrinthController.uiState.value
+        check(state.settingsReady) { "请先选择账号，等待配置加载" }
+        val currentAccountId = state.selectedAccount?.id
+        if (expectedAccountId != null) {
+            check(currentAccountId == expectedAccountId) { "当前账号已切换，请重新核对后再保存" }
         }
-        graph.labyrinthController.saveSettings(value)
+        value.validationError()?.let { error(it) }
+        check(value.difficulty in state.availableDifficulties) { "所选难度尚未解锁" }
+        val shared = graph.sharedData
+        if (shared != null) {
+            val id = checkNotNull(currentAccountId) { "请先绑定共享账号" }
+            shared.saveReroll(id, value)
+            graph.labyrinthController.saveSettingsChecked(value)?.let { err ->
+                error("共享配置已写入，但当前会话未应用：$err")
+            }
+        } else {
+            graph.labyrinthController.saveSettingsChecked(value)?.let(::error)
+        }
     }
 
     private fun refreshLocalRerollSettings() {
@@ -581,7 +600,8 @@ class GraphControlService(
     }
 
     private fun guardAuthenticatedAccount(server: GameServer, uid: Long) = synchronized(admission) {
-        check(!revoked.get() && !stopping.get() && !closing.get()) { "控制连接已停止，禁止新的账号操作" }
+        check(!revoked.get() && !closing.get()) { "控制连接已停止，禁止新的账号操作" }
+        if (stopping.get()) throw CancellationException("任务正在停止，已取消账号操作")
         check(uid > 0) { "服务端 UID 无效" }
         // All channel clients use the same game-server account namespace.
         val key = accountServerKey(server) to uid
